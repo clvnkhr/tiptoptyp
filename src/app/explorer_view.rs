@@ -481,7 +481,7 @@ pub(super) fn add_workspace_nodes(
             let hover_kind = crate::document::preview_kind_for_path(&hover_path);
             builder.node(
                 NodeBuilder::leaf(node.path.clone())
-                    .icon(|ui| paint_tree_icon(ui, false))
+                    .icon(|ui| paint_filetype_icon(ui, &node.path))
                     .label_ui(move |ui| {
                         let row = ui.horizontal(|ui| {
                             let color = workspace_entry_resolved_color(
@@ -533,7 +533,7 @@ pub(super) fn add_workspace_nodes(
             let color = workspace_entry_color(&node.path, false, true, context);
             builder.node(
                 NodeBuilder::leaf(node.path.clone())
-                    .icon(|ui| paint_tree_icon(ui, false))
+                    .icon(|ui| paint_filetype_icon(ui, &node.path))
                     .label_ui(move |ui| {
                         let color = workspace_entry_resolved_color(
                             color,
@@ -1746,4 +1746,19 @@ pub(super) fn paint_tree_icon(ui: &mut egui::Ui, folder: bool) {
         if folder { UiIcon::Folder } else { UiIcon::File },
         color,
     );
+}
+
+fn paint_filetype_icon(ui: &mut egui::Ui, path: &Path) {
+    let rect = ui.available_rect_before_wrap().shrink(theme::SPACE.tight);
+    let size = METRICS.explorer.tree_icon_size.min(rect.size());
+    let rect = Rect::from_center_size(rect.center(), size);
+    let color = ui.ctx().style_of(ui.ctx().theme()).visuals.text_color();
+    if !crate::file_icons::paint(
+        ui.painter(),
+        rect,
+        crate::file_icons::for_path(Some(path)),
+        color,
+    ) {
+        paint_ui_icon(ui.painter(), rect, UiIcon::File, color);
+    }
 }

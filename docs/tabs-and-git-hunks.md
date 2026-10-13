@@ -318,3 +318,13 @@ remained alive on closing its dirty QA fixture; its owned process was then
 terminated without saving. The user's running app was left alone. The gallery
 session itself exited normally. These are viewport observations, not native
 composed-desktop verification; native preview bounds were not changed.
+
+File rows and tab titles use bundled Nerd Font filetype icons, including
+distinct Typst and TeX logos. The font is a small subset and remains independent
+of the selected editor/UI fonts. Icons occupy a fixed slot before the filename;
+accessible button names remain the filename.
+
+While dragging, the grabbed tab follows the pointer, neighbors slide into their
+insertion slots, and the released tab settles in 140 ms. Drop slots stay fixed,
+while control hitboxes and tooltip anchors follow the visible tabs. Paint stays
+clipped to the tab strip, and settled tabs do not schedule animation repaints.

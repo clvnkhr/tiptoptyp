@@ -259,3 +259,14 @@ It does not revive explicitly hidden targets or change ordinary interactive
 popup visibility. The resulting image still proves only that viewport's pixels.
 
 `draw-symbol` captures the maximized Explorer drawing panel with fixed strokes and compact, right-aligned rows displaying the active language’s insertion forms. Opaque row backgrounds preserve legibility over normal-darkness ink. Model accuracy is tested separately with real offline inference.
+
+### Offscreen tab/icon review on macOS
+
+`cargo test --bin tiptoptyp file_icons_and_tab_drag_framebuffer_review -- --ignored --nocapture`
+creates fresh component viewport framebuffers under
+`.tiptoptyp/screenshots/agent-review/nerd-tabs/`, using the app's Glow painter
+on a private CGL framebuffer. It captures actual tab drag input, slide/landing
+frames, and representative filetype glyphs at 1× and 2× in light/dark themes.
+It opens no window and posts no desktop input. Inspect the PNGs after running.
+This is pixel evidence for these egui components, not a whole-window screenshot
+or a replacement for the native `tab_drag` journey or maintained theme gallery.

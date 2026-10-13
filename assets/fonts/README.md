@@ -37,5 +37,27 @@ The font files themselves embed these same MIT/Bitstream Vera notices.
 | `hack/Hack-Italic.ttf` | `096fb67a2b85f3c866e9cb3e965b27c2c10b977315f4d3d7f095674be35091c1` |
 | `hack/Hack-BoldItalic.ttf` | `64f74a079700b7dfe128551a1e28875d5ba980971e55f5e0f0596e37bdc6a6bc` |
 
-The package copies all seven copyright/license notices to `Resources/licenses`
+The package copies all eight copyright/license notices to `Resources/licenses`
 and this provenance record to `Resources/font-provenance.md`.
+
+## Filetype icons
+
+`nerd/FileIcons.ttf` is a 47,720-byte subset of Nerd Fonts **v3.4.0**
+`SymbolsNerdFont-Regular.ttf`, containing all Seti UI glyphs and Font Logos'
+Typst glyph (161 distinct codepoints). It is a dedicated UI family; it does
+not replace the selected UI, editor, or terminal font.
+
+Source: https://github.com/ryanoasis/nerd-fonts/tree/v3.4.0/patched-fonts/NerdFontsSymbolsOnly
+
+Source SHA-256: `71db104aa66567d0efe0b98758f9dfc1895573a453fe85fb53d1c38544a55106`.
+Subset SHA-256: `7a0efd8dfb59a7f5a8c5a00bb34192f5a8a4ac147b36ccc508a9cf3e2868345f`.
+
+Generated using FontTools 4.60.1, `recalcTimestamp=False`, with
+`name_IDs=['*']`, `name_legacy=True`, `name_languages=['*']`, and
+`notdef_outline=True`. Codepoints come from the release's `glyphnames.json`
+keys `seti-*` and `linux-typst`. Family/PostScript names were renamed to
+Tiptoptyp File Icons. Glyphs retain their outlines and metrics.
+`nerd/LICENSE.md` contains Nerd Fonts and Seti UI's MIT notices, plus
+Font Logos' public-domain dedication for the Typst glyph:
+https://github.com/jesseweed/seti-ui/blob/master/LICENSE.md and
+https://github.com/lukas-w/font-logos/blob/master/LICENSE.

@@ -26,6 +26,7 @@ mod editor_math_guides;
 mod embedded_structure;
 mod embedded_tex;
 mod explorer;
+mod file_icons;
 mod folding;
 mod font_catalog;
 mod font_preview;
@@ -305,3 +306,6 @@ mod tests {
         assert_eq!(snapshot.viewport.icon, normal.viewport.icon);
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod test_framebuffer;

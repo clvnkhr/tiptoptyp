@@ -1,6 +1,7 @@
 //! Tabs own stable identity and ordered document records, never an EditorApp or
 //! background service. The first tab is the initial preview source.
 use super::*;
+mod motion;
 mod trace;
 
 pub(super) struct TabRecord {
@@ -33,6 +34,8 @@ pub(super) struct Tabs {
     tab_drag_active: bool,
     tab_drag_source: Option<u64>,
     drag_trace: trace::Trace,
+    tab_motion: BTreeMap<u64, motion::Motion>,
+    tab_drag_grab: f32,
     #[cfg(target_os = "macos")]
     native_drag_guard: Option<crate::native_window::TitlebarDragGuard>,
 }
@@ -64,6 +67,8 @@ impl Default for Tabs {
             tab_drag_active: false,
             tab_drag_source: None,
             drag_trace: trace::Trace::default(),
+            tab_motion: BTreeMap::new(),
+            tab_drag_grab: 0.0,
             #[cfg(target_os = "macos")]
             native_drag_guard: None,
         }
@@ -911,6 +916,21 @@ impl EditorApp {
         let mut rename = None;
         let mut pressed_tab = None;
         let mut tab_rects = Vec::new();
+        let mut tab_visuals = Vec::new();
+        let (primary_down, primary_released, pointer, decidedly_dragging, time) =
+            ui.input(|input| {
+                (
+                    input.pointer.primary_down(),
+                    input.pointer.button_released(egui::PointerButton::Primary),
+                    input.pointer.latest_pos(),
+                    input.pointer.is_decidedly_dragging(),
+                    input.time,
+                )
+            });
+        let source_before = self.tabs.tab_drag_source;
+        let dragged =
+            source_before.filter(|_| decidedly_dragging && (primary_down || primary_released));
+        let mut moving = false;
         let height = METRICS.toolbar.title_height;
         let width = ui.available_width().max(0.0);
         if width < 1.0 {
@@ -937,27 +957,37 @@ impl EditorApp {
                         .max_height(height)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
+                                let origin = ui.cursor().left();
                                 for index in 0..self.tabs.len() {
                                     let id = self.tabs.id_at(index).unwrap();
                                     let document = self.document_for_tab(id).unwrap();
                                     let name = document.name();
+                                    let compatible = LanguageSupport::for_document(document.kind()).build.is_some();
+                                    let title_width = tab_title_width(&name, width, self.settings.fixed_tab_width, compatible);
                                     let active = Some(id) == self.tabs.active_id();
                                     ui.push_id(id, |ui| {
-                                        let compatible = LanguageSupport::for_document(document.kind()).build.is_some();
-                                        let title_width = tab_title_width(
-                                            &name,
-                                            width,
-                                            self.settings.fixed_tab_width,
-                                            compatible,
+                                        let controls = if compatible { 2.0 } else { 1.0 };
+                                        let (slot, _) = ui.allocate_exact_size(
+                                            Vec2::new(title_width + controls * (TAB_BUTTON_WIDTH + TAB_ITEM_SPACING), height),
+                                            Sense::hover(),
                                         );
-                                        let tab = tab_widget(
-                                            ui,
-                                            document,
-                                            active,
-                                            Some(id) == self.tabs.preview_id(),
-                                            title_width,
-                                        );
-                                        tab_rects.push((id, tab.rect));
+                                        let target = slot.left() - origin;
+                                        let grabbed_x = (dragged == Some(id)).then(|| pointer.map_or(target, |pointer| pointer.x - self.tabs.tab_drag_grab - origin));
+                                        let motion = self.tabs.tab_motion.entry(id).or_insert_with(|| motion::Motion::new(target));
+                                        let mut x = motion.update(target, grabbed_x, time);
+                                        if primary_released { x = motion.update(target, None, time); }
+                                        moving |= motion.moving();
+                                        let visual_slot = slot.translate(Vec2::new(x - target, 0.0));
+                                        let mut child = ui.new_child(egui::UiBuilder::new()
+                                            .id_salt("tab-content").max_rect(visual_slot)
+                                            .layout(Layout::left_to_right(Align::Center)));
+                                        let document = self.document_for_tab(id).unwrap();
+                                        let mut tab = tab_widget(&mut child, document, active, Some(id) == self.tabs.preview_id(), title_width);
+                                        // Drawing and input follow the animation. Reordering and
+                                        // scroll-to-active use only these unanimated insertion slots.
+                                        tab.rect = slot;
+                                        tab_rects.push((id, slot));
+                                        tab_visuals.push((id, tab.visual));
                                         if active && reveal {
                                             ui.scroll_to_rect(tab.rect, Some(Align::Center));
                                         }
@@ -977,7 +1007,7 @@ impl EditorApp {
                                         if response.is_pointer_button_down_on()
                                             && ui.input(|input| input.pointer.primary_down())
                                         {
-                                            pressed_tab = Some(id);
+                                            pressed_tab = Some((id, response.rect.left()));
                                         }
                                         if response.hovered() {
                                             native_hover_text(
@@ -1015,18 +1045,14 @@ impl EditorApp {
             .inner
             .inner_rect
             .intersect(ui.clip_rect());
-        if let Some(id) = pressed_tab {
+        if let Some((id, left)) = pressed_tab {
+            if self.tabs.tab_drag_source != Some(id)
+                && let Some(pointer) = ui.input(|input| input.pointer.press_origin())
+            {
+                self.tabs.tab_drag_grab = pointer.x - left;
+            }
             self.tabs.tab_drag_source = Some(id);
         }
-        let (primary_down, primary_released, pointer, decidedly_dragging) =
-            ui.ctx().input(|input| {
-                (
-                    input.pointer.primary_down(),
-                    input.pointer.button_released(egui::PointerButton::Primary),
-                    input.pointer.latest_pos(),
-                    input.pointer.is_decidedly_dragging(),
-                )
-            });
         // A release and the final movement can arrive together. Apply the
         // destination before clearing the gesture, including on that frame.
         let source_before = self.tabs.tab_drag_source;
@@ -1056,6 +1082,35 @@ impl EditorApp {
                     }
                 }
             }
+        }
+        let painter = ui.painter().with_clip_rect(tab_viewport);
+        let mut lifted_visuals = Vec::new();
+        for (id, visual) in tab_visuals {
+            if self
+                .tabs
+                .tab_motion
+                .get(&id)
+                .is_some_and(motion::Motion::lifted)
+            {
+                lifted_visuals.push((id, visual));
+            } else {
+                visual.paint(&painter);
+            }
+        }
+        // A second gesture can start before the first landing finishes. Keep
+        // every landing visible, with the currently grabbed tab above them.
+        lifted_visuals.sort_by_key(|(id, _)| dragged == Some(*id));
+        for (_, mut visual) in lifted_visuals {
+            if visual.fill == Color32::TRANSPARENT {
+                visual.fill = ui.visuals().panel_fill;
+            }
+            visual.paint(&painter);
+        }
+        self.tabs
+            .tab_motion
+            .retain(|id, _| self.tabs.records.contains_key(id));
+        if moving {
+            ui.ctx().request_repaint();
         }
         if trace_sample {
             self.tabs.drag_trace.record(ui.ctx(), format!(
@@ -1132,11 +1187,13 @@ struct TabResponse {
     title: egui::Response,
     preview: Option<egui::Response>,
     close: egui::Response,
+    visual: TabVisual,
 }
 
 const FIXED_TAB_WIDTH: f32 = 160.0;
 const TAB_BUTTON_WIDTH: f32 = 18.0;
 const TAB_ITEM_SPACING: f32 = 2.0;
+const TAB_FILE_ICON_WIDTH: f32 = 22.0;
 
 fn tab_title_width(name: &str, available_width: f32, fixed_width: bool, compatible: bool) -> f32 {
     let controls_width = TAB_BUTTON_WIDTH
@@ -1151,7 +1208,8 @@ fn tab_title_width(name: &str, available_width: f32, fixed_width: bool, compatib
     }
 
     ((name.chars().count() + 1) as f32 * METRICS.toolbar.title_character_width
-        + METRICS.toolbar.title_padding)
+        + METRICS.toolbar.title_padding
+        + TAB_FILE_ICON_WIDTH)
         .clamp(54.0, 200.0)
         .min((available_width - controls_width - TAB_ITEM_SPACING).max(24.0))
 }
@@ -1168,6 +1226,56 @@ fn tab_drop_index(tab_rects: &[(u64, Rect)], pointer: Pos2) -> Option<usize> {
         .or(Some(tab_rects.len()))
 }
 
+struct TabVisual {
+    rect: Rect,
+    title_rect: Rect,
+    title: Arc<egui::Galley>,
+    color: Color32,
+    fill: Color32,
+    corner: egui::CornerRadius,
+    file_icon: char,
+    preview: Option<(Rect, UiIcon, Color32)>,
+    close: (Rect, Color32),
+}
+
+impl TabVisual {
+    fn paint(&self, painter: &egui::Painter) {
+        let rect = self.rect;
+        if !painter.clip_rect().intersects(rect) {
+            return;
+        }
+        painter.rect_filled(rect, self.corner, self.fill);
+        let title = self.title_rect;
+        let icon_rect = Rect::from_center_size(
+            Pos2::new(title.left() + TAB_FILE_ICON_WIDTH * 0.5, title.center().y),
+            Vec2::splat(15.0),
+        );
+        if !crate::file_icons::paint(painter, icon_rect, self.file_icon, self.color) {
+            paint_ui_icon(painter, icon_rect, UiIcon::File, self.color);
+        }
+        let text_rect = Rect::from_min_max(
+            Pos2::new(title.left() + TAB_FILE_ICON_WIDTH, title.top()),
+            title.max,
+        );
+        let position = Pos2::new(
+            text_rect.left(),
+            title.center().y - self.title.size().y * 0.5,
+        );
+        painter
+            .with_clip_rect(painter.clip_rect().intersect(text_rect))
+            .galley(position, self.title.clone(), self.color);
+        if let Some((button, icon, color)) = self.preview {
+            paint_ui_icon(painter, tab_icon_rect(button, icon), icon, color);
+        }
+        paint_ui_icon(
+            painter,
+            tab_icon_rect(self.close.0, UiIcon::Close),
+            UiIcon::Close,
+            self.close.1,
+        );
+    }
+}
+
 fn tab_widget(
     ui: &mut egui::Ui,
     document: &DocumentSession,
@@ -1176,65 +1284,79 @@ fn tab_widget(
     title_width: f32,
 ) -> TabResponse {
     let name = document.name();
+    let title_text = format!("{name}{}", if document.is_dirty() { "*" } else { "" });
     let height = METRICS.toolbar.title_height;
-    let frame = egui::Frame::new()
-        .fill(if active {
+    let frame = egui::Frame::new().show(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = TAB_ITEM_SPACING;
+        ui.horizontal(|ui| {
+            let title = ui.add_sized(
+                [title_width, height],
+                egui::Button::new("")
+                    .frame(false)
+                    .sense(Sense::click_and_drag()),
+            );
+            title.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &title_text)
+            });
+            let preview = LanguageSupport::for_document(document.kind())
+                .build
+                .is_some()
+                .then(|| {
+                    let response = tab_icon_button(ui, true, &format!("Preview {name}"));
+                    native_hover_text(
+                        response,
+                        if chosen {
+                            "Preview source"
+                        } else {
+                            "Use this tab for preview"
+                        },
+                    )
+                });
+            let close = tab_icon_button(ui, true, &format!("Close {name}"));
+            let close = native_hover_text(close, format!("Close {name}"));
+            (title, preview, close)
+        })
+        .inner
+    });
+    let (title, preview, close) = frame.inner;
+    let color = ui.visuals().strong_text_color();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::simple(title_text, font, color, f32::INFINITY);
+    job.wrap.max_width = (title.rect.width() - TAB_FILE_ICON_WIDTH).max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let visual = TabVisual {
+        rect: frame.response.rect,
+        title_rect: title.rect,
+        title: galley,
+        color,
+        fill: if active {
             ui.visuals().selection.bg_fill
         } else {
             Color32::TRANSPARENT
-        })
-        .corner_radius(ui.visuals().widgets.inactive.corner_radius)
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal(|ui| {
-                let title = ui.add_sized(
-                    [title_width, height],
-                    egui::Button::new(
-                        RichText::new(format!(
-                            "{name}{}",
-                            if document.is_dirty() { "*" } else { "" }
-                        ))
-                        .strong(),
-                    )
-                    .frame(false)
-                    .sense(Sense::click_and_drag())
-                    .truncate(),
-                );
-                let preview = LanguageSupport::for_document(document.kind())
-                    .build
-                    .is_some()
-                    .then(|| {
-                        let preview = tab_icon_button(
-                            ui,
-                            true,
-                            if chosen {
-                                UiIcon::Eye
-                            } else {
-                                UiIcon::EyeClosed
-                            },
-                            &format!("Preview {name}"),
-                        );
-                        native_hover_text(
-                            preview,
-                            if chosen {
-                                "Preview source"
-                            } else {
-                                "Use this tab for preview"
-                            },
-                        )
-                    });
-                let close = tab_icon_button(ui, true, UiIcon::Close, &format!("Close {name}"));
-                let close = native_hover_text(close, format!("Close {name}"));
-                (title, preview, close)
-            })
-            .inner
-        });
-    let (title, preview, close) = frame.inner;
+        },
+        corner: ui.visuals().widgets.inactive.corner_radius,
+        file_icon: crate::file_icons::for_path(document.path().as_deref()),
+        preview: preview.as_ref().map(|response| {
+            (
+                response.rect,
+                if chosen {
+                    UiIcon::Eye
+                } else {
+                    UiIcon::EyeClosed
+                },
+                ui.style().interact(response).fg_stroke.color,
+            )
+        }),
+        close: (close.rect, ui.style().interact(&close).fg_stroke.color),
+    };
     TabResponse {
         rect: frame.response.rect,
         title,
         preview,
         close,
+        visual,
     }
 }
 
@@ -1245,7 +1367,7 @@ fn tab_icon_rect(button: Rect, icon: UiIcon) -> Rect {
     )
 }
 
-fn tab_icon_button(ui: &mut egui::Ui, enabled: bool, icon: UiIcon, label: &str) -> egui::Response {
+fn tab_icon_button(ui: &mut egui::Ui, enabled: bool, label: &str) -> egui::Response {
     let response = ui
         .add_enabled_ui(enabled, |ui| {
             ui.add_sized(
@@ -1255,17 +1377,6 @@ fn tab_icon_button(ui: &mut egui::Ui, enabled: bool, icon: UiIcon, label: &str) 
         })
         .inner;
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    let color = if enabled {
-        ui.style().interact(&response).fg_stroke.color
-    } else {
-        ui.visuals().weak_text_color()
-    };
-    paint_ui_icon(
-        ui.painter(),
-        tab_icon_rect(response.rect, icon),
-        icon,
-        color,
-    );
     response
 }
 

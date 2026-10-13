@@ -63,6 +63,7 @@ pub(crate) fn definitions() -> FontDefinitions {
             family.push(name.into());
         }
     }
+    crate::file_icons::register(&mut definitions);
     definitions
 }
 

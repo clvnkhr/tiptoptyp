@@ -1710,3 +1710,349 @@ fn tab_activation_retires_editor_providers_before_another_keypress() {
     assert!(app.writing.diagnostics.is_empty());
     assert!(app.tex_diagnostics.iter().all(Vec::is_empty));
 }
+
+#[test]
+fn tab_controls_follow_the_slide_and_the_strip_settles_without_idle_animation() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.append_tab(&context);
+    app.document_mut().replace_loaded_unprojected(
+        "second".into(),
+        root.path().join("second.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(800.0, 70.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(
+            |ui, app: &mut EditorApp| {
+                app.show_tabs(ui, None);
+                app.execute_pending_document_action(ui.ctx(), None);
+            },
+            app,
+        );
+    harness.run_steps(5);
+    let before = harness.get_by_label("first.typ").rect();
+    let close_delta = harness.get_by_label("Close first.typ").rect().left() - before.left();
+    let first = harness.state().tabs.id_at(0).unwrap();
+    assert!(harness.state_mut().tabs.reorder(0, 1));
+    harness.run_steps(1);
+    assert_eq!(
+        harness.get_by_label("first.typ").rect().left(),
+        before.left(),
+        "the first frame retains the old visual position"
+    );
+    harness.run_steps(2);
+    let intermediate = harness.get_by_label("first.typ").rect();
+    let destination = harness.state().tabs.tab_drag_rects[1];
+    assert!(intermediate.left() > before.left() && intermediate.left() < destination.left());
+    assert_eq!(
+        harness.get_by_label("Close first.typ").rect().left() - intermediate.left(),
+        close_delta,
+        "the close hitbox follows the visible title"
+    );
+    harness.run_steps(12);
+    assert!(
+        harness
+            .state()
+            .tabs
+            .tab_motion
+            .values()
+            .all(|motion| !motion.moving())
+    );
+    let settled = harness.get_by_label("first.typ").rect();
+    harness.run_steps(6);
+    assert_eq!(harness.get_by_label("first.typ").rect(), settled);
+    harness.get_by_label("Close first.typ").click();
+    harness.run_steps(4);
+    assert!(!harness.state().tabs.ids().any(|id| id == first));
+    assert_eq!(harness.state().document().name(), "second.tex");
+}
+
+#[test]
+fn a_drag_within_the_same_slot_tracks_the_pointer_then_returns_on_release() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let app = fixture(&context, root.path());
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(600.0, 70.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
+    harness.run_steps(5);
+    let before = harness.get_by_label("first.typ").rect();
+    let start = before.center();
+    let end = start + Vec2::new(30.0, 0.0);
+    harness.event(egui::Event::PointerMoved(start));
+    harness.event(egui::Event::PointerButton {
+        pos: start,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(1);
+    harness.event(egui::Event::PointerMoved(end));
+    harness.run_steps(2);
+    assert_eq!(
+        harness.get_by_label("first.typ").rect().left(),
+        before.left() + 30.0
+    );
+    assert_eq!(
+        harness.get_by_label("Close first.typ").rect().center().y,
+        before.center().y
+    );
+    harness.event(egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(2);
+    assert!(
+        harness
+            .state()
+            .tabs
+            .tab_motion
+            .values()
+            .any(|motion| motion.moving()),
+        "release must schedule a return even without a reorder"
+    );
+    harness.run_steps(12);
+    assert_eq!(harness.get_by_label("first.typ").rect(), before);
+    assert!(harness.state().tabs.tab_drag_source.is_none());
+    assert!(
+        harness
+            .state()
+            .tabs
+            .tab_motion
+            .values()
+            .all(|motion| !motion.moving())
+    );
+}
+
+#[test]
+fn tab_filetype_icon_precedes_the_filename_without_changing_its_accessible_name() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.document_mut().replace_loaded_unprojected(
+        "sample".into(),
+        root.path().join("paper.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    let mut ready = false;
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(600.0, 70.0))
+        .build_ui_state(
+            move |ui, app: &mut EditorApp| {
+                if !ready {
+                    theme::configure_editor_fonts(
+                        ui.ctx(),
+                        Default::default(),
+                        Default::default(),
+                        false,
+                        400,
+                        400,
+                        None,
+                    );
+                    ready = true;
+                    return;
+                }
+                let document = app.document();
+                let tab = tab_widget(ui, document, true, true, 160.0);
+                assert_eq!(
+                    tab.visual.file_icon,
+                    crate::file_icons::for_path(Some(Path::new("paper.tex")))
+                );
+                assert!(
+                    tab.visual.title.rect.width() <= tab.title.rect.width() - TAB_FILE_ICON_WIDTH
+                );
+                tab.visual.paint(ui.painter());
+            },
+            app,
+        );
+    harness.run_steps(3);
+    harness.get_by_label("paper.tex");
+    harness.get_by_label("Preview paper.tex");
+    harness.get_by_label("Close paper.tex");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "fresh offscreen Glow viewport review; no desktop activation or input"]
+fn file_icons_and_tab_drag_framebuffer_review() {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".tiptoptyp/screenshots/agent-review/nerd-tabs");
+    for (name, scale, dark) in [
+        ("light", 1.0, false),
+        ("light-2x", 2.0, false),
+        ("dark", 1.0, true),
+    ] {
+        let context = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        let mut app = fixture(&context, root.path());
+        app.append_tab(&context);
+        app.document_mut().replace_loaded_unprojected(
+            "second".into(),
+            root.path().join("paper.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        app.append_tab(&context);
+        app.document_mut().replace_loaded_unprojected(
+            "".into(),
+            root.path().join("paper.pdf"),
+            DocumentKind::Pdf,
+            None,
+        );
+        app.append_tab(&context);
+        app.document_mut().replace_loaded_unprojected(
+            "notes".into(),
+            root.path().join("notes.md"),
+            DocumentKind::Text,
+            None,
+        );
+        let theme = crate::builtin_themes::find(if dark {
+            "catppuccin-mocha"
+        } else {
+            "catppuccin-latte"
+        })
+        .unwrap();
+        theme::set_imported_palette(&context, Some((dark, theme.palette)));
+        theme::configure_styles(&context);
+        context.set_theme(if dark {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        });
+        let mut renderer = crate::test_framebuffer::Framebuffer::new([
+            (900.0 * scale) as u32,
+            (320.0 * scale) as u32,
+        ]);
+        let mut drag_start = Pos2::ZERO;
+        let mut drag_end = Pos2::ZERO;
+        for step in 0..24 {
+            let mut input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 320.0))),
+                time: Some(step as f64 / 60.0),
+                ..Default::default()
+            };
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .native_pixels_per_point = Some(scale);
+            if step == 8 {
+                drag_start = app.tabs.tab_drag_rects[0].center();
+                drag_end =
+                    app.tabs.tab_drag_rects.last().unwrap().right_center() - Vec2::new(4.0, 0.0);
+                input.events = vec![
+                    egui::Event::PointerMoved(drag_start),
+                    egui::Event::PointerButton {
+                        pos: drag_start,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ];
+            } else if step == 9 || step == 10 {
+                input.events = vec![egui::Event::PointerMoved(
+                    drag_start.lerp(drag_end, if step == 9 { 0.55 } else { 1.0 }),
+                )];
+            } else if step == 12 {
+                input.events = vec![egui::Event::PointerButton {
+                    pos: drag_end,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }];
+            }
+            let output = context.run_ui(input, |ui| {
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+                app.show_tabs(ui, None);
+                ui.separator();
+                for path in [
+                    "paper.typ",
+                    "paper.tex",
+                    "references.bib",
+                    "paper.pdf",
+                    "figure.png",
+                    "notes.md",
+                    "config.toml",
+                    "data.json",
+                    "source.rs",
+                    "analysis.py",
+                    "run.sh",
+                    ".gitignore",
+                ] {
+                    ui.horizontal(|ui| {
+                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::hover());
+                        assert!(crate::file_icons::paint(
+                            ui.painter(),
+                            rect.shrink(1.5),
+                            crate::file_icons::for_path(Some(Path::new(path))),
+                            ui.visuals().text_color()
+                        ));
+                        ui.label(path);
+                    });
+                }
+            });
+            let phase = match step {
+                5 => Some("idle"),
+                8 => Some("drag-start"),
+                10 => Some("slide"),
+                22 => Some("settled"),
+                _ => None,
+            };
+            let path = phase.map(|phase| directory.join(format!("{name}-{phase}.png")));
+            renderer.render(&context, output, path.as_deref());
+        }
+    }
+}
+
+#[test]
+fn starting_another_drag_before_landing_does_not_drop_a_tab_from_the_paint_list() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = fixture(&context, root.path());
+    app.append_tab(&context);
+    app.document_mut().replace_loaded_unprojected(
+        "second".into(),
+        root.path().join("second.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    context
+        .run_ui(
+            egui::RawInput {
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| app.show_tabs(ui, None),
+        )
+        .drop_without_applying_deltas();
+    for (index, id) in app.tabs.ids().collect::<Vec<_>>().into_iter().enumerate() {
+        let x = app.tabs.tab_drag_rects[index].left();
+        app.tabs
+            .tab_motion
+            .get_mut(&id)
+            .unwrap()
+            .update(x, Some(x + 10.0), 1.0);
+    }
+    let output = context.run_ui(
+        egui::RawInput {
+            time: Some(1.02),
+            ..Default::default()
+        },
+        |ui| app.show_tabs(ui, None),
+    );
+    for title in ["first.typ", "second.tex"] {
+        assert_eq!(output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == title)).count(), 1, "every tab must be painted exactly once, even with two landing animations: {title}");
+    }
+}

@@ -47,6 +47,10 @@ const FONT_LICENSES: &[(&str, &str)] = &[
     ),
     ("assets/fonts/notosans/OFL.txt", "licenses/NotoSans-OFL.txt"),
     ("assets/fonts/hack/LICENSE.md", "licenses/Hack-LICENSE.md"),
+    (
+        "assets/fonts/nerd/LICENSE.md",
+        "licenses/NerdFont-LICENSE.md",
+    ),
 ];
 const HACK_LICENSE_SHA256: &str =
     "1f61bb7c790c59b4b0ecdf304628b94e42ae4c8020094a8c3da73381ab212623";
