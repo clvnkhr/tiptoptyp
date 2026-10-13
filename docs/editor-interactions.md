@@ -149,12 +149,11 @@ standard streams. No terminal or shell runs implicitly. Quotes split arguments;
 `$VARIABLE`, `$(...)`, pipes and wildcard characters are passed literally. To
 use a shell or wrapper, select it explicitly as the custom executable.
 
-- `{args}` expands to the exact generated argument list, preserving paths with
-  spaces and non-UTF-8 paths. For example, Typst can use
-  `{args} --input draft=true`.
-- `{arg:N}` expands one generated argument by zero-based index. Omitting
-  `{args}` replaces the whole list; the custom command must still honor the
-  application's stdio protocol and generated output location.
+- Arguments shows the literal editable defaults for the selected binary, such as
+  `watch --diagnostic-format short --input draft=true`. Quoting groups values.
+  The app appends document/output paths, project roots, discovered fonts and
+  the options controlled by SyncTeX/offline settings. Reset restores the tool's
+  defaults; required watch/stdio/PDF protocol arguments are validated.
 - Environment is a JSON object, for example `{"MY_FLAG":"enabled"}`. Values
   override the inherited environment. Working directory defaults to the
   operation's document/project directory; an explicit override should be absolute.

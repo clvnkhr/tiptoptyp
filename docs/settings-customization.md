@@ -8,32 +8,61 @@ settings** applies valid edits through the same persistence path as the form.
 **Reload current settings** discards the draft. Unknown app keys, wrong types,
 invalid choices (with the field name and allowed options), invalid ranges,
 malformed command arguments/environment, and invalid working
-directories are rejected. Tool-specific configuration is an arbitrary JSON object:
-the receiving tool validates its own keys. Editing a draft does not change the app.
+directories are rejected. Tool-specific configuration must be a JSON object. Known Tinymist choices and
+types are checked before applying; app-owned preview keys and entry overrides
+are rejected. Other provider keys are validated by the receiving tool. Editing
+a draft does not change the app.
 
 ## Tool commands
 
-Each binary's **Command customization** section shows its effective customization.
-The default is `{args}`, environment `{}`, and a blank working directory. These
-mean generated arguments, inherited environment, and the operation's document or
-project directory. Reset restores these defaults. Hover the field labels for
-examples and links to that tool's documentation.
+Each binary's **Command customization** section shows its actual default arguments,
+editable directly. Environment starts as `{}` and working directory is blank,
+meaning inherited environment and the operation's document/project directory.
+Reset restores that tool's defaults. Hover field labels for examples and links.
+JSON stores this literal argument list in `command.argv`; the old template field
+has been removed.
+
+| Tool | Editable default arguments |
+|---|---|
+| Typst | `watch --diagnostic-format short` |
+| Tinymist | `lsp` |
+| Tectonic | `-X compile --untrusted --keep-logs --keep-intermediates` |
+| TexLab | Empty |
+| Badness | `lsp` |
+| tex-fmt | `--stdin --quiet` |
+| LaTeXdiff | Empty; markup, UTF-8 encoding, input paths and optional `--flatten` are managed by the dialog |
 
 - Arguments use shell-style quoting only; there is no shell execution, `$HOME`
-  expansion, or `~` expansion. `{args}` preserves generated arguments;
-  `{arg:0}` selects the first generated argument. Removing `{args}` replaces them.
-  For example, Typst: `{args} --font-path "/Users/me/My Fonts"`.
+  expansion, or `~` expansion. For example, Typst:
+  `watch --diagnostic-format short --font-path "/Users/me/My Fonts"`.
+  The app appends input/output paths, workspace roots, discovered fonts and
+  flags controlled by SyncTeX/offline settings. Protocol-critical arguments
+  are required, with a clear validation error if removed. Optional flags remain
+  the binary's responsibility. Argument placeholders are not supported.
 - Environment is a JSON object of strings, merged into the inherited environment.
-  Example for a Rust tool supporting this variable: `{"RUST_LOG":"debug"}`.
+  For Tectonic: `{"TECTONIC_CACHE_DIR":"/Users/me/tectonic-cache"}`.
 - Working directory is blank or an existing absolute directory, such as
-  `/Users/me/Documents/My Paper`. Do not surround this field with quotes.
+  `/Users/me/paper`. Do not surround this field with quotes.
   Changing it changes where the tool resolves relative paths.
 
 Under **TeX tools**, expand **TexLab configuration (JSON)** or **Badness
 configuration (JSON)** to see and override the actual configuration sent to the
 server. Each has Apply and Reset. TexLab defaults leave compilation to Tectonic
-and formatting/linting to Badness. Badness has no app-specific configuration
-(default `{}`). Tool commands and server configuration are separate settings.
+and formatting/linting to Badness, with a 300 ms diagnostic delay and fuzzy
+case-insensitive completion. Badness shows its existing fallback defaults,
+`{"lineWidth":80,"indentWidth":2}`. These affect formatting unless a discovered
+configuration file supplies the project style. Tool commands and server
+configuration are separate settings.
+
+Under Tinymist, **Tinymist configuration (JSON)** exposes formatter choice,
+width, indentation, prose wrapping, input variables, lint policy and export policy.
+The app retains the preview connection and designated entry. `typstExtraArgs`
+accepts only `--input=KEY=VALUE` options. Lint stays disabled; its trigger is
+ready for `onType` because this client does not send explicit save notifications.
+
+Open Settings → **? Help & tips** → **Tool options** for ten useful choices
+per bundled tool, copyable examples, defaults, tradeoffs and official references. Badness LSP formatting/lint options mostly
+belong in `badness.toml`; `--config` and `--no-config` do not affect this mode.
 
 **Ignored diagnostic codes** accepts comma-separated codes, for example
 `redundant-script-braces`. No codes are ignored by default. The Problems label
@@ -61,20 +90,19 @@ contract applies to new adapters as well as Harper, Tinymist and TeX services.
 
 ## Custom snippets and linked fields
 
-Settings → Editor → Custom snippets lets you add a prefix, language (`typst`, `tex`, or `both`), description, and snippet body. The same entries are editable in the `snippets` JSON array. For example:
+Settings → Editor → Custom snippets opens a source form. Search Settings for **snippets** or **completion** to open it directly. Choose **Add Typst snippet** or **Add TeX snippet**, edit the prefix and description, and write ordinary source in the highlighted editor with line numbers and rainbow brackets. Pick Typst, TeX or Both, then **Save snippets**. Invalid drafts cannot be saved and do not change live completions; **Revert changes** restores the saved list. Each language starts with an editable example.
 
-```json
-{
-  "snippets": [{
-    "prefix": "env",
-    "description": "LaTeX environment",
-    "language": "tex",
-    "body": "\\begin{${1:enumerate}}\n  $0\n\\end{$1}"
-  }]
-}
+Backslashes, dollar math, quotes and line breaks are literal: do not JSON-escape them. Optional editable fields use `${1:name}`; repeat `${1}` to mirror the same field, and use `${0}` for the final cursor. Bare `$1`, `$0` and `$x$` are ordinary source. For example, a TeX snippet with prefix `env`:
+
+```tex
+\begin{${1:enumerate}}
+  ${0}
+\end{${1}}
 ```
 
-Type the prefix and accept its completion. Numbered fields are selected for replacement; repeated field numbers mirror the edit. Tab/Shift+Tab navigate fields, `$0` finishes, and Escape ends linked editing. Undo/redo apply to both copies together. Editing outside the selected field or switching documents ends the session. Placeholder defaults and first-choice lists are supported; snippet transformations are not.
+Type the prefix and accept its completion. Tab/Shift+Tab navigate fields, Escape ends linked editing, and undo/redo apply to mirrored copies together. Editing outside the selected field or switching documents ends the session. Numbered defaults and nested fields are supported; transformations and variables are not interpreted in custom source. Server-provided snippets continue to use standard LSP syntax.
+
+Autocomplete uses a link for a language server, a document for a custom snippet and code brackets for a built-in command. Font suggestions show only their name, rendered in that font. Completion rows have no explanatory tooltips. Filtering and rebasing preserve each candidate's provider.
 
 ## TeX tools in auto-miTeX documents
 
@@ -100,3 +128,27 @@ Images preserve their original colors by default. Enable **Dark images** to inve
 image colors when the Page choice is dark; Light pages show original colors.
 The image header's contrast icon toggles this same preference. This affects the
 preview only: source image files and transparency remain unchanged.
+
+## LaTeXdiff
+
+**Edit → LaTeXdiff…** opens an owned modal above the document, including native
+previews. Choose an older and newer `.tex` file. When the newer file is the
+current editor document, **Include unsaved editor changes** compares a snapshot
+against the older file on disk. By default both paths are the current file, so
+this compares the last saved version against the editor.
+
+**Generate diff** runs LaTeXdiff in the background. Choose underlined, coloured,
+or traditional markup; **Include subfiles** expands `\input` and `\include`.
+**Copy source** copies the result; **Save and open…** saves a separate `.tex`,
+opens it in a new tab, and selects it for the existing TeX/PDF preview pipeline.
+Save beside the newer document to preserve relative graphics/bibliography paths.
+Neither original may be used as the output path. Esc or Cmd+W closes the modal;
+closing cancels generation and removes its temporary snapshot. A confirmed save
+is completed even if its initiating window closes.
+
+LaTeXdiff is discovered in PATH or MacTeX's `/Library/TeX/texbin`; it is not
+bundled. **LaTeXdiff options**, also under Settings → TeX tools, provides its
+executable, literal arguments, JSON environment and working directory. For
+example `--math-markup=1` marks whole equations. All options are available in
+settings JSON at `latexdiff`; invalid markup choices and malformed command
+settings are rejected. See the [official manual](https://mirrors.ctan.org/support/latexdiff/doc/latexdiff-man.pdf).

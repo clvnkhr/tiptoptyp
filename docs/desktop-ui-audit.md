@@ -1782,3 +1782,815 @@ never activates the application or retries input, and cannot replace the origina
 failure. Two negative contracts establish these properties, bringing the Python
 contract suite to 40 passing tests. The final repeat compiled and exercised the
 updated Swift observer as well as the unchanged optimized app binary.
+
+
+## Local-definition uses — 2026-10-09
+
+The former definition-site decoration did not match the intended behavior.
+Exact-position regressions first failed for Typst and TeX: declarations were
+marked instead of uses. Settings now exposes **Highlight uses of local
+definitions** (`highlight_local_uses`), with matching search, Help and JSON
+behavior. Uses follow local Typst scopes, parameters, loop/destructuring bindings
+and set/show customizations, or lexical TeX macro/environment declarations.
+Declaration targets, comments, literal code, unrelated member names and argument
+labels retain ordinary syntax highlighting. Imported definitions and dynamic
+TeX expansion are outside this source-local feature.
+
+The editor reuses its incremental Typst syntax tree. Decorated jobs and byte
+ranges remain cached across unchanged frames; code-mode offsets participate in
+cache invalidation. Tests cover identical bytes switched between code/markup,
+Unicode positions, namespace shadowing, global TeX declarations, malformed
+literal delimiters and non-TeX generic files. The full document diff shares the
+same setting and complete-source highlighting path. Partial Typst declarations
+keep their targets unmarked while valid unfinished expressions retain their
+uses. Import aliases shadow earlier local names even when explicit imported
+items accompany the alias; exact-range tests cover both cases.
+
+Final verification: 1,775 Rust tests passed (44 opt-in tests ignored), 17 xtask
+tests and 49 Python UI-harness contracts passed; formatting and strict Clippy
+passed for ordinary and desktop-test builds. Native `editor_preferences` passed
+in `run-fdrc8k1y` using real macOS clicks, keys and scrolling, including the new
+setting and unchanged document source. No framebuffer was required or captured;
+this is behavioral evidence, not a visual-composition claim.
+
+The optimized, interleaved source-change scanner comparison and limitations are
+recorded in `performance-results/local-use-highlights-2026-10-09.json`. Cached
+frames perform no additional scan; the measurement excludes layout and native
+rendering. User `todo.typ` and `todo.pdf` contents were preserved.
+
+## Buffered Tinymist mode acceptance (9 October 2026)
+
+The separate experimental backend preserves the original Tinymist default.
+The actual app journey `partial_preview` passed in
+`.tiptoptyp/desktop-ui-tests/run-sy9mviyc`, using debug build
+`tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791556459)`, SHA256
+`1f95c4d6ce77b34db7bcdcc786b9a449d9f1fb4933ae575f5bed442be030be9a`.
+Accessibility/input permissions were available and the desktop was unlocked.
+This is native-input/read-only-state evidence, distinct from the optimized
+standalone frontend performance comparison.
+
+The 48-page fixture checked actual DOM partial mode and visible ink after
+End, Outline return, four wheel transitions, zoom/fit, and reopening partial
+mode. Populated pages stayed between 4 and 6 while 1–2 pages were visible; no
+fallback canvases appeared. Switching to the original mode required a fresh
+ready DOM with partial disabled and all 48 pages populated. The existing
+three-page full-mode browser integration also passed
+(`/private/tmp/ttt-partial-original-e2e.log`).
+
+The first native attempt exposed an observation bug: readiness tested the
+first page's ink bounding box, even when that offscreen page was intentionally
+empty. The corrected probe checks initialized, visible page ink. Three Node
+regressions cover offscreen first-page placeholders, visible missing ink and
+uninitialized/loading modules. The initial failing app receipt remains
+`run-7zlqmyu_`. The platform's synthetic Home event did not navigate the
+WebKit scroller (`run-val6xlch`); the acceptance journey uses the actual
+Outline control to return to the beginning. No Home behavior change is claimed.
+
+The new mode changes SVG contents/scheduling, not native placement. Opt-in
+app tracing retained, for example:
+
+```text
+ui.preview.bounds available=(838.5,30.0)-(1400.0,860.0) clip=(838.5,30.0)-(1400.0,860.0) egui=(842.5,30.0)-(1400.0,860.0) native=(842.5,30.0)-(1400.0,860.0) viewport=(0.0,0.0)-(1400.0,884.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000
+```
+
+Fresh standalone Chromium and WebKit PNGs were inspected for rendered ink.
+They are not composed desktop captures, and no composed visual pass is claimed.
+Required Rust checks passed: 1779 tests with 44 intentionally ignored, 17 xtask
+tests, formatting and strict ordinary/desktop-feature Clippy. Adapter 23 Node
+tests, observation 3 Node tests and 52 Python contract tests also passed.
+The profiling-enabled Rust suite, strict profiling-feature Clippy and xtask
+formatting check passed as well. See
+[Buffered Tinymist preview](preview-partial-rendering.md) for the architecture,
+reproduction commands and measurement receipt.
+
+
+## Tinymist follow-up performance and shared full-mode optimizations (9 October 2026)
+
+The optional partial mode now reuses one geometry snapshot per request and
+acknowledged SVG ink for geometry-only changes with the same page buffer. A
+normal patch remains mandatory for source updates, force requests, missing
+associations and a changed buffered range. Exact-position regressions cover
+far-page Ctrl-wheel zoom, fixed CSS page gaps and source repagination. The
+normal patch fallback originally shifted the pointer's source point from
+200 to 216.36 source units on page 18; the shared page-local restoration fixes
+both paths. Final page-42 browser checks force the ordinary fallback and retain
+visible ink with first/second-frame errors under 0.51 CSS pixels.
+
+The exact black-on-white palette bypass and retained-link handler deduplication
+also apply to full SVG document previews. Before the fix, initializing a
+retained link 101 times attached 101 mousemove/mouseleave handler pairs; after,
+it attaches one. New/replaced links, exceptions and unrelated preview modes
+retain their required behavior. Full rendering bounds, source FIFO and Canvas
+fallback are unchanged. Near-identity and dark/tinted/inverted palettes must
+still have exactly one transfer filter. The native palette assertion now
+recognizes the identity bypass in either mode, with negatives for tinted ink,
+tinted paper and inversion.
+
+Final adapter `06c0dba75e657f3806efaa7bc47274b0437e207291b3c7f47085bb515cdcbb33`
+and stricter browser probe `de605d06540e9fbbe6de7b742704e84523b9fb772c02e13371e94e0d9bbea21e`
+passed separate 48-page full and partial browser acceptance. Receipts:
+`.tiptoptyp/profiles/partial-optimize-2026-10-09/strict-final-full-acceptance.json`
+and `strict-final-partial-acceptance.json`. The checks exercise links/history,
+source changes during scrolling, first-frame ink, resize/zoom, idle work, five
+palette transitions, page clipping and decoded paper/colored-ink pixels.
+Fresh dark and restored-white PNGs were inspected in both modes under
+`.tiptoptyp/screenshots/agent-review/partial-optimize`. These are standalone
+Chromium viewport captures, not composed native editor evidence. No native
+bounds or maintained gallery contract changed.
+
+Matched browser pairs record partial p95 gaps 33.4→16.8 ms and full gaps
+199.9→183.3 ms. The native partial pair records 114→78 ms using the same optimized
+Swift binary, backing scale 2, fixture/workload/reset and low power mode off.
+It measured adapter `c7ba6f…` before the shared full-mode ports, not final
+`06c0db…`. Total native workload time and rescale wall spans increased; do not
+claim a CPU/overall-work reduction. Full sample ranges overlap substantially.
+See `performance-results/tinymist-partial-followup-2026-10-09.json` for preserved
+metadata, all sample summaries, selected raw receipts and interpretation.
+
+The probe audit found that the installed Playwright poller treated async
+predicates as truthy Promises, allowing unresolved false readiness to pass.
+Source readiness and frame stability now use explicit bounded awaited RAF
+observations. Older browser results remain separate from the selected matched
+probe-`94320b…` pairs. A later review found that the first stability
+observation did not need to contain fitted ink; both observations must now be
+valid rendered page-18 states at equal viewport dimensions. Before-only
+scale/page/dummy/size negatives cover this gap. Selected timing receipts still
+assert matching final physical start states; they do not prove the strengthened
+first-observation contract. Final acceptance was rerun with the stricter probe. Native instrumentation uses a single bounded, cancellable
+RAF sampler; a stale in-flight callback cannot restart it. Idle checks now
+reject rescale, rerender or viewport work. Probe source and binary hashes
+must agree before reuse; the optimized build and Swift version are recorded.
+A failed 90-second compile in `20261009T155415Z-98akhxri` was retained; build cleanup now terminates
+remaining process-group descendants on timeout/interruption, with bounded
+waits and a 240-second compile limit. Fresh compilation and reuse passed.
+
+The real-app follow-up was attempted twice and did not pass. `run-6lg2dzjl`
+failed while opening the fixture before preview checks: the native Open button
+was unavailable, although the desktop was unlocked and permissions available.
+Its cause remains unclassified; no production Open fix is claimed. The journey
+now establishes source-editor keyboard ownership before issuing Open.
+`run-cpohohk5` then failed initial document-window registration after the Mac
+locked; failure evidence identifies `com.apple.loginwindow` and locked state.
+The final read-only preflight still reports `accessibility=true`, `input=true`,
+`desktop=false`, `locked=true`. The pending command is
+`python3 scripts/test-desktop-ui.py --journey partial_preview`; this unavailable
+interaction check is not a pass. Earlier `run-sy9mviyc` covers the initial mode,
+not these follow-up changes, and is retained separately.
+
+Final ordinary verification passed formatting, strict all-target Clippy,
+1779 Rust tests (44 intentionally ignored), 17 xtask tests, 48 Node contracts,
+53 Python UI-harness contracts, browser probe self-tests and native runner
+comparability/phase/binary-reuse/build-cleanup self-tests. Final strict profiling
+Clippy, the profiling-enabled suite (1787 passed; 44 intentionally ignored) and
+xtask formatting also passed. User `todo.typ` and
+`todo.pdf` hashes are unchanged by this work.
+
+
+## Buffered Tinymist becomes the Typst default (9 October 2026)
+
+`PreviewPreference::default()` now chooses `InteractivePartial`; AppSettings
+uses that same default. Fresh/no-storage profiles and a missing preview-choice
+field load the buffered viewer. Explicit stored full-Tinymist or PDFium choices
+remain selected. The complete viewer stays available as a separate Settings
+option. TeX and opened PDFs retain their PDFium routing. Built-in Help and
+current backend documentation describe the new policy. Low-level service
+options and deliberate full/PDFium QA fixtures keep their explicit choices.
+
+Focused persistence tests cover absent storage, an empty store, omitted JSON
+fields, and every explicit backend through both persistence and Settings JSON.
+The semantic Settings selector still starts from explicit full mode to verify
+that selecting partial emits an update. Toolbar tests cover the default partial
+viewer, explicit full viewer and TeX under both Tinymist preferences; the opened
+PDF test now starts beside the default partial Typst preview. No renderer,
+worker, cache or repaint algorithm changed; no new performance benchmark is
+needed for this selection-policy change.
+
+The real macOS `partial_preview` journey passed in
+`.tiptoptyp/desktop-ui-tests/run-nxohoeg1`, debug build
+`tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791574389)`, SHA256
+`742f6c7c87c9c71f5ddca729d4dc1c17bcb0e1ae4d15d9206a80f943e9961832`.
+Accessibility/input permissions were available and the desktop was unlocked.
+The journey used a fresh isolated settings profile, observed the actual partial
+DOM before any backend change, then used native clicks/keys/wheel navigation
+on the 48-page fixture. Initial/End/Outline/wheel/zoom/fit/reopened-partial
+checks all retained visible ink, 4–6 populated pages and zero canvases. Switching
+to full required actual full mode with all 48 pages populated. It restored the
+initial session afterward. This passes the previously unavailable follow-up
+native interaction check, without erasing the earlier unclassified Open and
+locked-desktop failures. It is not a composed visual or performance claim.
+No screenshots or placement changes were needed for the default-setting change.
+
+Verification passed formatting, strict all-target Clippy, 1780 Rust tests
+(44 intentionally ignored), 17 xtask tests and 54 Python UI-harness contracts.
+The harness negatives reject wrong requested/effective backends and stale,
+loading or actual-full DOM observations when checking fresh default adoption.
+User `todo.typ` and `todo.pdf` contents were preserved.
+
+
+## Fractional-page partial zoom audit (9 October 2026)
+
+The reported tiny-only zoom symptom did not reproduce with Cmd+= / Cmd+- on the
+installed app's mathematics document, or with repeated buttons in standalone
+WebKit. Inspection confirmed that the installed app embedded adapter `06c0db…`.
+A separate, reproducible partial-mode bug was found: compiled ISO paper sizes
+are fractional, while the SVG exporter ceil-rounds paper dimensions. This
+invalidated the geometry reuse checks on every zoom. The new deterministic
+fractional-page regression failed before the fix and passes afterwards. Layout
+now follows SVG dimensions; WASM render-window bounds preserve compiled units.
+
+The browser probe now checks accumulated zoom against actual SVG scale and
+requires a covered small zoom to retain ink. Its A4 transform extends the known
+marker stripe to match the taller paper; pixel checks require marker color only
+where that known stripe intersects the viewport. Blank paper and a horizontally
+panned-off stripe are not reported as missing ink. Both full and partial lanes
+passed sustained zoom, refill, source changes, navigation, and partial pointer
+anchoring with the fixed adapter `f2895d…`. Fresh standalone browser captures
+were inspected; they do not prove composed editor appearance.
+
+The matched Chromium workload retained the same probe/fixture/sidecar hashes,
+viewport, warmup and five fixed sample starts. Partial zoom-sequence patches
+fell from 19 to 2; the timed resize/scroll/zoom workload's median renders fell
+from 59 to 16. Median p95 frame gap remained about 16.8 ms. This is reduced
+renderer work, not evidence of smoother native pinch gestures. The checked-in
+[receipt](performance-results/tinymist-fractional-zoom-2026-10-09.json) records
+all samples and limits, including the additional untimed after-only pointer
+acceptance. Baseline was intentionally measure-only because the reuse contract
+fails. Physical trackpad pinch input has not been reproduced by the harness.
+
+Formatting, strict all-targets Clippy, 1,780 Rust tests (44 ignored), 17 xtask
+tests, 50 JavaScript contract tests, and 55 Python harness checks passed.
+The expanded real-app `partial_preview` journey verifies twelve native button
+steps, four native keyboard zoom steps and fit against fresh visible-paper
+geometry on 48 fractional A4 pages; its execution receipt is recorded below.
+
+
+The optimized native run passed: `.tiptoptyp/desktop-ui-tests/run-m8tiph7t`,
+`tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791580715)`, binary SHA-256
+`471471ec2e79969809fe1ee0a18d4e06d1323962f885c48fb1bf9f2c983f1ffd`.
+Accessibility/input/desktop checks were all available and the desktop was
+unlocked. The run confirmed the actual partial default, all repeated native
+zoom steps against paper scale, fit, distant coverage, full mode with 48/48
+populated pages, and reopened partial mode. The isolated profile/session was
+restored and the process exited successfully. This is native interaction
+coverage, not a composed-window screenshot or physical pinch test.
+
+
+## Sustained zoom and dense mathematical fixture (9 October 2026)
+
+The user identified trackpad pinch as the original input and confirmed that the
+preceding fractional-page fix resolves it. Physical pinch remains distinct from
+the harness's synthetic Ctrl-wheel events.
+
+A failing deterministic performance test recorded two physical layouts for
+each covered partial zoom frame and repeated cursor searches through unchanged
+ink. Covered zoom now applies scale, paper positions and pointer anchoring in one
+layout, and cursor discovery occurs after patches. The first draft deferred zoom
+before anchoring a normal fallback fetch; matched measurements exposed extra
+patches. A second failing regression required the first fetch to target the
+anchored destination. That ordering is fixed and all pointer/coverage/source
+queue invariants pass. Detached cursor decorations force a normal patch and are
+rediscovered; clearing cursor paths flushes the cached list.
+
+A full-viewer performance regression recorded 1,000 paper-transform reads on a
+1,000-page synthetic document. Full page tracking now binary-searches the first
+intersecting paper and visits overlapping papers only. Tests compare it with a
+complete reference scan across unequal heights, distant pages and zoom ratios
+from 0.1 to 10. Full rendering's source/patch/canvas behavior is unchanged.
+
+The new opt-in `tinymist-zoom-stress.typ` fixture compiles to 48 pages, including
+672 dense matrices and nested estimates, with unequal fractional paper widths.
+Its initial partial SVG has 52,636 nodes and some buffered positions exceed
+130,000; the earlier fixture had about 6,700 initially. Browser/native stress
+probes preserve coverage/ink/first-frame/idle checks and use a separately recorded
+320,000-node cap; the fast fixture retains its original 30,000-node cap. Both
+before and after adapters pass those contracts.
+
+Matched optimized WebKit runs (same native binary, three warmed samples, 900×700
+points at 2× backing scale) reduced the ten-step zoom phase from a median 5,062 ms
+to 2,905 ms and its rescale calls from 22 to 12. The full workload median fell
+from 9,173 ms to 7,119 ms; p95 RAF gap fell from 508 ms to 288 ms. Worst zoom
+steps remain around 0.5 seconds. Five matched Chromium samples have essentially
+unchanged combined p95 gaps around 217 ms. Inclusive wall spans are not CPU time.
+The checked-in [receipt](performance-results/tinymist-zoom-stress-2026-10-09.json)
+retains the measurements and their limits. Fresh standalone captures were
+inspected for paper/ink coverage; they do not prove composed editor appearance.
+
+The initial dense-full native check lost page ink after keyboard zoom. Separate
+standalone full-mode runs with both the preserved pre-optimization adapter and
+the current adapter exceeded the same 125-second probe budget. A two-second
+native CPU sample of the baseline WebKit process found SVG geometry/compositing
+work during scrolling; the process was CPU-bound with roughly 4 GB resident
+memory. Dense full rendering remains a failed capacity check, not a pass. The
+stress journey now explicitly uses the dense fixture for partial mode, the
+standard 48-page fixture for full zoom/last-page smoke checks, then returns to
+the dense partial entry. Both failure receipts remain in the measurement record.
+
+The larger journey also exposed test-driver traversal of the unrelated WebKit
+accessibility tree when pressing a native Open button. The driver now skips
+web areas and matches native button roles. Two-fixture cleanup explicitly closes
+fixture tab identities: an MRU transition to an original tab can no longer make
+the harness close that original tab. A deterministic regression covers that
+selection sequence and restores the original active/preview/backend identities.
+
+The final optimized native journey passed in
+`.tiptoptyp/desktop-ui-tests/run-8ehs8c0k`, version
+`tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791584816)`, binary SHA-256
+`ec20b2be8148923c05793aae52ace2d3b116eddb019a36381a0fb4316e00898f`.
+Accessibility/input/desktop checks passed with the desktop unlocked. It checked
+26 fresh partial coverage states, twelve native button zoom steps, four partial
+keyboard zoom steps, fit, distant refills, three full-viewer keyboard zoom steps
+on the standard fixture, full last-page tracking, and dense partial restoration.
+The original tab, preview entry and backend were restored. This is native input
+and read-only geometry evidence, not a composed-window screenshot or physical
+pinch automation.
+
+Required formatting, strict all-target Clippy, the full Rust suite (1,780 passed,
+44 ignored), and xtask tests (17 passed) passed. Adapter/renderer probe tests
+(53), desktop harness contracts (56), both browser-free fixture-bound checks and
+the native probe self-tests passed. The full-renderer browser integration passed
+with its obsolete identity-filter expectation corrected; exact white/black uses
+no SVG filter while tinted/inverted palettes retain the filter and pixel checks.
+No Rust profiling instrumentation changed in this task. The steady idle contract
+remains unchanged; heavy active rendering measurements above are separate from
+idle, cold startup and last-input-to-final-paint latency.
+
+The user's cancellation idea is recorded in the partial-rendering design notes.
+Queued viewport inputs already coalesce to the newest request; the pinned
+synchronous SVG patch cannot be interrupted by an event that has not run yet.
+A future interruptible scheduler should retain visible ink and ordered source
+patches, cancel obsolete viewport work at safe checkpoints, publish only the
+latest refill, and measure the last gesture input to the final correct frame.
+
+
+## Idle viewport image for Tinymist zoom — 10 October 2026
+
+Smooth Tinymist zoom is default-on for macOS and selectable in Preview settings.
+After 150 ms of settled idle, one bounded viewport capture is decoded. Zoom
+reuses that exact image element, cancels pending idle timers and rejects earlier
+in-flight captures, including gestures which return to their starting geometry.
+It never captures or decodes on demand. The native capture is capped below four
+million pixels; TIFF-to-PNG encoding runs on one background worker per live view.
+Source, palette, scroll and view changes invalidate old pixels. Disabled and
+unsupported paths retain normal zoom without extra paint frames or image work.
+
+The native journey exposed two additional bugs before handoff. Full Tinymist did
+not schedule an initial idle capture after its asynchronous final completion;
+now the cache observes that completion without a polling loop. Native End could
+remain at the first page after full zoom/fit; both viewers now handle Home/End
+explicitly while preserving modified keys and text-input ownership. Keyboard
+appearance inversion also invalidates cached pixels immediately.
+
+The final optimized real-app `partial_zoom_stress` journey passed in
+`.tiptoptyp/desktop-ui-tests/run-9f4_62e7`, version
+`tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791619904)`, binary SHA-256
+`70aa83b8bff53b4a1d4ae640d8ede78251db809bcea76a2dd6e7e35a9dd2edce`.
+It checked 26 fresh coverage states, settings toggle/release/reenable, and new
+keyboard cache hits/handoffs separately in the partial and full viewers. The
+actual native cache images were 1,618×2,408 pixels. The run restored the original
+session and retained preview bounds traces. An earlier locked run is recorded
+as unavailable, not passed; a temporary keep-awake assertion protected final
+runs without changing the Mac's permanent sleep settings.
+
+Matched optimized standalone WebKit runs used the dense 48-page fixture,
+900×700 points at 2× backing scale, three-second warmup and three measured samples
+per setting. Median ten-step zoom was 4,052 ms disabled versus 3,520 ms enabled;
+all 30 enabled inputs used the existing image. The final sharp DOM/RAF handoff
+was 415 ms disabled versus 447 ms enabled, and worst zoom RAF gaps remained near
+0.67 seconds. This does not claim faster final rendering, physical pinch input
+or final GPU-presentation latency. The Swift probe uses Cocoa PNG encoding;
+the real app's Rust worker was verified by the separate native journey.
+
+A fresh cached-transition PNG under
+`.tiptoptyp/screenshots/agent-review/partial-render-native/20261010T081856Z-camzvied`
+was inspected for page edges, clipping and retained ink. It is a standalone
+viewport visual scene, not proof of composed editor pixels. The
+[checked-in receipt](performance-results/tinymist-zoom-cache-2026-10-10.json)
+retains current code hashes, warmup/workload metadata, all measured samples,
+rejected experiments, native cache states and geometry trace examples.
+
+Required formatting, strict all-target Clippy, the full Rust suite (1,785 passed,
+44 ignored), xtask tests (17 passed), focused JavaScript tests (63 passed), and
+desktop harness contracts (56 passed) passed. The macOS-only checkbox assertion
+is gated for other platforms. No Rust profiling instrumentation or maintained
+framebuffer-gallery contract changed.
+
+
+## Native isolation of cached Tinymist zoom — 10 October 2026
+
+The earlier DOM-image overlay shared Tinymist's WebContent JavaScript thread.
+Its roughly 0.67-second browser-frame stalls explain the reported choppiness;
+a background PNG encoder did not isolate gesture transforms. That implementation
+is replaced by a native retained CGImage in a clipped Core Animation layer.
+AppKit gesture/key input transforms the layer on the app's main thread, separate
+from WebContent, and the compositor scales it without per-input pixel resampling,
+PNG/base64 transfer or browser decoding. Capture still starts only after 150 ms
+of settled idle, with one in-flight capture and fewer than four million pixels.
+
+Vector rendering keeps one request in flight and one latest replacement. Pointer
+anchors compose across intermediate inputs, including a round trip with residual
+pan. Exact revision/scale/token acknowledgements retire the image only after the
+latest sharp geometry is ready. Source/palette invalidation retires pixels without
+abandoning the final requested zoom; hiding/disabling aborts it. Bounds changes
+scale the native image without adding duplicate renderer requests. Cold-cache
+zoom uses the bounded renderer path. Local monitors retain the exact owner window
+and focused WebKit responder; sibling settings/editor keys pass through.
+
+The optimized native component regression deliberately blocked WebContent for
+800 ms and posted four owned AppKit Cmd+= events during that block. Three matched
+runs per lane used the same binary, 640×420 point viewport and three-second warmup,
+without concurrent builds or test workloads. Browser-path input responses were
+517–699 ms (median 608 ms); native layer-transform submissions were 0.11–0.44 ms
+(median 0.16 ms). All twelve native inputs reused the idle image while WebContent
+was blocked. Each run coalesced four inputs into two vector requests, reached
+1.1^4 scale and completed handoff. Negative responder ownership and hide/release
+checks passed. These are submission timings, not GPU presentation or dense-file
+final-render latency; vector completion is mocked in this isolation fixture.
+
+The final optimized real-app `partial_zoom_stress` journey passed in
+`.tiptoptyp/desktop-ui-tests/run-bimbqtl8`, version
+`tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791654976)`, SHA-256
+`75d56ccd704545982f2441c07d59542303c0a0eb5b54444c355eac2ce15d4793`.
+The effective partial and full backends were verified. It checked 26 fresh
+partial coverage states, twelve native button zooms, four partial and three full
+native keyboard zooms, native raster hits in both modes, latest sharp coverage,
+fit, distant refill, settings disable/reenable and original-session restoration.
+The dense 48-page fixture exercises partial rendering; the standard 48-page
+fixture exercises full rendering. The native rasters were 1,618×2,408 pixels.
+Relevant `ui.preview.bounds` traces and input/renderer receipts are retained.
+
+Three fresh native-layer PNGs under
+`.tiptoptyp/screenshots/agent-review/zoom-isolation/20261010T193803Z` were inspected
+for upright retained ink, scaled text and viewport clipping. They render the owned
+CALayer during the blocked interval, not the composed editor window. The separate
+Cua app-observation call stalled until the temporary app had exited, then returned
+file-not-found; whole-window visual composition is unverified. Physical trackpad
+pinch was not automated. A preliminary locked component run failed handoff and
+had incorrect child bounds; it is excluded from the final matched measurements.
+
+Formatting, strict all-target Clippy, the full Rust suite (1,789 passed, 44 ignored),
+xtask (17), JavaScript regressions (64), desktop harness contracts (56), and native
+probe self-tests passed. The external cached test runner stalled; only the owned
+processes were stopped and the complete suite was rerun with the repository's
+standard runner. No Rust profiling instrumentation or maintained theme-gallery
+contract changed. The old Swift bitmap-provider copy was removed so it cannot
+misrepresent production native input isolation.
+
+The [measurement receipt](performance-results/tinymist-zoom-native-2026-10-10.json)
+contains all six successful component runs, source/build hashes, power/environment
+metadata, the native journey states and bounds traces, and unavailable checks.
+
+
+## Buffered native zoom, opaque boundaries and divider feedback — 10 October 2026
+
+Cached gestures now defer Tinymist vector work until native pinch end/cancel or
+120 ms of quiet; a one-second watchdog handles a missing pinch-end event. One
+native timer, one vector flight and one latest replacement bound the work. The
+same path scales the image during divider changes and restores the source point
+at the viewport top. Identical bounds do no work.
+
+Idle capture includes half a viewport on each horizontal side and a full viewport
+above/below, with page backgrounds and referenced glyph/palette definitions. A
+passive offscreen WKWebView renders the inert copy without moving the live SVG,
+activating the app or taking focus. Scripts/external resources are disabled and
+its data store is ephemeral. One capture and the existing four-million-pixel cap
+remain; the larger buffer can reduce density. An opaque sRGB clip background
+blocks the live PDF beneath exposed edges. A native regression first exposed
+GenericRGB's 238→241 color mismatch; using sRGB removes that seam.
+
+The old unconstrained photo transform moved a zoomed-out first page down 100 px
+in the regression fixture. The new transform clamps to SVG scroll limits and
+centers below-fit paper. Full mode gets an absolute scroll target; partial mode
+gets page-local/gap-fraction anchors so fixed-size gaps do not shift its final
+content point. Tests cover end limits, gutters, moving anchors and mixed
+zoom/resize coalescing. Cached page metadata is reused, not allocated on every
+viewport observation.
+
+Final formatting, strict all-target Clippy, Rust (1,798 passed, 44 ignored),
+xtask (17), JavaScript (76) and harness contracts (56) passed. Actual bundled
+Tinymist frontend checks passed for full and partial mode, including bounded
+nonempty paper copies, glyph dependencies, unchanged live source/scroll geometry,
+and light/dark palette propagation. The isolated native regression passed with
+activation prohibited: all four owned zoom keys moved pixels during an 800 ms
+WebContent stall, sent one final vector request and handed off. Zoom-out opacity,
+horizontal midpoint, four child-width changes, one final resize request, retained
+keyboard ownership and release passed. The fixture mocks vector completion;
+its debug submission timings are not a release/dense-document speed comparison.
+
+Fresh browser-buffer and isolated native clip-layer PNGs under
+`.tiptoptyp/screenshots/agent-review/zoom-buffer` were inspected for retained ink,
+clipping, opacity and horizontal alignment. The isolated clip's root coordinate
+system differs from its host; it does not prove screen-space vertical placement
+or the composed editor transition. No maintained framebuffer/gallery contract
+changed.
+
+The release baseline completed, but both deferred comparison attempts lost
+foreground input ownership to Codex; the missing events never advanced native
+revision. Those runs are excluded. The user then declined an idle interval, so
+final whole-app `partial_zoom_stress` (including newly added divider drags),
+composed native bounds/visual confirmation, physical pinch and final paired timing
+remain unavailable. No 10× or final-render speedup is claimed. The
+[buffer/defer receipt](performance-results/tinymist-zoom-buffer-2026-10-10.json)
+retains source hashes, raw component observations, checks and exclusions.
+
+Final review also found and reproduced a cold-start resize race: the JS helper
+could claim a resize before the native cache was initialized, then wait for an
+acknowledgement that never existed. It now claims resizing only with an admitted
+image or an already active native request. Uninitialized/cold views retain normal
+Tinymist sizing. The isolated native fixture also receives real browser resize
+events, and deterministic coverage verifies startup and active ownership.
+
+
+## Cached zoom at document edges and image resource bounds — 10 October 2026
+
+The real pinned Tinymist frontend reproduced a 235-pixel partial-layout height
+error at half zoom near the end of the 48-page dense fixture. The cached transform
+scaled the fixed 10-pixel page gaps. A failing bottom-edge geometry regression
+preceded the fix; the new model scales page ink separately from gaps and computes
+the same bounds and page-local/gap-fraction anchor as the actual frontend. Resizing
+also preserves current horizontal scroll instead of restoring capture-time scroll.
+
+Native image layers now submit only visible intersections and normalized texture
+rectangles. Partial page slices share one immutable CGImage; offscreen slices are
+hidden and pages outside the bounded capture do not allocate layers. A 10,000-page
+regression allocates only three slices. Per-input forced Core Animation flushes
+were removed. After capture, the reused passive WKWebView loads a blank document
+and shrinks to 1×1; navigation identity rejects callbacks from an older/parked load.
+Retained image pixels remain usable through subsequent zoom and recapture.
+
+Formatting, strict all-target Clippy, Rust (1,804 passed, 44 ignored), xtask (17),
+JavaScript (76) and desktop harness contracts (56) passed. The headless real
+full/partial edge probe passed all 24 cases. The latest native own-window regression
+passed mock opacity/centering/resize checks and actual full/partial Tinymist checks,
+asserting the effective backend, a parked 1×1 capture view, image updates during
+an 800 ms WebContent stall, one final vector request and sharp handoff. No global
+input or application activation was used. Fresh native clip PNGs under
+`.tiptoptyp/screenshots/agent-review/zoom-edge` were inspected for retained ink,
+clipping and opaque boundaries. Their isolated root coordinates cannot establish
+composed editor placement or screen-space vertical centering.
+
+Three matched release submission runs per lane show no clear CPU improvement
+(about 10–11 µs/input), and do not measure presented frames, GPU cost, RSS savings
+or dense-document final-render latency. Raw samples, build/source hashes, commands
+and unavailable checks are in the
+[edge/resource receipt](performance-results/tinymist-zoom-edges-2026-10-10.json).
+The full editor `partial_zoom_stress` journey, composed-window bounds observation
+and physical trackpad pinch remain unavailable because the user declined an idle
+foreground interval. The implementation changes image geometry/cropping, not the
+outer native preview rectangle.
+
+After all checks, both the main Cargo target and the separate xtask target were
+cleaned at the user's request (32.8 GiB and 78.9 MiB reported by Cargo). The final
+optimized app/probes and raw evidence remain under
+`.tiptoptyp/profiles/zoom-edge-final`; screenshots remain under `.tiptoptyp/screenshots`.
+
+
+## Native zoom cache continuity and atomic refresh — 11 October 2026
+
+A failing deterministic reproduction showed that sharp handoff discarded valid
+pixels during idle recapture. The native layer now hides and retains those pixels
+and their transform. A detached replacement cannot overwrite the admitted image's
+geometry. Native acceptance is acknowledged before JavaScript promotes metadata;
+source changes and input races reject late results without retiring usable pixels.
+There is at most one capture and one prepared replacement. Retained pixels are
+used only while they cover the visible paper; an uncovered zoom-out immediately
+uses the live renderer instead of covering missing ink with an opaque proxy.
+
+Formatting, strict all-target Clippy, opt-in native Clippy, Rust (1,806 passed,
+44 ignored), xtask (17), JavaScript (82), and desktop harness contracts (56) passed.
+Optimized own-window tests passed the delayed-admission race on the mock and actual
+full/partial Tinymist frontends, verifying the effective backend. They also verify
+updates during an 800 ms WebContent stall, one final vector request, refresh
+recovery, immediate uncovered-paper fallback, covered zoom-out opacity and four
+child-width changes. Sibling keyboard ownership and hidden/disabled cache release
+passed. The first mock opacity run exposed a stale test assumption that a proxy
+should remain even outside its captured paper; fallback and covered opacity now
+have separate assertions.
+
+Fresh isolated clip PNGs under `.tiptoptyp/screenshots/agent-review/zoom-reuse`
+and `zoom-edge/native-{full,partial}-zoom-reuse-native-final.png` were inspected
+for retained ink, centered mock paper and opaque gutters. They do not prove
+composed-editor placement or screen-space vertical centering. No outer preview
+bounds or maintained gallery contract changed.
+
+Three matched interleaved release runs retained native feedback for the next
+gesture (42–64 µs submission) where the baseline had no image and waited about
+830 ms for sharp output during a forced stall. Final render latency was unchanged.
+This is a component timing, not a GPU/frame-rate or whole-app smoothness guarantee.
+Transient raster retention can reach eight million pixels during refresh, plus
+capture/GPU overhead; no RSS savings are claimed. The full editor
+`partial_zoom_stress` journey and physical pinch/composed-window checks remain
+unavailable because the user declined an idle foreground interval. Own-window
+probes prohibit activation and never post global input. Raw evidence and exclusions
+are in the [cache-reuse receipt](performance-results/tinymist-zoom-reuse-2026-10-11.json).
+
+The previous task's cache clean required an optimized rebuild. A stalled local
+compiler-cache build was bypassed only for these checks; the final compiler and
+documentation compiler match. No additional target clean or installed-app change
+was made during this task.
+
+
+## Installed editor hidden by native blur (2026-10-11)
+
+Reproduced the grey editor in the installed release and established a failing
+native regression before fixing it. An `NSVisualEffectView` added as the lowest
+child still covered the parent CGL output. The higher Tinymist child remained
+visible, which made the window look like a preview-only app. Previous framebuffer
+captures did not include this native overlay and therefore missed the bug.
+
+Removed the blur overlay while preserving ordinary translucency. Native tests
+enforce no decoration children over CGL output, unchanged content/window identity,
+resize behavior and sibling-window isolation. The renderer was initially treated
+as incompatible with soft blur. The later sibling-placement investigation disproved
+that broad claim; the old explanatory tooltip was removed. The fix adds no worker,
+per-frame native mutation or idle repaint.
+
+Formatting, strict all-target Clippy, all Rust suites (including 1,667 application
+tests) and 17 xtask tests passed. The opt-in native property check passed. The
+native lifecycle fixture initially timed out without application activation; its
+bundled rerun completed with one canceled close, a committed close and no failure.
+The real-app layout journey passed with Tinymist partial actually active and
+ready, with Accessibility/input permissions available. Its build receipt and
+`ui.preview.bounds` traces are retained in
+`.tiptoptyp/desktop-ui-tests/run-rx_w0a52`.
+
+A fresh release framebuffer was inspected at
+`.tiptoptyp/screenshots/agent-review/blur-recovery/1791709418350-0001-main.png`.
+A separate CUA whole-window observation verified that the corrected release
+interface was visible in native composition; that isolated main scene does not
+establish Tinymist-specific pixel composition. The bundle passed package and
+signature verification. Logs, receipt and limitations are retained beside the
+framebuffer in `review.json`.
+
+### Preview buffer preparation — 11 October 2026
+
+The live WebContent renderer no longer deep-copies and traverses dense SVG trees
+to prepare its idle zoom buffer. The native matched probe measures 289→50 ms for
+three dense partial pages (79,176 buffered nodes), and 31→7 ms in standard full
+mode. Canonical output equivalence preserves paper geometry, ink and dependencies.
+See `docs/performance-results/tinymist-buffer-preparation-2026-10-11.json` for
+source/binary hashes, raw samples, environment and limitations. These are
+preparation spans, not final vector-render or GPU-frame measurements.
+
+The real `partial_zoom_stress` journey passed in
+`.tiptoptyp/desktop-ui-tests/run-zj2nocly`, with the effective backends verified as
+Tinymist partial and Tinymist full, real input permissions enabled and the desktop
+unlocked. Both native zoom bursts sent one final vector request; cached divider
+drags and far-page coverage passed. The initial run
+`run-fb766wuw` exposed a harness input-owner error: it sent End after dragging a
+root divider while preview keyboard focus was false. The journey now explicitly
+clicks and checks preview focus before its viewer-only key. No production focus
+behavior or renderer timing assertion was weakened. Native bounds traces are
+retained in `app.log`; the inspected fresh browser buffer raster proves isolated
+serialization/raster appearance only, not composed-editor pixels.
+
+All required checks passed with four Rust test workers, plus the profiling-feature
+checks, 88 deterministic JavaScript tests and 56 desktop harness tests. The first
+default-concurrency Rust run hit seven existing fake-tool startup deadlines; the
+Tinymist fixtures passed serially and both entire suites passed with bounded
+concurrency. Fixture timeouts and test selection were unchanged.
+
+### Automatic TeX package imports — 11 October 2026
+
+A shared import planner now handles TeX table Apply (both grid and Source), drawn
+symbols, math-environment conversion, completions/snippets and new templates.
+It adds the required packages and tabularray libraries within the same document
+transaction as the generated code. Existing imports/options/comments remain
+intact; Cancel and failed/stale validation leave the document untouched. Undo
+restores both the preamble and body, with Unicode cursors and linked snippet
+fields remapped together. Existing packages are not removed automatically.
+
+Sixteen focused regressions cover all supported table environments, column
+providers, rules/colours, library deduplication, literal/comment exclusion,
+package loading order, preamble configuration, built-in versus packaged symbols,
+line endings, cursor/tabstop mapping and atomic Undo. The new native table case
+starts with a missing siunitx import, checks Cancel/Apply/Undo/Redo and reopens
+and reapplies without duplicating it. The final optimized `tables` journey
+passed on macOS 14.6.1/Apple Silicon with Accessibility and input permission:
+`.tiptoptyp/desktop-ui-tests/run-en41ar8p/result.json`, build
+`1de1cf7896a4-dirty.1791721435`, executable SHA-256
+`bc55a7e8c758c13b27d2e153e18e42aef5813cbd124bc7420036b8f5789e9976`.
+This is native interaction evidence, not a pixel/composition claim. No maintained
+visual contract changed, so no framebuffer or gallery recapture was required.
+
+The audit caught and fixed imports preceding external preambles, array dependencies
+following arydshln, and template imports following configuration commands that
+needed them. The symbol transaction regression also caught a context-lock
+reentry in focus restoration; editor identity is now read before acquiring the
+focus write lock. Formatting, strict all-target clippy, all 1,875 Rust tests
+(with four workers, 50 existing opt-in tests ignored), 17 xtask tests and 56
+Python harness contract tests passed. Final logs are retained in
+`/private/tmp/ttt-imports-{full-tests,xtask-tests,native}-final.log`.
+
+Import work runs only on an explicit generation/apply action: there is no idle
+polling, per-frame parsing, filesystem access or background package installation.
+The manager is lexical, not a TeX evaluator. A fragment with no preamble reports
+required imports in its main document instead of inserting invalid body-level
+imports. Imported preamble/class internals and dynamic package names are not
+expanded; user options remain authoritative.
+
+
+## Source snippet editing and completion providers — 2026-10-11
+
+Custom snippets now use a dedicated, searchable source form with per-language examples, language/prefix/description controls, cached Typst/TeX highlighting, line numbers, rainbow brackets and explicit Save/Revert. Invalid drafts never replace live snippets. Raw math dollars, backslashes, quotes and line breaks are preserved; only explicit numbered `${1:name}`, `${1}` and `${0}` fields are interpreted. Escaped TeX dollars before braces remain literal. A failing boundary test first demonstrated that `\${1}` was incorrectly consumed; the adapter now respects escaped dollars. Literal opening braces in placeholder defaults also exposed and fixed a shared LSP delimiter-parser bug.
+
+Completion candidates carry provider metadata through filtering/rebasing independently of their insertion format. Rows show a language-server link, custom-snippet document, built-in code brackets or a font A, with concise provider tooltips and accessible labels. A mixed-provider semantic test covers hover stability, acceptance and dismissal.
+
+The native `snippets` journey uses the source form for both languages, verifies scoping, literal `$x$`, `\${2}` and doubled backslashes, then checks linked editing and undo/redo. The `completion` journey checks both embedded built-in TeX and real Tinymist responses. Its initial server probe failed because the standalone fixture was plain text and had no server session; the fixture is now Typst and the journey waits for actual editor LSP readiness.
+
+Final optimized build: `1de1cf7896a4-dirty.1791724404`, SHA-256 `6f73d4d679868a52d56d9636e297d1a943e8fe557e987005e8e63216c6c715fc`. Native input checks passed on macOS 14.6.1 / Apple Silicon, with Accessibility and input permissions available: `.tiptoptyp/desktop-ui-tests/run-islwuixo` (snippets, including the escaped-dollar boundary) and `run-vcio6m20` (completion). Fresh affected viewport captures were inspected and retained under `.tiptoptyp/screenshots/agent-review/snippets`. These are viewport framebuffers, not proof of composed native preview geometry; this change does not modify native preview bounds or the stable theme gallery.
+
+All required checks passed: formatting, clippy with warnings denied (normal and desktop-ui-tests builds), 1,879 enabled Rust tests (50 existing opt-in ignores), 17 xtask tests and 56 runner contract checks. No performance benchmark was needed: provider metadata adds no background work; only the selected snippet is rendered, highlighting is cached, and validation runs on edits without idle polling or repaint loops. Unrelated working-tree changes, including todo source/output, were preserved.
+
+
+### 2026-10-11: Font names in completion
+
+Completion rows no longer create explanatory hover tooltips. Installed-font rows show only the family name, rendered using that family's primary face; the font badge, detail label and separate sample footer are removed. Provider symbols remain on other completion rows. The Settings help reflects this behavior.
+
+Font names reuse the existing worker-owned rasterization and private atlases. The list paints visible rows plus overscan and reuses sixteen completion cache slots; font browsing does not replace the application's font definitions. Tests verify cached texture reuse, bounded slots, keyboard scrolling to either end of a long list, and stable bounds on hover. A fresh native image exposed a small overflow with two results: the actual themed button was 21 points tall against a 20-point virtual row. The regression fails before reducing vertical button padding and passes afterward; provider glyph reservation also uses the supporting text size.
+
+Verification: fmt, default and desktop-feature strict Clippy, 1,881 Rust tests (50 existing opt-in ignored), 17 xtask tests, and 56 Python harness contract tests passed. The final real macOS completion journey passed in `.tiptoptyp/desktop-ui-tests/run-j7vqnpy6`, with Accessibility/input permission and an unlocked desktop. Its final build was debug `tiptoptyp Dev 0.1.0 (1de1cf7896a4-dirty.1791739511)`, SHA-256 `4d16c11c3f7c69bfa78ddf4378d88d4708db814e57668d88ef53b6cc283dd012`. This is interaction evidence, not a performance benchmark.
+
+Inspected the fresh viewport framebuffer `.tiptoptyp/screenshots/agent-review/font-completion/run-j7vqnpy6/1791739549815-0004-main.png`: Times and Times New Roman show their serif faces, the list has no footer or redundant scrollbar, and row text is aligned and unclipped. This verifies the egui popup, not native-child preview composition. The maintained gallery was regenerated in one production app session and all 25 PNGs decoded and validated.
+
+
+## Native blur restored in normal builds (2026-10-11)
+
+Soft blur is enabled by default and has an Appearance checkbox. The material is a
+sibling below the existing renderer, with behind-window blending; neither the
+renderer nor its input owner is replaced. Each viewport owns one cached material.
+AppKit handles resizing; a bounded parent check repairs fullscreen reparenting.
+Theme changes reuse the view, and disabling blur removes it on the main thread.
+No CPU image blur, additional worker or idle repaint loop is introduced. Native
+compositor cost was not benchmarked.
+
+The real-editor `background` journey passed with both Tinymist and PDFium actually
+ready: three off/on cycles per backend, Light/Dark, separate Settings ownership,
+Find typing/close, native resize and unchanged source. Native lifecycle checks
+passed fullscreen/return (including shadow restoration), minimize/restore,
+Settings hide/reopen, focus handoff and canceled/committed document close. The
+property check passed stable content/responder identity and repeated attach/remove
+cleanup. Required formatting, strict default/native-feature Clippy, 1,882 Rust
+tests (50 opt-in tests ignored), 17 xtask tests and 56 Python contracts passed.
+
+The 25-image release gallery was freshly regenerated and validated. Main light,
+main dark and Settings framebuffers were inspected. A fresh CUA composed Tinymist
+window remained visible with the new underlay; framebuffer images alone exclude
+that material and native child. The strength of blur for desktop content behind
+the window and Intel hardware remain unmeasured. Optional-review timeouts and a
+retained-query harness mistake are recorded as failed attempts, not passes.
+
+The production bundle passed package/signature checks and replaced the closed
+installed app. Its previous bundle is preserved for rollback. Build hashes,
+geometry traces, successful native evidence and limitations are retained in
+`.tiptoptyp/profiles/native-blur-restored/review.json`; the passing journey is
+`.tiptoptyp/desktop-ui-tests/run-iykerwyp`, and the native lifecycle report is
+`.tiptoptyp/native-window-tests/run-qfpuiu6s/result.txt`.
+
+
+### Partial-render exception recovery follow-up — 12 October 2026
+
+A read-only audit found an existing failure-path gap outside the current successful
+zoom/divider fixes. `flushPartial` clears coverage after a renderer exception
+(`src/preview_navigation.js:348`), while the snapshot acknowledgement requires a
+ready frame (`src/preview_zoom_snapshot.js:79`). The native `Pipeline::dispatch`
+then refuses replacement work while the previous flight remains occupied
+(`src/preview_zoom_snapshot.rs:185`). Further zoom input alone may therefore wait
+for scroll/reload or another renderer recovery. This was identified from source;
+no native exception-injection reproduction or recovery verification was run.
+
+Follow-up: report a failed render with its token and revision, release only the
+matching native flight, hide/retire its feedback, and allow subsequent input to
+recover. Reject obsolete failure callbacks and keep recovery bounded; do not add
+an automatic retry or idle repaint loop. The present anchor and retained-image
+changes cover successful rendering and do not introduce this exception path.
+
+
+### Delayed preview resize acknowledgement — 12 October 2026
+
+The unlocked final-release journey in `run-x9cq1ixd` failed after widening the
+partial preview: native request 54 remained in flight with the cached image
+visible. The desktop was unlocked and the tested app remained foreground.
+A deterministic contract reproduced the missing ready acknowledgement when a
+second DOM resize arrived between sharp DOM mutation and its paint callback.
+The snapshot helper now preserves an active flight's acknowledgement and treats
+an already acknowledged viewport size as a no-op. Two focused contracts cover
+notifications both before and after the handoff; newer native requests retain
+their existing stale-callback cancellation.
+
+The corrected release journey `run-ggn_p9d3` passed three narrow/widen cycles in
+each actual Tinymist mode, native keyboard bursts and source-preserving cleanup.
+All 12 divider anchors were within 0.43 CSS pixels. Matched native before/after
+probes used the same optimized flags, viewport, mode-specific fixture and warmup;
+the corrected probes passed with forced duplicate resize notifications and
+captured/sharp ink within 0.85 CSS pixels. The original baseline still failed
+full-mode alignment and cache retention. The repository transition receipt
+retains hashes, native reports, 3,175 final `ui.preview.bounds` lines and the
+failed attempts. Fresh isolated native-layer PNGs were inspected; composed
+desktop pixels and physical trackpad presentation remain unverified.
+
+A separate attempt, `run-e8z9eyub`, timed out reopening the preview controls after
+scrolling despite a fresh stable hit target, foreground app and granted input.
+The identical build passed that path on the next complete journey. This remains
+an unexplained intermittent click failure, not an excluded permission failure
+or an automatic retry inside the test. Investigate native event/focus ownership
+if it recurs; no speculative popup fix was included in the resize change.

@@ -24,10 +24,13 @@ Under **Settings → Editor**:
   Custom TeX macro expansion is not evaluated. Tabs use the configured space indent,
   or four columns when Tab inserts tab characters. Wrapped continuations,
   folded rows and non-leading whitespace are not decorated.
-- **Highlight definitions and redefinitions** is optional. It emphasizes local
-  Typst binding names, assignments and set targets, and TeX macro/environment
-  declaration names. This is a source decoration, not execution or cross-file
-  semantic resolution; dynamic TeX expansion is not evaluated.
+- **Highlight uses of local definitions** is optional. It emphasizes references
+  and calls to names defined or changed in this document; declaration sites keep
+  their normal syntax highlighting. Typst bindings follow lexical scope, including
+  function parameters, loop variables and destructuring. TeX macro and custom
+  environment uses are recognized from source declarations. Comments, strings,
+  raw/verbatim text and unrelated field or argument names are excluded. This
+  does not resolve imported definitions or evaluate dynamic TeX expansion.
 - **Custom text highlights** contains literal, case-sensitive text matches and
   per-row foreground, background, weight, italic, underline and strike controls,
   with a live sample. TODO/FIXME have accent, bold, underlined defaults.
@@ -59,7 +62,7 @@ image geometry.
 # Checks
 
 `editor_preferences` is the native journey for Help, settings search, guide,
-definition and wrap toggles, source preservation and close/focus routing.
+local-use and wrap toggles, source preservation and close/focus routing.
 `controls` additionally verifies short native tooltip width, captures its own
 focused viewport when review is requested, and exercises preview navigation,
 dragging and repeated Outline transitions for both preview backends.
@@ -75,3 +78,12 @@ The optimized layout-cache measurement is opt-in:
 cargo test --release --bin tiptoptyp decoration_cost_measurement -- \
   --ignored --nocapture --test-threads=1
 ```
+
+The source-change scanner comparison is recorded in
+`docs/performance-results/local-use-highlights-2026-10-09.json`. On macOS arm64,
+the same optimized binary compared the former declaration scanner with the new
+use scanner over 500 definitions and 500 uses. Median costs per edit were
+3.895 → 0.336 ms for Typst and 0.620 → 0.145 ms for TeX. Typst reuses the editor's
+incremental syntax tree, eliminating the former second parse. These are scanner
+measurements, excluding layout, shaping, native rendering and preview work;
+cached highlighting is covered separately by deterministic cache-reuse tests.

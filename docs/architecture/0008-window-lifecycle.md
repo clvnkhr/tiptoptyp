@@ -240,3 +240,79 @@ on one compact row, Replace adds one row, and Activity labels wrap without state
 suffixes. The trace is retained beside them. This offline fixture uses PDFium
 and emits no native preview bounds; these captures verify individual viewports,
 not composed desktop overlap or every native focus transition.
+
+
+## Translucent backgrounds (2026-10-11)
+
+macOS document and persistent-tool windows retain native alpha capability. Their
+decorations, shadow and traffic-light policies stay explicit. Appearance has a
+transparency toggle and background opacity (80% by default). Turning the effect
+off paints the original opaque background; toggling never replaces a window.
+Other platforms retain opaque backgrounds.
+
+The initial implementation inserted an `NSVisualEffectView` below the renderer's
+other children. That was still **above the parent's OpenGL output**: the installed
+editor became entirely grey while its higher native Tinymist child remained
+visible. Offscreen renderer captures could not show this native overlay. A new
+native regression failed before the fix; a composed-window observation also
+reproduced the user's screenshot.
+
+The initial recovery removed the native blur child. The restored implementation
+uses a sibling `NSVisualEffectView` below the existing renderer, with AppKit's
+behind-window blending and under-window material. Soft blur is on by default in
+normal builds and can be disabled in Appearance. A radius slider (0–50, default
+8 rather than the material’s 30) adjusts its existing native Gaussian filter.
+A decorative-view `updateLayer` override reapplies the radius when AppKit changes
+the material. This uses private filter KVC; missing filters retain the native
+material. No custom backdrop or content-view replacement is introduced. Renderer
+children and the responder chain stay intact. The owner handle is explicit,
+with no key-window lookup or activation. Native configuration is cached by
+viewport identity, enabled state, blur preference, radius and appearance.
+Theme changes reuse the material view; opacity changes require no native update.
+AppKit resizes the underlay; a bounded parent check repairs fullscreen reparenting.
+The viewport cache removes the underlay on AppKit's main thread when released.
+
+The theme palette remains opaque. Only the viewport-local UI style and background
+paint change: the window tint is drawn once, nested panel frames remain clear, and
+editor/Explorer/terminal surfaces add a light shade. Text, controls, diagnostics,
+images and PDF page colors retain their normal appearance. There is no added idle
+repaint loop, per-frame native view mutation, image blur or resampling.
+
+Deterministic tests cover JSON limits, local palette isolation and stable settings
+geometry. Native tests enforce no decoration children over CGL output, stable
+content/window identity, resize and sibling-window isolation. Framebuffer PNGs
+show renderer pixels but cannot prove native composition; that needs a separate
+whole-window observation.
+
+### Blur placement investigation (2026-10-11)
+
+An isolated copy of the actual editor was tested with a temporary AppKit probe.
+The effective backend was Tinymist partial, with native readiness confirmed by
+the desktop inspection endpoint. Fresh CUA window observations reproduced the
+old child placement hiding the editor, while a sibling `NSVisualEffectView`
+ordered below the existing `WinitView` kept the editor and native preview visible.
+The sibling's parent was the content view's existing superview; the renderer was
+not reparented or replaced. Find received native typing, and window zoom resized
+the underlay from 1400×885 to 1512×887 points. Content-view and first-responder
+identities stayed unchanged when attaching/removing the effect.
+
+The initial probe observation did not establish how desktop content behind the
+window was blurred; the contrasting backdrop was not visible in its window image.
+A repeated-transition probe experiment was invalidated by using a numeric signal
+that is not SIGUSR1 on macOS; it is not counted as coverage. That investigation
+changed no behavior. Subsequent restoration enables the sibling placement in
+normal builds and defaults, with native geometry/lifecycle tests and a real-editor
+journey covering both preview backends, Settings, repeated toggles, appearance,
+resize and keyboard input.
+
+Do not replace the window's content view with a wrapper: winit 0.30.13's
+`WindowDelegate::view` casts `window.contentView()` to `WinitView`, assuming it
+still owns that object. The restored underlay must retain that identity, remain
+below the renderer, follow native geometry, and be removed with its owner.
+AppKit's behind-window blending is the intended effect; a CPU screenshot blur
+or renderer migration is not required by this placement experiment.
+
+Probe source, binary hash, native geometry and limitations are recorded in
+`.tiptoptyp/profiles/native-blur-investigation/review.json`. Apple references:
+[behind-window blending](https://developer.apple.com/documentation/appkit/nsvisualeffectview/blendingmode-swift.enum/behindwindow)
+and [under-window material](https://developer.apple.com/documentation/appkit/nsvisualeffectview/material-swift.enum/underwindowbackground).

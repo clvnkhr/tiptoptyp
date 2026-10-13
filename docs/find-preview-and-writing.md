@@ -83,3 +83,63 @@ The desktop observation tool captured the owner separately, so combined native
 window stacking was not visually verified; ownership/geometry/native input
 regressions and the shared popup window policy cover it structurally.
 Logs and the retained `ui.preview.bounds` trace are in `.tiptoptyp/find-overlay/`.
+
+
+## Mathematical prose boundary audit (8 October 2026)
+
+Harper's pinned adapters discarded punctuation inside equations. TeX's upstream
+mask also converted a hidden single newline plus indentation into a paragraph,
+splitting a correct sentence around display math or a formatting command. Typst's
+post-lint equation exclusion then removed genuine sentence-wide warnings.
+
+The language-specific prose adapters now retain terminal top-level commas,
+semicolons, colons and periods at their original Unicode-scalar positions, while
+keeping each equation an opaque semantic object. A display equation does not
+start a paragraph by itself. Actual blank lines, headings, list boundaries and
+explicit TeX paragraph commands still separate prose. Math labels and closing
+syntax after terminal punctuation do not hide the next sentence's first word.
+Sentence-initial spelling mistakes after equation punctuation remain eligible;
+the existing proper-name heuristic applies only within a sentence.
+
+The adapters conservatively leave decimal points, tuples, nested matrix content,
+ASCII ellipses, factorials, question-mark notation and unfinished equations
+opaque. TeX `\text{...}` annotations remain checked, while literal code payloads
+remain excluded. Typst technical named arguments are excluded before grammar
+runs, rather than discarding any resulting lint that overlaps an equation. The
+Typst adapter also repairs upstream argument-token ordering only when necessary.
+No macro expansion or TeX execution is used for writing checks.
+
+[Reviewed mathematical vocabulary](../assets/dictionaries/README.md) now includes
+whole hyphenated compounds and additional operator/PDE terms. Unknown spelling,
+repeated words and capitalization rules remain enabled; the generic spelling
+message has not been hidden or treated as a separate class of error.
+
+All parsing remains on the existing delayed writing worker, with its existing
+size limit and request coalescing. There is no new per-frame parsing, worker,
+repaint timer, or UI-thread dictionary construction. Compound recognition uses
+one in-place pass with bounded lookups and retains token capacity; deterministic
+regressions cover long unknown chains and source gaps. These changes improve
+correctness and make no claim of faster grammar processing.
+
+The checked-in `manual-tests/harper-math-prose.typ` and `.tex` fixtures cover
+punctuation both inside and outside display math, aligned TeX, indented formatting,
+ordinary prose, compounds and names. The `harper_math_prose` desktop journey opens
+both real files, verifies a completed clean result, types a spelling mistake and
+repeated word, verifies their exact original locations and file paths, and then
+checks stale-result retention followed by a fresh clean result. Completion is
+observed against the exact document revision and settings, not inferred from
+an idle previous result. This is semantic/native interaction coverage, not
+composed visual evidence; no UI pixels or layout contract changed.
+
+
+Validation for this audit: all 1,730 executed Rust tests, 17 xtask tests and
+45 desktop-harness contract tests pass. Formatting and strict all-target Clippy
+pass both normally and with `desktop-ui-tests`. The focused prose/worker suite
+and malformed-TeX scanner regressions pass after recorded failing reproductions.
+
+The attempted native command was
+`caffeinate -diu -t900 python3 scripts/test-desktop-ui.py --journey harper_math_prose --release`.
+It stopped at preflight because the Mac was locked (`desktop: false`,
+`locked: true`), with Accessibility and input permissions already enabled.
+No app interaction was executed, so native coverage remains unverified. The
+attempt's evidence directory is `.tiptoptyp/desktop-ui-tests/run-y7vf7t93`.

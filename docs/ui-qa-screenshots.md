@@ -88,7 +88,7 @@ The accepted scenes and their framebuffer targets are:
 | `explorer-context-menu` | `popup` | Explorer right-click menu |
 | `unicode-completion` | `main` | Hebrew, mathematical, and alchemical glyphs in symbol completions |
 | `draw-symbol` | `main` | Dark handwriting ink with ranked, right-aligned language-specific commands on translucent backgrounds |
-| `font-completion` | `main` | Fuzzy font completion with a lazily loaded font sample |
+| `font-completion` | `main` | Fuzzy font completion with family names rendered in their own fonts |
 | `settings-font-picker` | `settings` | Searchable font picker and the same live font sample used in hover cards |
 | `git-editor` | `main` | Default-open Git section, badges, line totals, and gutter markers |
 | `git-chunk` | `main` | Full-document comparison with an editable current column, normal syntax colors beneath Git overrides, and stage/unstage/revert/navigation controls |

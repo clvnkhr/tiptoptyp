@@ -34,6 +34,7 @@ python3 scripts/test-desktop-ui.py --journey tex
 python3 scripts/test-desktop-ui.py --journey tex_editing
 python3 scripts/test-desktop-ui.py --journey tex_intelligence
 python3 scripts/test-desktop-ui.py --journey tex_save
+python3 scripts/test-desktop-ui.py --journey harper_math_prose --release
 ```
 
 The runner compiles a separate `desktop-ui-tests` feature build and copies it
@@ -117,6 +118,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | tex_editing | Named `.tex` file, Unicode caret and undo/redo, 320-line source, `%` comment round trips including active line endpoints, math/bracket selection wrapping, literal TeX command search/replace with undo/redo; disabled autosave leaves disk unchanged |
 | tex_intelligence | Real TexLab/Badness readiness and Badness lint output; Harper prose versus math/text boundaries, old Harper/Badness diagnostics retained until refreshed, Problems navigation, accepting a document-defined TexLab command with undo/redo |
 | tex_save | New untyped buffer saved as `.tex` through the native panel, exact disk contents, manual save, clean close and reopening the saved file |
+| harper_math_prose | Real Typst and TeX mathematical-prose fixtures; clean completed diagnostics across display punctuation and compounds, native typing of a typo and repeated word at exact source locations/original paths, stale results retained after correction until a fresh clean result arrives |
 | editing | Typing and Unicode replacement, undo/redo caret and saved-state indicator, acknowledged multiline paste, upward mouse/keyboard newline selection, direction-preserving comment round trips including a zero-column or blank active endpoint |
 | search | Query focus, next/previous, case/regex toggles, replace one/all, undo and Escape |
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
@@ -127,7 +129,9 @@ now exercised through the real app, and the lower-level coverage retained.
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
 | controls | Both engines: stable outline popup size, app-switch hide/restore, outline/history/pages/zoom/fit/search, minimize/reopen, detach/return |
 | settings_search | Cmd+N and Cmd+5 cannot change the document behind Settings; Cmd+F focuses Settings search without opening document Find; typing, repeated Cmd+F, search destinations and highlight expiry; Cmd+W closes Settings and preserves the document |
-| background | Switch to Tinymist with its pane hidden; frontend finishes loading; reveal reuses it and paints pages |
+| partial_preview | A standalone fresh profile first proves buffered Typst is the actual default renderer; a real 48-page A4 document with fractional point sizes then exercises partial preview; native End, Outline and wheel navigation refill visible ink, repeated zoom buttons and keyboard events grow/shrink actual paper geometry, and fit preserves coverage, and full → partial switching preserves both choices and restores the original session |
+| partial_zoom_stress | The higher-resolution viewport cache is admitted, its setting disables/releases and reenables it, and real keyboard zoom records fresh cache hits/handoffs in both Tinymist viewers and advances the production native compositor counters; Home/End work after zoom/fit; opt-in dense 48-page matrix/nested-math fixture with unequal fractional widths; real-app partial zoom/refills on the dense fixture, full-viewer keyboard zoom and last-page tracking on the standard 48-page fixture, then return to the dense partial entry; actual paper-scale/ink assertions, cached native feedback through three narrow/widen cycles in each viewer, no stranded render flight after delayed duplicate resize notifications, and native/sharp scroll-anchor comparisons within 1.1 CSS pixels, and identity-based session cleanup |
+| background | Hidden Tinymist frontend loads before reveal; sibling blur stays below document/Settings renderers in Tinymist and PDFium; repeated off/on and theme transitions, native resize, Find typing and source preservation |
 | focus | Two document windows; Settings opened/closed from alternating owners; native focus returns to each owner; minimize/restore, Finder app switch, close second window once |
 | preview | Pin a real Typst fixture; switch PDFium → Tinymist through Settings; require the selected renderer to become ready; light/dark × comfy transitions; applied palette and live Tinymist DOM checks |
 | pdf_output | Tinymist live preview and engine refresh do not create an adjacent PDF; PDF button and Cmd+R commit actual PDF bytes, edits mark it stale without overwriting it, failed builds retain the old file and clear the queue, corrected builds recover, and PDFium cache refresh does not write the adjacent file |
@@ -241,9 +245,7 @@ resizes while Find retains keyboard focus. It does not edit Rectangle preference
 
 ### Linked snippets
 
-The `snippets` journey configures a custom TeX environment snippet through Settings JSON,
-invokes completion, types into its selected name, and checks the mirrored closing
-environment plus undo/redo. Run it with `scripts/test-desktop-ui.py --journey snippets`.
+The `snippets` journey creates Typst and TeX snippets through the highlighted source form (no JSON), saves them, verifies language scoping and the provider symbol, and checks literal dollar math/backslashes plus linked-field edits and undo/redo. Run it with `scripts/test-desktop-ui.py --journey snippets`.
 The native driver rejects a locked desktop before attempting input.
 
 ### Drawing recognition
@@ -275,8 +277,10 @@ source without changing preview colors. `--capture-review` captures the PDFium
 focus outline and badge once; the root framebuffer cannot display the embedded
 Tinymist WebView, whose focus and keyboard behavior are checked separately.
 
-`editor_preferences` opens Settings Help, checks its Find routing, changes and
-restores indentation guides, definition highlighting and word wrapping, opens the
+`editor_preferences` opens Settings Help, expands each of the six bundled-tool
+references with native clicks and scrolling, requires the first and last option
+text and unchanged source,
+checks Help's Find routing, changes and restores indentation guides, highlighting uses of local definitions and word wrapping, opens the
 custom highlight section, and verifies that source text is unchanged. Use
 `--capture-review` to retain fresh Help/settings/editor viewport framebuffers.
 The `controls` journey also rejects an oversized short toolbar tooltip and, when
@@ -284,7 +288,7 @@ capturing, focuses that tooltip's native viewport before the screenshot shortcut
 
 ### Native TeX editing
 
-The three `tex_*` journeys run individually, together with `--journey tex`,
+The three `tex_*` journeys and `harper_math_prose` run individually, together with `--journey tex`,
 or as part of `all`, against named TeX files. Settings are changed through the real JSON editor and restored after
 the journey. They do not inject diagnostics, completion responses or editor
 handlers. The intelligence journey requires working pinned TexLab and Badness;
@@ -296,3 +300,14 @@ diagnostic counts/current revision and fingerprints, never diagnostic text.
 These are interaction checks, not typing-latency benchmarks or PDF rendering
 proof. TeX formatting, SyncTeX navigation and mixed Typst/TeX preview transitions
 remain separate coverage gaps.
+
+The `tables` journey additionally checks real Typst variable/spread samples and
+TeX macro samples, attempts to type into their read-only cells, edits a literal
+neighbour, and verifies that Apply preserves the original variable expressions.
+Sample fingerprints come from the actual configured compiler result.
+
+The table journey also opens tabularray and siunitx tables, verifies actual
+compiler samples, attempts to alter locked macro cells, edits their literal
+neighbours and checks that package options survive Apply/undo. It also starts with a missing siunitx import, verifies that Cancel leaves the preamble unchanged, checks automatic import insertion on Apply, restores both changes with one Undo/Redo, and reapplies without adding duplicate imports.
+
+The completion journey also requests installed fonts in a real Typst `text(font:)` argument, waits for the private name atlas to finish, captures the list when requested, and accepts the selected family without modifying the quote boundaries. Font rows show only the family name in that font.

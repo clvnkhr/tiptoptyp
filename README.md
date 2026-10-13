@@ -11,7 +11,8 @@ interactive vector preview, Typst for canonical PDF output, PDFium for PDF viewi
   bidirectional preview/source navigation
 - PDFium preview for TeX and opened PDFs: continuous scrolling, zoom, within-page
   text selection, page-based search, outlines and links. Recompiles retain the
-  previous page until replacement pixels are ready. Typst defaults to Tinymist;
+  previous page until replacement pixels are ready. Typst defaults to buffered
+  Tinymist partial preview;
   **Settings → Typst preview backend → PDFium** selects compiled-PDF preview.
 - Editable UTF-8 text files with Syntect highlighting, direct image previews,
   and direct native PDF viewing
@@ -142,7 +143,8 @@ TIPTOPTYP_TINYMIST=/absolute/path/to/tinymist \
 cargo run --release
 ```
 
-Tinymist is the default Typst preview on supported platforms. TeX output and
+Buffered Tinymist partial is the default Typst preview on supported platforms.
+The complete Tinymist renderer remains selectable in Settings. TeX output and
 opened PDFs always use PDFium. Tinymist may retry its own service, but failure
 never activates another renderer. Select PDFium explicitly for Typst on platforms
 without native Tinymist webviews. The bundled PDFium library is required and
@@ -360,7 +362,7 @@ because native notifications suppress changes below dot-directories; Tinymist
 still supplies the low-latency interactive preview.
 
 Tinymist runs as a separate LSP sidecar. tiptoptyp sends `didOpen` and full-buffer
-`didChange` notifications, starts Tinymist's documented default preview, and
+`didChange` notifications, starts the selected full or buffered partial preview, and
 embeds the localhost frontend it returns. Tinymist therefore owns incremental
 SVG rendering, source spans, hover behavior, and click mapping. tiptoptyp handles
 `window/showDocument` to reveal and select the corresponding native editor

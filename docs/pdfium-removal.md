@@ -2,7 +2,8 @@
 
 Rollback checkpoint: `00abc5f` retains both viewers and their comparison harness.
 
-Typst defaults to Tinymist. TeX output and opened PDFs always use PDFium;
+Typst defaults to buffered Tinymist partial preview; the complete Tinymist
+renderer remains selectable in Settings. TeX output and opened PDFs always use PDFium;
 Typst can explicitly select PDFium in Settings. Service recovery never changes
 the selected renderer. PDFium's pinned native library is validated before the
 editor opens; missing/incompatible libraries fail startup.
