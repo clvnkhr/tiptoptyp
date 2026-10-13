@@ -1,0 +1,60 @@
+% Compiler and native table-workbench package fixture. No source files are changed by sampling.
+\documentclass{article}
+\usepackage[table]{xcolor}
+\usepackage{array,booktabs,tabularx,tabulary,longtable,xltabular,siunitx,dcolumn,nicematrix,tabularray}
+\newcommand{\revenue}{60}
+\begin{document}
+\begin{tabular*}{\linewidth}[t]{@{\extracolsep{\fill}}lc}
+Star & \revenue \\
+\end{tabular*}
+
+\begin{tabulary}{\linewidth}{LJ}
+Tabulary & \revenue \\
+\end{tabulary}
+
+\begin{xltabular}[l]{\linewidth}{lX}
+Xltabular & \revenue \\
+\end{xltabular}
+
+\begin{longtable}{lc}
+\toprule
+Name & Value \\
+\endhead
+\rowcolor[gray]{0.9}
+Longtable & \revenue \\
+\bottomrule
+\end{longtable}
+
+\begin{NiceTabular}{lc}[hvlines]
+Nice & \revenue \\
+\end{NiceTabular}
+
+\begin{NiceTabular*}{\linewidth}{lc}[hvlines]
+NiceStar & \revenue \\
+\end{NiceTabular*}
+
+\begin{tblr}[baseline=T]{colspec={Q[l]X[2,r]},hlines,vlines}
+Tabularray & \revenue \\
+\end{tblr}
+
+\begin{longtblr}[caption={Example, kept}]{colspec={lc},rowhead=1,hlines}
+Name & Value \\
+Longray & \revenue \\
+\end{longtblr}
+
+\begin{talltblr}{lc}
+Tallray & \revenue \\
+\end{talltblr}
+
+\begin{tabular}{lS[table-format=2.0]}
+Siunitx & \revenue \\
+\end{tabular}
+
+\begin{tabular}{lD{.}{.}{2}}
+Dcolumn & \revenue \\
+\end{tabular}
+
+\begin{tabular}{lw{r}{2cm}W{c}{2cm}}
+Array & \revenue & Literal \\
+\end{tabular}
+\end{document}
