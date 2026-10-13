@@ -3,6 +3,7 @@ type WritingIdentity = (DocumentKey, bool, bool, crate::settings::WritingLanguag
 #[derive(Default)]
 pub(super) struct WritingState {
     observed: Option<WritingIdentity>,
+    completed: Option<WritingIdentity>,
     skipped: Option<&'static str>,
     deadline: Option<Instant>,
     job: LatestJob<(WritingIdentity, Vec<Diagnostic>)>,
@@ -10,6 +11,17 @@ pub(super) struct WritingState {
     pub(super) markers: Vec<usize>,
 }
 impl WritingState {
+    #[cfg(any(test, feature = "desktop-ui-tests"))]
+    pub(super) fn current(
+        &self,
+        key: DocumentKey,
+        grammar: bool,
+        unicode: bool,
+        language: crate::settings::WritingLanguage,
+    ) -> bool {
+        self.completed == Some((key, grammar, unicode, language))
+    }
+
     pub(super) fn activity(&self) -> crate::activity::Activity {
         if let Some(reason) = self.skipped {
             return crate::activity::Activity::Inactive(reason);
@@ -35,6 +47,7 @@ impl EditorApp {
             self.writing.job.supersede();
             self.writing.deadline = None;
             self.writing.observed = None;
+            self.writing.completed = None;
             self.writing.skipped = Some("No document is open");
             if !self.writing.diagnostics.is_empty() || !self.writing.markers.is_empty() {
                 self.writing.diagnostics.clear();
@@ -95,6 +108,7 @@ impl EditorApp {
                         )
                     })
                     .collect();
+                self.writing.completed = Some(completed);
                 self.writing.diagnostics = diagnostics;
                 self.update_tex_diagnostics();
             }
@@ -190,6 +204,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(app.writing.diagnostics.is_empty());
+        assert_eq!(app.writing.completed, app.writing.observed);
+        assert!(
+            app.writing
+                .current(identity.0, identity.1, identity.2, identity.3)
+        );
         app.writing.diagnostics = original;
         app.document_mut()
             .replace_unprojected_untitled("new document");
@@ -197,6 +216,33 @@ mod tests {
         assert!(
             app.writing.diagnostics.is_empty(),
             "never show another document's lints"
+        );
+    }
+
+    #[test]
+    fn current_writing_requires_a_completed_revision_and_the_same_settings() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        let old = app.document().key();
+        let language = crate::settings::WritingLanguage::British;
+        app.writing.observed = Some((old, true, false, language));
+        assert!(!app.writing.current(old, true, false, language));
+        app.writing.completed = app.writing.observed;
+        assert!(app.writing.current(old, true, false, language));
+        assert!(!app.writing.current(old, false, false, language));
+        assert!(!app.writing.current(old, true, true, language));
+        assert!(
+            !app.writing
+                .current(old, true, false, crate::settings::WritingLanguage::American)
+        );
+        app.document_mut()
+            .edit(CCursorRange::default(), |source| source.push('!'));
+        let new = app.document().key();
+        app.writing.observed = Some((new, true, false, language));
+        assert!(
+            !app.writing.current(new, true, false, language),
+            "scheduling a new request does not make stale diagnostics current"
         );
     }
 
@@ -224,6 +270,7 @@ mod tests {
         assert!(app.tabs.is_empty());
         assert!(!app.close_accepted());
         assert!(app.writing.deadline.is_none());
+        assert!(app.writing.completed.is_none());
         assert!(!app.writing.job.is_running());
         assert!(matches!(
             app.writing.activity(),

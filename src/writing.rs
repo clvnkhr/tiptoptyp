@@ -1,11 +1,13 @@
 //! Offline writing checks. Locations are Unicode scalar offsets, like Harper.
+mod spelling;
 mod tex_prose;
+mod typst_prose;
 use crate::{
     diagnostics::{Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource},
     document::DocumentKind,
 };
 use harper_core::{
-    Dialect, Document,
+    Dialect, Document, TokenStringExt,
     linting::{LintGroup, Linter},
     spell::{FstDictionary, MergedDictionary},
 };
@@ -24,6 +26,7 @@ static WRITING_DICTIONARY: LazyLock<Arc<MergedDictionary>> = LazyLock::new(|| {
     let curated = FstDictionary::curated();
     let words = MATH_WORDS
         .lines()
+        .flat_map(spelling::dictionary_variants)
         .filter(|word| !curated.contains_word_str(word))
         .map(|word| {
             (
@@ -52,25 +55,22 @@ pub(crate) fn check(
         && let Some(dialect) = writing_dialect(source, kind, language)
     {
         let dictionary = Arc::clone(&WRITING_DICTIONARY);
-        let document = if kind == DocumentKind::Tex {
-            Document::new(source, &tex_prose::TexProse, dictionary.as_ref())
-        } else {
-            Document::new(source, &harper_typst::Typst, dictionary.as_ref())
-        };
+        let document = Document::new(source, &Prose(kind), dictionary.as_ref());
         let mut linter = LintGroup::new_curated(dictionary, dialect);
-        let excluded = excluded_typst_ranges(source, kind);
         let characters: Vec<char> = source.chars().collect();
         let indentation = indentation_ranges(&characters);
+        let sentence_starts: Vec<_> = document
+            .iter_sentences()
+            .filter_map(|sentence| {
+                sentence
+                    .first_non_whitespace()
+                    .map(|token| token.span.start)
+            })
+            .collect();
         issues.extend(
             linter
                 .lint(&document)
                 .into_iter()
-                .filter(|lint| {
-                    let next = excluded.partition_point(|range| range.end <= lint.span.start);
-                    excluded
-                        .get(next)
-                        .is_none_or(|range| range.start >= lint.span.end)
-                })
                 .filter(|lint| {
                     let next = indentation.partition_point(|range| range.end <= lint.span.start);
                     !indentation.get(next).is_some_and(|range| {
@@ -79,7 +79,12 @@ pub(crate) fn check(
                 })
                 .filter(|lint| {
                     lint.lint_kind != harper_core::linting::LintKind::Spelling
-                        || !likely_name(&characters, lint.span.start, lint.span.end)
+                        || !likely_name(
+                            &characters,
+                            &sentence_starts,
+                            lint.span.start,
+                            lint.span.end,
+                        )
                 })
                 .map(|lint| (lint.span.start, lint.message, "Harper")),
         );
@@ -232,45 +237,30 @@ fn writing_dialect(
     }
 }
 
-// Harper deliberately reads Typst string literals as prose. Technical named
-// arguments and math are not prose; keep their original scalar coordinates.
-fn excluded_typst_ranges(source: &str, kind: DocumentKind) -> Vec<std::ops::Range<usize>> {
-    if kind != DocumentKind::Typst {
-        return Vec::new();
+/// One parser boundary keeps language-specific prose admission and compound
+/// recognition consistent. Tokens retain the original Unicode-scalar spans.
+struct Prose(DocumentKind);
+impl harper_core::parsers::Parser for Prose {
+    fn parse(&self, source: &[char]) -> Vec<harper_core::Token> {
+        let mut tokens = match self.0 {
+            DocumentKind::Tex => tex_prose::TexProse.parse(source),
+            DocumentKind::Typst => typst_prose::TypstProse.parse(source),
+            _ => Vec::new(),
+        };
+        spelling::merge_reviewed_compounds(source, &mut tokens);
+        tokens
     }
-    use typst_syntax::{LinkedNode, SyntaxKind, ast::Named};
-    fn visit(node: LinkedNode<'_>, offsets: &[usize], out: &mut Vec<std::ops::Range<usize>>) {
-        let excluded = node.kind() == SyntaxKind::Equation
-            || node.get().cast::<Named>().is_some_and(|arg| {
-                !matches!(
-                    arg.name().as_str(),
-                    "body" | "title" | "caption" | "alt" | "description"
-                )
-            });
-        if excluded {
-            let range = node.range();
-            out.push(offsets[range.start]..offsets[range.end]);
-        } else {
-            for child in node.children() {
-                visit(child, offsets, out);
-            }
-        }
-    }
-    let mut offsets = vec![0; source.len() + 1];
-    for (scalar, (byte, ch)) in source.char_indices().enumerate() {
-        offsets[byte..byte + ch.len_utf8()].fill(scalar);
-        offsets[byte + ch.len_utf8()] = scalar + 1;
-    }
-    let syntax = typst_syntax::Source::detached(source);
-    let mut excluded = Vec::new();
-    visit(LinkedNode::new(syntax.root()), &offsets, &mut excluded);
-    excluded
 }
 
 // A capitalized word in the middle of a sentence is usually a person's or
 // place's name. Do not exempt sentence-initial spelling mistakes or lowercase
 // prose, and retain every non-spelling rule for names.
-fn likely_name(source: &[char], start: usize, end: usize) -> bool {
+fn likely_name(source: &[char], sentence_starts: &[usize], start: usize, end: usize) -> bool {
+    // Equation punctuation is semantic even when closing source delimiters
+    // separate it from the next word. Do not hide that sentence's first typo.
+    if sentence_starts.binary_search(&start).is_ok() {
+        return false;
+    }
     let Some(word) = source.get(start..end) else {
         return false;
     };
@@ -287,6 +277,176 @@ fn likely_name(source: &[char], start: usize, end: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_harper_math_fixtures_only_report_intentionally_added_errors() {
+        for (kind, source) in [
+            (
+                DocumentKind::Typst,
+                include_str!("../manual-tests/harper-math-prose.typ"),
+            ),
+            (
+                DocumentKind::Tex,
+                include_str!("../manual-tests/harper-math-prose.tex"),
+            ),
+        ] {
+            let path = Path::new("fixture");
+            let issues = check(
+                source,
+                kind,
+                path,
+                true,
+                false,
+                crate::settings::WritingLanguage::Auto,
+            );
+            assert!(issues.is_empty(), "{kind:?}: {issues:?}");
+            let (prefix, suffix) = if kind == DocumentKind::Tex {
+                (
+                    source.strip_suffix("\\end{document}\n").unwrap(),
+                    "\\end{document}\n",
+                )
+            } else {
+                (source, "")
+            };
+            let edited = format!(
+                "{prefix}This sentence contains a misspelld word.\nThis is the the simple result.\n{suffix}"
+            );
+            let issues = check(
+                &edited,
+                kind,
+                path,
+                true,
+                false,
+                crate::settings::WritingLanguage::Auto,
+            );
+            let first_line = prefix.matches('\n').count() + 1;
+            let locations: Vec<_> = issues
+                .iter()
+                .map(|issue| {
+                    let location = issue.location.unwrap();
+                    (location.line, location.column)
+                })
+                .collect();
+            assert_eq!(
+                locations,
+                [(first_line, 26), (first_line + 1, 9)],
+                "{kind:?}: {issues:?}"
+            );
+            assert!(
+                issues
+                    .iter()
+                    .all(|issue| issue.source == DiagnosticSource::File(path.to_owned()))
+            );
+        }
+    }
+
+    #[test]
+    fn math_sentence_punctuation_does_not_exempt_sentence_initial_typos_as_names() {
+        for (kind, source) in [
+            (
+                DocumentKind::Typst,
+                "We obtain $ x = 1. $ Misspelld follows.",
+            ),
+            (DocumentKind::Tex, r"We obtain \[x=1.\] Misspelld follows."),
+        ] {
+            let issues = check(
+                source,
+                kind,
+                Path::new("fixture"),
+                true,
+                false,
+                crate::settings::WritingLanguage::British,
+            );
+            let column = source.find("Misspelld").unwrap() + 1;
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.location == Some(DiagnosticLocation { line: 1, column })),
+                "sentence-initial typo must remain visible: {kind:?}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn display_punctuation_keeps_continuations_and_real_capitalization_errors_distinct() {
+        for (kind, equation) in [
+            (DocumentKind::Typst, "$ x = 1PUNCT $"),
+            (DocumentKind::Tex, r"\[x=1PUNCT\]"),
+            (DocumentKind::Tex, r"\begin{align}x&=1PUNCT\end{align}"),
+        ] {
+            for punctuation in [",", "."] {
+                let source = format!(
+                    "We obtain\n{}\nthere are several solutions to this equation.",
+                    equation.replace("PUNCT", punctuation)
+                );
+                let issues = check(
+                    &source,
+                    kind,
+                    Path::new("fixture"),
+                    true,
+                    false,
+                    crate::settings::WritingLanguage::British,
+                );
+                if punctuation == "," {
+                    assert!(
+                        issues.is_empty(),
+                        "valid continuation: {kind:?}: {issues:?}"
+                    );
+                } else {
+                    assert!(
+                        issues.iter().any(|issue| issue.location
+                            == Some(DiagnosticLocation { line: 3, column: 1 })
+                            && issue.message.contains("capital")),
+                        "real sentence start needs capitalization: {kind:?}: {issues:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indented_tex_formatting_inside_a_math_continuation_is_not_a_new_sentence() {
+        let source = "The estimate holds\n\\[x=1,\\]\nwhere\n    \\emph{the theorem gives several solutions to this equation.}";
+        let issues = check(
+            source,
+            DocumentKind::Tex,
+            Path::new("fixture"),
+            true,
+            false,
+            crate::settings::WritingLanguage::British,
+        );
+        assert!(
+            issues.is_empty(),
+            "correct indented continuation: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn mathematical_dot_runs_do_not_make_continuations_capitalization_errors() {
+        for (kind, equation) in [
+            (DocumentKind::Typst, "$ xDOTS $"),
+            (DocumentKind::Tex, r"\[xDOTS\]"),
+        ] {
+            for dots in ["..", "...", "...."] {
+                let source = format!(
+                    "The sequence\n{}\ncontinues with several terms.",
+                    equation.replace("DOTS", dots)
+                );
+                let issues = check(
+                    &source,
+                    kind,
+                    Path::new("fixture"),
+                    true,
+                    false,
+                    crate::settings::WritingLanguage::British,
+                );
+                assert!(
+                    issues.is_empty(),
+                    "mathematical ellipsis: {kind:?}: {issues:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn mathematical_prose_is_accepted_in_typst_and_tex_without_hiding_errors() {
@@ -351,10 +511,9 @@ mod tests {
         let words: Vec<_> = MATH_WORDS.lines().collect();
         assert!(words.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(
-            words
-                .iter()
-                .all(|word| word.len() >= 4
-                    && word.bytes().all(|letter| letter.is_ascii_lowercase()))
+            words.iter().all(|word| word.len() >= 4
+                && word.split('-').all(|part| !part.is_empty()
+                    && part.bytes().all(|letter| letter.is_ascii_lowercase())))
         );
         let dictionary = Arc::clone(&WRITING_DICTIONARY);
         assert!(Arc::ptr_eq(&dictionary, &WRITING_DICTIONARY));

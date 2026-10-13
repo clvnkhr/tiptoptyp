@@ -156,6 +156,34 @@ impl EditorApp {
             "preview_generation": format!("{:?}", self.tinymist_sync.generation),
             }).as_object().unwrap().clone(),
         );
+        interaction["writing_current"] = serde_json::json!(
+            !self.tabs.is_empty()
+                && self.writing.current(
+                    self.document().key(),
+                    self.settings.english_grammar,
+                    self.settings.unicode_warnings,
+                    self.settings.writing_language
+                )
+        );
+        interaction["writing_locations"] = serde_json::json!(
+            self.writing
+                .diagnostics
+                .iter()
+                .filter_map(|diagnostic| diagnostic
+                    .location
+                    .map(|location| [location.line, location.column]))
+                .collect::<Vec<_>>()
+        );
+        interaction["writing_paths"] = serde_json::json!(
+            self.writing
+                .diagnostics
+                .iter()
+                .filter_map(|diagnostic| match &diagnostic.source {
+                    DiagnosticSource::File(path) => Some(path),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        );
         interaction["format_after_math_conversion"] =
             serde_json::json!(self.settings.format_after_math_conversion);
         interaction["explorer_panel_width"] = serde_json::json!(
