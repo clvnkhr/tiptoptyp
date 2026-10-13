@@ -1,21 +1,24 @@
 // Opt-in test against the real pinned frontend. No production browser dependency.
 // TIPTOPTYP_PLAYWRIGHT=/path/to/playwright TIPTOPTYP_TEST_TINYMIST=/path/to/tinymist
-const { chromium } = require(process.env.TIPTOPTYP_PLAYWRIGHT || 'playwright');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-(async () => {
+if (process.argv.includes('--large')) {
+  require('./test-preview-partial-e2e.cjs').run().catch(error => { console.error(error); process.exitCode = 1; });
+} else (async () => {
+  const { chromium } = require(process.env.TIPTOPTYP_PLAYWRIGHT || 'playwright');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ttt-preview-e2e-'));
   const file = path.join(directory, 'main.typ');
   const source = '= First\n#link(<second>)[Continue]\n#pagebreak()\n= Second <second>\nSecond page.\n#pagebreak()\n= Third\nLast page.';
   fs.writeFileSync(file, source);
   const adapter = fs.readFileSync(path.join(__dirname, '../src/preview_navigation.js'), 'utf8');
+  const partial=process.argv.includes('--partial');
   const executable = process.env.TIPTOPTYP_TEST_TINYMIST;
   assert.ok(executable, 'Set TIPTOPTYP_TEST_TINYMIST to the pinned binary');
-  const server = spawn(executable, ['preview','--no-open','--root',directory,'--host','127.0.0.1:0','--data-plane-host','127.0.0.1:0','--control-plane-host','127.0.0.1:0','--invert-colors','never',file]);
+  const server = spawn(executable, ['preview','--no-open',...(partial?['--partial-rendering=true']:[]),'--root',directory,'--host','127.0.0.1:0','--data-plane-host','127.0.0.1:0','--control-plane-host','127.0.0.1:0','--invert-colors','never',file]);
   let log = '';
   let browser;
   const watchdog = setTimeout(() => { server.kill(); process.exitCode = 1; browser?.close(); }, 60000);
@@ -36,8 +39,10 @@ const crypto = require('node:crypto');
       window.ipc = { postMessage: message => window.messages.push(JSON.parse(message)) };
     });
     await page.addInitScript(adapter);
+    await page.addInitScript(fs.readFileSync(path.join(__dirname, '../src/preview_snapshot_buffer.js'), 'utf8'));
     await page.goto(url);
     await page.waitForFunction(()=>document.getElementById('typst-container')?.documents?.[0]?.impl?.moduleInitialized);
+    assert.equal(await page.evaluate(()=>document.getElementById('typst-container').documents[0].impl.partialRendering),partial,'verify actual frontend mode');
     await page.evaluate(async control=> {
       window.control = new WebSocket(control);
       window.control.onmessage=e=>{ const message=JSON.parse(e.data); if(message.event==='outline') window.outline=message.items; };
@@ -46,6 +51,35 @@ const crypto = require('node:crypto');
     fs.appendFileSync(file,'\n');
     await page.waitForFunction(()=>window.outline?.length===3);
     await page.waitForTimeout(1500);
+    // The idle buffer preserves real page backgrounds, glyph dependencies and
+    // an entire viewport above/below. No change to the live SVG or scroll offset.
+    const buffered = await page.evaluate(() => {
+      const doc=document.getElementById('typst-container').documents[0].impl;
+      const svg=doc.hookedElem.firstElementChild, scroll=doc.hookedElem.parentElement;
+      const before=[svg.outerHTML,scroll.scrollLeft,scroll.scrollTop];
+      const buffer=window.tiptoptypSnapshotBuffer({svg,width:innerWidth,height:innerHeight,background:[255,255,255]});
+      const parsed=new DOMParser().parseFromString(buffer.html,'text/html');
+      const refs=[...parsed.querySelectorAll('use')].map(n=>n.getAttribute('href')||n.getAttribute('xlink:href')).filter(h=>h?.startsWith('#'));
+      return {buffer,paper:svg.getBoundingClientRect().toJSON(),beforeSame:before[0]===svg.outerHTML&&before[1]===scroll.scrollLeft&&before[2]===scroll.scrollTop,
+        empty:[...parsed.querySelectorAll('g.typst-page')].filter(n=>n.getAttribute('data-dummy')==='1'||!n.querySelector('use,path,text')).length,
+        ink:parsed.querySelectorAll('g.typst-page').length,papers:parsed.querySelectorAll('.typst-page-inner').length,
+        dependencies:refs.every(h=>!document.getElementById(h.slice(1))||parsed.getElementById(h.slice(1))),scripts:parsed.querySelectorAll('script').length};
+    });
+    assert.equal(buffered.beforeSame,true);assert.equal(buffered.dependencies,true);assert.equal(buffered.scripts,0);
+    assert.equal(buffered.buffer.width,1600);assert.equal(buffered.buffer.height,1800);
+    assert.equal(buffered.buffer.x,-400);assert.equal(buffered.buffer.y,-600);
+    assert.equal(buffered.empty,0,'buffer contains an unrendered page');
+    assert.ok(buffered.ink>0&&buffered.ink<3);assert.equal(buffered.ink,buffered.papers);
+    const raster=await browser.newPage({viewport:{width:1600,height:1800}});
+    await raster.setContent(buffered.buffer.html);
+    await raster.waitForTimeout(100);
+    const painted=await raster.evaluate(()=>({paper:getComputedStyle(document.querySelector('.typst-page-inner')).fill,
+      bounds:document.querySelector('svg').getBoundingClientRect().toJSON(),width:document.body.scrollWidth,height:document.body.scrollHeight}));
+    assert.equal(painted.paper,'rgb(255, 255, 255)');assert.ok(Math.abs(painted.bounds.left-buffered.paper.left-400)<.02);assert.ok(Math.abs(painted.bounds.top-buffered.paper.top-600)<.02);
+    const bufferSnapshot=path.join(__dirname,'../.tiptoptyp/screenshots/agent-review/zoom-buffer');
+    fs.mkdirSync(bufferSnapshot,{recursive:true});
+    await raster.screenshot({path:path.join(bufferSnapshot,`browser-buffer-${Date.now()}.png`)});
+    await raster.close();
     // Check rendered pixels, not merely CSS attributes: both paper and ink
     // must respond to appearance changes without rebuilding the document.
     const assertPalette = async (bg,fg) => {
@@ -56,8 +90,22 @@ const crypto = require('node:crypto');
         paper: getComputedStyle(document.querySelector('#typst-container .typst-page-inner')).fill
       }));
       assert.equal(placement.host, 'none', 'never filter the HTML host: WKWebView snapshots hide its compositor failure');
-      assert.ok(placement.page.includes('#tiptoptyp-palette'), JSON.stringify(placement));
+      const identity = bg.every(value => value === 255) && fg.every(value => value === 0);
+      assert.ok(identity ? placement.page === 'none' : placement.page.includes('#tiptoptyp-palette'), JSON.stringify(placement));
       assert.equal(placement.paper, `rgb(${bg.join(', ')})`);
+      const buffer=await page.evaluate(bg=>{
+        const svg=document.getElementById('typst-container').documents[0].impl.hookedElem.firstElementChild;
+        return window.tiptoptypSnapshotBuffer({svg,width:innerWidth,height:innerHeight,background:bg});
+      },bg);
+      const mirror=await browser.newPage({viewport:{width:buffer.width,height:buffer.height}});
+      await mirror.setContent(buffer.html);
+      const copied=await mirror.evaluate(()=>({paper:getComputedStyle(document.querySelector('.typst-page-inner')).fill,
+        filter:getComputedStyle(document.querySelector('g.typst-page')).filter,
+        background:getComputedStyle(document.body).backgroundColor}));
+      assert.equal(copied.paper,placement.paper);
+      assert.equal(copied.filter,placement.page);
+      assert.equal(copied.background,`rgb(${bg.join(', ')})`);
+      await mirror.close();
       const png = await page.screenshot();
       const counts = await page.evaluate(async ({png,bg,fg}) => {
         const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
@@ -150,7 +198,7 @@ const crypto = require('node:crypto');
     await page.waitForFunction(() => window.messages.at(-1)?.page === 3);
     await assertPalette([24,31,42],[200,210,220]);
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','rendered light/dark palette without rerender','text editing and viewer shortcuts','live source update'],result},null,2));
+    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,partial,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','rendered light/dark palette without rerender','text editing and viewer shortcuts','live source update'],result},null,2));
   } finally {
     clearTimeout(watchdog); await browser?.close(); server.kill(); fs.rmSync(directory,{recursive:true,force:true});
   }
