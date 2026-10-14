@@ -1,5 +1,16 @@
 # Settings customization
 
+Settings uses compact categories: Appearance, Editor, Writing, Preview, Tools,
+Shortcuts, Snippets and Templates. Wide windows show the categories beside the
+form; narrow windows use a selector next to search. Search spans every category.
+Choose a result to switch to its category and briefly highlight its control.
+Switching categories retains the query, scroll positions and unfinished drafts.
+It does not resize the window or apply unsaved JSON/tool configuration.
+
+Appearance keeps color adjustments collapsed until opened or reached by search.
+Its page sample uses the same theme, page mode and independent comfy background
+and text choices as the actual preview; it does not compile a document.
+
 The **{}** button at the top-right of the Settings title bar toggles between
 the form and JSON. Settings can be maximized and restored normally.
 JSON starts with the complete current
@@ -15,7 +26,7 @@ a draft does not change the app.
 
 ## Tool commands
 
-Each binary's **Command customization** section shows its actual default arguments,
+Under **Tools**, each binary's **Command customization** section shows its actual default arguments,
 editable directly. Environment starts as `{}` and working directory is blank,
 meaning inherited environment and the operation's document/project directory.
 Reset restores that tool's defaults. Hover field labels for examples and links.
@@ -90,7 +101,7 @@ contract applies to new adapters as well as Harper, Tinymist and TeX services.
 
 ## Custom snippets and linked fields
 
-Settings → Editor → Custom snippets opens a source form. Search Settings for **snippets** or **completion** to open it directly. Choose **Add Typst snippet** or **Add TeX snippet**, edit the prefix and description, and write ordinary source in the highlighted editor with line numbers and rainbow brackets. Pick Typst, TeX or Both, then **Save snippets**. Invalid drafts cannot be saved and do not change live completions; **Revert changes** restores the saved list. Each language starts with an editable example.
+Settings → Snippets opens the snippet source form. Search Settings for **snippets** or **completion** to open it directly. Choose **Add Typst snippet** or **Add TeX snippet**, edit the prefix and description, and write ordinary source in the highlighted editor with line numbers and rainbow brackets. Pick Typst, TeX or Both, then **Save snippets**. Invalid drafts cannot be saved and do not change live completions; **Revert changes** restores the saved list. Each language starts with an editable example.
 
 Backslashes, dollar math, quotes and line breaks are literal: do not JSON-escape them. Optional editable fields use `${1:name}`; repeat `${1}` to mirror the same field, and use `${0}` for the final cursor. Bare `$1`, `$0` and `$x$` are ordinary source. For example, a TeX snippet with prefix `env`:
 

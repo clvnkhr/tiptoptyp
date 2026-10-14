@@ -1,13 +1,14 @@
 //! Settings renderer: borrowed presentation inputs and explicit application actions.
 //! This module cannot access the document, worker handles, or EditorApp.
 use super::settings_controls::{
-    FontPickerSelection, color_theme_choice_label, fallback_notice, settings_inline_value,
-    settings_value_row, show_font_family_picker, show_font_weight_control,
-    show_service_status_chip, show_status_chip, tool_preference_editor,
+    FontPickerSelection, color_theme_choice_label, fallback_notice, settings_control_row,
+    settings_inline_value, settings_value_row, show_font_family_picker, show_font_weight_control,
+    show_page_appearance_sample, show_service_status_chip, show_status_chip,
+    tool_preference_editor,
 };
 use super::{
     SettingsSection, SettingsTarget, ToolPickerTarget, settings_heading, settings_hover_text,
-    settings_search_results, settings_target_anchor, success_color, theme_label,
+    settings_search_results, settings_target_anchor, success_color,
 };
 use crate::{
     builtin_themes,
@@ -28,6 +29,8 @@ use std::path::Path;
 
 #[derive(Default)]
 pub(super) struct SettingsUiState {
+    pub(super) category: SettingsSection,
+    pub(super) colors_open: bool,
     pub(super) json_mode: bool,
     pub(super) snippets: Option<super::settings_snippets::Draft>,
     pub(super) help_mode: bool,
@@ -250,14 +253,20 @@ impl SettingsPanel<'_> {
             return;
         }
 
+        let wide = super::settings_navigation::uses_rail(ui.available_width());
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Search settings").strong());
+            if !wide {
+                super::settings_navigation::selector(ui, &mut self.state.category);
+            }
             let search = ui.add(
                 egui::TextEdit::singleline(&mut self.state.query)
                     .id_salt("settings-search")
-                    .hint_text("Theme, fonts, shortcuts, preview, tools…")
+                    .hint_text("Search settings")
                     .desired_width(f32::INFINITY),
             );
+            search.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search settings")
+            });
             if self.state.focus_search {
                 self.state.focus_search = false;
                 search.request_focus();
@@ -267,33 +276,44 @@ impl SettingsPanel<'_> {
         });
         if !self.state.query.trim().is_empty() {
             let matches = settings_search_results(&self.state.query);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Matches").weak());
-                if matches.is_empty() {
-                    ui.label(RichText::new("No settings found").weak());
-                }
-                for target in matches {
-                    let response = ui.button(target.label());
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe(
-                        &format!("settings.result.{}", target.label()),
-                        &response,
-                    );
-                    if response.clicked() {
-                        self.state.scroll_target = Some(target);
-                        let duration = std::time::Duration::from_secs(3);
-                        let id = super::settings_highlight_id(ui.ctx().viewport_id());
-                        ui.ctx().data_mut(|data| {
-                            data.insert_temp(id, (target, std::time::Instant::now() + duration))
-                        });
-                        // One delayed repaint removes the highlight; no idle animation loop.
-                        ui.ctx().request_repaint_after(duration);
-                    }
-                }
-            });
-            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt("settings-search-results")
+                .max_height(96.0)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if matches.is_empty() {
+                            ui.weak("No settings found");
+                        }
+                        for target in matches {
+                            let response = ui.button(target.label());
+                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                            crate::desktop_test::observe(
+                                &format!("settings.result.{}", target.label()),
+                                &response,
+                            );
+                            if response.clicked() {
+                                self.state.scroll_target = Some(target);
+                                let duration = std::time::Duration::from_secs(3);
+                                let id = super::settings_highlight_id(ui.ctx().viewport_id());
+                                ui.ctx().data_mut(|data| {
+                                    data.insert_temp(
+                                        id,
+                                        (target, std::time::Instant::now() + duration),
+                                    )
+                                });
+                                ui.ctx().request_repaint_after(duration);
+                            }
+                        }
+                    });
+                });
         }
-
+        if let Some(target) = self.state.scroll_target {
+            super::settings_navigation::route_target(
+                &mut self.state.category,
+                &mut self.state.colors_open,
+                target,
+            );
+        }
         let deterministic_settings = matches!(
             self.snapshot_scene,
             Some(
@@ -316,28 +336,96 @@ impl SettingsPanel<'_> {
         } else {
             original.clone()
         };
-        let settings_scroll = egui::ScrollArea::vertical()
-            .id_salt("settings-scroll")
-            .auto_shrink([false, false]);
-        let settings_scroll = if deterministic_settings
-            && !matches!(
-                self.snapshot_scene,
-                Some(
-                    UiSnapshotScene::BracketSettings
-                        | UiSnapshotScene::SettingsColors
-                        | UiSnapshotScene::SettingsEditor
-                        | UiSnapshotScene::SettingsStatus
-                )
-            ) {
-            // Deterministic scenes describe the complete Settings contract from
-            // its first row, independently of persisted egui scroll memory.
-            settings_scroll.vertical_scroll_offset(0.0)
-        } else {
-            settings_scroll
-        };
         let mut settings_scroll_target = self.state.scroll_target.take();
-        settings_scroll.show(ui, |ui| {
-                settings_heading(ui, SettingsSection::Appearance);
+        if wide {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(
+                        super::settings_navigation::RAIL_WIDTH,
+                        ui.available_height(),
+                    ),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        super::settings_navigation::rail(ui, &mut self.state.category);
+                    },
+                );
+                ui.separator();
+                ui.vertical(|ui| {
+                    ui.set_width(ui.available_width());
+                    settings_scroll_target = self.show_category_scroll(
+                        ui,
+                        &mut edited,
+                        settings_scroll_target,
+                        deterministic_settings,
+                    );
+                });
+            });
+        } else {
+            settings_scroll_target = self.show_category_scroll(
+                ui,
+                &mut edited,
+                settings_scroll_target,
+                deterministic_settings,
+            );
+        }
+
+        self.state.scroll_target = settings_scroll_target;
+
+        if !deterministic_settings && &edited != original {
+            self.actions.push(SettingsAction::Update(Box::new(edited)));
+        }
+    }
+    fn show_category_scroll(
+        &mut self,
+        ui: &mut egui::Ui,
+        edited: &mut AppSettings,
+        target: Option<SettingsTarget>,
+        deterministic: bool,
+    ) -> Option<SettingsTarget> {
+        // Responsive rails add layout ancestors, but editor drafts and widget
+        // history must retain the same identity when the window crosses them.
+        let content_id = egui::Id::new((
+            ui.ctx().viewport_id(),
+            "settings-category-content",
+            self.state.category,
+        ));
+        ui.scope_builder(egui::UiBuilder::new().id(content_id), |ui| {
+            let scroll = egui::ScrollArea::vertical()
+                .id_salt(("settings-scroll", self.state.category))
+                .auto_shrink([false, false]);
+            let reset = deterministic
+                && !matches!(
+                    self.snapshot_scene,
+                    Some(
+                        UiSnapshotScene::BracketSettings
+                            | UiSnapshotScene::SettingsColors
+                            | UiSnapshotScene::SettingsEditor
+                            | UiSnapshotScene::SettingsStatus
+                    )
+                );
+            let scroll = if reset {
+                scroll.vertical_scroll_offset(0.0)
+            } else {
+                scroll
+            };
+            scroll
+                .show(ui, |ui| {
+                    self.show_category(ui, edited, target, deterministic)
+                })
+                .inner
+        })
+        .inner
+    }
+    fn show_category(
+        &mut self,
+        ui: &mut egui::Ui,
+        edited: &mut AppSettings,
+        mut settings_scroll_target: Option<SettingsTarget>,
+        deterministic_settings: bool,
+    ) -> Option<SettingsTarget> {
+        settings_heading(ui, self.state.category);
+        match self.state.category {
+            SettingsSection::Appearance => {
                 let system_theme = ui.ctx().system_theme();
                 let effective_theme = ui.ctx().theme();
                 let theme_overridden = self.theme_override.is_some();
@@ -349,44 +437,30 @@ impl SettingsPanel<'_> {
                                 | UiSnapshotScene::SettingsDarkThemePicker
                         )
                     );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::Appearance,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.add_sized(
-                        [
-                            METRICS.settings.appearance_label_width,
-                            METRICS.icon.button_size.y,
-                        ],
-                        egui::Label::new(
-                            RichText::new(SettingsTarget::Appearance.label()).strong(),
-                        ),
-                    );
+                settings_target_anchor(ui, SettingsTarget::Appearance, &mut settings_scroll_target);
+                settings_control_row(ui, "Interface", |ui| {
                     ui.add_enabled_ui(theme_picker_enabled, |ui| {
-                        for appearance in InterfaceTheme::ALL {
-                            let _response = ui.selectable_value(
-                                &mut edited.interface_theme,
-                                appearance,
-                                appearance.label(),
-                            );
-                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                            if ui.is_rect_visible(_response.rect) {
-                                crate::desktop_test::observe(&format!("settings.theme.{}", appearance.label()), &_response);
+                        ui.horizontal_wrapped(|ui| {
+                            for appearance in InterfaceTheme::ALL {
+                                let response = ui.selectable_value(
+                                    &mut edited.interface_theme,
+                                    appearance,
+                                    appearance.label(),
+                                );
+                                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                if ui.is_rect_visible(response.rect) {
+                                    crate::desktop_test::observe(
+                                        &format!("settings.theme.{}", appearance.label()),
+                                        &response,
+                                    );
+                                }
+                                let _ = response;
                             }
-                        }
+                        });
                     });
                     if theme_overridden {
-                        ui.label(
-                            RichText::new("QA override")
-                                .size(theme::TYPE.supporting)
-                                .weak(),
-                        );
+                        ui.weak("QA override");
                     }
-                    ui.separator();
-                    settings_inline_value(ui, "Active", theme_label(Some(effective_theme)));
                 });
                 crate::window_background::settings_ui(ui, &mut edited.window_background);
                 settings_target_anchor(
@@ -394,16 +468,12 @@ impl SettingsPanel<'_> {
                     SettingsTarget::TypstSyntax,
                     &mut settings_scroll_target,
                 );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::TypstSyntax.label()).strong());
+                settings_control_row(ui, SettingsTarget::TypstSyntax.label(), |ui| {
                     if crate::app::icons::action_button(ui, "Overrides…").clicked() {
-                        self.actions.push(SettingsAction::ShowOverrides { dark: effective_theme == egui::Theme::Dark });
+                        self.actions.push(SettingsAction::ShowOverrides {
+                            dark: effective_theme == egui::Theme::Dark,
+                        });
                     }
-                    ui.label(
-                        RichText::new("Colours and decorations inherit from the selected theme")
-                            .weak(),
-                    );
                 });
 
                 for (appearance, target, picker_id) in [
@@ -424,15 +494,7 @@ impl SettingsPanel<'_> {
                         ColorThemeChoice::Sublime(path) => Some(path.clone()),
                         ColorThemeChoice::Builtin(_) => None,
                     };
-                    ui.horizontal_wrapped(|ui| {
-                        theme::apply_compact_control_spacing(ui);
-                        ui.add_sized(
-                            [
-                                METRICS.settings.appearance_label_width,
-                                METRICS.icon.button_size.y,
-                            ],
-                            egui::Label::new(RichText::new(target.label()).strong()),
-                        );
+                    settings_control_row(ui, target.label(), |ui| {
                         ui.add_enabled_ui(theme_picker_enabled, |ui| {
                             let open_picker = matches!(
                                 (appearance, self.snapshot_scene),
@@ -455,17 +517,15 @@ impl SettingsPanel<'_> {
                                 egui::Popup::open_id(ui.ctx(), id.with("popup"));
                             }
                             let choice = edited.color_theme_mut(appearance);
-                            let picker = egui::ComboBox::from_id_salt((
-                                picker_id,
-                                self.snapshot_scene,
-                            ))
-                                .width(220.0)
-                                .height(METRICS.settings.theme_picker_max_height)
-                                .selected_text(selected_name)
-                                .show_ui(ui, |ui| {
-                                    show_theme_choices(ui, choice, appearance);
-                                })
-                                .response;
+                            let picker =
+                                egui::ComboBox::from_id_salt((picker_id, self.snapshot_scene))
+                                    .width((ui.available_width() - 34.0).clamp(72.0, 220.0))
+                                    .height(METRICS.settings.theme_picker_max_height)
+                                    .selected_text(selected_name)
+                                    .show_ui(ui, |ui| {
+                                        show_theme_choices(ui, choice, appearance);
+                                    })
+                                    .response;
                             if let Some(path) = &imported_path {
                                 settings_hover_text(picker, path.clone());
                             }
@@ -473,35 +533,53 @@ impl SettingsPanel<'_> {
                                 self.actions.push(SettingsAction::ChooseTool(
                                     ToolPickerTarget::SublimeTheme {
                                         dark_mode: appearance == egui::Theme::Dark,
-                                    }));
+                                    },
+                                ));
                             }
                         });
                     });
                 }
 
-                let (displayed_invert, displayed_hue_shift) = self
-                    .theme_override
-                    .as_ref()
-                    .map_or((edited.theme_invert, edited.theme_hue_shift_degrees), |profile| {
-                        (profile.invert, profile.hue_shift_degrees)
-                    });
+                let (displayed_invert, displayed_hue_shift) = self.theme_override.as_ref().map_or(
+                    (edited.theme_invert, edited.theme_hue_shift_degrees),
+                    |profile| (profile.invert, profile.hue_shift_degrees),
+                );
                 settings_target_anchor(
                     ui,
                     SettingsTarget::InvertColors,
                     &mut settings_scroll_target,
                 );
+                settings_target_anchor(ui, SettingsTarget::HueShift, &mut settings_scroll_target);
                 settings_target_anchor(
                     ui,
-                    SettingsTarget::HueShift,
+                    SettingsTarget::ThemeColors,
                     &mut settings_scroll_target,
                 );
-                settings_target_anchor(ui, SettingsTarget::ThemeColors, &mut settings_scroll_target);
                 // Capture themes intentionally ignore persisted color adjustments.
-                let colors = if theme_overridden { Default::default() } else { edited.theme_colors };
+                let colors = if theme_overridden {
+                    Default::default()
+                } else {
+                    edited.theme_colors
+                };
                 let mut transform = crate::theme_transform::ThemeTransform::new(
-                    displayed_invert, f32::from(displayed_hue_shift),
-                ).with_colors(colors);
-                ui.add_enabled_ui(!theme_overridden, |ui| show_theme_color_controls(ui, &mut transform));
+                    displayed_invert,
+                    f32::from(displayed_hue_shift),
+                )
+                .with_colors(colors);
+                let reveal_colors = std::mem::take(&mut self.state.colors_open)
+                    || matches!(self.snapshot_scene, Some(UiSnapshotScene::SettingsColors));
+                let colors = egui::CollapsingHeader::new("Color adjustments")
+                    .id_salt("settings-colors")
+                    .open(reveal_colors.then_some(true))
+                    .show(ui, |ui| {
+                        ui.add_enabled_ui(!theme_overridden, |ui| {
+                            show_theme_color_controls(ui, &mut transform);
+                        });
+                    });
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.colors.disclosure", &colors.header_response);
+                let _ = colors;
+
                 if !theme_overridden {
                     edited.theme_invert = transform.invert;
                     edited.theme_hue_shift_degrees = transform.hue_shift_degrees as i16;
@@ -518,198 +596,61 @@ impl SettingsPanel<'_> {
                     );
                 }
 
-                let _comfy = ui.checkbox(&mut edited.comfy_background, "Comfy background — match page to the interface");
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                if ui.is_rect_visible(_comfy.rect) { crate::desktop_test::observe("settings.comfy", &_comfy); }
-                let _comfy_text = ui.checkbox(&mut edited.comfy_text, "Comfy text — match text to the interface");
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                if ui.is_rect_visible(_comfy_text.rect) { crate::desktop_test::observe("settings.comfy.text", &_comfy_text); }
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::PageTheme,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(SettingsTarget::PageTheme.label()).strong());
-                    for theme in DocumentTheme::ALL {
-                        let _page = ui.selectable_value(&mut edited.document_theme, theme, theme.label());
-                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                        if ui.is_rect_visible(_page.rect) { crate::desktop_test::observe(&format!("settings.page.{theme:?}"), &_page); }
-                    }
-                    ui.separator();
-                    settings_inline_value(
-                        ui,
-                        "Effective",
-                        theme_label(Some(edited.document_theme.resolve(effective_theme))),
-                    );
-                });
-                settings_target_anchor(ui, SettingsTarget::DarkImages, &mut settings_scroll_target);
-                image_appearance_preference(ui, &mut edited);
-
-                ui.add_space(theme::SPACE.small);
                 ui.separator();
-                settings_heading(ui, SettingsSection::Editor);
-                settings_target_anchor(ui, SettingsTarget::IndependentDividers, &mut settings_scroll_target);
-                let dividers = ui.checkbox(&mut edited.independent_main_dividers, SettingsTarget::IndependentDividers.label())
-                    .on_hover_text("Keep the code/preview divider in place when resizing Explorer. Disable to keep the code panel width fixed.");
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("settings.dividers", &dividers);
-                let _ = dividers;
-                for target in [
-                    SettingsTarget::WrapLines,
-                    SettingsTarget::LineNumbers,
-                    SettingsTarget::StickyContextRows,
-                    SettingsTarget::AutoSave,
-                    SettingsTarget::AutoSaveDelay,
-                ] {
-                    settings_target_anchor(ui, target, &mut settings_scroll_target);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    let _wrap = ui.checkbox(&mut edited.line_wrap, SettingsTarget::WrapLines.label());
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe("settings.editor.wrap", &_wrap);
-                    ui.checkbox(
-                        &mut edited.line_numbers,
-                        SettingsTarget::LineNumbers.label(),
-                    );
-                    ui.checkbox(
-                        &mut edited.sticky_context_rows,
-                        SettingsTarget::StickyContextRows.label(),
-                    );
-                    ui.checkbox(&mut edited.auto_save, SettingsTarget::AutoSave.label());
-                        settings_slider_enabled(ui, SettingsTarget::AutoSaveDelay.label(), edited.auto_save,
-                            egui::Slider::new(&mut edited.auto_save_delay_ms, 250..=5_000)
-                                .suffix(" ms")
-                                .logarithmic(true),
-                        );
-                });
-                settings_target_anchor(ui, SettingsTarget::IndentationGuides, &mut settings_scroll_target);
-                ui.horizontal_wrapped(|ui| {
-                    let _guides = ui.checkbox(&mut edited.indentation_guides, "Indentation guides");
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe("settings.editor.guides", &_guides);
-                    ui.label("Guide character");
-                    let before = edited.indentation_guide_character.clone();
-                    let response = ui.add(egui::TextEdit::singleline(&mut edited.indentation_guide_character).char_limit(1).desired_width(40.0));
-                    if response.changed() && (edited.indentation_guide_character.chars().count() != 1 || edited.indentation_guide_character.chars().any(|c| c.is_control() || c.is_whitespace())) {
-                        edited.indentation_guide_character = before;
-                    }
-                }).response.on_hover_text("Display-only lines at each indent level. Choose one visible character, e.g. │ or ┆. Saved whitespace is unchanged.");
-                settings_target_anchor(ui, SettingsTarget::LocalUseHighlights, &mut settings_scroll_target);
-                let _local_uses = ui.checkbox(&mut edited.highlight_local_uses, SettingsTarget::LocalUseHighlights.label())
-                    .on_hover_text("Emphasize uses of names defined or changed in this document, including Typst bindings and TeX macros or environments. Declaration sites stay unchanged.");
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("settings.editor.local-uses", &_local_uses);
-                settings_target_anchor(ui, SettingsTarget::TextHighlights, &mut settings_scroll_target);
-                egui::CollapsingHeader::new("Custom text highlights").open(self.state.query.to_lowercase().contains("highlight").then_some(true)).show(ui, |ui| {
-                    ui.weak("Literal, case-sensitive matches in source. Later rows win on overlap. Unset colors follow the theme accent.");
-                    super::settings_controls::show_text_highlight_editor(ui, &mut edited.highlight_rules, &self.font_configuration.editor_weight_support);
-                });
-                settings_target_anchor(ui, SettingsTarget::AutoPairDelimiters, &mut settings_scroll_target);
-                settings_target_anchor(ui, SettingsTarget::EnglishGrammar, &mut settings_scroll_target);
-                ui.checkbox(&mut edited.english_grammar, SettingsTarget::EnglishGrammar.label()).on_hover_text("Offline checks after a short typing pause. Documents up to 2 MB; suggestions appear in Problems and inline diagnostics.");
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Writing language");
-                    for language in crate::settings::WritingLanguage::ALL {
-                        ui.selectable_value(&mut edited.writing_language, language, language.label());
-                    }
-                }).response.on_hover_text("Auto reads top-level #set text(lang: \"en\", region: \"us\") in Typst. Use region: \"gb\" for UK English. lang: \"uk\" means Ukrainian. Other languages are not checked by Harper. Computed/imported settings use the UK fallback.");
-                settings_target_anchor(ui, SettingsTarget::Handwriting, &mut settings_scroll_target);
-                crate::handwriting::settings_ui(ui, &mut edited.handwriting);
-                settings_target_anchor(ui, SettingsTarget::UnicodeWarnings, &mut settings_scroll_target);
-                ui.checkbox(&mut edited.unicode_warnings, SettingsTarget::UnicodeWarnings.label());
-                ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label())
-                    .on_hover_text("Typing an opening bracket, quote, dollar, asterisk, underscore or backtick surrounds selected text. Typst also pairs delimiters at an empty caret. Paste stays unchanged.");
-                settings_target_anchor(ui, SettingsTarget::Indentation, &mut settings_scroll_target);
-                ui.horizontal(|ui| {
-                    ui.label(SettingsTarget::Indentation.label());
-                    let mut spaces = edited.indent_spaces != 0;
-                    ui.checkbox(&mut spaces, "Spaces");
-                    if spaces {
-                        if edited.indent_spaces == 0 { edited.indent_spaces = 2; }
-                        ui.add(egui::DragValue::new(&mut edited.indent_spaces).range(1..=16));
-                    } else {
-                        edited.indent_spaces = 0;
-                        ui.label("Tab character");
-                    }
-                });
-                settings_target_anchor(ui, SettingsTarget::AsciiPunctuation, &mut settings_scroll_target);
-                ui.checkbox(&mut edited.ascii_punctuation, SettingsTarget::AsciiPunctuation.label())
-                    .on_hover_text("Convert full-width punctuation, including 。 to a period. Off preserves the characters sent by your keyboard. Pasted text is unchanged.");
-                settings_target_anchor(ui, SettingsTarget::Templates, &mut settings_scroll_target);
-                egui::CollapsingHeader::new("Document templates").default_open(self.state.query.to_lowercase().contains("template")).show(ui, |ui| {
-                    ui.weak("These templates appear in New from template. Changes are saved with Settings.");
-                    let mut remove = None;
-                    for (index, template) in edited.templates.iter_mut().enumerate() {
-                        ui.push_id(("template", index), |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Name"); ui.text_edit_singleline(&mut template.name);
-                                if ui.small_button("Remove").clicked() { remove = Some(index); }
+                ui.strong("Page appearance");
+                let page_width = ui.available_width();
+                ui.horizontal_top(|ui| {
+                    let controls_width = (page_width - 124.0).max(150.0);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(controls_width, 0.0),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            settings_target_anchor(
+                                ui,
+                                SettingsTarget::PageTheme,
+                                &mut settings_scroll_target,
+                            );
+                            ui.horizontal_wrapped(|ui| {
+                                for page in DocumentTheme::ALL {
+                                    let response = ui.selectable_value(
+                                        &mut edited.document_theme,
+                                        page,
+                                        page.label(),
+                                    );
+                                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                    if ui.is_rect_visible(response.rect) {
+                                        crate::desktop_test::observe(
+                                            &format!("settings.page.{page:?}"),
+                                            &response,
+                                        );
+                                    }
+                                    let _ = response;
+                                }
                             });
-                            ui.horizontal(|ui| {
-                                ui.selectable_value(&mut template.language, crate::document_templates::Language::Typst, "Typst");
-                                ui.selectable_value(&mut template.language, crate::document_templates::Language::Tex, "TeX");
-                            });
-                            super::code_editor::editor(ui, "template-source", &mut template.source, template.language.extension(), self.settings, 8);
-                            ui.separator();
-                        });
-                    }
-                    if let Some(index) = remove { edited.templates.remove(index); }
-                    if ui.button("Add template").clicked() { edited.templates.push(crate::document_templates::Template {name:"New template".into(), language:crate::document_templates::Language::Typst, source:String::new()}); }
-                    if ui.button("Restore default templates").clicked() { edited.templates = crate::document_templates::defaults(); }
-                });
-                let reveal_snippets = settings_scroll_target == Some(SettingsTarget::Snippets)
-                    || self.state.query.to_lowercase().contains("snippet")
-                    || self.state.query.to_lowercase().contains("completion");
-                settings_target_anchor(ui, SettingsTarget::Snippets, &mut settings_scroll_target);
-                let mut header = egui::CollapsingHeader::new("Custom snippets");
-                if reveal_snippets { header = header.open(Some(true)); }
-                header.show(ui, |ui| {
-                    super::settings_snippets::show(ui, &mut self.state.snippets, &mut edited, self.settings);
-                });
-                settings_target_anchor(ui, SettingsTarget::AutoFormatMath, &mut settings_scroll_target);
-                let _math_format = ui.checkbox(&mut edited.format_after_math_conversion, SettingsTarget::AutoFormatMath.label())
-                    .on_hover_text("Format the document after switching inline/display math. Uses the selected formatter and ordinary auto-save settings.");
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("settings.editor.math_format", &_math_format);
-                settings_target_anchor(ui, SettingsTarget::MitexDollars, &mut settings_scroll_target);
-                ui.checkbox(&mut edited.mitex_auto_enable, SettingsTarget::MitexDollars.label());
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("MiTeX version");
-                    ui.add(egui::TextEdit::singleline(&mut edited.mitex_version).desired_width(65.0))
-                        .on_hover_text("Pinned package version used when enabling TeX mode. Existing imports are not rewritten.");
-                });
-                ui.label("$x$ → mi · $ x $ → mitex. Native Typst math prevents enabling.");
-                settings_target_anchor(ui, SettingsTarget::GitDiffStyle, &mut settings_scroll_target);
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::GitDiffStyle.label()).strong());
-                    for style in GitDiffStyle::ALL {
-                        ui.selectable_value(&mut edited.git_diff_style, style, style.label());
-                    }
-                });
-                settings_target_anchor(ui, SettingsTarget::RainbowBrackets, &mut settings_scroll_target);
-                show_bracket_controls(ui, &mut edited.rainbow_brackets);
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::KeyboardShortcuts,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new("Keyboard").strong());
-                    if ui
-                        .button(SettingsTarget::KeyboardShortcuts.label())
-                        .clicked()
-                    {
-                        self.actions.push(SettingsAction::ShowShortcuts);
-                    }
-                    ui.label(
-                        RichText::new("All application, editor, build, preview, and window bindings")
-                            .size(theme::TYPE.supporting)
-                        .weak(),
+                            let background =
+                                ui.checkbox(&mut edited.comfy_background, "Comfy background");
+                            let text = ui.checkbox(&mut edited.comfy_text, "Comfy text");
+                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                            {
+                                if ui.is_rect_visible(background.rect) {
+                                    crate::desktop_test::observe("settings.comfy", &background);
+                                }
+                                if ui.is_rect_visible(text.rect) {
+                                    crate::desktop_test::observe("settings.comfy.text", &text);
+                                }
+                            }
+                            let _ = (background, text);
+                            settings_target_anchor(
+                                ui,
+                                SettingsTarget::DarkImages,
+                                &mut settings_scroll_target,
+                            );
+                            image_appearance_preference(ui, edited);
+                        },
                     );
+                    show_page_appearance_sample(ui, edited);
                 });
+                ui.separator();
                 settings_target_anchor(
                     ui,
                     SettingsTarget::InterfaceScale,
@@ -725,15 +666,14 @@ impl SettingsPanel<'_> {
                     SettingsTarget::FixedTabWidth,
                     &mut settings_scroll_target,
                 );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::InterfaceScale.label()).strong());
+                settings_control_row(ui, SettingsTarget::InterfaceScale.label(), |ui| {
                     ui.add(
                         egui::Slider::new(&mut edited.ui_scale_percent, 75..=150)
                             .suffix("%")
                             .clamping(egui::SliderClamping::Always),
                     );
-                    ui.separator();
+                });
+                settings_control_row(ui, "Tabs and menus", |ui| {
                     ui.checkbox(
                         &mut edited.titlebar_menus,
                         SettingsTarget::TitleBarMenus.label(),
@@ -743,14 +683,21 @@ impl SettingsPanel<'_> {
                         SettingsTarget::FixedTabWidth.label(),
                     );
                 });
-                settings_target_anchor(ui, SettingsTarget::ToolbarStyle, &mut settings_scroll_target);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(SettingsTarget::ToolbarStyle.label());
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::ToolbarStyle,
+                    &mut settings_scroll_target,
+                );
+                settings_control_row(ui, SettingsTarget::ToolbarStyle.label(), |ui| {
                     egui::ComboBox::from_id_salt("toolbar-style")
                         .selected_text(edited.toolbar_style.label())
                         .show_ui(ui, |ui| {
                             for style in crate::settings::ToolbarStyle::ALL {
-                                ui.selectable_value(&mut edited.toolbar_style, style, style.label());
+                                ui.selectable_value(
+                                    &mut edited.toolbar_style,
+                                    style,
+                                    style.label(),
+                                );
                             }
                         });
                 });
@@ -760,9 +707,7 @@ impl SettingsPanel<'_> {
                     SettingsTarget::UiFontWeight,
                     &mut settings_scroll_target,
                 );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::UiFont.label()).strong());
+                settings_control_row(ui, SettingsTarget::UiFont.label(), |ui| {
                     if let Some(selection) = show_font_family_picker(
                         ui,
                         "ui-font-family",
@@ -802,7 +747,8 @@ impl SettingsPanel<'_> {
                         }
                     }
                     if crate::app::icons::action_button(ui, "Choose…").clicked() {
-                        self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::UiFont));
+                        self.actions
+                            .push(SettingsAction::ChooseTool(ToolPickerTarget::UiFont));
                     }
                     ui.separator();
                     show_font_weight_control(
@@ -813,15 +759,135 @@ impl SettingsPanel<'_> {
                         self.font_configuration.ui_weight_support.as_ref(),
                     );
                 });
+            }
+            SettingsSection::Editor => {
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::IndependentDividers,
+                    &mut settings_scroll_target,
+                );
+                let dividers = ui.checkbox(&mut edited.independent_main_dividers, SettingsTarget::IndependentDividers.label())
+                    .on_hover_text("Keep the code/preview divider in place when resizing Explorer. Disable to keep the code panel width fixed.");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.dividers", &dividers);
+                let _ = dividers;
+                for target in [
+                    SettingsTarget::WrapLines,
+                    SettingsTarget::LineNumbers,
+                    SettingsTarget::StickyContextRows,
+                    SettingsTarget::AutoSave,
+                    SettingsTarget::AutoSaveDelay,
+                ] {
+                    settings_target_anchor(ui, target, &mut settings_scroll_target);
+                }
+                ui.horizontal_wrapped(|ui| {
+                    let _wrap =
+                        ui.checkbox(&mut edited.line_wrap, SettingsTarget::WrapLines.label());
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.editor.wrap", &_wrap);
+                    ui.checkbox(
+                        &mut edited.line_numbers,
+                        SettingsTarget::LineNumbers.label(),
+                    );
+                    ui.checkbox(
+                        &mut edited.sticky_context_rows,
+                        SettingsTarget::StickyContextRows.label(),
+                    );
+                    ui.checkbox(&mut edited.auto_save, SettingsTarget::AutoSave.label());
+                    settings_slider_enabled(
+                        ui,
+                        SettingsTarget::AutoSaveDelay.label(),
+                        edited.auto_save,
+                        egui::Slider::new(&mut edited.auto_save_delay_ms, 250..=5_000)
+                            .suffix(" ms")
+                            .logarithmic(true),
+                    );
+                });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::IndentationGuides,
+                    &mut settings_scroll_target,
+                );
+                ui.horizontal_wrapped(|ui| {
+                    let _guides = ui.checkbox(&mut edited.indentation_guides, "Indentation guides");
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.editor.guides", &_guides);
+                    ui.label("Guide character");
+                    let before = edited.indentation_guide_character.clone();
+                    let response = ui.add(egui::TextEdit::singleline(&mut edited.indentation_guide_character).char_limit(1).desired_width(40.0));
+                    if response.changed() && (edited.indentation_guide_character.chars().count() != 1 || edited.indentation_guide_character.chars().any(|c| c.is_control() || c.is_whitespace())) {
+                        edited.indentation_guide_character = before;
+                    }
+                }).response.on_hover_text("Display-only lines at each indent level. Choose one visible character, e.g. │ or ┆. Saved whitespace is unchanged.");
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::LocalUseHighlights,
+                    &mut settings_scroll_target,
+                );
+                let _local_uses = ui.checkbox(&mut edited.highlight_local_uses, SettingsTarget::LocalUseHighlights.label())
+                    .on_hover_text("Emphasize uses of names defined or changed in this document, including Typst bindings and TeX macros or environments. Declaration sites stay unchanged.");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.editor.local-uses", &_local_uses);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TextHighlights,
+                    &mut settings_scroll_target,
+                );
+                egui::CollapsingHeader::new("Custom text highlights").open(self.state.query.to_lowercase().contains("highlight").then_some(true)).show(ui, |ui| {
+                    ui.weak("Literal, case-sensitive matches in source. Later rows win on overlap. Unset colors follow the theme accent.");
+                    super::settings_controls::show_text_highlight_editor(ui, &mut edited.highlight_rules, &self.font_configuration.editor_weight_support);
+                });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::AutoPairDelimiters,
+                    &mut settings_scroll_target,
+                );
+                ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label())
+                    .on_hover_text("Typing an opening bracket, quote, dollar, asterisk, underscore or backtick surrounds selected text. Typst also pairs delimiters at an empty caret. Paste stays unchanged.");
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::Indentation,
+                    &mut settings_scroll_target,
+                );
+                ui.horizontal(|ui| {
+                    ui.label(SettingsTarget::Indentation.label());
+                    let mut spaces = edited.indent_spaces != 0;
+                    ui.checkbox(&mut spaces, "Spaces");
+                    if spaces {
+                        if edited.indent_spaces == 0 {
+                            edited.indent_spaces = 2;
+                        }
+                        ui.add(egui::DragValue::new(&mut edited.indent_spaces).range(1..=16));
+                    } else {
+                        edited.indent_spaces = 0;
+                        ui.label("Tab character");
+                    }
+                });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::GitDiffStyle,
+                    &mut settings_scroll_target,
+                );
+                ui.horizontal_wrapped(|ui| {
+                    theme::apply_compact_control_spacing(ui);
+                    ui.label(RichText::new(SettingsTarget::GitDiffStyle.label()).strong());
+                    for style in GitDiffStyle::ALL {
+                        ui.selectable_value(&mut edited.git_diff_style, style, style.label());
+                    }
+                });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::RainbowBrackets,
+                    &mut settings_scroll_target,
+                );
+                show_bracket_controls(ui, &mut edited.rainbow_brackets);
                 settings_target_anchor(ui, SettingsTarget::CodeFont, &mut settings_scroll_target);
                 settings_target_anchor(
                     ui,
                     SettingsTarget::CodeFontWeight,
                     &mut settings_scroll_target,
                 );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::CodeFont.label()).strong());
+                settings_control_row(ui, SettingsTarget::CodeFont.label(), |ui| {
                     if let Some(selection) = show_font_family_picker(
                         ui,
                         "code-font-family",
@@ -849,7 +915,8 @@ impl SettingsPanel<'_> {
                         }
                     }
                     if crate::app::icons::action_button(ui, "Choose…").clicked() {
-                        self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::CodeFont));
+                        self.actions
+                            .push(SettingsAction::ChooseTool(ToolPickerTarget::CodeFont));
                     }
                     ui.separator();
                     show_font_weight_control(
@@ -878,32 +945,12 @@ impl SettingsPanel<'_> {
                 });
                 settings_target_anchor(
                     ui,
-                    SettingsTarget::PreviewJump,
+                    SettingsTarget::ExplorerOrder,
                     &mut settings_scroll_target,
                 );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::HoverDelay,
-                    &mut settings_scroll_target,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    theme::apply_compact_control_spacing(ui);
-                    ui.label(RichText::new(SettingsTarget::PreviewJump.label()).strong());
-                    egui::ComboBox::from_id_salt("source-preview-trigger")
-                        .width(METRICS.settings.source_preview_trigger_width)
-                        .selected_text(edited.source_preview_trigger.label())
-                        .show_ui(ui, |ui| {
-                            for trigger in SourcePreviewTrigger::ALL {
-                                ui.selectable_value(
-                                    &mut edited.source_preview_trigger,
-                                    trigger,
-                                    trigger.label(),
-                                );
-                            }
-                        });
-                    ui.separator();
-                    ui.label(RichText::new("Hovers").strong());
-                    ui.label(SettingsTarget::HoverDelay.label());
+                show_explorer_order_controls(ui, &mut edited.explorer_order);
+                settings_target_anchor(ui, SettingsTarget::HoverDelay, &mut settings_scroll_target);
+                settings_control_row(ui, SettingsTarget::HoverDelay.label(), |ui| {
                     ui.add(
                         egui::DragValue::new(&mut edited.hover_delay_ms)
                             .range(0..=2_000)
@@ -911,120 +958,68 @@ impl SettingsPanel<'_> {
                             .suffix(" ms"),
                     );
                 });
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
+            }
+            SettingsSection::Writing => {
                 settings_target_anchor(
                     ui,
-                    SettingsTarget::ExplorerOrder,
+                    SettingsTarget::EnglishGrammar,
                     &mut settings_scroll_target,
                 );
-                show_explorer_order_controls(ui, &mut edited.explorer_order);
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_heading(ui, SettingsSection::Tools);
-                ui.label(
-                    RichText::new(
-                        "Packaged builds use pinned sidecars. A custom path overrides one tool without changing the other.",
-                    )
-                    .size(theme::TYPE.supporting)
-                    .color(ui.visuals().weak_text_color()),
-                );
-                ui.strong("Typst tools");
-                let staged_typst = self.typst_tool;
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::TypstCompiler,
-                    &mut settings_scroll_target,
-                );
-                if tool_preference_editor(
-                    ui,
-                    SettingsTarget::TypstCompiler.label(),
-                    &mut edited.typst,
-                    staged_typst,
-                    deterministic_settings,
-                    self.settings,
-                ) {
-                    self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::Typst));
-                }
-                if !deterministic_settings
-                    && let Some(reason) = &staged_typst.fallback_reason
-                {
-                    fallback_notice(ui, "Binary fallback active", reason);
-                }
-                ui.add_space(METRICS.settings.tool_gap);
-                let staged_tinymist = self.tinymist_tool;
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::TinymistLanguageServer,
-                    &mut settings_scroll_target,
-                );
-                if tool_preference_editor(
-                    ui,
-                    SettingsTarget::TinymistLanguageServer.label(),
-                    &mut edited.tinymist,
-                    staged_tinymist,
-                    deterministic_settings,
-                    self.settings,
-                ) {
-                    self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::Tinymist));
-                }
-                if !deterministic_settings
-                    && let Some(reason) = &staged_tinymist.fallback_reason
-                {
-                    fallback_notice(ui, "Binary fallback active", reason);
-                }
-                configuration_editor(ui, crate::toolchain::ToolKind::Tinymist, &mut edited.tinymist_configuration, self.settings, None);
-                settings_target_anchor(ui, SettingsTarget::TexServices, &mut settings_scroll_target);
-                ui.add_space(theme::SPACE.small);
-                ui.scope(|ui| {
-                    ui.strong("TeX tools");
-                    show_tex_preferences(ui, &mut edited.tex, self.tex_tools, self.settings);
-                    for (kind, preference, resolution) in [
-                        (crate::toolchain::ToolKind::Tectonic, &mut edited.tex.tectonic, &self.tex_tools.tectonic),
-                        (crate::toolchain::ToolKind::Texlab, &mut edited.tex.texlab, &self.tex_tools.texlab),
-                        (crate::toolchain::ToolKind::Badness, &mut edited.tex.badness, &self.tex_tools.badness),
-                        (crate::toolchain::ToolKind::TexFmt, &mut edited.tex.tex_fmt, &self.tex_tools.tex_fmt),
-                    ] {
-                        if tool_preference_editor(ui, kind.label(), preference, resolution, deterministic_settings, self.settings) {
-                            self.actions.push(SettingsAction::ChooseTool(ToolPickerTarget::Tex(kind)));
-                        }
-                        if !deterministic_settings && let Some(reason) = &resolution.fallback_reason { fallback_notice(ui, kind.label(), reason); }
+                ui.checkbox(&mut edited.english_grammar, SettingsTarget::EnglishGrammar.label()).on_hover_text("Offline checks after a short typing pause. Documents up to 2 MB; suggestions appear in Problems and inline diagnostics.");
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Writing language");
+                    for language in crate::settings::WritingLanguage::ALL {
+                        ui.selectable_value(&mut edited.writing_language, language, language.label());
                     }
-                    ui.strong("LaTeXdiff");
-                    super::latexdiff::preferences(ui, &mut edited.latexdiff);
-                    configuration_editor(ui, crate::toolchain::ToolKind::Texlab, &mut edited.tex.texlab_configuration, self.settings, Some(&mut edited.tex.texlab_ignored_codes));
-                    configuration_editor(ui, crate::toolchain::ToolKind::Badness, &mut edited.tex.badness_configuration, self.settings, Some(&mut edited.tex.badness_ignored_codes));
-
+                }).response.on_hover_text("Auto reads top-level #set text(lang: \"en\", region: \"us\") in Typst. Use region: \"gb\" for UK English. lang: \"uk\" means Ukrainian. Other languages are not checked by Harper. Computed/imported settings use the UK fallback.");
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::Handwriting,
+                    &mut settings_scroll_target,
+                );
+                crate::handwriting::settings_ui(ui, &mut edited.handwriting);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::UnicodeWarnings,
+                    &mut settings_scroll_target,
+                );
+                ui.checkbox(
+                    &mut edited.unicode_warnings,
+                    SettingsTarget::UnicodeWarnings.label(),
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::AsciiPunctuation,
+                    &mut settings_scroll_target,
+                );
+                ui.checkbox(&mut edited.ascii_punctuation, SettingsTarget::AsciiPunctuation.label())
+                    .on_hover_text("Convert full-width punctuation, including 。 to a period. Off preserves the characters sent by your keyboard. Pasted text is unchanged.");
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::AutoFormatMath,
+                    &mut settings_scroll_target,
+                );
+                let _math_format = ui.checkbox(&mut edited.format_after_math_conversion, SettingsTarget::AutoFormatMath.label())
+                    .on_hover_text("Format the document after switching inline/display math. Uses the selected formatter and ordinary auto-save settings.");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.editor.math_format", &_math_format);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::MitexDollars,
+                    &mut settings_scroll_target,
+                );
+                ui.checkbox(
+                    &mut edited.mitex_auto_enable,
+                    SettingsTarget::MitexDollars.label(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("MiTeX version");
+                    ui.add(egui::TextEdit::singleline(&mut edited.mitex_version).desired_width(65.0))
+                        .on_hover_text("Pinned package version used when enabling TeX mode. Existing imports are not rewritten.");
                 });
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::RefreshBinaryStatus,
-                    &mut settings_scroll_target,
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::BrowseTypstPackages,
-                    &mut settings_scroll_target,
-                );
-                if ui
-                    .button(SettingsTarget::RefreshBinaryStatus.label())
-                    .clicked()
-                {
-                    self.actions.push(SettingsAction::RefreshTools);
-                    ui.ctx().request_repaint();
-                }
-                if ui
-                    .button(SettingsTarget::BrowseTypstPackages.label())
-                    .clicked()
-                {
-                    self.actions.push(SettingsAction::ShowPackages);
-                }
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_heading(ui, SettingsSection::Preview);
+                ui.label("$x$ → mi · $ x $ → mitex. Native Typst math prevents enabling.");
+            }
+            SettingsSection::Preview => {
                 settings_target_anchor(
                     ui,
                     SettingsTarget::PreviewBackend,
@@ -1064,13 +1059,20 @@ impl SettingsPanel<'_> {
                 {
                     ui.colored_label(ui.visuals().error_fg_color, reason);
                 }
-                settings_target_anchor(ui, SettingsTarget::PreviewZoomSnapshot, &mut settings_scroll_target);
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::PreviewZoomSnapshot,
+                    &mut settings_scroll_target,
+                );
                 let _snapshot_response = ui.add_enabled(cfg!(target_os = "macos"), egui::Checkbox::new(
                     &mut edited.preview_zoom_snapshot, SettingsTarget::PreviewZoomSnapshot.label(),
                 )).on_hover_text("Scale a cached, higher-resolution viewport image while Tinymist redraws, then reveal the sharp preview. Works with both Tinymist modes on macOS. Keeps one image in memory, capped at four million pixels.");
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 if ui.is_rect_visible(_snapshot_response.rect) {
-                    crate::desktop_test::observe("settings.preview.zoom_snapshot", &_snapshot_response);
+                    crate::desktop_test::observe(
+                        "settings.preview.zoom_snapshot",
+                        &_snapshot_response,
+                    );
                 }
                 settings_target_anchor(
                     ui,
@@ -1091,15 +1093,176 @@ impl SettingsPanel<'_> {
                 {
                     self.actions.push(SettingsAction::RetryTinymist);
                 }
-
-                ui.add_space(theme::SPACE.small);
-                ui.separator();
-                settings_heading(ui, SettingsSection::Status);
-                let status = if deterministic_settings {
-                    format!(
-                        "{} (deterministic QA build)",
-                        crate::build_info::APP_NAME
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::PreviewJump,
+                    &mut settings_scroll_target,
+                );
+                settings_control_row(ui, SettingsTarget::PreviewJump.label(), |ui| {
+                    egui::ComboBox::from_id_salt("source-preview-trigger")
+                        .width(
+                            ui.available_width()
+                                .min(METRICS.settings.source_preview_trigger_width),
+                        )
+                        .selected_text(edited.source_preview_trigger.label())
+                        .show_ui(ui, |ui| {
+                            for trigger in SourcePreviewTrigger::ALL {
+                                ui.selectable_value(
+                                    &mut edited.source_preview_trigger,
+                                    trigger,
+                                    trigger.label(),
+                                );
+                            }
+                        });
+                });
+            }
+            SettingsSection::Tools => {
+                ui.label(
+                    RichText::new(
+                        "Packaged builds use pinned sidecars. A custom path overrides one tool without changing the other.",
                     )
+                    .size(theme::TYPE.supporting)
+                    .color(ui.visuals().weak_text_color()),
+                );
+                ui.strong("Typst tools");
+                let staged_typst = self.typst_tool;
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TypstCompiler,
+                    &mut settings_scroll_target,
+                );
+                if tool_preference_editor(
+                    ui,
+                    SettingsTarget::TypstCompiler.label(),
+                    &mut edited.typst,
+                    staged_typst,
+                    deterministic_settings,
+                    self.settings,
+                ) {
+                    self.actions
+                        .push(SettingsAction::ChooseTool(ToolPickerTarget::Typst));
+                }
+                if !deterministic_settings && let Some(reason) = &staged_typst.fallback_reason {
+                    fallback_notice(ui, "Binary fallback active", reason);
+                }
+                ui.add_space(METRICS.settings.tool_gap);
+                let staged_tinymist = self.tinymist_tool;
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TinymistLanguageServer,
+                    &mut settings_scroll_target,
+                );
+                if tool_preference_editor(
+                    ui,
+                    SettingsTarget::TinymistLanguageServer.label(),
+                    &mut edited.tinymist,
+                    staged_tinymist,
+                    deterministic_settings,
+                    self.settings,
+                ) {
+                    self.actions
+                        .push(SettingsAction::ChooseTool(ToolPickerTarget::Tinymist));
+                }
+                if !deterministic_settings && let Some(reason) = &staged_tinymist.fallback_reason {
+                    fallback_notice(ui, "Binary fallback active", reason);
+                }
+                configuration_editor(
+                    ui,
+                    crate::toolchain::ToolKind::Tinymist,
+                    &mut edited.tinymist_configuration,
+                    self.settings,
+                    None,
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TexServices,
+                    &mut settings_scroll_target,
+                );
+                ui.scope(|ui| {
+                    ui.strong("TeX tools");
+                    show_tex_preferences(ui, &mut edited.tex, self.tex_tools, self.settings);
+                    for (kind, preference, resolution) in [
+                        (
+                            crate::toolchain::ToolKind::Tectonic,
+                            &mut edited.tex.tectonic,
+                            &self.tex_tools.tectonic,
+                        ),
+                        (
+                            crate::toolchain::ToolKind::Texlab,
+                            &mut edited.tex.texlab,
+                            &self.tex_tools.texlab,
+                        ),
+                        (
+                            crate::toolchain::ToolKind::Badness,
+                            &mut edited.tex.badness,
+                            &self.tex_tools.badness,
+                        ),
+                        (
+                            crate::toolchain::ToolKind::TexFmt,
+                            &mut edited.tex.tex_fmt,
+                            &self.tex_tools.tex_fmt,
+                        ),
+                    ] {
+                        if tool_preference_editor(
+                            ui,
+                            kind.label(),
+                            preference,
+                            resolution,
+                            deterministic_settings,
+                            self.settings,
+                        ) {
+                            self.actions
+                                .push(SettingsAction::ChooseTool(ToolPickerTarget::Tex(kind)));
+                        }
+                        if !deterministic_settings && let Some(reason) = &resolution.fallback_reason
+                        {
+                            fallback_notice(ui, kind.label(), reason);
+                        }
+                    }
+                    ui.strong("LaTeXdiff");
+                    super::latexdiff::preferences(ui, &mut edited.latexdiff);
+                    configuration_editor(
+                        ui,
+                        crate::toolchain::ToolKind::Texlab,
+                        &mut edited.tex.texlab_configuration,
+                        self.settings,
+                        Some(&mut edited.tex.texlab_ignored_codes),
+                    );
+                    configuration_editor(
+                        ui,
+                        crate::toolchain::ToolKind::Badness,
+                        &mut edited.tex.badness_configuration,
+                        self.settings,
+                        Some(&mut edited.tex.badness_ignored_codes),
+                    );
+                });
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::RefreshBinaryStatus,
+                    &mut settings_scroll_target,
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::BrowseTypstPackages,
+                    &mut settings_scroll_target,
+                );
+                if ui
+                    .button(SettingsTarget::RefreshBinaryStatus.label())
+                    .clicked()
+                {
+                    self.actions.push(SettingsAction::RefreshTools);
+                    ui.ctx().request_repaint();
+                }
+                if ui
+                    .button(SettingsTarget::BrowseTypstPackages.label())
+                    .clicked()
+                {
+                    self.actions.push(SettingsAction::ShowPackages);
+                }
+                ui.separator();
+                ui.strong("Service status");
+                let status = if deterministic_settings {
+                    format!("{} (deterministic QA build)", crate::build_info::APP_NAME)
                 } else {
                     crate::build_info::VERSION.to_owned()
                 };
@@ -1176,13 +1339,61 @@ impl SettingsPanel<'_> {
                         ),
                     );
                 });
-            });
-
-        self.state.scroll_target = settings_scroll_target;
-
-        if !deterministic_settings && &edited != original {
-            self.actions.push(SettingsAction::Update(Box::new(edited)));
+            }
+            SettingsSection::Shortcuts => {
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::KeyboardShortcuts,
+                    &mut settings_scroll_target,
+                );
+                ui.horizontal_wrapped(|ui| {
+                    theme::apply_compact_control_spacing(ui);
+                    ui.label(RichText::new("Keyboard").strong());
+                    if ui
+                        .button(SettingsTarget::KeyboardShortcuts.label())
+                        .clicked()
+                    {
+                        self.actions.push(SettingsAction::ShowShortcuts);
+                    }
+                    ui.label(
+                        RichText::new(
+                            "All application, editor, build, preview, and window bindings",
+                        )
+                        .size(theme::TYPE.supporting)
+                        .weak(),
+                    );
+                });
+            }
+            SettingsSection::Snippets => {
+                settings_target_anchor(ui, SettingsTarget::Snippets, &mut settings_scroll_target);
+                super::settings_snippets::show(ui, &mut self.state.snippets, edited, self.settings);
+            }
+            SettingsSection::Templates => {
+                settings_target_anchor(ui, SettingsTarget::Templates, &mut settings_scroll_target);
+                ui.scope(|ui| {
+                    ui.weak("These templates appear in New from template. Changes are saved with Settings.");
+                    let mut remove = None;
+                    for (index, template) in edited.templates.iter_mut().enumerate() {
+                        ui.push_id(("template", index), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("Name"); ui.text_edit_singleline(&mut template.name);
+                                if ui.small_button("Remove").clicked() { remove = Some(index); }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.selectable_value(&mut template.language, crate::document_templates::Language::Typst, "Typst");
+                                ui.selectable_value(&mut template.language, crate::document_templates::Language::Tex, "TeX");
+                            });
+                            super::code_editor::editor(ui, "template-source", &mut template.source, template.language.extension(), self.settings, 8);
+                            ui.separator();
+                        });
+                    }
+                    if let Some(index) = remove { edited.templates.remove(index); }
+                    if ui.button("Add template").clicked() { edited.templates.push(crate::document_templates::Template {name:"New template".into(), language:crate::document_templates::Language::Typst, source:String::new()}); }
+                    if ui.button("Restore default templates").clicked() { edited.templates = crate::document_templates::defaults(); }
+                });
+            }
         }
+        settings_scroll_target
     }
 }
 
@@ -1251,22 +1462,26 @@ pub(super) fn show_theme_choices(
 
 pub(super) const LUMINOSITY_HINT: &str = "Adjust midtones while preserving black and white.";
 
+fn show_theme_color_reset(
+    ui: &mut egui::Ui,
+    transform: &mut crate::theme_transform::ThemeTransform,
+) {
+    if crate::app::icons::action_button_enabled(
+        ui,
+        *transform != Default::default(),
+        "Reset colors",
+    )
+    .clicked()
+    {
+        *transform = Default::default();
+    }
+}
+
 pub(super) fn show_theme_color_controls(
     ui: &mut egui::Ui,
     transform: &mut crate::theme_transform::ThemeTransform,
 ) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new(SettingsTarget::ThemeColors.label()).strong());
-        if crate::app::icons::action_button_enabled(
-            ui,
-            *transform != Default::default(),
-            "Reset colors",
-        )
-        .clicked()
-        {
-            *transform = Default::default();
-        }
-    });
+    show_theme_color_reset(ui, transform);
     ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut transform.invert, SettingsTarget::InvertColors.label());
         settings_slider(
@@ -1853,6 +2068,29 @@ mod tests {
                 ),
             );
         harness.run();
+        fn category(
+            harness: &mut Harness<
+                '_,
+                (
+                    SettingsUiState,
+                    AppSettings,
+                    Vec<SettingsAction>,
+                    Option<AppSettings>,
+                ),
+            >,
+            section: SettingsSection,
+        ) {
+            use egui_kittest::kittest::by;
+            harness
+                .get(
+                    by().label(section.title())
+                        .role(egui::accesskit::Role::Button),
+                )
+                .click();
+            harness.run();
+            assert_eq!(harness.state().0.category, section);
+        }
+        category(&mut harness, SettingsSection::Tools);
         for capability in ["Editing", "LSP", "Interactive", "PDF", "Rendering", "Links"] {
             harness.get_by_label(capability);
         }
@@ -1860,6 +2098,7 @@ mod tests {
             harness.state().2.is_empty(),
             "idle Settings must not emit updates"
         );
+        category(&mut harness, SettingsSection::Preview);
         harness
             .get_by_label("Tinymist partial (experimental)")
             .click();
@@ -1891,16 +2130,19 @@ mod tests {
             matches!(action, SettingsAction::Update(settings) if !settings.preview_follow_edits)
         }));
         harness.state_mut().2.clear();
+        category(&mut harness, SettingsSection::Editor);
         harness.get_by_label("Spaces").click();
         harness.run();
         assert!(harness.state().2.iter().any(|action| matches!(action, SettingsAction::Update(settings) if settings.indent_spaces == 0)));
         harness.state_mut().2.clear();
+        category(&mut harness, SettingsSection::Writing);
         harness
             .get_by_label("Use ASCII punctuation when typing")
             .click();
         harness.run();
         assert!(harness.state().2.iter().any(|action| matches!(action, SettingsAction::Update(settings) if settings.ascii_punctuation)));
         harness.state_mut().2.clear();
+        category(&mut harness, SettingsSection::Preview);
         harness.get_by_label("Retry Tinymist").click();
         harness.run();
         assert!(
@@ -1911,6 +2153,13 @@ mod tests {
                 .any(|a| matches!(a, SettingsAction::RetryTinymist))
         );
         harness.state_mut().2.clear();
+        category(&mut harness, SettingsSection::Appearance);
+        assert!(
+            harness.query_by_label("Invert colors").is_none(),
+            "advanced colors start collapsed"
+        );
+        harness.state_mut().0.scroll_target = Some(SettingsTarget::InvertColors);
+        harness.run();
         harness.get_by_label("Invert colors").click();
         harness.run();
         assert!(!harness.state().1.theme_invert);
@@ -1932,6 +2181,7 @@ mod tests {
                 .any(|a| matches!(a, SettingsAction::Update(settings) if settings.fixed_tab_width))
         );
         harness.state_mut().2.clear();
+        category(&mut harness, SettingsSection::Editor);
         harness.get_by_label("Side-by-side").click();
         harness.run();
         assert!(harness.state().2.iter().any(
@@ -1939,6 +2189,7 @@ mod tests {
                 == crate::settings::GitDiffStyle::SideBySide)
         ));
         harness.state_mut().2.clear();
+        category(&mut harness, SettingsSection::Appearance);
         harness.get_by_label("Overrides…").click();
         harness.run();
         assert!(

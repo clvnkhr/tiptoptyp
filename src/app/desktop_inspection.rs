@@ -35,12 +35,18 @@ impl EditorApp {
         let controls = self.preview_controls_snapshot();
         let preview = self.preview_status_snapshot();
         let palette = self.preview_palette(context, self.preview.dark);
-        let (settings_query_fingerprint, settings_text_input_focused, settings_json) = {
+        let (
+            settings_query_fingerprint,
+            settings_text_input_focused,
+            settings_json,
+            settings_category,
+        ) = {
             let settings_window = self.settings_window.lock().unwrap();
             (
                 crate::desktop_test::fingerprint(&settings_window.ui.query),
                 settings_window.text_input_focused,
                 serde_json::json!({"fingerprint": settings_window.ui.json_draft.as_ref().map(|draft| crate::desktop_test::fingerprint(&draft.text)), "visible": settings_window.ui.json_mode, "query": settings_window.ui.json_query, "valid": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.validation.is_ok()), "saved": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.saved)}),
+                settings_window.ui.category.title(),
             )
         };
         let snippets = self.settings.snippets.iter().map(|s| serde_json::json!({"prefix": s.prefix, "language": s.language, "body": crate::desktop_test::fingerprint(&s.body)})).collect::<Vec<_>>();
@@ -87,6 +93,7 @@ impl EditorApp {
             "settings_query_fingerprint": settings_query_fingerprint,
             "settings_text_input_focused": settings_text_input_focused,
         });
+        observation["settings_category"] = settings_category.into();
         observation["window_background"] =
             serde_json::to_value(self.settings.window_background).unwrap();
         observation["native_background"] =

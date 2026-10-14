@@ -29,6 +29,32 @@ def fingerprint(text):
     return f"{value:016x}"
 
 
+def settings_category_target_visible(state, category):
+    target = state["targets"].get("settings.category." + category)
+    search = state["targets"].get("settings.search")
+    return bool(target and search and target["enabled"] and target["age_ms"] <= 500
+                and target["frame"] == search["frame"] and target["viewport"] == search["viewport"])
+
+
+def settings_navigation_matches(document, category, query, source):
+    return (document["settings_visible"] and not document["settings_json"]["visible"]
+            and not document["settings_help_visible"] and document["settings_category"] == category
+            and document["settings_query_fingerprint"] == fingerprint(query)
+            and document["source_fingerprint"] == source)
+
+
+def settings_window_size(windows):
+    settings = [window for window in windows if "Settings" in window.get("AXTitle", "")]
+    if len(settings) != 1:
+        raise AssertionError("expected exactly one native Settings window")
+    size = settings[0].get("size")
+    if not isinstance(size, list) or len(size) != 2 or not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0 for value in size):
+        raise AssertionError("native Settings window size is missing or invalid")
+    return tuple(size)
+
+
 def assert_explorer_frame(state, independent, preview_edge):
     document = state["document"]
     frame = document["frame"]
@@ -1489,23 +1515,66 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             self.capture_viewport("main")
         self.close_scratch(count)
 
+    def settings_category(self, category, query, source, size):
+        import time
+        if not settings_category_target_visible(self.snapshot(), category):
+            self.click("settings.category.selector")
+        deadline = time.monotonic() + 6
+        while not settings_category_target_visible(self.snapshot(), category):
+            if time.monotonic() >= deadline:
+                raise AssertionError("Settings category target is not current: " + category)
+            time.sleep(0.05)
+        self.click("settings.category." + category)
+        self.wait("category retains search and source: " + category, lambda d:
+                  settings_navigation_matches(d, category, query, source))
+        if settings_window_size(self.native("windows")["windows"]) != size:
+            raise AssertionError("switching Settings category resized the native window")
+
     def settings_search(self):
         self.settings()
-        tabs = self.snapshot()["document"]["tabs"]
-        panel = self.snapshot()["document"]["panel"]
+        if self.snapshot()["document"]["settings_json"]["visible"]:
+            self.click("settings.json.mode")
+            self.wait("category journey starts in the Settings form", lambda d:
+                      not d["settings_json"]["visible"])
+        before = self.snapshot()["document"]
+        tabs, panel, source = before["tabs"], before["panel"], before["source_fingerprint"]
+        size = settings_window_size(self.native("windows")["windows"])
         self.key(45)  # Cmd+N belongs to Settings; it must not create a document.
         self.stable_state(lambda d: d["settings_visible"] and d["tabs"] == tabs)
         self.key(23)  # Cmd+5 must not toggle the document's bottom panel.
         self.stable_state(lambda d: d["settings_visible"] and d["panel"] == panel)
         self.key(3)  # Cmd+F focuses the Settings search, not document Find.
         self.wait("Settings search receives its shortcut", lambda d: d["settings_text_input_focused"] and not d["find_visible"])
+        self.key(0)
         self.native("text", "backend")
         self.wait("Settings search receives typed text", lambda d: d["settings_query_fingerprint"] == fingerprint("backend"))
         self.key(3)
         self.wait("repeated Cmd+F keeps Settings search focused", lambda d: d["settings_text_input_focused"] and not d["find_visible"])
-        for query, label in (("backend", "Typst preview backend"), ("appearance", "Appearance")):
+        for category in ("Appearance", "Editor", "Writing", "Tools"):
+            self.settings_category(category, "backend", source, size)
+        self.setting_section("wrap", "Wrap lines")
+        self.wait("search routes to Editor", lambda d:
+                  settings_navigation_matches(d, "Editor", "wrap", source))
+        wrap = self.snapshot()["document"]["line_wrap"]
+        self.click("settings.editor.wrap")
+        self.wait("form edit applies before category navigation", lambda d: d["line_wrap"] != wrap)
+        for category in ("Writing", "Editor"):
+            self.settings_category(category, "wrap", source, size)
+            self.stable_state(lambda d: d["line_wrap"] != wrap, frames=3)
+        self.click("settings.editor.wrap")
+        self.wait("form edit restores after category navigation", lambda d: d["line_wrap"] == wrap)
+        for query, label, category in (
+            ("backend", "Typst preview backend", "Preview"),
+            ("grammar", "Offline English spelling and grammar (Typst / TeX)", "Writing"),
+            ("compiler", "Typst compiler", "Tools"),
+            ("appearance", "Appearance", "Appearance"),
+        ):
             self.setting_section(query, label)
-            self.wait("search destination highlighted", lambda d: d["settings_highlight"] == label)
+            self.wait("search destination highlights the correct category", lambda d:
+                      d["settings_highlight"] == label
+                      and settings_navigation_matches(d, category, query, source))
+            if settings_window_size(self.native("windows")["windows"]) != size:
+                raise AssertionError("search navigation resized the native Settings window")
             if self.capture_review and label == "Appearance":
                 self.capture_viewport("settings")
         self.wait("highlight expires", lambda d: d["settings_highlight"] is None, timeout=5)
@@ -1520,6 +1589,16 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         state = self.snapshot()
         if state["targets"]["settings.json.save"]["enabled"]:
             raise AssertionError("invalid settings left Save enabled")
+        draft = state["document"]["settings_json"]["fingerprint"]
+        self.click("settings.json.mode")
+        self.wait("form navigation leaves the JSON draft parked", lambda d:
+                  not d["settings_json"]["visible"])
+        for category in ("Editor", "Tools"):
+            self.settings_category(category, "appearance", source, size)
+        self.click("settings.json.mode")
+        self.wait("JSON draft survives form category navigation", lambda d:
+                  d["settings_json"]["visible"] and not d["settings_json"]["valid"]
+                  and d["settings_json"]["fingerprint"] == draft)
         self.click("settings.json.reload")
         self.wait("Reload restores valid settings", lambda d: d["settings_json"]["valid"])
         self.click("settings.json")
@@ -1537,11 +1616,14 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.native_wait("Settings restores its previous size", lambda ws: any(w.get("AXTitle") == settings_window["AXTitle"] and w.get("size") == size for w in ws))
         self.key(3)
         self.wait("Cmd+F stays in JSON", lambda d: d["settings_json"]["visible"] and not d["find_visible"])
-        self.wait_target("settings.json.find")
+        self.wait_target("settings.json.find", focused=True)
+        self.key(0)
         self.native("text", "writing_language")
         self.wait("JSON find receives typing", lambda d: d["settings_json"]["query"] == "writing_language")
         self.key(13)  # Cmd+W closes Settings, not the document tab.
-        self.wait("Cmd+W closes Settings but preserves the document", lambda d: not d["settings_visible"] and d["tabs"] == 1)
+        self.wait("Cmd+W closes Settings but preserves the document", lambda d:
+                  not d["settings_visible"] and d["tabs"] == tabs
+                  and d["source_fingerprint"] == source)
         self.native_wait("document regains focus after Settings shortcut", lambda ws: not any("Settings" in w["AXTitle"] for w in ws) and any(w.get("AXFocused") for w in ws))
 
     def background(self):

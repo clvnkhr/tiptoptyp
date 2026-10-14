@@ -11,34 +11,43 @@ pub(super) fn recolor(rgba: &mut [u8], background: Color32, foreground: Color32)
         }
     }
 }
+/// Resolve page colors without creating a renderer or changing a document.
+/// The Settings sample and both preview backends share this policy.
+pub(super) fn resolve_palette(
+    settings: &AppSettings,
+    visuals: &egui::Visuals,
+    dark: bool,
+) -> (Color32, Color32) {
+    let (bg, fg) = if dark {
+        (Color32::BLACK, Color32::WHITE)
+    } else {
+        (Color32::WHITE, Color32::BLACK)
+    };
+    let (comfy_bg, comfy_fg) = if dark == visuals.dark_mode {
+        (visuals.panel_fill, visuals.text_color())
+    } else {
+        (visuals.text_color(), visuals.panel_fill)
+    };
+    (
+        if settings.comfy_background {
+            comfy_bg
+        } else {
+            bg
+        },
+        if settings.comfy_text { comfy_fg } else { fg },
+    )
+}
+
 impl EditorApp {
     pub(super) fn preview_palette(
         &self,
         context: &egui::Context,
         dark: bool,
     ) -> (Color32, Color32) {
-        let visuals = &context.style_of(context.theme()).visuals;
-        let (bg, fg) = if dark {
-            (Color32::BLACK, Color32::WHITE)
-        } else {
-            (Color32::WHITE, Color32::BLACK)
-        };
-        let (comfy_bg, comfy_fg) = if dark == visuals.dark_mode {
-            (visuals.panel_fill, visuals.text_color())
-        } else {
-            (visuals.text_color(), visuals.panel_fill)
-        };
-        (
-            if self.settings.comfy_background {
-                comfy_bg
-            } else {
-                bg
-            },
-            if self.settings.comfy_text {
-                comfy_fg
-            } else {
-                fg
-            },
+        resolve_palette(
+            &self.settings,
+            &context.style_of(context.theme()).visuals,
+            dark,
         )
     }
 
@@ -82,6 +91,39 @@ mod tests {
             assert_eq!(text.0, plain.0);
             assert_eq!(text.1, both.1);
         }
+    }
+    #[test]
+    fn page_sample_palette_uses_real_theme_colors_including_opposite_page_appearance() {
+        let panel = Color32::from_rgb(27, 38, 44);
+        let text = Color32::from_rgb(224, 214, 182);
+        let mut visuals = egui::Visuals::dark();
+        visuals.panel_fill = panel;
+        visuals.override_text_color = Some(text);
+        let mut settings = AppSettings {
+            comfy_background: true,
+            comfy_text: true,
+            ..AppSettings::default()
+        };
+        assert_eq!(resolve_palette(&settings, &visuals, true), (panel, text));
+        assert_eq!(resolve_palette(&settings, &visuals, false), (text, panel));
+        settings.comfy_text = false;
+        assert_eq!(
+            resolve_palette(&settings, &visuals, true),
+            (panel, Color32::WHITE)
+        );
+        assert_eq!(
+            resolve_palette(&settings, &visuals, false),
+            (text, Color32::BLACK)
+        );
+        settings.comfy_background = false;
+        assert_eq!(
+            resolve_palette(&settings, &visuals, true),
+            (Color32::BLACK, Color32::WHITE)
+        );
+        assert_eq!(
+            resolve_palette(&settings, &visuals, false),
+            (Color32::WHITE, Color32::BLACK)
+        );
     }
     #[test]
     fn comfy_changes_neither_document_nor_build_revision() {

@@ -100,6 +100,16 @@ mod tests {
             .type_text("fonts");
         harness.run();
         assert_eq!(harness.state().ui.query, "fonts");
+        assert!(
+            harness
+                .query(
+                    by().label("Invert colors")
+                        .role(egui::accesskit::Role::CheckBox)
+                )
+                .is_none()
+        );
+        harness.get_by_label("Color adjustments").click();
+        harness.run();
         harness
             .get(
                 by().label("Invert colors")
@@ -513,6 +523,8 @@ mod tests {
             )
             .click();
         harness.run();
+        harness.state_mut().ui.category = SettingsSection::Editor;
+        harness.run();
         for label in [
             "Indentation guides",
             "Highlight uses of local definitions",
@@ -550,6 +562,136 @@ mod tests {
         assert_eq!(live.highlight_rules[2].text, "#mycomment");
         let draft = crate::settings_json::Draft::new(&live);
         assert_eq!(draft.validation.unwrap(), live);
+    }
+
+    #[test]
+    fn settings_search_crosses_categories_and_retains_query_and_form_edits() {
+        let mut window = SettingsWindow::default();
+        window.ui.query = "Wrap lines".into();
+        let mut harness = settings_harness(window);
+        harness.state_mut().ui.category = SettingsSection::Templates;
+        harness.run();
+        harness
+            .get(by().label("Wrap lines").role(egui::accesskit::Role::Button))
+            .click();
+        harness.run();
+        assert_eq!(harness.state().ui.category, SettingsSection::Editor);
+        assert!(harness.state().ui.scroll_target.is_none());
+        harness
+            .get(
+                by().label("Wrap lines")
+                    .role(egui::accesskit::Role::CheckBox),
+            )
+            .click();
+        harness.run();
+        assert!(!harness.state().input.as_ref().unwrap().settings.line_wrap);
+        harness.state_mut().ui.query = "Hue shift".into();
+        harness.run();
+        harness
+            .get(by().label("Hue shift").role(egui::accesskit::Role::Button))
+            .click();
+        harness.run();
+        assert_eq!(harness.state().ui.category, SettingsSection::Appearance);
+        assert_eq!(harness.state().ui.query, "Hue shift");
+        harness.get(
+            by().label("Invert colors")
+                .role(egui::accesskit::Role::CheckBox),
+        );
+        assert!(harness.state().ui.scroll_target.is_none());
+        harness.state_mut().ui.category = SettingsSection::Tools;
+        harness.run();
+        assert_eq!(
+            harness.state().ui.category,
+            SettingsSection::Tools,
+            "the consumed search jump must not force users back on later frames"
+        );
+        assert_eq!(harness.state().ui.query, "Hue shift");
+        let mut settings = AppSettings::default();
+        harness.state_mut().take_actions(&mut settings);
+        assert!(!settings.line_wrap);
+    }
+
+    #[test]
+    fn settings_navigation_and_page_sample_fit_narrow_and_wide_windows() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        for width in [360.0, 500.0, 730.0] {
+            harness.set_size(Vec2::new(width, 1800.0));
+            harness.run();
+            for label in [
+                "Search settings",
+                "Page appearance sample",
+                "Comfy background",
+                "Comfy text",
+                "Fixed tab width",
+            ] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width,
+                    "{label} escaped {width}px window: {rect:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_invalid_tool_drafts_survive_wide_narrow_wide_navigation() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        harness.set_size(Vec2::new(900.0, 4000.0));
+        harness.state_mut().ui.category = SettingsSection::Tools;
+        harness.run();
+        let saved = harness.state().input.as_ref().unwrap().settings.clone();
+        harness
+            .get_by_label("Tinymist configuration (JSON)")
+            .click();
+        harness.run();
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get(by().role(egui::accesskit::Role::MultilineTextInput))
+            .type_text("{ unfinished");
+        harness.run();
+        harness
+            .query_all(by().label("Command customization"))
+            .next()
+            .unwrap()
+            .click();
+        harness.run();
+        let arguments = saved.typst.command.arguments.as_str();
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value(arguments),
+            )
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value(arguments),
+            )
+            .type_text("\"unfinished");
+        harness.run();
+        for width in [500.0, 900.0] {
+            harness.set_size(Vec2::new(width, 4000.0));
+            harness.run();
+            harness.get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("{ unfinished"),
+            );
+            harness.get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("\"unfinished"),
+            );
+            assert_eq!(
+                harness.state().input.as_ref().unwrap().settings,
+                saved,
+                "invalid unsaved drafts must never alter live preferences"
+            );
+        }
     }
 
     fn settings_harness(mut window: SettingsWindow) -> Harness<'static, SettingsWindow> {

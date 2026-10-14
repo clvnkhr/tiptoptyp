@@ -52,7 +52,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
             "Search Settings for snippets, then edit Typst or TeX directly and Save snippets. Optional ${1:name} fields repeat with ${1}; ${0} sets the final cursor. Tab advances fields. Autocomplete symbols identify language-server, custom-snippet and built-in suggestions. Font names appear in their own font.",
             "Indentation guides, highlighting uses of local definitions and literal text highlights are under Editor. Their styling never changes saved source.",
             "Appearance includes a translucent background on macOS. Adjust Background opacity, or turn the effect off, without changing PDF pages.",
-            "The {} title-bar button edits all settings as validated JSON. Changes apply only after Save.",
+            "Settings search covers every category. Choose a result to switch pages and highlight its control. Categories keep their scroll positions and drafts; narrow windows use a selector beside search. The {} title-bar button edits validated JSON, applied only after Save.",
         ] { ui.label(format!("• {tip}")); }
     });
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]

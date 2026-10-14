@@ -77,6 +77,7 @@ mod pdfium_view;
 mod preview_controls;
 mod preview_follow;
 mod preview_palette;
+mod settings_navigation;
 mod settings_panel;
 mod settings_snippets;
 mod settings_view;
@@ -899,23 +900,41 @@ enum AppPopupAction {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 enum SettingsSection {
+    #[default]
     Appearance,
     Editor,
-    Tools,
+    Writing,
     Preview,
-    Status,
+    Tools,
+    Shortcuts,
+    Snippets,
+    Templates,
 }
 
 impl SettingsSection {
+    const ALL: [Self; 8] = [
+        Self::Appearance,
+        Self::Editor,
+        Self::Writing,
+        Self::Preview,
+        Self::Tools,
+        Self::Shortcuts,
+        Self::Snippets,
+        Self::Templates,
+    ];
+
     const fn title(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
             Self::Editor => "Editor",
-            Self::Tools => "Tool binaries",
-            Self::Preview => "Typst preview backend",
-            Self::Status => "Service status",
+            Self::Writing => "Writing",
+            Self::Preview => "Preview",
+            Self::Tools => "Tools",
+            Self::Shortcuts => "Shortcuts",
+            Self::Snippets => "Snippets",
+            Self::Templates => "Templates",
         }
     }
 }
@@ -1102,7 +1121,13 @@ impl SettingsTarget {
             | Self::HueShift
             | Self::ThemeColors
             | Self::PageTheme
-            | Self::DarkImages => SettingsSection::Appearance,
+            | Self::DarkImages
+            | Self::InterfaceScale
+            | Self::TitleBarMenus
+            | Self::ToolbarStyle
+            | Self::FixedTabWidth
+            | Self::UiFont
+            | Self::UiFontWeight => SettingsSection::Appearance,
             Self::IndependentDividers
             | Self::WrapLines
             | Self::IndentationGuides
@@ -1112,41 +1137,35 @@ impl SettingsTarget {
             | Self::StickyContextRows
             | Self::AutoPairDelimiters
             | Self::Indentation
-            | Self::AsciiPunctuation
-            | Self::EnglishGrammar
-            | Self::Handwriting
-            | Self::UnicodeWarnings
-            | Self::MitexDollars
-            | Self::AutoFormatMath
-            | Self::Snippets
-            | Self::Templates
             | Self::GitDiffStyle
             | Self::RainbowBrackets
             | Self::AutoSave
             | Self::AutoSaveDelay
-            | Self::KeyboardShortcuts
             | Self::ExplorerOrder
-            | Self::InterfaceScale
-            | Self::TitleBarMenus
-            | Self::ToolbarStyle
-            | Self::FixedTabWidth
-            | Self::UiFont
-            | Self::UiFontWeight
             | Self::CodeFont
             | Self::CodeFontWeight
-            | Self::PreviewJump
             | Self::HoverDelay => SettingsSection::Editor,
+            Self::AsciiPunctuation
+            | Self::EnglishGrammar
+            | Self::Handwriting
+            | Self::UnicodeWarnings
+            | Self::MitexDollars
+            | Self::AutoFormatMath => SettingsSection::Writing,
+            Self::Snippets => SettingsSection::Snippets,
+            Self::Templates => SettingsSection::Templates,
+            Self::KeyboardShortcuts => SettingsSection::Shortcuts,
             Self::TypstCompiler
             | Self::TinymistLanguageServer
             | Self::TexServices
             | Self::RefreshBinaryStatus
-            | Self::BrowseTypstPackages => SettingsSection::Tools,
-            Self::PreviewBackend | Self::PreviewZoomSnapshot | Self::PreviewFollowEdits => {
-                SettingsSection::Preview
-            }
-            Self::ToolchainStatus | Self::ProjectRoot | Self::UiScreenshots => {
-                SettingsSection::Status
-            }
+            | Self::BrowseTypstPackages
+            | Self::ToolchainStatus
+            | Self::ProjectRoot
+            | Self::UiScreenshots => SettingsSection::Tools,
+            Self::PreviewBackend
+            | Self::PreviewZoomSnapshot
+            | Self::PreviewFollowEdits
+            | Self::PreviewJump => SettingsSection::Preview,
         }
     }
 
@@ -11072,14 +11091,6 @@ fn notice_color(kind: NoticeKind, context: &egui::Context) -> Color32 {
         NoticeKind::Info => info_color(context),
         NoticeKind::Success => success_color(context),
         NoticeKind::Error => error_color(context),
-    }
-}
-
-fn theme_label(theme: Option<egui::Theme>) -> &'static str {
-    match theme {
-        Some(egui::Theme::Light) => "Light",
-        Some(egui::Theme::Dark) => "Dark",
-        None => "Unavailable",
     }
 }
 

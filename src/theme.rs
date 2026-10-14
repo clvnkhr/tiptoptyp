@@ -1249,7 +1249,7 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         toolbar_height: 30.0,
         status_height: 24.0,
         panel_header_height: 28.0,
-        settings_width: 500.0,
+        settings_width: 730.0,
         settings_height: 560.0,
         settings_min_size: Vec2::new(360.0, 260.0),
         typst_overrides_width: 920.0,
@@ -1999,7 +1999,7 @@ mod tests {
         assert_eq!(METRICS.chrome.main_min_size, Vec2::new(220.0, 160.0));
         assert_eq!(METRICS.chrome.status_height, 24.0);
         assert_eq!(METRICS.chrome.panel_header_height, 28.0);
-        assert_eq!(METRICS.chrome.settings_width, 500.0);
+        assert_eq!(METRICS.chrome.settings_width, 730.0);
         assert_eq!(METRICS.chrome.settings_min_size, Vec2::new(360.0, 260.0));
         assert_eq!(METRICS.spacing.global_item, Vec2::new(6.0, 4.0));
         assert_eq!(METRICS.spacing.global_button_padding, Vec2::new(7.0, 3.0));

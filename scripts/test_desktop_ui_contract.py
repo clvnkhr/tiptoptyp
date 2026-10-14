@@ -605,6 +605,40 @@ class SettingsSectionContract(unittest.TestCase):
         self.assertEqual(list(targets), [])
 
 
+class SettingsNavigationContract(unittest.TestCase):
+    def test_rail_or_open_selector_requires_current_settings_targets(self):
+        from desktop_ui_journeys import settings_category_target_visible
+        target = {"enabled": True, "age_ms": 0, "frame": 12, "viewport": "Settings"}
+        state = {"targets": {"settings.category.Editor": dict(target), "settings.search": dict(target)}}
+        self.assertTrue(settings_category_target_visible(state, "Editor"))
+        for field, value in (("enabled", False), ("age_ms", 501), ("frame", 11), ("viewport", "main")):
+            state["targets"]["settings.category.Editor"] = {**target, field: value}
+            with self.subTest(field=field):
+                self.assertFalse(settings_category_target_visible(state, "Editor"))
+        self.assertFalse(settings_category_target_visible(state, "Tools"))
+
+    def test_navigation_requires_category_query_form_mode_and_unchanged_source(self):
+        from desktop_ui_journeys import settings_navigation_matches, fingerprint
+        valid = {"settings_visible": True, "settings_json": {"visible": False},
+                 "settings_help_visible": False, "settings_category": "Editor",
+                 "settings_query_fingerprint": fingerprint("wrap"), "source_fingerprint": "original"}
+        self.assertTrue(settings_navigation_matches(valid, "Editor", "wrap", "original"))
+        for field, value in (("settings_visible", False), ("settings_json", {"visible": True}),
+                             ("settings_help_visible", True), ("settings_category", "Appearance"),
+                             ("settings_query_fingerprint", fingerprint("")), ("source_fingerprint", "edited")):
+            with self.subTest(field=field):
+                self.assertFalse(settings_navigation_matches({**valid, field: value}, "Editor", "wrap", "original"))
+
+    def test_native_size_is_required_instead_of_assuming_a_missing_window_is_stable(self):
+        from desktop_ui_journeys import settings_window_size
+        settings = {"AXTitle": "tiptoptyp Settings", "size": [850, 700]}
+        self.assertEqual(settings_window_size([{"AXTitle": "main"}, settings]), (850, 700))
+        for windows in ([], [settings, settings], [{**settings, "size": None}],
+                        [{**settings, "size": [0, 700]}], [{**settings, "size": [float("nan"), 700]}]):
+            with self.subTest(windows=windows), self.assertRaises(AssertionError):
+                settings_window_size(windows)
+
+
 class CopyIsolationContract(unittest.TestCase):
     def test_copy_acknowledges_fixture_match_and_releases_adapter_on_success_or_failure(self):
         import io

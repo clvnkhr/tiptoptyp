@@ -17,6 +17,133 @@ use crate::{
 use eframe::egui::{self, Align, Color32, Layout, RichText, Vec2};
 use std::path::Path;
 
+/// Consistent label and value columns that become a single stack in narrow windows.
+pub(super) fn settings_control_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    add_controls: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let width = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    let columns = settings_row_columns(width, gap);
+    if let Some((label_width, controls_width)) = columns {
+        let label_text = egui::WidgetText::from(label).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Wrap),
+            label_width,
+            egui::TextStyle::Body,
+        );
+        let row_height = label_text
+            .size()
+            .y
+            .max(ui.spacing().interact_size.y)
+            .max(
+                ui.text_style_height(&egui::TextStyle::Button)
+                    + ui.spacing().button_padding.y * 2.0,
+            )
+            .max(METRICS.icon.button_size.y);
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                Vec2::new(label_width, row_height),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    // Allocation uses the child's actual minimum size, not its
+                    // requested width. Reserve the column even for short labels.
+                    ui.set_min_size(Vec2::new(label_width, row_height));
+                    ui.add(egui::Label::new(label_text));
+                },
+            );
+            ui.allocate_ui_with_layout(
+                Vec2::new(controls_width, row_height),
+                Layout::left_to_right(Align::Center).with_main_wrap(true),
+                |ui| {
+                    ui.set_min_width(controls_width);
+                    add_controls(ui)
+                },
+            )
+            .inner
+        })
+    } else {
+        ui.vertical(|ui| {
+            ui.label(label);
+            add_controls(ui)
+        })
+    }
+}
+
+fn settings_row_columns(width: f32, gap: f32) -> Option<(f32, f32)> {
+    (width >= 360.0).then(|| {
+        let label = 126.0;
+        (label, (width - label - gap).max(0.0))
+    })
+}
+
+/// A small page sample uses the same colors as the real preview, without
+/// starting a compiler, native child, image worker, or repaint animation.
+pub(super) fn show_page_appearance_sample(
+    ui: &mut egui::Ui,
+    settings: &crate::settings::AppSettings,
+) {
+    // At large interface scales the controls take priority over an unreadably
+    // small sample. Its fixed text layout needs the full thumbnail width.
+    if ui.available_width() < 112.0 {
+        return;
+    }
+    let width = 112.0;
+    let size = Vec2::new(width, width * 1.28);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Image,
+            ui.is_enabled(),
+            "Page appearance sample",
+        )
+    });
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("settings.page_sample", &response);
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let interface = if ui.visuals().dark_mode {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
+    let dark = settings.document_theme.resolve(interface) == egui::Theme::Dark;
+    let (background, foreground) =
+        super::preview_palette::resolve_palette(settings, ui.visuals(), dark);
+    let paper = rect.shrink(4.0);
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect_filled(rect, 3.0, ui.visuals().extreme_bg_color);
+    painter.rect_filled(paper, 0.0, background);
+    painter.rect_stroke(
+        paper,
+        0.0,
+        ui.visuals().widgets.noninteractive.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let text = |offset: f32, value: &str, font: f32| {
+        painter.text(
+            egui::pos2(paper.center().x, paper.top() + offset),
+            egui::Align2::CENTER_TOP,
+            value,
+            egui::FontId::proportional(font),
+            foreground,
+        );
+    };
+    text(12.0, "Energy estimate", 11.0);
+    text(34.0, "Let A generate a\nsemigroup on H.", 10.0);
+    text(70.0, "∂ₜu + Au = f", 12.0);
+    text(97.0, "The bound follows.", 10.0);
+    painter.text(
+        egui::pos2(paper.center().x, paper.bottom() - 6.0),
+        egui::Align2::CENTER_BOTTOM,
+        "1",
+        egui::FontId::proportional(9.0),
+        foreground,
+    );
+}
+
 pub(super) fn color_theme_choice_label(choice: &ColorThemeChoice) -> String {
     match choice {
         ColorThemeChoice::Builtin(id) => builtin_themes::find(id)
@@ -65,7 +192,7 @@ pub(super) fn show_font_family_picker(
         .unwrap_or_else(|| default_label.to_owned());
     let mut selection = None;
     egui::ComboBox::from_id_salt(id)
-        .width(190.0)
+        .width(ui.available_width().clamp(0.0, 190.0))
         .height(350.0)
         .selected_text(selected_text)
         .show_ui(ui, |ui| {
@@ -815,6 +942,103 @@ pub(super) fn show_text_highlight_editor(
             *rules = crate::editor_decoration::default_rules();
         }
     });
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn settings_row_labels_and_controls_have_stable_columns_and_vertical_centers() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for width in [400.0, 500.0, 730.0] {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 300.0))
+                .build_ui(|ui| {
+                    for (index, label) in ["UI", "Light theme", "A long setting label that wraps"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        settings_control_row(ui, label, |ui| {
+                            let _ = ui.button(format!("Value {index}"));
+                        });
+                    }
+                });
+            harness.run();
+            let controls = (0..3)
+                .map(|index| harness.get_by_label(&format!("Value {index}")).rect())
+                .collect::<Vec<_>>();
+            for (label, control) in ["UI", "Light theme", "A long setting label that wraps"]
+                .into_iter()
+                .zip(&controls)
+            {
+                let label_rect = harness.get_by_label(label).rect();
+                assert!(
+                    (control.left() - controls[0].left()).abs() < 0.5,
+                    "{width}px row {label} moved the controls column: {controls:?}"
+                );
+                assert!(
+                    (label_rect.center().y - control.center().y).abs() < 0.5,
+                    "{width}px row {label} has misaligned centers: {label_rect:?} / {control:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn aligned_settings_rows_keep_controls_inside_narrow_and_wide_windows() {
+        for width in [250.0, 360.0, 500.0, 730.0] {
+            let context = egui::Context::default();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 300.0));
+            let mut controls = None;
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |ui| {
+                    settings_control_row(ui, "A longer setting label", |ui| {
+                        controls = Some(
+                            ui.add_sized(
+                                [
+                                    ui.available_width().min(190.0),
+                                    ui.spacing().interact_size.y,
+                                ],
+                                egui::Button::new("Choose value"),
+                            )
+                            .rect,
+                        );
+                    });
+                },
+            );
+            output.drop_without_applying_deltas();
+            assert!(screen.contains_rect(controls.unwrap()), "width {width}");
+        }
+        assert!(settings_row_columns(359.0, 8.0).is_none());
+        let (label, value) = settings_row_columns(500.0, 8.0).unwrap();
+        assert_eq!(label + value + 8.0, 500.0);
+    }
+
+    #[test]
+    fn page_sample_is_painted_without_overflow_or_a_native_child() {
+        for width in [80.0, 112.0, 180.0] {
+            let context = egui::Context::default();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 200.0));
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    ..Default::default()
+                },
+                |ui| {
+                    show_page_appearance_sample(ui, &crate::settings::AppSettings::default());
+                    assert!(screen.contains_rect(ui.min_rect()));
+                },
+            );
+            // The sample is normal egui paint: no native child or image upload.
+            assert_eq!(output.viewport_output.len(), 1);
+            output.drop_without_applying_deltas();
+        }
+    }
 }
 
 #[cfg(test)]

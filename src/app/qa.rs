@@ -918,12 +918,9 @@ impl QaSession {
         app.table_editor = None;
         app.rename_overlay_had_focus = false;
         app.rename_overlay_suspended = false;
-        app.settings_window.lock().unwrap().ui.staged_ui_font_weight = None;
-        app.settings_window
-            .lock()
-            .unwrap()
-            .ui
-            .staged_code_font_weight = None;
+        // Each capture step starts from the canonical Settings page, rather
+        // than inheriting a category, search, or JSON mode from an earlier step.
+        app.settings_window.lock().unwrap().ui = settings_panel::SettingsUiState::default();
         app.notice = None;
         app.preview.raw_diagnostics.clear();
         app.preview.diagnostics.clear();
@@ -1013,6 +1010,13 @@ mod tests {
         };
         let key = app.document().key();
         for theme in ["tiptop-light", "tiptop-dark"] {
+            {
+                let mut window = app.settings_window.lock().unwrap();
+                window.ui.category = SettingsSection::Tools;
+                window.ui.query = "prior scene".into();
+                window.ui.json_mode = true;
+                window.ui.scroll_target = Some(SettingsTarget::TypstCompiler);
+            }
             qa.set_step(
                 &mut app,
                 &UiCaptureStep {
@@ -1028,6 +1032,11 @@ mod tests {
             assert_eq!(app.tabs.len(), 1);
             assert!(app.source_preview_available());
             assert_eq!(app.document().key(), key);
+            let window = app.settings_window.lock().unwrap();
+            assert_eq!(window.ui.category, SettingsSection::Appearance);
+            assert!(window.ui.query.is_empty());
+            assert!(!window.ui.json_mode);
+            assert!(window.ui.scroll_target.is_none());
         }
         app.document_mut()
             .replace_unprojected_untitled("scene-only buffer");
