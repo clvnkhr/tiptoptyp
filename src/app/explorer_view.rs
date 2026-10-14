@@ -1,9 +1,9 @@
 //! Explorer sections and rows: borrowed presentation inputs and returned actions.
+use super::icons::quiet_square_icon_button;
 use super::{
     FileDropTarget, METRICS, TooltipPlacement, UiIcon, approximate_char_capacity,
     clipped_panel_content_ui, error_color, icon_button, native_hover_text, offer_asset_hover,
-    offer_file_drop_target, offer_folder_row_drop, paint_ui_icon, square_icon_button, static_icon,
-    tail_elide,
+    offer_file_drop_target, offer_folder_row_drop, paint_ui_icon, static_icon, tail_elide,
 };
 use crate::workspace::{WorkspaceNode, WorkspaceSnapshot};
 use crate::{
@@ -1140,6 +1140,57 @@ fn collapsed_explorer_sections_have_no_resize_grip() {
 
 #[cfg(test)]
 #[test]
+fn quiet_explorer_header_actions_preserve_panel_geometry_and_collapse_state() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let mut harness = Harness::builder().build_ui_state(
+        |ui, state: &mut (Rect, usize)| {
+            let output = explorer_section_resizable(
+                ui,
+                ExplorerSectionRenderSpec {
+                    id_salt: "quiet-header-regression",
+                    title: "Files",
+                    default_open: true,
+                    body_height: 140.0,
+                    show_resize_handle: true,
+                    maximized: false,
+                    search: None,
+                    focus_search: false,
+                    active_search: false,
+                },
+                |ui| {
+                    ui.label("A file");
+                },
+            );
+            state.0 = output.frame_rect.unwrap();
+            if output.toggle_maximized {
+                state.1 += 1;
+            }
+        },
+        (Rect::NOTHING, 0),
+    );
+    harness.run();
+    let panel = harness.state().0;
+    let action = harness.get_by_label("Maximize Files section").rect();
+    assert_eq!(
+        action.size(),
+        Vec2::splat(METRICS.explorer.section_header_height)
+    );
+    harness.hover_at(action.center());
+    harness.run();
+    assert_eq!(harness.state().0, panel);
+    assert_eq!(
+        harness.get_by_label("Maximize Files section").rect(),
+        action
+    );
+    harness.get_by_label("Maximize Files section").click();
+    harness.run();
+    assert_eq!(harness.state().1, 1);
+    harness.get_by_label("A file");
+    assert_eq!(harness.state().0, panel);
+}
+
+#[cfg(test)]
+#[test]
 fn explorer_search_initial_offset_does_not_reset_wheel_scrolling() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     #[derive(Default)]
@@ -1267,11 +1318,12 @@ fn explorer_section_search(
         }
         focused = response.has_focus() || focus;
         if !query.is_empty()
-            && square_icon_button(
+            && quiet_square_icon_button(
                 ui,
                 UiIcon::Close,
                 "Clear search",
                 METRICS.explorer.header_row_height,
+                false,
             )
             .clicked()
         {
@@ -1313,8 +1365,7 @@ pub(super) fn explorer_section_resizable(
                         .max(0.0),
                     METRICS.explorer.section_header_height,
                 ],
-                egui::Button::new((RichText::new(spec.title).strong(), egui::Atom::grow()))
-                    .frame(false),
+                egui::Button::new((RichText::new(spec.title), egui::Atom::grow())).frame(false),
             );
             title_clicked = response.clicked();
             output.section_clicked |= response.has_focus();
@@ -1325,7 +1376,13 @@ pub(super) fn explorer_section_resizable(
             };
             let label = format!("{verb} {} section", spec.title);
             let maximize = native_hover_text(
-                square_icon_button(ui, icon, &label, METRICS.explorer.section_header_height),
+                quiet_square_icon_button(
+                    ui,
+                    icon,
+                    &label,
+                    METRICS.explorer.section_header_height,
+                    spec.maximized,
+                ),
                 &label,
             );
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]

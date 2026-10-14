@@ -34,6 +34,8 @@ use explorer_view::{
     show_explorer_sections, show_project_index_section, workspace_node_matches_query,
     workspace_tree_state_id,
 };
+mod layout_picker;
+use layout_picker::{layout_popup_size, show_layout_popup_ui};
 mod popup_layout;
 #[cfg(test)]
 use popup_layout::app_popup_scroll_id;
@@ -863,6 +865,9 @@ enum AppPopup {
         anchor: Pos2,
     },
     View {
+        anchor: Pos2,
+    },
+    Layout {
         anchor: Pos2,
     },
     Workspace {
@@ -6715,7 +6720,6 @@ impl EditorApp {
 
             let toolbar_width = ui.available_width();
             let compact = toolbar_width < METRICS.toolbar.compact_breakpoint;
-            let view_mode_enabled = self.native_command_enabled(AppCommand::Code);
             if compact {
                 theme::apply_dense_toolbar_spacing(ui);
             }
@@ -6731,72 +6735,34 @@ impl EditorApp {
 
             let tex_available = self.tex_mode_available();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let panel = icons::toolbar_button(
+                let layout_open = matches!(self.app_popup, Some(AppPopup::Layout { .. }));
+                let layout = icons::toolbar_button(
                     ui,
-                    self.native_command_enabled(AppCommand::Panel),
-                    self.bottom_panel.is_visible(),
-                    UiIcon::Panel,
-                    "Panel",
-                    self.settings.toolbar_style,
+                    true,
+                    layout_open,
+                    match self.view_mode {
+                        ViewMode::Code => UiIcon::Code,
+                        ViewMode::Split => UiIcon::Split,
+                        ViewMode::Preview => UiIcon::Preview,
+                    },
+                    "Layout",
+                    if self.settings.toolbar_style == crate::settings::ToolbarStyle::Text {
+                        crate::settings::ToolbarStyle::Text
+                    } else {
+                        crate::settings::ToolbarStyle::TextAndIcons
+                    },
                     false,
                 );
-                if native_hover_text(
-                    panel,
-                    shortcut_tooltip("Toggle bottom panel", &shortcuts, ShortcutAction::Panel),
-                )
-                .clicked()
-                {
-                    self.execute_app_command(AppCommand::Panel, ui.ctx(), frame);
-                }
-                ui.add_enabled_ui(view_mode_enabled, |ui| {
-                    for (mode, command, hint) in [
-                        (ViewMode::Preview, AppCommand::Preview, "Preview"),
-                        (
-                            ViewMode::Split,
-                            AppCommand::Split,
-                            "Split editor and preview",
-                        ),
-                        (ViewMode::Code, AppCommand::Code, "Code editor"),
-                    ] {
-                        let title = command_spec(command).title;
-                        let icon = match mode {
-                            ViewMode::Code => UiIcon::Code,
-                            ViewMode::Split => UiIcon::Split,
-                            ViewMode::Preview => UiIcon::Preview,
-                        };
-                        if native_hover_text(
-                            icons::toolbar_button(
-                                ui,
-                                true,
-                                self.view_mode == mode,
-                                icon,
-                                title,
-                                self.settings.toolbar_style,
-                                false,
-                            ),
-                            hint,
-                        )
-                        .clicked()
-                        {
-                            self.execute_app_command(command, ui.ctx(), frame);
-                        }
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("toolbar.layout", &layout);
+                if layout.clicked() {
+                    if layout_open {
+                        self.close_app_popup();
+                    } else {
+                        self.open_app_popup(AppPopup::Layout {
+                            anchor: layout.rect.left_bottom(),
+                        });
                     }
-                });
-                if native_hover_text(
-                    icons::toolbar_button(
-                        ui,
-                        true,
-                        self.explorer.panel_visible(),
-                        UiIcon::Explorer,
-                        "Explorer",
-                        self.settings.toolbar_style,
-                        false,
-                    ),
-                    "Toggle the file explorer",
-                )
-                .clicked()
-                {
-                    self.execute_app_command(AppCommand::Explorer, ui.ctx(), frame);
                 }
                 if native_hover_text(
                     icons::toolbar_button(
@@ -8534,97 +8500,179 @@ impl EditorApp {
                 {
                     let color = diagnostic_color(diagnostic.severity, ui.ctx());
                     let code = diagnostic_code(diagnostic);
+                    let details_id = ui.make_persistent_id((
+                        "problem-details",
+                        self.tabs.active_id(),
+                        &diagnostic.source,
+                        diagnostic.location,
+                        &diagnostic.provider,
+                        &diagnostic.message,
+                        diagnostic.severity,
+                        &code,
+                    ));
+                    let has_details = diagnostic
+                        .details
+                        .iter()
+                        .any(|detail| problem_is_detail(detail));
+                    let mut expanded = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<bool>(details_id).unwrap_or(false));
+                    let mut disclosure_rect = None;
                     let background_slot = ui.painter().add(egui::Shape::Noop);
                     let row = ui
-                        .scope(|ui| {
+                        .push_id((details_id, index), |ui| {
                             ui.set_min_width(ui.available_width());
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(
-                                    RichText::new(diagnostic.severity.label())
-                                        .strong()
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                let severity = ui.add(egui::Label::new(
+                                    RichText::new(problem_severity_glyph(diagnostic.severity))
+                                        .monospace()
                                         .color(color),
-                                );
+                                ));
+                                severity.widget_info(|| {
+                                    egui::WidgetInfo::labeled(
+                                        egui::WidgetType::Label,
+                                        true,
+                                        diagnostic.severity.label(),
+                                    )
+                                });
                                 if let Some(location) = diagnostic.location {
                                     ui.add(
                                         egui::Label::new(
                                             RichText::new(format!(
                                                 "{}:{}",
-                                                location.line, location.column
+                                                location.line, location.column,
                                             ))
                                             .monospace()
-                                            .color(ui.visuals().weak_text_color()),
+                                            .weak(),
                                         )
                                         .selectable(true),
                                     );
                                 }
-                                // Wrapping labels inherit the first row's height,
-                                // including the monospace location label.
-                                let line_height = ui
-                                    .cursor()
-                                    .height()
-                                    .max(ui.text_style_height(&egui::TextStyle::Body));
-                                let message = ui.add(
-                                    egui::Label::new(&diagnostic.message)
-                                        .selectable(true)
-                                        .wrap(),
-                                );
-                                if diagnostic.provider.is_some() || code.is_some() {
-                                    let source = match (&diagnostic.provider, &code) {
-                                        (Some(provider), Some(code)) => {
-                                            format!("{provider} · Code: {code}")
-                                        }
-                                        (Some(provider), None) => provider.clone(),
-                                        (None, Some(code)) => format!("Code: {code}"),
-                                        (None, None) => unreachable!(),
-                                    };
-                                    let galley = ui.painter().layout_no_wrap(
-                                        source,
-                                        theme::supporting_font(),
-                                        ui.visuals().weak_text_color(),
-                                    );
-                                    if let Some(rect) = problem_provider_rect(
-                                        message.rect,
-                                        ui.max_rect().right(),
-                                        galley.size(),
-                                        ui.spacing().item_spacing.x,
-                                        line_height,
-                                    ) {
-                                        ui.painter().galley(
-                                            rect.min,
-                                            galley,
+                                let source = match (&diagnostic.provider, &code) {
+                                    (Some(provider), Some(code)) => {
+                                        format!("{provider} · Code: {code}")
+                                    }
+                                    (Some(provider), None) => provider.clone(),
+                                    (None, Some(code)) => format!("Code: {code}"),
+                                    (None, None) => String::new(),
+                                };
+                                let provider_width = if source.is_empty() {
+                                    0.0
+                                } else {
+                                    ui.painter()
+                                        .layout_no_wrap(
+                                            source.clone(),
+                                            theme::supporting_font(),
                                             ui.visuals().weak_text_color(),
+                                        )
+                                        .size()
+                                        .x
+                                };
+                                let (message_width, provider_width) = problem_text_widths(
+                                    ui.available_width(),
+                                    provider_width,
+                                    has_details,
+                                    ui.spacing().item_spacing.x,
+                                );
+                                ui.allocate_ui_with_layout(
+                                    Vec2::new(message_width, 0.0),
+                                    Layout::top_down(Align::Min),
+                                    |ui| {
+                                        ui.set_min_width(message_width);
+                                        ui.add(
+                                            egui::Label::new(&diagnostic.message)
+                                                .selectable(true)
+                                                .wrap(),
                                         );
+                                    },
+                                );
+                                if provider_width > 0.0 {
+                                    ui.allocate_ui_with_layout(
+                                        Vec2::new(provider_width, 0.0),
+                                        Layout::top_down(Align::Min),
+                                        |ui| {
+                                            ui.set_min_width(provider_width);
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(source)
+                                                        .size(theme::TYPE.supporting)
+                                                        .weak(),
+                                                )
+                                                .selectable(true)
+                                                .truncate()
+                                                .show_tooltip_when_elided(false),
+                                            );
+                                        },
+                                    );
+                                }
+                                if has_details {
+                                    let label = if expanded {
+                                        "Hide diagnostic details"
+                                    } else {
+                                        "Show diagnostic details"
+                                    };
+                                    let disclosure = icons::square_icon_button(
+                                        ui,
+                                        if expanded { UiIcon::Down } else { UiIcon::Next },
+                                        label,
+                                        18.0,
+                                    );
+                                    disclosure_rect = Some(disclosure.rect);
+                                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                    if ui.is_rect_visible(disclosure.rect) {
+                                        crate::desktop_test::observe(
+                                            &format!("problem.{index}.details"),
+                                            &disclosure,
+                                        );
+                                    }
+                                    if disclosure.clicked() {
+                                        expanded = !expanded;
+                                        ui.ctx().data_mut(|data| {
+                                            data.insert_temp(details_id, expanded)
+                                        });
                                     }
                                 }
                             });
-                            for detail in &diagnostic.details {
-                                if detail.split_once(':').is_some_and(|(label, _)| {
-                                    label.trim().eq_ignore_ascii_case("code")
-                                }) {
-                                    continue;
+                            if expanded {
+                                for detail in diagnostic
+                                    .details
+                                    .iter()
+                                    .filter(|detail| problem_is_detail(detail))
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(METRICS.problems.detail_indent);
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(detail)
+                                                    .size(theme::TYPE.supporting)
+                                                    .monospace()
+                                                    .weak(),
+                                            )
+                                            .selectable(true)
+                                            .wrap(),
+                                        );
+                                    });
                                 }
-                                ui.horizontal(|ui| {
-                                    ui.add_space(METRICS.problems.detail_indent);
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(detail)
-                                                .size(theme::TYPE.supporting)
-                                                .monospace()
-                                                .weak(),
-                                        )
-                                        .selectable(true)
-                                        .wrap(),
-                                    );
-                                });
                             }
                         })
                         .response;
-                    row.context_menu(|ui| {
-                        if ui.button("Copy diagnostic").clicked() {
-                            ui.ctx().copy_text(diagnostic.full_message());
-                            ui.close();
-                        }
-                    });
+                    // The parent row senses hover so its selectable text can
+                    // own pointer drags. Open its context menu from the actual
+                    // secondary release rather than making the row steal clicks.
+                    let context_requested = ui.rect_contains_pointer(row.rect)
+                        && ui.input(|input| {
+                            input.pointer.button_clicked(egui::PointerButton::Secondary)
+                        });
+                    egui::Popup::context_menu(&row)
+                        .open_memory(context_requested.then_some(egui::SetOpenCommand::Bool(true)))
+                        .show(|ui| {
+                            if ui.button("Copy diagnostic").clicked() {
+                                ui.ctx().copy_text(diagnostic.full_message());
+                                ui.close();
+                            }
+                        });
                     let row = if self.snapshot_scene == Some(UiSnapshotScene::ProblemsPanel)
                         && index == 0
                     {
@@ -8665,7 +8713,13 @@ impl EditorApp {
                         }
                         native_hover_text(hover, hint);
                     }
+                    let disclosure_hovered = disclosure_rect.is_some_and(|rect| {
+                        ui.ctx()
+                            .pointer_latest_pos()
+                            .is_some_and(|point| rect.contains(point))
+                    });
                     if diagnostic.location.is_some()
+                        && !disclosure_hovered
                         && let Some(diagnostic) =
                             problem_row_jump_target(diagnostic, problem_row_double_clicked(&row))
                     {
@@ -11216,21 +11270,27 @@ fn revision_as_i32(revision: u64) -> i32 {
     revision.min(i32::MAX as u64) as i32
 }
 
-fn problem_provider_rect(
-    message: Rect,
-    right: f32,
-    provider: Vec2,
-    gap: f32,
-    line_height: f32,
-) -> Option<Rect> {
-    (message.height() <= line_height + 1.0 && message.right() + gap + provider.x <= right).then(
-        || {
-            Rect::from_min_size(
-                Pos2::new(right - provider.x, message.center().y - provider.y * 0.5),
-                provider,
-            )
-        },
-    )
+fn problem_severity_glyph(severity: DiagnosticSeverity) -> &'static str {
+    match severity {
+        DiagnosticSeverity::Error => "×",
+        DiagnosticSeverity::Warning => "△",
+        DiagnosticSeverity::Note => "i",
+        DiagnosticSeverity::Help => "?",
+        DiagnosticSeverity::Unknown => "·",
+    }
+}
+
+fn problem_is_detail(detail: &str) -> bool {
+    !detail
+        .split_once(':')
+        .is_some_and(|(label, _)| label.trim().eq_ignore_ascii_case("code"))
+}
+
+fn problem_text_widths(available: f32, provider: f32, details: bool, gap: f32) -> (f32, f32) {
+    let available = (available - if details { 18.0 + gap } else { 0.0 }).max(0.0);
+    let provider = provider.min(available * 0.38).max(0.0);
+    let message = (available - provider - if provider > 0.0 { gap } else { 0.0 }).max(0.0);
+    (message, provider)
 }
 
 fn approximate_char_capacity(width: f32, font_size: f32) -> usize {

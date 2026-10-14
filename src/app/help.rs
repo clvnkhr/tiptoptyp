@@ -43,6 +43,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.heading("Try these");
         for tip in [
             "Select text, then type an opening bracket, quote or $ to surround it. Undo reverses it in one step.",
+            "Layout in the title bar groups Code, Split, Preview, Explorer and the bottom panel. Their keyboard shortcuts still work, and toggling a panel keeps its chosen size.",
             "Focus an Explorer subpanel and use Find to search just that panel. Its empty search bar scrolls away.",
             "Edit → LaTeXdiff compares two TeX files or the current editor against its saved version. Generate a marked-up .tex file, then Save and open to build its PDF. Options are also under TeX tools.",
             "Edit → Edit Table opens an editable grid. Variable cells display locked compiler samples; generated Typst tables open as a read-only sampled grid. Use Source for deliberate expression changes. TeX tables, math conversion, snippets and document templates add missing package imports to the preamble automatically; Undo restores both imports and inserted code.",

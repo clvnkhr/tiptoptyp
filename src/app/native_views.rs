@@ -1155,6 +1155,9 @@ impl EditorApp {
             AppPopup::File { anchor } => (*anchor, command_popup_size(CommandMenu::File, &style)),
             AppPopup::Edit { anchor } => (*anchor, command_popup_size(CommandMenu::Edit, &style)),
             AppPopup::View { anchor } => (*anchor, command_popup_size(CommandMenu::View, &style)),
+            AppPopup::Layout { anchor } => {
+                (*anchor, layout_popup_size(context, &style, &shortcuts))
+            }
             AppPopup::Workspace {
                 anchor, is_file, ..
             } => (*anchor, workspace_context_menu_size(*is_file, &style)),
@@ -1246,6 +1249,7 @@ impl EditorApp {
             source_read_only: self.table_editor.is_some(),
             ..Default::default()
         };
+        let layout_state = self.layout_menu_state();
         let mut close = false;
         let mut action = None;
         let mut had_focus = self.app_popup_had_focus;
@@ -1340,6 +1344,9 @@ impl EditorApp {
                                         &shortcuts,
                                         &mut action,
                                     );
+                                }
+                                AppPopup::Layout { .. } => {
+                                    show_layout_popup_ui(ui, layout_state, &shortcuts, &mut action);
                                 }
                                 AppPopup::Workspace { path, is_file, .. } => {
                                     let preview_selected = self

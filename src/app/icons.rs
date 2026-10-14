@@ -91,6 +91,43 @@ pub(crate) fn square_icon_button(
     response
 }
 
+/// An exact-size action with no idle tile; hover, focus and selection remain visible.
+pub(crate) fn quiet_square_icon_button(
+    ui: &mut egui::Ui,
+    icon: UiIcon,
+    label: &str,
+    size: f32,
+    selected: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let selected = selected && response.enabled();
+    let emphasized = selected
+        || response.hovered()
+        || response.has_focus()
+        || response.is_pointer_button_down_on()
+        || response.highlighted();
+    let visuals = ui.style().interact_selectable(&response, selected);
+    if emphasized {
+        ui.painter().rect(
+            rect,
+            visuals.corner_radius,
+            visuals.weak_bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
+    });
+    let color = if response.enabled() && !emphasized {
+        ui.visuals().weak_text_color()
+    } else {
+        visuals.fg_stroke.color
+    };
+    paint_ui_icon(ui.painter(), rect.shrink(5.0), icon, color);
+    response
+}
+
 pub(crate) fn icon_button(ui: &mut egui::Ui, icon: UiIcon, tooltip: &str) -> egui::Response {
     icon_button_enabled(ui, true, icon, tooltip)
 }
@@ -996,6 +1033,82 @@ fn paint_tree_glyph(painter: &egui::Painter, rect: Rect, folder: bool, color: Co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quiet_actions_keep_exact_targets_and_accessibility_through_hover_focus_and_disable() {
+        use egui_kittest::{
+            Harness,
+            kittest::{NodeT as _, Queryable as _},
+        };
+        for size in [18.0, 20.0, 24.0] {
+            let mut harness = Harness::builder().build_ui_state(
+                move |ui, state: &mut (bool, usize)| {
+                    // Keep the viewport background distinct from the target.
+                    ui.set_min_size(Vec2::new(200.0, 100.0));
+                    if ui
+                        .add_enabled_ui(state.0, |ui| {
+                            quiet_square_icon_button(
+                                ui,
+                                UiIcon::Maximize,
+                                "Quiet action",
+                                size,
+                                false,
+                            )
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        state.1 += 1;
+                    }
+                },
+                (true, 0),
+            );
+            // Idle styling is checked without pointer or keyboard emphasis.
+            // Focused actions intentionally paint a tile, including any focus
+            // established by the accessibility harness during initialization.
+            harness.hover_at(Pos2::new(-100.0, -100.0));
+            harness.ctx.memory_mut(|memory| {
+                if let Some(focused) = memory.focused() {
+                    memory.surrender_focus(focused);
+                }
+            });
+            harness.run_steps(2);
+            assert!(!harness.get_by_label("Quiet action").is_focused());
+            let rect = harness.get_by_label("Quiet action").rect();
+            assert_eq!(rect.size(), Vec2::splat(size));
+            let idle_tiles = harness.output().shapes.iter().filter(|shape|
+                matches!(&shape.shape, egui::Shape::Rect(tile) if tile.rect == rect && tile.fill != Color32::TRANSPARENT)
+            ).count();
+            assert_eq!(
+                idle_tiles,
+                0,
+                "idle actions must not paint tiles at size {size}; shapes: {:?}",
+                harness.output().shapes
+            );
+            harness.hover_at(rect.center());
+            harness.run();
+            assert_eq!(harness.get_by_label("Quiet action").rect(), rect);
+            harness.get_by_label("Quiet action").focus();
+            harness.run();
+            assert!(harness.get_by_label("Quiet action").is_focused());
+            assert_eq!(harness.get_by_label("Quiet action").rect(), rect);
+            harness.get_by_label("Quiet action").click();
+            harness.run();
+            assert_eq!(harness.state().1, 1);
+            harness.state_mut().0 = false;
+            harness.run();
+            assert_eq!(harness.get_by_label("Quiet action").rect(), rect);
+            assert!(
+                harness
+                    .get_by_label("Quiet action")
+                    .accesskit_node()
+                    .is_disabled()
+            );
+            harness.get_by_label("Quiet action").click();
+            harness.run();
+            assert_eq!(harness.state().1, 1, "disabled actions cannot activate");
+        }
+    }
 
     fn glyph_shapes(icon: UiIcon) -> Vec<egui::Shape> {
         let ctx = egui::Context::default();

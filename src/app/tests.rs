@@ -8338,7 +8338,6 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
                 app,
             );
         harness.run_steps(3);
-        let compact = harness.query_by_label("Files").is_some();
         // The untitled Typst entry uses Tinymist where an interactive preview
         // exists, and the Typst CLI binary elsewhere.
         let interactive_platform = cfg!(any(target_os = "macos", target_os = "windows"));
@@ -8363,14 +8362,7 @@ fn projected_application_toolbar_order_and_right_alignment_survive_resizing() {
         if interactive_platform {
             labels.push("PDF");
         }
-        labels.extend([
-            "Settings",
-            if compact { "Files" } else { "Explorer" },
-            if compact { "C" } else { "Code" },
-            if compact { "S" } else { "Split" },
-            if compact { "P" } else { "Preview" },
-            "Panel",
-        ]);
+        labels.extend(["Settings", "Layout"]);
         let mut previous_right = 0.0;
         for label in labels {
             let rect = harness.get_by_label(label).rect();
@@ -9479,23 +9471,18 @@ fn dormant_settings_surface_survives_document_resume_and_close() {
 }
 
 #[test]
-fn problem_provider_stays_on_one_line_or_disappears() {
-    let message = Rect::from_min_size(Pos2::new(20.0, 10.0), Vec2::new(100.0, 20.0));
-    let provider = Vec2::new(70.0, 16.0);
-    let rect = problem_provider_rect(message, 300.0, provider, 8.0, 20.0).unwrap();
-    assert_eq!(rect.right(), 300.0);
-    assert_eq!(rect.center().y, message.center().y);
-    assert!(problem_provider_rect(message, 190.0, provider, 8.0, 20.0).is_none());
-    assert!(
-        problem_provider_rect(
-            message.expand2(Vec2::new(0.0, 10.0)),
-            300.0,
-            provider,
-            8.0,
-            20.0
-        )
-        .is_none()
-    );
+fn problem_message_and_provider_share_a_bounded_row() {
+    for width in [80.0, 180.0, 500.0] {
+        for details in [false, true] {
+            let (message, provider) = problem_text_widths(width, 300.0, details, 6.0);
+            let allocated = message + provider + 6.0 + if details { 24.0 } else { 0.0 };
+            assert!(message > 0.0 && provider > 0.0);
+            assert!(allocated <= width + 0.001, "{width}: {allocated}");
+        }
+    }
+    assert_eq!(problem_text_widths(100.0, 0.0, false, 6.0), (100.0, 0.0));
+    assert!(!problem_is_detail("Code: redundant-script-braces"));
+    assert!(problem_is_detail("Hint: remove these braces"));
 }
 
 #[test]
@@ -9651,6 +9638,161 @@ fn toolbar_style_defaults_to_icons_and_roundtrips_each_choice() {
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored.toolbar_style, toolbar_style);
     }
+}
+
+fn compact_problems_harness() -> egui_kittest::Harness<'static, EditorApp> {
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, std::env::temp_dir());
+    app.document_mut()
+        .replace_unprojected_untitled("first\nsecond\nthird");
+    app.preview.diagnostics = vec![Diagnostic {
+        provider: Some("Badness".into()),
+        severity: DiagnosticSeverity::Warning,
+        source: DiagnosticSource::Main,
+        location: Some(DiagnosticLocation { line: 2, column: 1 }),
+        message: "Redundant braces".into(),
+        details: vec![
+            "Code: redundant-script-braces".into(),
+            "Hint: remove these braces".into(),
+        ],
+    }];
+    let mut harness = egui_kittest::Harness::builder()
+        .with_step_dt(0.01)
+        .with_size(Vec2::new(900.0, 400.0))
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_problems(ui), app);
+    harness.run();
+    harness
+}
+
+#[test]
+fn problems_details_are_explicit_and_collapsed_without_losing_provider_or_message() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut harness = compact_problems_harness();
+    harness.get_by_label("Redundant braces");
+    harness.get_by_label("Badness · Code: redundant-script-braces");
+    assert!(
+        harness
+            .query_by_label("Hint: remove these braces")
+            .is_none()
+    );
+    let header = harness.get_by_label("Redundant braces").rect();
+    harness.get_by_label("Show diagnostic details").click();
+    harness.run();
+    harness.get_by_label("Hint: remove these braces");
+    assert_eq!(harness.get_by_label("Redundant braces").rect(), header);
+    assert!(harness.state().pending_editor_selection.is_none());
+    harness.get_by_label("Hide diagnostic details").click();
+    harness.run();
+    assert!(
+        harness
+            .query_by_label("Hint: remove these braces")
+            .is_none()
+    );
+    assert!(harness.state().pending_editor_selection.is_none());
+    assert_eq!(harness.state().preview.diagnostics[0].details.len(), 2);
+}
+
+#[test]
+fn problems_metadata_and_disclosure_stay_right_aligned_for_short_and_wrapped_messages() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut harness = compact_problems_harness();
+    for width in [900.0, 360.0] {
+        harness.set_size(Vec2::new(width, 500.0));
+        harness.state_mut().preview.diagnostics[0].message = "Short".into();
+        harness.run();
+        let provider = harness
+            .get_by_label("Badness · Code: redundant-script-braces")
+            .rect();
+        let disclosure = harness.get_by_label("Show diagnostic details").rect();
+        let message = "A longer diagnostic message that wraps across a few lines. ".repeat(3);
+        harness.state_mut().preview.diagnostics[0].message = message.clone();
+        harness.run();
+        let wrapped = harness.get_by_label(&message).rect();
+        let next_provider = harness
+            .get_by_label("Badness · Code: redundant-script-braces")
+            .rect();
+        let next_disclosure = harness.get_by_label("Show diagnostic details").rect();
+        assert!(
+            (next_provider.right() - provider.right()).abs() <= 0.1,
+            "provider shifted at {width}: {provider:?} -> {next_provider:?}"
+        );
+        assert!(
+            (next_disclosure.right() - disclosure.right()).abs() <= 0.1,
+            "disclosure shifted at {width}: {disclosure:?} -> {next_disclosure:?}"
+        );
+        assert!(
+            next_disclosure.right() <= width && next_disclosure.right() >= width - 24.0,
+            "disclosure is not at the panel edge: {next_disclosure:?}"
+        );
+        assert!(wrapped.width() > 40.0 && wrapped.right() <= next_provider.left() + 0.1);
+        assert!(next_provider.right() <= next_disclosure.left() + 0.1);
+    }
+}
+
+#[test]
+fn problems_distinct_codes_have_separate_disclosures_and_repeated_rows_have_unique_widgets() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut harness = compact_problems_harness();
+    let mut first = harness.state().preview.diagnostics[0].clone();
+    first.details = vec!["Code: first".into(), "Hint: first diagnostic".into()];
+    let mut second = first.clone();
+    second.details = vec!["Code: second".into(), "Hint: second diagnostic".into()];
+    harness.state_mut().preview.diagnostics = vec![first.clone(), second];
+    harness.run();
+    assert_eq!(
+        harness.get_all_by_label("Show diagnostic details").count(),
+        2
+    );
+    harness
+        .get_all_by_label("Show diagnostic details")
+        .next()
+        .unwrap()
+        .click();
+    harness.run();
+    harness.get_by_label("Hint: first diagnostic");
+    assert!(harness.query_by_label("Hint: second diagnostic").is_none());
+    harness.state_mut().preview.editor_diagnostics = vec![first];
+    harness.run();
+    assert_eq!(harness.get_all_by_label("Redundant braces").count(), 3);
+    assert_eq!(
+        harness.get_all_by_label("Hide diagnostic details").count(),
+        2
+    );
+    assert!(harness.state().pending_editor_selection.is_none());
+}
+
+#[test]
+fn problems_copy_includes_collapsed_details() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut harness = compact_problems_harness();
+    harness.get_by_label("Redundant braces").click_secondary();
+    harness.run();
+    let position = harness.get_by_label("Copy diagnostic").rect().center();
+    harness.event(egui::Event::PointerMoved(position));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+    }
+    let expected = harness.state().preview.diagnostics[0].full_message();
+    assert!(
+        harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .any(|command| {
+                matches!(command, egui::OutputCommand::CopyText(text) if text == &expected)
+            })
+    );
+    // Source navigation is exercised through real double-clicks by the
+    // desktop diagnostics journey; this check covers the Copy menu itself.
+    assert!(harness.state().pending_editor_selection.is_none());
 }
 
 #[test]

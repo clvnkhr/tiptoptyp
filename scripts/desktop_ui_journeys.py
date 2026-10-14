@@ -185,7 +185,7 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         finally:
             finish_clipboard_adapter(process)
 
-    def review_native_preview(self, label):
+    def review_native_preview(self, label, document_focus=True):
         """Optional observation boundary; a resumed pause is not a visual pass."""
         if not self.review_preview:
             return
@@ -198,7 +198,8 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                 raise RuntimeError("visual review not completed within three minutes")
             time.sleep(0.2)
         self.native("activate")
-        self.wait("document focused after visual review", lambda d: d["focused"])
+        if document_focus:
+            self.wait("document focused after visual review", lambda d: d["focused"])
 
     def capture_initial_review(self):
         # Native activation alone may leave the first responder unclaimed.
@@ -801,10 +802,28 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         for key, mode in ((19, "Code"), (21, "Preview"), (20, "Split")):
             self.key(key)
             self.wait("view mode " + mode, lambda d: d["view_mode"] == mode)
+        # The compact Layout picker uses the real native popup above a live
+        # Tinymist child; exercise every row rather than only its shortcuts.
+        self.choose_backend("Interactive", save_pdf=False)
+        self.wait("Layout picker has a live native preview behind it", lambda d:
+                  d["preview_backend"] == "Tinymist" and d["preview_native_ready"], timeout=40)
+        self.click("toolbar.layout")
+        self.wait_target("layout.code")
+        self.key(53, "none")
+        self.wait("Escape returns Layout focus to its document", lambda d: d["focused"])
+        for mode in ("Code", "Preview", "Split"):
+            self.click("toolbar.layout")
+            if mode == "Code":
+                if self.capture_review:
+                    self.capture_viewport("popup")
+                self.review_native_preview("layout-native-popup", document_focus=False)
+            self.click("layout." + mode.lower())
+            self.wait("Layout picker selects " + mode, lambda d: d["view_mode"] == mode)
+        self.click("toolbar.layout")
+        self.click("layout.explorer")
+        self.wait("Layout picker hides Explorer", lambda d: not d["explorer_visible"])
         self.key(18)
-        self.wait("explorer hides", lambda d: not d["explorer_visible"])
-        self.key(18)
-        self.wait("explorer reopens", lambda d: d["explorer_visible"])
+        self.wait("Explorer shortcut still restores the same sections", lambda d: d["explorer_visible"])
         for section in ("Tags", "Files"):
             self.wait_target("explorer.maximize." + section)
             self.click("explorer.maximize." + section)
@@ -832,6 +851,13 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.stable(baseline)
         self.click("panel.activity")
         self.wait("Activity selected", lambda d: d["panel"] == "Activity")
+        self.stable(baseline)
+        self.click("toolbar.layout")
+        self.click("layout.panel")
+        self.wait("Layout picker hides the bottom panel", lambda d: d["panel"] is None)
+        self.click("toolbar.layout")
+        self.click("layout.panel")
+        self.wait("Layout picker restores the selected bottom tab", lambda d: d["panel"] == "Activity")
         self.stable(baseline)
         self.click("panel.close")
         self.wait("close panel button", lambda d: d["panel"] is None)

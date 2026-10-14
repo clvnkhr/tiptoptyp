@@ -565,10 +565,11 @@ impl Drawing {
                 ] {
                     let button = ui
                         .add_enabled_ui(enabled, |ui| {
-                            crate::app::icons::square_icon_button(ui, icon, label, 24.0)
+                            crate::app::icons::quiet_square_icon_button(
+                                ui, icon, label, 24.0, false,
+                            )
                         })
-                        .inner
-                        .on_hover_text(label);
+                        .inner;
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                     crate::desktop_test::observe(
                         match label {
@@ -837,6 +838,36 @@ mod tests {
             assert!(!harness.state().0.pending);
         }
     }
+    #[test]
+    fn quiet_drawing_controls_keep_targets_and_stroke_history() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness = Harness::builder().build_ui_state(
+            |ui, drawing: &mut Drawing| {
+                drawing.show(ui, false, HandwritingSettings::default());
+            },
+            Drawing::fixture(),
+        );
+        harness.run_steps(2);
+        let ink = harness.state().strokes.clone();
+        let clear = harness.get_by_label("Clear").rect();
+        assert_eq!(clear.size(), egui::Vec2::splat(24.0));
+        harness.hover_at(clear.center());
+        harness.run_steps(1);
+        assert_eq!(harness.get_by_label("Clear").rect(), clear);
+        assert_eq!(harness.state().strokes, ink);
+        harness.get_by_label("Clear").click();
+        harness.run_steps(1);
+        assert!(harness.state().strokes.is_empty());
+        assert!(harness.state().results.is_empty());
+        harness.get_by_label("Undo stroke").click();
+        harness.run_steps(1);
+        assert_eq!(harness.state().strokes, ink);
+        harness.get_by_label("Redo stroke").click();
+        harness.run_steps(1);
+        assert!(harness.state().strokes.is_empty());
+        assert_eq!(harness.get_by_label("Clear").rect(), clear);
+    }
+
     #[test]
     fn engine_switch_preserves_ink_and_rejects_the_in_flight_result() {
         let mut drawing = Drawing::fixture();

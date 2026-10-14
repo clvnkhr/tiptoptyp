@@ -25,6 +25,46 @@ fn fixture(context: &egui::Context, root: &Path, owner: egui::ViewportId) -> Edi
     app
 }
 
+fn click_toolbar_command(harness: &mut Harness<'_, EditorApp>, command: AppCommand, label: &str) {
+    if matches!(
+        command,
+        AppCommand::Code
+            | AppCommand::Split
+            | AppCommand::Preview
+            | AppCommand::Explorer
+            | AppCommand::Panel
+    ) {
+        harness.get_by_label("Layout").click();
+        harness.run();
+        // `run` follows ROOT repaint requests, while a secondary viewport's
+        // Area requests its own sizing/placement passes. Finish those two
+        // passes before reading and clicking the final row coordinates.
+        harness.run_steps(2);
+        assert!(matches!(
+            harness.state().app_popup,
+            Some(AppPopup::Layout { .. })
+        ));
+        let shortcut = harness
+            .state()
+            .settings
+            .effective_shortcuts()
+            .egui(command_spec(command).shortcut_action);
+        let label = shortcut.map_or_else(
+            || command_spec(command).title.to_owned(),
+            |shortcut| {
+                format!(
+                    "{} {}",
+                    command_spec(command).title,
+                    harness.ctx.format_shortcut(&shortcut)
+                )
+            },
+        );
+        harness.get_by_label(&label).click();
+    } else {
+        harness.get_by_label(label).click();
+    }
+}
+
 fn key_event(shortcut: KeyboardShortcut) -> egui::Event {
     egui::Event::Key {
         key: shortcut.logical_key,
@@ -175,6 +215,7 @@ fn panel_routes_close_and_reopen_a_focused_terminal_without_mutating_source() {
                         egui::Panel::top("terminal-test-toolbar")
                             .exact_size(METRICS.chrome.toolbar_height)
                             .show(ui, |ui| app.show_toolbar(ui, None));
+                        layout_picker::show_test_popup(ui, app);
                         if app.bottom_panel.is_visible() {
                             app.show_bottom_panel(ui);
                         }
@@ -190,7 +231,7 @@ fn panel_routes_close_and_reopen_a_focused_terminal_without_mutating_source() {
                 .or_default()
                 .focused = Some(true);
             harness.run();
-            harness.get_by_label("Panel").click();
+            click_toolbar_command(&mut harness, AppCommand::Panel, "Panel");
             harness.run();
             assert_eq!(
                 harness.state().bottom_panel.selected(),
@@ -209,7 +250,9 @@ fn panel_routes_close_and_reopen_a_focused_terminal_without_mutating_source() {
             );
             for visible in [false, true] {
                 match route {
-                    Route::Toolbar | Route::CompactToolbar => harness.get_by_label("Panel").click(),
+                    Route::Toolbar | Route::CompactToolbar => {
+                        click_toolbar_command(&mut harness, AppCommand::Panel, "Panel")
+                    }
                     Route::NativeMenu => harness
                         .state_mut()
                         .enqueue_native_menu_command(AppCommand::Panel),
@@ -311,6 +354,7 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                             app.handle_shortcuts(ui.ctx(), None);
                             app.process_native_menu_commands(ui.ctx(), None);
                             app.show_toolbar(ui, None);
+                            layout_picker::show_test_popup(ui, app);
                             // Commands hand focus to real panel/editor owners;
                             // each must exist in this harness's accessibility tree.
                             if app.bottom_panel.is_visible() {
@@ -332,8 +376,10 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                 harness.run();
                 assert!(harness.state().native_command_enabled(command));
                 match route {
-                    Route::Toolbar => harness.get_by_label(label).click(),
-                    Route::CompactToolbar => harness.get_by_label(compact_label).click(),
+                    Route::Toolbar => click_toolbar_command(&mut harness, command, label),
+                    Route::CompactToolbar => {
+                        click_toolbar_command(&mut harness, command, compact_label)
+                    }
                     Route::NativeMenu => harness.state_mut().enqueue_native_menu_command(command),
                     Route::Shortcut => {
                         let chord = harness
@@ -1013,7 +1059,15 @@ fn command_toolbar_availability_matches_document_and_empty_workspace_admission()
         }
         let mut harness = Harness::builder()
             .with_size(Vec2::new(1800.0, 160.0))
-            .build_ui_state(|ui, app: &mut EditorApp| app.show_toolbar(ui, None), app);
+            .build_ui_state(
+                |ui, app: &mut EditorApp| {
+                    app.show_toolbar(ui, None);
+                    layout_picker::show_test_popup(ui, app);
+                },
+                app,
+            );
+        harness.run();
+        harness.get_by_label("Layout").click();
         harness.run();
         for (command, label) in [
             (AppCommand::Find, "Find"),
@@ -1024,8 +1078,21 @@ fn command_toolbar_availability_matches_document_and_empty_workspace_admission()
             (AppCommand::Split, "Split"),
             (AppCommand::Preview, "Preview"),
         ] {
+            let label = if matches!(command, AppCommand::Find | AppCommand::Settings) {
+                label.to_owned()
+            } else {
+                harness
+                    .state()
+                    .settings
+                    .effective_shortcuts()
+                    .egui(command_spec(command).shortcut_action)
+                    .map_or_else(
+                        || label.to_owned(),
+                        |shortcut| format!("{label} {}", harness.ctx.format_shortcut(&shortcut)),
+                    )
+            };
             assert_eq!(
-                !harness.get_by_label(label).accesskit_node().is_disabled(),
+                !harness.get_by_label(&label).accesskit_node().is_disabled(),
                 harness.state().native_command_enabled(command),
                 "{kind:?} {command:?}"
             );
