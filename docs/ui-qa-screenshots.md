@@ -51,13 +51,21 @@ When no explicit `--ui-screenshot` is supplied, a scene queues its canonical
 target and name automatically. An explicit capture remains available for
 special dimensions or labels.
 
+The checked-in [table workbench comparison](ui-snapshots/table-editor-review.png)
+uses matching 620×600 Catppuccin Mocha child-viewport captures before and after
+the compact layout. Fresh light/dark captures cover both Typst and TeX; the native
+`tables` journey separately exercises editing and scrolling at 620×420. These
+framebuffers show the table child UI, not the composed native preview window.
+
 The accepted scenes and their framebuffer targets are:
 
 | Scene | Capture target | Themed state |
 | --- | --- | --- |
 | `main` | `main` | Main split editor and preview |
-| `table-editor` | `table-editor` | Resizable table workbench with a merged heading, styling inspector and read-only source |
+| `table-editor` | `table-editor` | Resizable table workbench with a merged heading, compact toolbar, Format popup and read-only source |
 | `table-editor-narrow` | `table-editor` | The table workbench at its minimum width |
+| `table-editor-tex` | `table-editor` | Real named TeX/booktabs fixture in the same table workbench |
+| `table-editor-tex-narrow` | `table-editor` | TeX table workbench at its minimum width |
 | `tabs` | `main` | Adjacent title-bar tabs with close controls, a dirty active tab, and the first tab selected as preview source |
 | `empty-workspace` | `main` | No document tabs; workspace Explorer and New/Open remain available |
 | `tabs-pdf` | `main` | PDF tab in the editor pane beside the first tab's Typst preview |
