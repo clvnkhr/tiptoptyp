@@ -3,7 +3,9 @@ use eframe::egui::{self, Color32, FontData, FontDefinitions, FontFamily, FontId,
 use std::{path::Path, sync::Arc};
 
 const FONT_NAME: &str = "tiptoptyp-file-icons";
-const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/nerd/FileIcons.ttf");
+fn font_bytes() -> &'static [u8] {
+    crate::bundled_assets::font_bytes(crate::bundled_assets::AssetId::FileIcons)
+}
 const TEXT: char = '\u{e64e}';
 const CONFIG: char = '\u{e615}';
 const GIT: char = '\u{e65d}';
@@ -126,7 +128,7 @@ fn family() -> FontFamily {
 pub(crate) fn register(definitions: &mut FontDefinitions) {
     definitions.font_data.insert(
         FONT_NAME.into(),
-        Arc::new(FontData::from_static(FONT_BYTES)),
+        Arc::new(FontData::from_static(font_bytes())),
     );
     definitions
         .families
@@ -156,7 +158,7 @@ mod tests {
     use skrifa::MetadataProvider;
     #[test]
     fn every_filetype_and_special_name_has_a_bundled_glyph() {
-        let font = skrifa::FontRef::new(FONT_BYTES).unwrap();
+        let font = skrifa::FontRef::new(font_bytes()).unwrap();
         for path in EXTENSIONS
             .iter()
             .map(|(ext, _)| format!("sample.{ext}"))
@@ -204,7 +206,7 @@ mod tests {
         }
         assert_eq!(after.families[&family()], [FONT_NAME]);
         assert!(
-            FONT_BYTES.len() < 64 * 1024,
+            font_bytes().len() < 64 * 1024,
             "keep the filetype subset small"
         );
     }

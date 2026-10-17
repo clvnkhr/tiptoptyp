@@ -89,10 +89,14 @@ fn decode(record: &[u8]) -> (usize, Cloud) {
     }
     (class, cloud)
 }
-fn load_samples(excluded: &std::collections::HashSet<&[u8]>) -> Vec<Sample> {
-    include_bytes!("../assets/handwriting/detexify-samples.bin")
-        .chunks_exact(130)
-        .filter(|record| !excluded.contains(record))
+fn load_samples(excluded: &std::collections::HashSet<&[u8]>) -> Result<Vec<Sample>, String> {
+    let bytes =
+        crate::bundled_assets::model_bytes(crate::bundled_assets::AssetId::DetexifySamples)?;
+    Ok(bytes
+        .as_chunks::<130>()
+        .0
+        .iter()
+        .filter(|record| !excluded.contains(record.as_slice()))
         .map(|record| {
             let (class, cloud) = decode(record);
             Sample {
@@ -101,7 +105,7 @@ fn load_samples(excluded: &std::collections::HashSet<&[u8]>) -> Vec<Sample> {
                 cloud,
             }
         })
-        .collect()
+        .collect())
 }
 fn labels() -> &'static [super::handwriting::Symbol] {
     static LABELS: OnceLock<Vec<super::handwriting::Symbol>> = OnceLock::new();
@@ -172,18 +176,21 @@ fn rank(cloud: &Cloud, samples: &[Sample]) -> Vec<usize> {
         .map(|s| s.0)
         .collect()
 }
-pub(crate) fn recognize(strokes: &[Vec<Pos2>]) -> Vec<super::handwriting::Symbol> {
-    static SAMPLES: OnceLock<Vec<Sample>> = OnceLock::new();
-    normalize(strokes)
-        .map(|cloud| {
-            let samples = SAMPLES.get_or_init(|| load_samples(&Default::default()));
-            rank(&cloud, samples)
-                .into_iter()
-                .map(|class| labels()[class].clone())
-                .collect()
-        })
-        .unwrap_or_default()
+pub(crate) fn recognize(strokes: &[Vec<Pos2>]) -> Result<Vec<super::handwriting::Symbol>, String> {
+    static SAMPLES: OnceLock<Result<Vec<Sample>, String>> = OnceLock::new();
+    let Some(cloud) = normalize(strokes) else {
+        return Ok(Vec::new());
+    };
+    let samples = SAMPLES
+        .get_or_init(|| load_samples(&Default::default()))
+        .as_ref()
+        .map_err(Clone::clone)?;
+    Ok(rank(&cloud, samples)
+        .into_iter()
+        .map(|class| labels()[class].clone())
+        .collect())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,7 +201,7 @@ mod tests {
             .chunks_exact(130)
             .collect();
         let excluded = records.iter().copied().collect();
-        let samples = load_samples(&excluded);
+        let samples = load_samples(&excluded).unwrap();
         let (mut correct, mut total, mut cal_correct, mut cal_total) = (0, 0, 0, 0);
         for record in records.iter().step_by(10) {
             let (class, cloud) = decode(record);

@@ -117,7 +117,8 @@ impl CommandCustomization {
         let tokens = shlex::split(&self.arguments)
             .ok_or_else(|| invalid("Command arguments have an unmatched quote"))?;
         let managed: Vec<OsString> = command.get_args().map(Into::into).collect();
-        let mut replacement = Command::new(command.get_program());
+        let program = crate::bundled_payload::prepare_program(command.get_program())?;
+        let mut replacement = Command::new(program);
         if let Some(dir) = command.get_current_dir() {
             replacement.current_dir(dir);
         }

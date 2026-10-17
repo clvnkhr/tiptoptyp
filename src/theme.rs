@@ -728,32 +728,34 @@ where
     // Bundled Hack faces give the terminal real bold/italic instead of
     // synthetic embolden and sheared obliques. All four faces share advances,
     // so styled cells keep the grid columns.
-    const TERMINAL_FACES: [(&str, &str, &[u8]); 4] = [
+    const TERMINAL_FACES: [(&str, &str, crate::bundled_assets::AssetId); 4] = [
         (
             "tiptoptyp-terminal",
             "tiptoptyp-terminal-regular",
-            include_bytes!("../assets/fonts/hack/Hack-Regular.ttf"),
+            crate::bundled_assets::AssetId::HackRegular,
         ),
         (
             "tiptoptyp-terminal-bold",
             "tiptoptyp-terminal-bold",
-            include_bytes!("../assets/fonts/hack/Hack-Bold.ttf"),
+            crate::bundled_assets::AssetId::HackBold,
         ),
         (
             "tiptoptyp-terminal-italic",
             "tiptoptyp-terminal-italic",
-            include_bytes!("../assets/fonts/hack/Hack-Italic.ttf"),
+            crate::bundled_assets::AssetId::HackItalic,
         ),
         (
             "tiptoptyp-terminal-bold-italic",
             "tiptoptyp-terminal-bold-italic",
-            include_bytes!("../assets/fonts/hack/Hack-BoldItalic.ttf"),
+            crate::bundled_assets::AssetId::HackBoldItalic,
         ),
     ];
-    for (family, face, bytes) in TERMINAL_FACES {
+    for (family, face, asset) in TERMINAL_FACES {
         definitions.font_data.insert(
             face.to_owned(),
-            Arc::new(egui::FontData::from_static(bytes)),
+            Arc::new(egui::FontData::from_static(
+                crate::bundled_assets::font_bytes(asset),
+            )),
         );
         let mut chain = vec![face.to_owned()];
         chain.extend(terminal_fallback.iter().cloned());

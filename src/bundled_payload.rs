@@ -1,0 +1,648 @@
+//! Lazy, verified expansion of architecture-specific packaged sidecars.
+//!
+//! Resolution only reads the small manifest. Actual extraction belongs to the
+//! existing tool-launch/PDF worker, never the Settings or frame paths.
+use flate2::read::MultiGzDecoder;
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{HashMap, HashSet},
+    ffi::OsStr,
+    fs::{self, File},
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::SystemTime,
+};
+
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[derive(Debug)]
+struct Payload {
+    archive: PathBuf,
+    name: String,
+    bytes: u64,
+    sha256: String,
+    executable: bool,
+}
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+/// All supported resource layouts. This is pure path construction: probing
+/// availability and expanding payloads remain separate operation boundaries.
+pub(crate) fn resource_roots(executable: &Path) -> Vec<PathBuf> {
+    let Some(directory) = executable.parent() else {
+        return Vec::new();
+    };
+    vec![
+        directory.join("../Resources"),
+        directory.to_owned(),
+        directory.join("../lib/tiptoptyp"),
+    ]
+}
+
+/// Native-architecture payloads are kept separate even in a universal bundle.
+/// These paths are inexpensive resolution tokens, not executable cache files.
+pub(crate) fn packaged_candidates(name: &str) -> Vec<PathBuf> {
+    let Ok(executable) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    resource_roots(&executable)
+        .into_iter()
+        .map(|root| {
+            root.join("toolchain")
+                .join(crate::toolchain::target_triple())
+                .join(format!("{name}.gz"))
+        })
+        .collect()
+}
+
+pub(crate) fn is_packaged_payload(path: &Path) -> bool {
+    describe(path).is_ok_and(|payload| payload.is_some())
+}
+
+/// A custom executable is left alone. A manifest-backed gzip path is expanded
+/// only here, after operation arguments have been validated by its caller.
+pub(crate) fn prepare_program(program: &OsStr) -> io::Result<PathBuf> {
+    let path = Path::new(program);
+    let Some(payload) = describe(path)? else {
+        return Ok(path.to_owned());
+    };
+    let root = cache_root(crate::toolchain::target_triple())?;
+    expand(&payload, &root)
+}
+
+/// Libraries are required to be a declared payload rather than a custom tool.
+pub(crate) fn prepare_packaged(path: &Path) -> io::Result<PathBuf> {
+    let payload = describe(path)?.ok_or_else(|| invalid("Packaged payload manifest is missing"))?;
+    expand(&payload, &cache_root(crate::toolchain::target_triple())?)
+}
+
+/// Fonts and recognition models are shared by both universal-binary slices.
+/// They stay non-executable and reuse one content-addressed cache across CPUs.
+#[cfg(all(feature = "production", not(test)))]
+pub(crate) fn prepare_shared_asset(path: &Path) -> io::Result<PathBuf> {
+    let mut payload =
+        describe(path)?.ok_or_else(|| invalid("Packaged asset manifest is missing"))?;
+    payload.executable = false;
+    expand(&payload, &cache_root("shared")?)
+}
+
+fn describe(archive: &Path) -> io::Result<Option<Payload>> {
+    if archive.extension() != Some(OsStr::new("gz")) {
+        return Ok(None);
+    }
+    let Some(parent) = archive.parent() else {
+        return Ok(None);
+    };
+    let manifest = parent.join("manifest.tsv");
+    if !manifest.try_exists()? {
+        return Ok(None);
+    }
+    let name = archive
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| invalid("Packaged payload has an invalid filename"))?;
+    if !fs::symlink_metadata(&manifest)?.file_type().is_file() {
+        return Err(invalid("Packaged payload manifest must be a regular file"));
+    }
+    let mut text = String::new();
+    File::open(&manifest)?
+        .take(MAX_MANIFEST_BYTES + 1)
+        .read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(invalid("Packaged payload manifest is too large"));
+    }
+    let mut names = HashSet::new();
+    let mut selected = None;
+    for (index, line) in text.lines().enumerate() {
+        let mut fields = line.split('\t');
+        let entry = fields.next().unwrap_or("");
+        let bytes = fields.next().and_then(|value| value.parse::<u64>().ok());
+        let sha256 = fields.next().unwrap_or("");
+        if !valid_name(entry)
+            || fields.next().is_some()
+            || !matches!(bytes, Some(1..=MAX_PAYLOAD_BYTES))
+            || sha256.len() != 64
+            || !sha256
+                .bytes()
+                .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(&ch))
+            || !names.insert(entry)
+            || index >= 32
+        {
+            return Err(invalid(format!(
+                "Invalid packaged payload manifest at line {}",
+                index + 1
+            )));
+        }
+        if entry == name {
+            selected = Some(Payload {
+                archive: archive.to_owned(),
+                name: entry.to_owned(),
+                bytes: bytes.unwrap(),
+                sha256: sha256.to_owned(),
+                executable: !is_library(entry),
+            });
+        }
+    }
+    if names.is_empty() {
+        return Err(invalid("Packaged payload manifest is empty"));
+    }
+    let payload = selected.ok_or_else(|| {
+        invalid(format!(
+            "Packaged payload {name} is absent from its manifest"
+        ))
+    })?;
+    if !fs::symlink_metadata(archive)?.file_type().is_file() {
+        return Err(invalid("Packaged payload must be a regular gzip file"));
+    }
+    Ok(Some(payload))
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b'_' | b'.'))
+        && !name.contains("..")
+}
+
+fn cache_root(scope: &str) -> io::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let base = std::env::var_os("HOME").map(|home| PathBuf::from(home).join("Library/Caches"));
+    #[cfg(target_os = "windows")]
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")));
+    let base = base
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| invalid("Cannot locate the private application cache"))?;
+    fs::create_dir_all(&base)?;
+    let mut root = base.canonicalize()?;
+    for component in ["dev.tiptoptyp.editor", "payloads", scope] {
+        root.push(component);
+        private_directory(&root)?;
+    }
+    Ok(root)
+}
+
+fn private_directory(path: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() {
+        return Err(invalid(
+            "Packaged payload cache directory is not a regular directory",
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != nix::unistd::geteuid().as_raw() {
+            return Err(invalid("Packaged payload cache belongs to another user"));
+        }
+        if metadata.mode() & 0o777 != 0o700 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
+}
+
+fn expand(payload: &Payload, root: &Path) -> io::Result<PathBuf> {
+    private_directory(root)?;
+    let directory = root.join(&payload.sha256);
+    private_directory(&directory)?;
+    let destination = directory.join(&payload.name);
+    if valid_cached(&destination, payload)? {
+        return Ok(destination);
+    }
+    // Unique temporary files prevent concurrent first launches from reading an
+    // incomplete extraction. No process lock can survive a crashed first use.
+    let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
+    let mut decoder = MultiGzDecoder::new(File::open(&payload.archive)?).take(payload.bytes + 1);
+    let mut hasher = Sha256::new();
+    let mut bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = decoder.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        bytes += count as u64;
+        if bytes > payload.bytes {
+            return Err(invalid("Packaged payload exceeds its declared size"));
+        }
+        hasher.update(&buffer[..count]);
+        temporary.write_all(&buffer[..count])?;
+    }
+    if bytes != payload.bytes || format!("{:x}", hasher.finalize()) != payload.sha256 {
+        return Err(invalid(
+            "Packaged payload failed size or SHA256 verification",
+        ));
+    }
+    temporary.flush()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if payload.executable { 0o700 } else { 0o600 };
+        temporary
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(mode))?;
+    }
+    temporary.as_file().sync_all()?;
+    // A corrupt older entry is replaced atomically. Concurrent writers produce
+    // identical verified bytes, so either complete result is valid.
+    match temporary.persist(&destination) {
+        Ok(file) => {
+            remember_verified(&destination, payload, CacheStamp::of(&file.metadata()?));
+            Ok(destination)
+        }
+        Err(_) if valid_cached(&destination, payload)? => Ok(destination),
+        Err(error) => Err(error.error),
+    }
+}
+
+fn is_library(name: &str) -> bool {
+    name.ends_with(".dylib") || name.ends_with(".dll") || name.ends_with(".so")
+}
+
+// This memo is bounded and touched only by operation workers. A tool launch
+// stats its immutable cache file; unchanged executables do not get re-read or
+// hashed for every compile/format request. Any metadata change rechecks bytes.
+const MAX_VERIFIED_FILES: usize = 64;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CacheStamp {
+    bytes: u64,
+    modified: Option<SystemTime>,
+    created: Option<SystemTime>,
+    readonly: bool,
+    #[cfg(unix)]
+    native: (u64, u64, i64, i64, i64, i64, u32, u32, u32),
+}
+impl CacheStamp {
+    fn of(metadata: &fs::Metadata) -> Self {
+        Self {
+            bytes: metadata.len(),
+            modified: metadata.modified().ok(),
+            created: metadata.created().ok(),
+            readonly: metadata.permissions().readonly(),
+            #[cfg(unix)]
+            native: {
+                use std::os::unix::fs::MetadataExt;
+                (
+                    metadata.dev(),
+                    metadata.ino(),
+                    metadata.mtime(),
+                    metadata.mtime_nsec(),
+                    metadata.ctime(),
+                    metadata.ctime_nsec(),
+                    metadata.mode(),
+                    metadata.uid(),
+                    metadata.gid(),
+                )
+            },
+        }
+    }
+}
+struct VerifiedFile {
+    sha256: String,
+    bytes: u64,
+    executable: bool,
+    stamp: CacheStamp,
+}
+fn verified_files() -> &'static Mutex<HashMap<PathBuf, VerifiedFile>> {
+    static FILES: OnceLock<Mutex<HashMap<PathBuf, VerifiedFile>>> = OnceLock::new();
+    FILES.get_or_init(Mutex::default)
+}
+fn remember_verified(path: &Path, payload: &Payload, stamp: CacheStamp) {
+    let mut files = verified_files()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if files.len() >= MAX_VERIFIED_FILES && !files.contains_key(path) {
+        files.clear();
+    }
+    files.insert(
+        path.to_owned(),
+        VerifiedFile {
+            sha256: payload.sha256.clone(),
+            bytes: payload.bytes,
+            executable: payload.executable,
+            stamp,
+        },
+    );
+}
+#[cfg(test)]
+thread_local! {
+    static CACHE_HASH_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn valid_cached(path: &Path, payload: &Payload) -> io::Result<bool> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !metadata.file_type().is_file() {
+        return Err(invalid(
+            "Packaged payload cache entry is not a regular file",
+        ));
+    }
+    if metadata.len() != payload.bytes {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != nix::unistd::geteuid().as_raw() {
+            return Err(invalid("Packaged payload cache belongs to another user"));
+        }
+        let expected = if payload.executable { 0o700 } else { 0o600 };
+        if metadata.mode() & 0o777 != expected {
+            return Ok(false);
+        }
+    }
+    let stamp = CacheStamp::of(&metadata);
+    if verified_files()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(path)
+        .is_some_and(|entry| {
+            entry.sha256 == payload.sha256
+                && entry.bytes == payload.bytes
+                && entry.executable == payload.executable
+                && entry.stamp == stamp
+        })
+    {
+        return Ok(true);
+    }
+    let file = File::open(path)?;
+    if CacheStamp::of(&file.metadata()?) != stamp {
+        return Err(invalid("Packaged payload cache changed while opening"));
+    }
+    #[cfg(test)]
+    CACHE_HASH_READS.with(|reads| reads.set(reads.get() + 1));
+    let mut hasher = Sha256::new();
+    let mut limited = file.take(payload.bytes + 1);
+    let mut count = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = limited.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        count += read as u64;
+        hasher.update(&buffer[..read]);
+    }
+    if count != payload.bytes || format!("{:x}", hasher.finalize()) != payload.sha256 {
+        return Ok(false);
+    }
+    let current = fs::symlink_metadata(path)?;
+    if !current.file_type().is_file()
+        || CacheStamp::of(&limited.get_ref().metadata()?) != stamp
+        || CacheStamp::of(&current) != stamp
+    {
+        return Err(invalid(
+            "Packaged payload cache changed during verification",
+        ));
+    }
+    remember_verified(path, payload, stamp);
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::{Compression, write::GzEncoder};
+
+    fn fixture(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("typst.gz");
+        let mut encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::best());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap();
+        fs::write(
+            directory.path().join("manifest.tsv"),
+            format!("typst\t{}\t{:x}\n", bytes.len(), Sha256::digest(bytes)),
+        )
+        .unwrap();
+        let cache = directory.path().join("cache");
+        (directory, archive, cache)
+    }
+
+    #[test]
+    fn resource_roots_cover_bundle_portable_and_linux_package_layouts() {
+        let directory = Path::new("package").join("bin");
+        let executable = directory.join("tiptoptyp");
+        assert_eq!(
+            resource_roots(&executable),
+            vec![
+                directory.join("../Resources"),
+                directory.clone(),
+                directory.join("../lib/tiptoptyp"),
+            ]
+        );
+        for root in resource_roots(&executable) {
+            let tools = root
+                .join("toolchain")
+                .join(crate::toolchain::target_triple())
+                .join("typst.gz");
+            let assets = root.join("assets/shared/noto-sans.ttf.gz");
+            assert_eq!(
+                tools.strip_prefix(&root).unwrap(),
+                Path::new("toolchain")
+                    .join(crate::toolchain::target_triple())
+                    .join("typst.gz")
+            );
+            assert_eq!(
+                assets.strip_prefix(&root).unwrap(),
+                Path::new("assets/shared/noto-sans.ttf.gz")
+            );
+        }
+        assert!(resource_roots(Path::new("/")).is_empty());
+    }
+
+    #[test]
+    fn discovery_is_lazy_and_expansion_is_exact_and_reusable() {
+        let (fixture, archive, cache) = fixture(b"#!/bin/sh\nprintf ready\n");
+        assert!(is_packaged_payload(&archive));
+        assert!(
+            !cache.exists(),
+            "availability checks must never inflate payloads"
+        );
+        let payload = describe(&archive).unwrap().unwrap();
+        let extracted = expand(&payload, &cache).unwrap();
+        assert_eq!(fs::read(&extracted).unwrap(), b"#!/bin/sh\nprintf ready\n");
+        let modified = extracted.metadata().unwrap().modified().unwrap();
+        fs::remove_file(&archive).unwrap();
+        assert_eq!(expand(&payload, &cache).unwrap(), extracted);
+        assert_eq!(extracted.metadata().unwrap().modified().unwrap(), modified);
+        assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn shared_data_is_verified_and_never_marked_executable() {
+        let (_fixture, archive, cache) = fixture(b"font or recognition model bytes");
+        let mut payload = describe(&archive).unwrap().unwrap();
+        payload.executable = false;
+        let path = expand(&payload, &cache).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"font or recognition model bytes");
+        assert!(valid_cached(&path, &payload).unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(path.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn unchanged_cache_skips_byte_reads_but_same_size_edits_are_reverified() {
+        let (_fixture, archive, cache) = fixture(b"complete verified payload");
+        let payload = describe(&archive).unwrap().unwrap();
+        let extracted = expand(&payload, &cache).unwrap();
+        let before = CACHE_HASH_READS.with(std::cell::Cell::get);
+        for _ in 0..4 {
+            assert!(valid_cached(&extracted, &payload).unwrap());
+        }
+        assert_eq!(
+            CACHE_HASH_READS.with(std::cell::Cell::get),
+            before,
+            "freshly verified extraction needs no immediate second read"
+        );
+        // Model the first launch of another app process, whose memo is empty.
+        verified_files().lock().unwrap().remove(&extracted);
+        assert!(valid_cached(&extracted, &payload).unwrap());
+        assert_eq!(CACHE_HASH_READS.with(std::cell::Cell::get), before + 1);
+        assert!(valid_cached(&extracted, &payload).unwrap());
+        assert_eq!(
+            CACHE_HASH_READS.with(std::cell::Cell::get),
+            before + 1,
+            "unchanged subsequent launches must not rehash the executable"
+        );
+        fs::write(&extracted, vec![b'!'; payload.bytes as usize]).unwrap();
+        assert!(!valid_cached(&extracted, &payload).unwrap());
+        assert_eq!(
+            CACHE_HASH_READS.with(std::cell::Cell::get),
+            before + 2,
+            "same-length corruption must invalidate the metadata memo"
+        );
+        expand(&payload, &cache).unwrap();
+        assert_eq!(fs::read(&extracted).unwrap(), b"complete verified payload");
+    }
+
+    #[test]
+    fn corrupted_cache_is_replaced_without_exposing_partial_output() {
+        let (_fixture, archive, cache) = fixture(b"complete verified payload");
+        let payload = describe(&archive).unwrap().unwrap();
+        let extracted = expand(&payload, &cache).unwrap();
+        fs::write(&extracted, vec![b'!'; payload.bytes as usize]).unwrap();
+        assert_eq!(expand(&payload, &cache).unwrap(), extracted);
+        assert_eq!(fs::read(extracted).unwrap(), b"complete verified payload");
+        assert_eq!(fs::read_dir(cache.join(payload.sha256)).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn concurrent_first_use_only_publishes_complete_verified_files() {
+        let (_fixture, archive, cache) = fixture(&vec![b'x'; 128 * 1024]);
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let archive = archive.clone();
+                let cache = cache.clone();
+                std::thread::spawn(move || {
+                    expand(&describe(&archive).unwrap().unwrap(), &cache).unwrap()
+                })
+            })
+            .collect();
+        let paths: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        assert!(paths.iter().all(|path| path == &paths[0]));
+        assert_eq!(fs::read(&paths[0]).unwrap(), vec![b'x'; 128 * 1024]);
+        assert_eq!(fs::read_dir(paths[0].parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn rejects_bad_manifests_hashes_sizes_and_truncated_gzip() {
+        for record in [
+            "../escape\t3\tHASH",
+            "typst\t0\tHASH",
+            "typst\t1073741825\tHASH",
+            "typst\t3\tbad",
+            "typst\t3\tHASH\textra",
+            "",
+            "typst\t3\tHASH\ntypst\t3\tHASH",
+        ] {
+            let (fixture, archive, _) = fixture(b"abc");
+            let record = record.replace("HASH", &format!("{:x}", Sha256::digest(b"abc")));
+            fs::write(fixture.path().join("manifest.tsv"), record).unwrap();
+            assert!(describe(&archive).is_err());
+        }
+        for bytes in [b"wrong".as_slice(), b"ab".as_slice(), b"abcdef".as_slice()] {
+            let (fixture, archive, cache) = fixture(bytes);
+            fs::write(
+                fixture.path().join("manifest.tsv"),
+                format!("typst\t3\t{:x}", Sha256::digest(b"abc")),
+            )
+            .unwrap();
+            assert!(expand(&describe(&archive).unwrap().unwrap(), &cache).is_err());
+            assert!(
+                fs::read_dir(cache)
+                    .unwrap()
+                    .flat_map(|entry| fs::read_dir(entry.unwrap().path()).unwrap())
+                    .next()
+                    .is_none()
+            );
+        }
+        let (_fixture, archive, cache) = fixture(b"abc");
+        let bytes = fs::read(&archive).unwrap();
+        fs::write(&archive, &bytes[..bytes.len() - 3]).unwrap();
+        assert!(expand(&describe(&archive).unwrap().unwrap(), &cache).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_symlinks_cannot_redirect_extraction() {
+        use std::os::unix::fs::symlink;
+        let (fixture, archive, cache) = fixture(b"abc");
+        let payload = describe(&archive).unwrap().unwrap();
+        fs::create_dir(&cache).unwrap();
+        symlink(fixture.path(), cache.join(&payload.sha256)).unwrap();
+        assert!(expand(&payload, &cache).is_err());
+        fs::remove_file(cache.join(&payload.sha256)).unwrap();
+        let extracted = expand(&payload, &cache).unwrap();
+        fs::remove_file(&extracted).unwrap();
+        let outside = fixture.path().join("outside");
+        fs::write(&outside, b"untouched").unwrap();
+        symlink(&outside, &extracted).unwrap();
+        assert!(expand(&payload, &cache).is_err());
+        assert_eq!(fs::read(outside).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn non_payload_commands_remain_unchanged() {
+        assert_eq!(
+            prepare_program(OsStr::new("typst")).unwrap(),
+            Path::new("typst")
+        );
+        assert_eq!(
+            prepare_program(OsStr::new("/bin/sh")).unwrap(),
+            Path::new("/bin/sh")
+        );
+    }
+}

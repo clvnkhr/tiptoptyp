@@ -16,15 +16,21 @@ const MAX_PIXELS: usize = 24 * 1024 * 1024;
 
 pub(crate) fn library_path() -> Result<PathBuf, String> {
     let name = Pdfium::pdfium_platform_library_name();
-    let mut candidates = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        candidates.push(dir.join("../Resources/pdfium").join(&name));
-        candidates.push(dir.join("pdfium").join(&name));
-        candidates.push(dir.join("../lib/tiptoptyp/pdfium").join(&name));
+    for archive in crate::bundled_payload::packaged_candidates(&name.to_string_lossy()) {
+        if archive.exists() {
+            return crate::bundled_payload::prepare_packaged(&archive)
+                .map_err(|error| format!("Could not prepare bundled PDFium: {error}"));
+        }
     }
+    let mut candidates = Vec::new();
     if !cfg!(feature = "production") {
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            candidates.push(dir.join("../Resources/pdfium").join(&name));
+            candidates.push(dir.join("pdfium").join(&name));
+            candidates.push(dir.join("../lib/tiptoptyp/pdfium").join(&name));
+        }
         candidates.push(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("toolchain/pdfium-bundle")

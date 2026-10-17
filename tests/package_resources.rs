@@ -62,3 +62,61 @@ fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resource
         assert!(root.join(source).exists(), "missing resource: {source}");
     }
 }
+
+#[test]
+fn macos_production_defaults_to_universal_and_canonical_release_output() {
+    let cargo: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+    let production: toml::Value = toml::from_str(include_str!("../packager-prod.toml")).unwrap();
+    let metadata = &cargo["package"]["metadata"]["packager"];
+    assert_eq!(
+        production["target-triple"].as_str(),
+        Some("universal-apple-darwin")
+    );
+    // Cargo's shared metadata must not force a macOS target on Linux/Windows.
+    assert!(metadata.get("target-triple").is_none());
+    for manifest in [metadata, &production] {
+        assert_eq!(manifest["out-dir"].as_str(), Some("target/release"));
+        assert_eq!(manifest["binaries-dir"].as_str(), Some("target/release"));
+        assert_eq!(
+            manifest["macos"]["minimum-system-version"].as_str(),
+            Some("12.0"),
+            "the app's minimum must include the bundled PDFium requirement"
+        );
+    }
+}
+
+#[test]
+fn packages_ship_compressed_payload_trees_without_duplicate_raw_binaries_or_assets() {
+    let cargo: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+    let production: toml::Value = toml::from_str(include_str!("../packager-prod.toml")).unwrap();
+    for manifest in [&cargo["package"]["metadata"]["packager"], &production] {
+        assert!(
+            manifest.get("external-binaries").is_none(),
+            "external sidecars duplicate the compressed architecture-specific payloads"
+        );
+        let resources = resources(&manifest["resources"]);
+        for (source, target) in [
+            ("toolchain/payloads", "toolchain"),
+            ("toolchain/shared-assets", "assets"),
+            ("toolchain/pdfium-notices", "pdfium"),
+        ] {
+            assert_eq!(resources.get(source).map(String::as_str), Some(target));
+        }
+        for source in resources.keys() {
+            assert!(
+                !source.starts_with("toolchain/bin")
+                    && !source.starts_with("toolchain/pdfium-bundle")
+                    && !source.starts_with("toolchain/pdfium-targets"),
+                "uncompressed native runtime duplicated in package resources: {source}"
+            );
+            assert!(
+                !["ttf", "otf", "onnx", "bin", "dylib", "dll", "so", "exe"]
+                    .iter()
+                    .any(|extension| Path::new(source)
+                        .extension()
+                        .is_some_and(|value| value == *extension)),
+                "shared assets and native runtimes belong in the compressed trees: {source}"
+            );
+        }
+    }
+}

@@ -91,10 +91,10 @@ fn recognize_symbols(strokes: &[Vec<Pos2>]) -> Result<Vec<Symbol>, String> {
     static MODEL: OnceLock<Result<Arc<TypedRunnableModel>, String>> = OnceLock::new();
     let model = MODEL
         .get_or_init(|| {
+            let bytes =
+                crate::bundled_assets::model_bytes(crate::bundled_assets::AssetId::Detypify)?;
             tract_onnx::onnx()
-                .model_for_read(&mut std::io::Cursor::new(include_bytes!(
-                    "../assets/handwriting/detypify.onnx"
-                )))
+                .model_for_read(&mut std::io::Cursor::new(bytes))
                 .and_then(|model| model.into_optimized())
                 .and_then(|model| model.into_runnable())
                 .map_err(|e| format!("Could not load symbol model: {e:#}"))
@@ -123,7 +123,7 @@ fn recognize_symbols(strokes: &[Vec<Pos2>]) -> Result<Vec<Symbol>, String> {
 fn recognize(strokes: Vec<Vec<Pos2>>, engine: HandwritingEngine) -> Result<Vec<Symbol>, String> {
     match engine {
         HandwritingEngine::Detypify => recognize_symbols(&strokes),
-        HandwritingEngine::Detexify => Ok(crate::handwriting_detexify::recognize(&strokes)),
+        HandwritingEngine::Detexify => crate::handwriting_detexify::recognize(&strokes),
     }
 }
 
@@ -1068,7 +1068,7 @@ mod tests {
         recognize_symbols(&strokes).unwrap();
         eprintln!("symbols cold: {:?}", start.elapsed());
         let start = std::time::Instant::now();
-        crate::handwriting_detexify::recognize(&strokes);
+        crate::handwriting_detexify::recognize(&strokes).unwrap();
         eprintln!("Detexify cold: {:?}", start.elapsed());
         for engine in HandwritingEngine::ALL {
             let start = std::time::Instant::now();

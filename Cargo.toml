@@ -14,6 +14,8 @@ native-ui-tests = []
 desktop-ui-tests = []
 
 [dependencies]
+flate2 = "1.1"
+sha2 = "0.10"
 tract-onnx = { version = "0.23.8", default-features = false }
 tiptoptyp-core = { path = "core" }
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
@@ -44,7 +46,7 @@ harper-tex = "2.11.0"
 serde_path_to_error = "0.1"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.28.0", features = ["signal"] }
+nix = { version = "0.28.0", features = ["signal", "user"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 raw-window-handle = "0.6.2"
@@ -100,6 +102,8 @@ split-debuginfo = "packed"
 strip = "none"
 
 [package.metadata.packager]
+out-dir = "target/release"
+binaries-dir = "target/release"
 product-name = "tiptoptyp"
 identifier = "dev.tiptoptyp.editor"
 category = "DeveloperTool"
@@ -113,9 +117,10 @@ icons = [
     "assets/icons/tiptoptyp.ico",
 ]
 before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build --prod"
-external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist", "toolchain/bin/tectonic", "toolchain/bin/texlab", "toolchain/bin/badness", "toolchain/bin/tex-fmt"]
 resources = [
-    { src = "toolchain/pdfium-bundle", target = "pdfium" },
+    { src = "toolchain/pdfium-notices", target = "pdfium" },
+    { src = "toolchain/payloads", target = "toolchain" },
+    { src = "toolchain/shared-assets", target = "assets" },
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
     { src = "assets/fonts/notosans/OFL.txt", target = "licenses/NotoSans-OFL.txt" },
@@ -143,6 +148,7 @@ file-associations = [
 ]
 
 [package.metadata.packager.macos]
+minimum-system-version = "12.0"
 # Produces a locally runnable, internally consistent bundle. Distribution
 # builds should replace this with their Developer ID identity and notarize.
 signing-identity = "-"

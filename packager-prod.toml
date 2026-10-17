@@ -3,6 +3,7 @@ product-name = "tiptoptyp"
 version = "0.1.0"
 identifier = "dev.tiptoptyp.editor"
 category = "DeveloperTool"
+target-triple = "universal-apple-darwin"
 formats = ["app"]
 out-dir = "target/release"
 binaries-dir = "target/release"
@@ -17,9 +18,10 @@ icons = [
     "assets/icons/tiptoptyp.ico",
 ]
 before-packaging-command = "cargo run --manifest-path xtask/Cargo.toml -- package-build --prod"
-external-binaries = ["toolchain/bin/typst", "toolchain/bin/tinymist", "toolchain/bin/tectonic", "toolchain/bin/texlab", "toolchain/bin/badness", "toolchain/bin/tex-fmt"]
 resources = [
-    { src = "toolchain/pdfium-bundle", target = "pdfium" },
+    { src = "toolchain/pdfium-notices", target = "pdfium" },
+    { src = "toolchain/payloads", target = "toolchain" },
+    { src = "toolchain/shared-assets", target = "assets" },
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
     { src = "assets/fonts/notosans/OFL.txt", target = "licenses/NotoSans-OFL.txt" },
@@ -47,5 +49,6 @@ file-associations = [
 ]
 
 [macos]
+minimum-system-version = "12.0"
 signing-identity = "-"
 entitlements = "packaging/macos-local.entitlements.plist"

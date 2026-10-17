@@ -1,6 +1,8 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod macos;
+mod payloads;
 mod pdfium;
 mod profile;
 
@@ -149,31 +151,58 @@ fn run() -> Result<(), String> {
             fetch_sidecars(&target)
         }
         "package-build" => {
-            let target = target_or_host(target)?;
-            fetch_sidecars(&target)?;
-            pdfium::fetch(&target)?;
+            let target = package_target(target)?;
+            for slice in macos::targets(&target) {
+                fetch_sidecars(slice)?;
+                pdfium::fetch_to(
+                    slice,
+                    &repository_root()
+                        .join("toolchain/pdfium-targets")
+                        .join(slice),
+                )?;
+            }
+            // Retain the native development renderer and its aggregate notices.
+            pdfium::fetch(&host_target()?)?;
             generate_third_party_notices()?;
-            let mut cargo = Command::new("cargo");
-            cargo.arg("build").arg("--release");
-            if production {
-                cargo.arg("--features").arg("production");
+            payloads::stage(&target)?;
+            if target.ends_with("apple-darwin") {
+                macos::build_release(&target, production)
+            } else {
+                let root = repository_root();
+                let mut cargo = Command::new("cargo");
+                cargo
+                    .args(["build", "--locked", "--release", "--target", &target])
+                    .arg("--target-dir")
+                    .arg(root.join("target"));
+                if production {
+                    cargo.args(["--features", "production"]);
+                }
+                run_status(&mut cargo, "release build")?;
+                let name = if target.contains("windows") {
+                    "tiptoptyp.exe"
+                } else {
+                    "tiptoptyp"
+                };
+                fs::create_dir_all(root.join("target/release"))
+                    .map_err(|error| error.to_string())?;
+                fs::copy(
+                    root.join("target").join(target).join("release").join(name),
+                    root.join("target/release").join(name),
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
             }
-            if target != host_target()? {
-                cargo.arg("--target").arg(&target);
-            }
-            run_status(&mut cargo, "release build")
         }
         "verify-package" => {
             if production {
                 return Err("verify-package always verifies the production app bundle".to_owned());
             }
-            let target = target_or_host(target)?;
-            verify_package(&target)
+            verify_package(&package_target(target)?)
         }
         "generate-notices" => generate_third_party_notices(),
         "help" | "--help" | "-h" => {
             println!(
-                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  fetch-pdfium [--target TRIPLE]\n  package-build [--target TRIPLE] [--prod]\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
+                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  fetch-pdfium [--target TRIPLE]\n  package-build [--target TRIPLE] [--prod] (macOS: universal by default)\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }
@@ -286,46 +315,31 @@ fn verify_package(target: &str) -> Result<(), String> {
         return Err("verify-package currently supports macOS app bundles".to_owned());
     }
     let root = repository_root();
-    let app = if target == host_target()? {
-        root.join("target/release")
-            .join(PRODUCTION_MACOS_APP_BUNDLE)
-    } else {
-        root.join("target")
-            .join(target)
-            .join("release")
-            .join(PRODUCTION_MACOS_APP_BUNDLE)
-    };
+    let app = root
+        .join("target/release")
+        .join(PRODUCTION_MACOS_APP_BUNDLE);
     let executable_dir = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");
-    require_file(&resources.join("pdfium/libpdfium.dylib"))?;
-    require_file(&resources.join("pdfium/PROVENANCE.txt"))?;
     require_file(&executable_dir.join("tiptoptyp"))?;
     require_file(&resources.join(MACOS_APP_ICON))?;
     verify_bundle_icon_reference(&app.join("Contents/Info.plist"), MACOS_APP_ICON)?;
-
-    let artifacts = parse_manifest(MANIFEST)?;
-    for artifact in artifacts
-        .iter()
-        .filter(|artifact| artifact.app_target == target)
-    {
-        let executable = executable_dir.join(&artifact.tool);
-        require_file(&executable)?;
-        let output = run_output(
-            Command::new(&executable).arg("--version"),
-            &format!("checking packaged {}", artifact.tool),
-        )?;
-        let reported = String::from_utf8_lossy(&output.stdout);
-        if !reported.contains(&artifact.version) {
-            return Err(format!(
-                "packaged {} reported {reported:?}, expected {}",
-                artifact.tool, artifact.version
-            ));
-        }
+    macos::verify_architectures(&executable_dir.join("tiptoptyp"), target)?;
+    payloads::verify(&resources, target)?;
+    for slice in macos::targets(target) {
         require_file(
             &resources
-                .join("toolchain-provenance")
-                .join(format!("{}-{target}.txt", artifact.tool)),
+                .join("pdfium")
+                .join(format!("PROVENANCE-{slice}.txt")),
         )?;
+        for tool in [
+            "typst", "tinymist", "tectonic", "texlab", "badness", "tex-fmt",
+        ] {
+            require_file(
+                &resources
+                    .join("toolchain-provenance")
+                    .join(format!("{tool}-{slice}.txt")),
+            )?;
+        }
     }
 
     verify_hash(
@@ -360,10 +374,37 @@ fn verify_package(target: &str) -> Result<(), String> {
         "verifying the packaged app signature",
     )?;
 
-    run_status(
-        Command::new(executable_dir.join("tiptoptyp")).arg("--check-runtime"),
-        "initializing the packaged PDF runtime",
-    )?;
+    let host = host_target()?;
+    let runtime_cache = tempfile::tempdir().map_err(|error| error.to_string())?;
+    for slice in macos::targets(target) {
+        let translated = slice == "x86_64-apple-darwin" && host == "aarch64-apple-darwin";
+        if slice != host
+            && (!translated
+                || !Command::new("arch")
+                    .args(["-x86_64", "/usr/bin/true"])
+                    .status()
+                    .is_ok_and(|status| status.success()))
+        {
+            println!(
+                "runtime execution unavailable for {slice}; architecture, payload and signature checks passed"
+            );
+            continue;
+        }
+        for check in ["--check-runtime", "--check-toolchain"] {
+            let mut command = if translated {
+                let mut command = Command::new("arch");
+                command.arg("-x86_64").arg(executable_dir.join("tiptoptyp"));
+                command
+            } else {
+                Command::new(executable_dir.join("tiptoptyp"))
+            };
+            command
+                .arg(check)
+                .env("HOME", runtime_cache.path())
+                .env("CFFIXED_USER_HOME", runtime_cache.path());
+            run_status(&mut command, &format!("checking packaged {slice} {check}"))?;
+        }
+    }
 
     println!("verified {}", app.display());
     Ok(())
@@ -449,6 +490,13 @@ fn host_target() -> Result<String, String> {
         .find_map(|line| line.strip_prefix("host: "))
         .map(str::to_owned)
         .ok_or_else(|| "rustc -vV did not report a host target".to_owned())
+}
+
+fn package_target(explicit: Option<String>) -> Result<String, String> {
+    if let Some(target) = selected_package_target(explicit, env::var_os(PACKAGE_TARGET_ENV)) {
+        return Ok(target);
+    }
+    Ok(macos::default_target(&host_target()?).to_owned())
 }
 
 fn target_or_host(explicit: Option<String>) -> Result<String, String> {

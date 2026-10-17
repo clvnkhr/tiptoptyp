@@ -8,6 +8,8 @@ mod app_icon;
 mod asset;
 mod auto_pairs;
 mod build_info;
+mod bundled_assets;
+mod bundled_payload;
 mod capabilities;
 mod child_view;
 mod compiler;
@@ -125,6 +127,15 @@ fn main() -> eframe::Result {
         println!("PDF runtime initialized successfully");
         return Ok(());
     }
+    if std::env::args_os().len() == 2
+        && std::env::args_os()
+            .nth(1)
+            .is_some_and(|arg| arg == "--check-toolchain")
+    {
+        toolchain::validate_bundled().map_err(invalid_launch_configuration)?;
+        println!("Bundled tools initialized successfully");
+        return Ok(());
+    }
     let profile = performance::Session::from_env()
         .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()))?;
     let result = run(profile.persistence_path());
@@ -135,6 +146,7 @@ fn main() -> eframe::Result {
 }
 
 fn validate_runtime() -> eframe::Result {
+    bundled_assets::validate().map_err(invalid_launch_configuration)?;
     pdfium::validate().map_err(|error| {
         eframe::Error::AppCreation(
             std::io::Error::other(format!("Could not initialize PDF renderer: {error}")).into(),
@@ -143,6 +155,7 @@ fn validate_runtime() -> eframe::Result {
 }
 
 fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
+    bundled_assets::validate().map_err(invalid_launch_configuration)?;
     let launch =
         LaunchOptions::from_process(profile_storage).map_err(invalid_launch_configuration)?;
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]

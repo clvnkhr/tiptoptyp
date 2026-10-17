@@ -36,6 +36,10 @@ const TARGETS: &[(&str, &str, &str)] = &[
 ];
 
 pub(super) fn fetch(target: &str) -> Result<(), String> {
+    fetch_to(target, &repository_root().join("toolchain/pdfium-bundle"))
+}
+
+pub(super) fn fetch_to(target: &str, bundle: &Path) -> Result<(), String> {
     let (_, platform, hash) = TARGETS
         .iter()
         .find(|row| row.0 == target)
@@ -70,7 +74,6 @@ pub(super) fn fetch(target: &str) -> Result<(), String> {
         "libpdfium.so"
     };
     let member = find_unique_member(&listing, OsStr::new(lib))?;
-    let bundle = root.join("toolchain/pdfium-bundle");
     // This directory contains generated artifacts only, for one package target.
     if bundle.exists() {
         fs::remove_dir_all(&bundle).map_err(|e| e.to_string())?;

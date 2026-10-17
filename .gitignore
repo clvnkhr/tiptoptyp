@@ -11,3 +11,10 @@
 # Python test runners generate interpreter-specific caches.
 __pycache__/
 *.py[cod]
+
+# Generated compressed package resources.
+/toolchain/payloads/
+/toolchain/shared-assets/
+/toolchain/pdfium-targets/
+/toolchain/pdfium-notices/
+/toolchain/.tiptoptyp-payload-*/

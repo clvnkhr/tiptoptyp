@@ -5,4 +5,20 @@ edition = "2024"
 rust-version = "1.98"
 publish = false
 
+[dependencies]
+flate2 = "1.1"
+sha2 = "0.10"
+tempfile = "3.21"
+
 [workspace]
+
+# Packaging compresses hundreds of MB even when the task runner is launched
+# with `cargo run`; keep its gzip/hash kernels optimized without a release build.
+[profile.dev.package.flate2]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3

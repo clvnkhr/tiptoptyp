@@ -2,33 +2,17 @@
 //! Keep these behind the primary faces so ordinary text keeps its metrics.
 use std::sync::Arc;
 
+use crate::bundled_assets::{AssetId, font_bytes};
+
 use eframe::egui::{FontData, FontDefinitions};
 
-const FONTS: [(&str, &[u8]); 6] = [
-    (
-        "tiptoptyp-noto-sans",
-        include_bytes!("../assets/fonts/notosans/NotoSans[wdth,wght].ttf"),
-    ),
-    (
-        "tiptoptyp-noto-emoji",
-        include_bytes!("../assets/fonts/notoemoji/NotoEmoji[wght].ttf"),
-    ),
-    (
-        "tiptoptyp-noto-symbols",
-        include_bytes!("../assets/fonts/notosanssymbols/NotoSansSymbols[wght].ttf"),
-    ),
-    (
-        "tiptoptyp-noto-math",
-        include_bytes!("../assets/fonts/notosansmath/NotoSansMath-Regular.ttf"),
-    ),
-    (
-        "tiptoptyp-noto-symbols2",
-        include_bytes!("../assets/fonts/notosanssymbols2/NotoSansSymbols2-Regular.ttf"),
-    ),
-    (
-        "tiptoptyp-noto-hebrew",
-        include_bytes!("../assets/fonts/notosanshebrew/NotoSansHebrew[wdth,wght].ttf"),
-    ),
+const FONTS: [(&str, AssetId); 6] = [
+    ("tiptoptyp-noto-sans", AssetId::NotoSans),
+    ("tiptoptyp-noto-emoji", AssetId::NotoEmoji),
+    ("tiptoptyp-noto-symbols", AssetId::NotoSymbols),
+    ("tiptoptyp-noto-math", AssetId::NotoMath),
+    ("tiptoptyp-noto-symbols2", AssetId::NotoSymbols2),
+    ("tiptoptyp-noto-hebrew", AssetId::NotoHebrew),
 ];
 
 pub(crate) const SYMBOL_EXAMPLES: [(&str, char); 19] = [
@@ -55,10 +39,11 @@ pub(crate) const SYMBOL_EXAMPLES: [(&str, char); 19] = [
 
 pub(crate) fn definitions() -> FontDefinitions {
     let mut definitions = FontDefinitions::default();
-    for (name, bytes) in FONTS {
-        definitions
-            .font_data
-            .insert(name.into(), Arc::new(FontData::from_static(bytes)));
+    for (name, asset) in FONTS {
+        definitions.font_data.insert(
+            name.into(),
+            Arc::new(FontData::from_static(font_bytes(asset))),
+        );
         for family in definitions.families.values_mut() {
             family.push(name.into());
         }
@@ -84,8 +69,8 @@ mod tests {
             let missing = view.layout_no_wrap("\u{0378}".into(), font.clone(), Color32::WHITE);
             for character in SYMBOLS.chars().filter(|c| !c.is_whitespace()) {
                 assert!(
-                    FONTS.iter().any(|(_, bytes)| {
-                        skrifa::FontRef::new(bytes)
+                    FONTS.iter().any(|(_, asset)| {
+                        skrifa::FontRef::new(font_bytes(*asset))
                             .unwrap()
                             .charmap()
                             .map(character)

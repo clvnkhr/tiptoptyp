@@ -165,9 +165,54 @@ pub(crate) fn resolve_tool(kind: ToolKind, preference: &ToolPreference) -> ToolR
         || tool_environment_override(kind, |name| env::var_os(name)),
         || find_on_path(kind.binary_name()),
     );
-    resolution.bundled_program = bundled.iter().find_map(|path| absolute_executable(path));
+    resolution.bundled_program = bundled
+        .iter()
+        .find_map(|path| absolute_bundled_program(path));
     resolution.command = preference.command.clone();
     resolution
+}
+
+/// Explicit package verification only; never called by Settings or startup.
+/// This exercises exactly the same lazy expansion used by real tool workers.
+pub(crate) fn validate_bundled() -> Result<(), String> {
+    for kind in [
+        ToolKind::Typst,
+        ToolKind::Tinymist,
+        ToolKind::Tectonic,
+        ToolKind::Texlab,
+        ToolKind::Badness,
+        ToolKind::TexFmt,
+    ] {
+        let resolution = resolve_tool(kind, &ToolPreference::for_tool(kind));
+        if resolution.origin != ToolOrigin::Bundled {
+            return Err(format!(
+                "{} is not bundled: {}",
+                kind.label(),
+                resolution.detail()
+            ));
+        }
+        let program = crate::bundled_payload::prepare_program(resolution.program.as_os_str())
+            .map_err(|error| format!("Could not prepare bundled {}: {error}", kind.label()))?;
+        let output = std::process::Command::new(&program)
+            .arg("--version")
+            .output()
+            .map_err(|error| format!("Could not run bundled {}: {error}", kind.label()))?;
+        let reported = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !output.status.success() || !reported.contains(kind.bundled_version()) {
+            return Err(format!(
+                "Bundled {} reported {:?} ({}); expected {}",
+                kind.label(),
+                reported.trim(),
+                output.status,
+                kind.bundled_version()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn tool_environment_override<Lookup>(
@@ -216,7 +261,7 @@ where
 
     if let Some(program) = bundled
         .iter()
-        .find_map(|candidate| absolute_executable(candidate))
+        .find_map(|candidate| absolute_bundled_program(candidate))
     {
         return ToolResolution::new(
             kind,
@@ -292,42 +337,47 @@ where
 
 fn bundled_candidates(kind: ToolKind) -> Vec<PathBuf> {
     let binary = executable_file_name(kind.binary_name());
-    let sidecar = sidecar_artifact_name(kind.binary_name());
-    let mut candidates = Vec::new();
-
-    if let Ok(current_executable) = env::current_exe()
-        && let Some(executable_dir) = current_executable.parent()
-    {
-        // cargo-packager installs external binaries alongside the application
-        // executable, with the target suffix removed.
-        candidates.push(executable_dir.join(&binary));
-        candidates.push(executable_dir.join(&sidecar));
-
-        // Also accept resource-style bundles so a distributor can package the
-        // exact same fetched files without cargo-packager.
+    let mut candidates = crate::bundled_payload::packaged_candidates(&binary);
+    if !cfg!(feature = "production") {
+        // Development staging stays directly executable. Production bundles use
+        // only the manifest-backed, architecture-specific compressed layout.
+        let sidecar = sidecar_artifact_name(kind.binary_name());
+        if let Ok(current_executable) = env::current_exe()
+            && let Some(executable_dir) = current_executable.parent()
+        {
+            candidates.push(executable_dir.join(&binary));
+            candidates.push(executable_dir.join(&sidecar));
+            candidates.push(
+                executable_dir
+                    .join("../Resources/toolchain")
+                    .join(target_triple())
+                    .join(&binary),
+            );
+            candidates.push(
+                executable_dir
+                    .join("toolchain")
+                    .join(target_triple())
+                    .join(&binary),
+            );
+        }
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        candidates.push(manifest_dir.join("toolchain/bin").join(sidecar));
         candidates.push(
-            executable_dir
-                .join("../Resources/toolchain")
+            manifest_dir
+                .join("resources/toolchain")
                 .join(target_triple())
-                .join(&binary),
-        );
-        candidates.push(
-            executable_dir
-                .join("toolchain")
-                .join(target_triple())
-                .join(&binary),
+                .join(binary),
         );
     }
-
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    candidates.push(manifest_dir.join("toolchain/bin").join(&sidecar));
-    candidates.push(
-        manifest_dir
-            .join("resources/toolchain")
-            .join(target_triple())
-            .join(binary),
-    );
     candidates
+}
+
+fn absolute_bundled_program(path: &Path) -> Option<PathBuf> {
+    if crate::bundled_payload::is_packaged_payload(path) {
+        path.canonicalize().ok()
+    } else {
+        absolute_executable(path)
+    }
 }
 
 fn executable_file_name(name: &str) -> String {
@@ -448,6 +498,40 @@ mod tests {
         assert_eq!(resolved.program, bundled.canonicalize().unwrap());
         assert_eq!(resolved.origin, ToolOrigin::Bundled);
         assert_eq!(resolved.fallback_reason, None);
+    }
+
+    #[test]
+    fn manifest_backed_tools_resolve_without_extracting_and_custom_paths_still_win() {
+        use sha2::{Digest, Sha256};
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("typst.gz");
+        // Availability only reads the manifest and file metadata: intentionally
+        // not a valid gzip stream, so this cannot accidentally test extraction.
+        std::fs::write(&archive, b"compressed payload token").unwrap();
+        std::fs::write(
+            directory.path().join("manifest.tsv"),
+            format!("typst\t3\t{:x}\n", Sha256::digest(b"abc")),
+        )
+        .unwrap();
+        let resolved = resolve_from(
+            ToolKind::Typst,
+            &ToolPreference::default(),
+            std::slice::from_ref(&archive),
+            || panic!("bundled availability must not inspect environment fallbacks"),
+            || panic!("bundled availability must not search PATH"),
+        );
+        assert_eq!(resolved.origin, ToolOrigin::Bundled);
+        assert_eq!(resolved.program, archive.canonicalize().unwrap());
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+        let custom = executable(directory.path(), "custom");
+        let preference = ToolPreference {
+            mode: ToolMode::Custom,
+            custom_path: custom.display().to_string(),
+            ..Default::default()
+        };
+        let resolved = resolve_from(ToolKind::Typst, &preference, &[archive], || None, || None);
+        assert_eq!(resolved.origin, ToolOrigin::Custom);
+        assert_eq!(resolved.program, custom.canonicalize().unwrap());
     }
 
     #[test]
