@@ -49,7 +49,11 @@ impl Requirements {
                 | "operatorname"
                 | "DeclareMathOperator"
                 | "overset"
-                | "underset" => "amsmath",
+                | "underset"
+                | "lvert"
+                | "rvert"
+                | "lVert"
+                | "rVert" => "amsmath",
                 "mathbb" | "mathfrak" => "amssymb",
                 "mathscr" => "mathrsfs",
                 "mathds" => "dsfont",
@@ -933,6 +937,152 @@ mod preamble_tests {
                 source.find(&format!("\\usepackage{{{package}}}")).unwrap()
                     < source.find(setup).unwrap(),
                 "{setup}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+    use crate::snippets::{Language, Scope};
+
+    fn fixture(snippet: &crate::snippets::Snippet) -> (String, Requirements) {
+        let body = crate::completion_edit::expand_lsp_snippet(&snippet.source_to_lsp().unwrap())
+            .unwrap()
+            .text;
+        let required = Requirements::fragment(&body);
+        let body = if snippet.scope == Scope::Math {
+            format!("${body}$")
+        } else {
+            body
+        };
+        let mut source =
+            format!("\\documentclass{{article}}\n\\begin{{document}}\n{body}\n\\end{{document}}\n");
+        ensure(&mut source, &mut [], &required).unwrap();
+        (source, required)
+    }
+
+    #[test]
+    fn tex_imports_all_tex_presets_have_minimal_idempotent_dependencies() {
+        for snippet in crate::snippet_presets::defaults()
+            .iter()
+            .filter(|s| s.language == Language::Tex)
+        {
+            let (source, required) = fixture(snippet);
+            let expected = match snippet.prefix.as_str() {
+                "norm" | "align" | "pmat" | "cases" => BTreeSet::from(["amsmath".into()]),
+                "bb" => BTreeSet::from(["amssymb".into()]),
+                _ => BTreeSet::new(),
+            };
+            assert_eq!(required.packages, expected, "{}", snippet.prefix);
+            assert!(
+                plan(&source, &required).unwrap().is_none(),
+                "{}",
+                snippet.prefix
+            );
+        }
+    }
+
+    #[test]
+    fn tex_imports_norm_preset_fields_and_import_share_one_undo() {
+        use crate::completion_edit::{CompletionCoordinates, CompletionTransaction};
+        let snippet = crate::snippet_presets::defaults()
+            .into_iter()
+            .find(|s| s.language == Language::Tex && s.prefix == "norm")
+            .unwrap();
+        let source =
+            "\\documentclass{article}\n\\begin{document}\nPréface $\\norm$\n\\end{document}\n";
+        let cursor = source[..source.find("norm").unwrap() + 4].chars().count();
+        let item = crate::snippets::items(
+            std::slice::from_ref(&snippet),
+            crate::document::DocumentKind::Tex,
+            source,
+            cursor,
+        )
+        .unwrap()
+        .remove(0);
+        let mut document = crate::document::DocumentSession::new(
+            tiptoptyp_core::document::WindowSessionId::new(1),
+            source,
+            crate::document::DocumentKind::Tex,
+        );
+        let mut transaction = CompletionTransaction::prepare(
+            document.key(),
+            source,
+            cursor,
+            &item,
+            CompletionCoordinates::Display,
+        )
+        .unwrap();
+        let required = Requirements::fragment(&fixture(&snippet).0);
+        transaction.add_tex_imports(&required).unwrap();
+        let fields = transaction.fields.clone();
+        let before = eframe::egui::text::CCursorRange::default();
+        transaction.commit(&mut document, before).unwrap();
+        assert!(
+            document
+                .source()
+                .contains("\\usepackage{amsmath}\n\\begin{document}")
+        );
+        assert!(
+            document
+                .source()
+                .contains("$\\left\\lVert x\\right\\rVert$")
+        );
+        let field = fields.iter().find(|(id, _)| *id == 1).unwrap().1.clone();
+        assert_eq!(
+            document
+                .source()
+                .chars()
+                .skip(field.start)
+                .take(field.len())
+                .collect::<String>(),
+            "x"
+        );
+        assert!(plan(document.source(), &required).unwrap().is_none());
+        document.history_step(false, before);
+        assert_eq!(document.source(), source);
+        document.history_step(true, before);
+        assert!(document.source().contains("\\usepackage{amsmath}"));
+    }
+
+    #[test]
+    #[ignore = "manual TeX catalogue validation requires an installed pdflatex"]
+    fn tex_imports_all_tex_presets_compile_with_installed_pdflatex() {
+        let directory = tempfile::tempdir().unwrap();
+        for snippet in crate::snippet_presets::defaults()
+            .iter()
+            .filter(|s| s.language == Language::Tex)
+        {
+            let (source, _) = fixture(snippet);
+            let filename = format!("{}.tex", snippet.prefix);
+            std::fs::write(directory.path().join(&filename), source).unwrap();
+            let output = std::process::Command::new("pdflatex")
+                .args([
+                    "-interaction=nonstopmode",
+                    "-halt-on-error",
+                    "-no-shell-escape",
+                    &filename,
+                ])
+                .current_dir(directory.path())
+                .output()
+                .expect("installed pdflatex");
+            assert!(
+                output.status.success(),
+                "{}: {}",
+                snippet.prefix,
+                String::from_utf8_lossy(&output.stdout)
+            );
+            let pdf = directory.path().join(format!("{}.pdf", snippet.prefix));
+            assert!(
+                std::fs::metadata(pdf).unwrap().len() > 0,
+                "{}",
+                snippet.prefix
+            );
+            eprintln!(
+                "TeX preset {}: compiled with automatically planned imports",
+                snippet.prefix
             );
         }
     }
