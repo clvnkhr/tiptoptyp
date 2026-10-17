@@ -903,6 +903,8 @@ mod tests {
             r"\lstinline§nonwordxyz§",
             r"\lstinline[language={[LaTeX]TeX}]|nonwordxyz|",
             r"\mintinline{tex}|nonwordxyz|",
+            r"\mintinline{tex}%nonwordxyz%",
+            r"\mintinline{tex} %nonwordxyz%",
             "\\mintinline% header\n{tex}|nonwordxyz|",
             r"\mintinline[breaklines]{tex}{nonwordxyz}",
             r"\mintinline{tex}!nonwordxyz $ \text{nonwordxyz}!",

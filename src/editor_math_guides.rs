@@ -89,12 +89,12 @@ pub(crate) fn tex_inline_literal_end(source: &str, start: usize) -> Option<usize
     if !matches!(name, "verb" | "lstinline" | "mintinline") {
         return None;
     }
-    fn header_space(source: &str, mut at: usize) -> usize {
+    fn header_space(source: &str, mut at: usize, skip_comments: bool) -> usize {
         loop {
             while let Some(ch) = source[at..].chars().next().filter(|ch| ch.is_whitespace()) {
                 at += ch.len_utf8();
             }
-            if source[at..].starts_with('%') {
+            if skip_comments && source[at..].starts_with('%') {
                 at += source[at..].find(['\n', '\r']).unwrap_or(source.len() - at);
             } else {
                 return at;
@@ -136,13 +136,13 @@ pub(crate) fn tex_inline_literal_end(source: &str, start: usize) -> Option<usize
             at += 1;
         }
     } else {
-        at = header_space(source, at);
+        at = header_space(source, at, true);
         if bytes.get(at) == Some(&b'[') {
             let (end, closed) = group_end(source, at, b'[', b']');
             if !closed {
                 return Some(end);
             }
-            at = header_space(source, end);
+            at = header_space(source, end, true);
         }
         if name == "mintinline" {
             if bytes.get(at) != Some(&b'{') {
@@ -152,7 +152,8 @@ pub(crate) fn tex_inline_literal_end(source: &str, start: usize) -> Option<usize
             if !closed {
                 return Some(end);
             }
-            at = header_space(source, end);
+            // The payload reader has made percent a literal delimiter already.
+            at = header_space(source, end, false);
         }
         if bytes.get(at) == Some(&b'{') {
             return Some(group_end(source, at, b'{', b'}').0);
@@ -299,6 +300,7 @@ mod tests {
             r"\lstinline[language=TeX]!$ & \[fake\]!",
             r"\lstinline§$ & \[fake\]§",
             r"\mintinline{tex}|$ & \[fake\]|",
+            r"\mintinline{tex}%$ & \[fake\]%",
             "\\mintinline% header\n{tex}|$ & \\[fake\\]|",
             r"\mintinline[breaklines]{tex}{$ & \text{fake}}",
             "\\lstinline|$ &\n",

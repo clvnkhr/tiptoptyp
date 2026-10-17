@@ -812,6 +812,11 @@ mod tests {
         assert_eq!(bindings.globals.len(), 10_000);
     }
     #[test]
+    fn tex_minted_percent_delimiter_keeps_following_uses_visible() {
+        let source = "\\def\\foo{x}\\mintinline{tex}%\\foo% \\foo";
+        assert_eq!(tex_names(source), ["\\foo"]);
+    }
+    #[test]
     fn tex_minted_headers_accept_spacing_and_comments() {
         let source = "\\def\\foo{x}\\mintinline% header\n{tex}|\\foo| \\foo";
         assert_eq!(tex_names(source), ["\\foo"]);
