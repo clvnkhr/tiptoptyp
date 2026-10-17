@@ -9,8 +9,8 @@ weak entries expire on native destruction and are pruned on subsequent creation.
 No OS focus query, unsafe lifetime extension or global strong window registry is
 used. This is a candidate for an upstream native-window accessor.
 
-Keep this patch limited to native ownership. Application lifecycle and rendering
-policy belong in tiptoptyp, not in eframe.
+Keep this patch limited to native ownership and platform integration corrections.
+Application lifecycle and rendering policy belong in tiptoptyp, not in eframe.
 
 A second narrow correction allows a close request to run its owning UI callback
 when a viewport is hidden/minimized. Deferred viewports otherwise have no logic
@@ -41,3 +41,13 @@ queries on macOS, so a native restore otherwise leaves a prior Minimized(true)
 command cached indefinitely. Native focus proves that window is restored;
 unfocused/minimized windows retain their existing state. This does not issue a
 restore or focus command and does not add polling.
+
+Native platform output uses the primary caret rectangle as the input-method
+candidate area in both renderers, including immediate/deferred children and
+logic-only output. egui-winit 0.36.2 forwards `IMEOutput.rect` (the entire text
+widget) to winit; for a scrolled source document this can extend below the screen.
+The native boundary substitutes `cursor_rect` without changing the original egui
+output, purpose, composition-interruption flag, clipboard or other commands.
+This moves one existing rectangle; it adds no allocation, polling or repaint loop.
+See [egui's output contract](https://docs.rs/egui/0.36.2/egui/output/struct.IMEOutput.html)
+and [winit's candidate-area contract](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html#method.set_ime_cursor_area).

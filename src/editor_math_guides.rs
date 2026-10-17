@@ -44,7 +44,7 @@ pub(crate) fn blocks(source: &str, kind: DocumentKind) -> Vec<MathBlock> {
     }
 }
 
-fn math_environment(name: &str) -> bool {
+pub(crate) fn math_environment(name: &str) -> bool {
     matches!(
         name.trim_end_matches('*'),
         "math"

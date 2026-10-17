@@ -694,7 +694,7 @@ impl GlowWinitRunning<'_> {
                         egui_winit.handle_platform_output_with_event_loop(
                             &window,
                             event_loop,
-                            platform_output,
+                            crate::window_host::native_platform_output(platform_output),
                         );
                     }
                 }
@@ -813,7 +813,11 @@ impl GlowWinitRunning<'_> {
         let gl_surface = viewport.gl_surface.as_ref().unwrap();
         let egui_winit = viewport.egui_winit.as_mut().unwrap();
 
-        egui_winit.handle_platform_output_with_event_loop(&window, event_loop, platform_output);
+        egui_winit.handle_platform_output_with_event_loop(
+            &window,
+            event_loop,
+            crate::window_host::native_platform_output(platform_output),
+        );
 
         if is_visible {
             let clipped_primitives = integration.egui_ctx.tessellate(shapes, pixels_per_point);
@@ -1801,7 +1805,10 @@ fn render_immediate_viewport(
         }
     }
 
-    egui_winit.handle_platform_output(window, platform_output);
+    egui_winit.handle_platform_output(
+        window,
+        crate::window_host::native_platform_output(platform_output),
+    );
 
     event_loop_context::with_current_event_loop(|event_loop| {
         glutin.handle_viewport_output(event_loop, egui_ctx, &viewport_output);

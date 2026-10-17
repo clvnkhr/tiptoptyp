@@ -77,6 +77,19 @@ pub fn identity(context: &Context, id: ViewportId) -> Option<u64> {
     })
 }
 
+/// Prepare the platform output forwarded to the native input-method bridge.
+/// Kept public for the application's native geometry regression tests.
+#[doc(hidden)]
+pub fn native_platform_output(mut output: egui::PlatformOutput) -> egui::PlatformOutput {
+    if let Some(ime) = &mut output.ime {
+        // egui-winit 0.36.2 forwards `rect` to set_ime_cursor_area. egui uses
+        // that field for the entire TextEdit, which may extend off-screen in
+        // a scrolled document. Candidate UI must instead avoid the caret.
+        ime.rect = ime.cursor_rect;
+    }
+    output
+}
+
 /// A close request needs its owning callback even for minimized/occluded
 /// windows. Otherwise deferred windows have neither UI nor a logic callback
 /// in which to answer the close transaction. This does not force presentation.

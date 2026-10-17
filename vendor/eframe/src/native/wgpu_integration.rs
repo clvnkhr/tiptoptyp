@@ -729,7 +729,7 @@ impl WgpuWinitRunning<'_> {
                         egui_winit.handle_platform_output_with_event_loop(
                             window,
                             event_loop,
-                            platform_output,
+                            crate::window_host::native_platform_output(platform_output),
                         );
                     }
                 }
@@ -801,7 +801,11 @@ impl WgpuWinitRunning<'_> {
             return Ok(EventResult::Wait);
         };
 
-        egui_winit.handle_platform_output_with_event_loop(window, event_loop, platform_output);
+        egui_winit.handle_platform_output_with_event_loop(
+            window,
+            event_loop,
+            crate::window_host::native_platform_output(platform_output),
+        );
 
         let vsync_secs = if is_visible {
             let clipped_primitives = egui_ctx.tessellate(shapes, pixels_per_point);
@@ -1254,7 +1258,10 @@ fn render_immediate_viewport(
         window,
     );
 
-    egui_winit.handle_platform_output(window, platform_output);
+    egui_winit.handle_platform_output(
+        window,
+        crate::window_host::native_platform_output(platform_output),
+    );
 
     handle_viewport_output(
         &egui_ctx,
