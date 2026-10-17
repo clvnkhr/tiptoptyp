@@ -1,0 +1,524 @@
+{
+  "date": "2026-10-17",
+  "change": "GPU instanced typing explosions",
+  "baseline_commit": "95bd63d14b6948951fa7ea371c49f81dcc81ba38",
+  "scope": "Particle state and position kernel; excludes editor layout, tessellation, painting, GPU, and native input latency.",
+  "performance_claim": "No renderer or GPU speedup is inferred from this particle-state microbenchmark.",
+  "environment": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+    "profile": "release",
+    "profile_configuration": {
+      "lto": "thin",
+      "codegen_units": 1,
+      "strip": true
+    }
+  },
+  "baseline": {
+    "baseline_binary": ".tiptoptyp/profiles/particle-explosion-baseline/particle-state-baseline",
+    "binary_bytes": 73265936,
+    "binary_sha256": "5f87b17795208a8fa34da71736922e1141c53c96a52e01b284ec4152a9432002",
+    "source_sha256": "9500252a5d1903f968475243aa26882c3d2bafa724acad0ca7f3e219fe996a8c",
+    "cargo_toml_sha256": "a5107469bb9f02f8dc4f4d2fc2962cdbd93d2371c39e429aebfab26d63c1c327",
+    "toolchain_toml_sha256": "9500030ccefd0bab631fb7f1763f79f4103eca3a344c36cf15be869e330683bb",
+    "command": [
+      "particle-state-baseline",
+      "particle_state_measurement",
+      "--ignored",
+      "--nocapture"
+    ],
+    "iterations": 100000,
+    "workload": {
+      "logical_hz": 120,
+      "emission": "7 particles every 3 frames",
+      "caret": [
+        400,
+        300
+      ],
+      "pool_limit": 128,
+      "lifetime_ms": 480,
+      "maximum_live": 128,
+      "theme": null,
+      "viewport": null
+    },
+    "initial_result": {
+      "disabled_ns_per_frame": 1.3,
+      "active_ns_per_frame": 295.4
+    },
+    "median": {
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 302.2,
+      "process_wall_ms": 47.355,
+      "process_user_cpu_ms": 35.478,
+      "process_system_cpu_ms": 8.115
+    },
+    "repeats_utc": "2026-10-17T13:46:36.364742+00:00",
+    "warmup": "Original optimized Cargo test invocation completed first; five direct runs reuse the preserved executable and warm filesystem cache.",
+    "compiler_processes_before": {
+      "cargo": 0,
+      "rustc": 0
+    },
+    "compiler_processes_after": {
+      "cargo": 0,
+      "rustc": 0
+    },
+    "process_timing_note": "The first execution from the preserved binary path took 667 ms wall time while its timed kernel remained 297.4 ns/frame. This process/path initialization is separate from the particle kernel and is not an app startup measurement."
+  },
+  "baseline_repeat_samples": [
+    {
+      "run": 1,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 297.4,
+      "process_wall_ms": 667.144,
+      "process_user_cpu_ms": 36.032,
+      "process_system_cpu_ms": 8.115,
+      "log": ".tiptoptyp/profiles/particle-explosion-baseline/repeat-1.log"
+    },
+    {
+      "run": 2,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 303.9,
+      "process_wall_ms": 48.831,
+      "process_user_cpu_ms": 35.955,
+      "process_system_cpu_ms": 8.175,
+      "log": ".tiptoptyp/profiles/particle-explosion-baseline/repeat-2.log"
+    },
+    {
+      "run": 3,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.6,
+      "active_ns_per_frame": 300.9,
+      "process_wall_ms": 47.355,
+      "process_user_cpu_ms": 35.27,
+      "process_system_cpu_ms": 9.035,
+      "log": ".tiptoptyp/profiles/particle-explosion-baseline/repeat-3.log"
+    },
+    {
+      "run": 4,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 304.3,
+      "process_wall_ms": 46.174,
+      "process_user_cpu_ms": 34.793,
+      "process_system_cpu_ms": 5.191,
+      "log": ".tiptoptyp/profiles/particle-explosion-baseline/repeat-4.log"
+    },
+    {
+      "run": 5,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.6,
+      "active_ns_per_frame": 302.2,
+      "process_wall_ms": 47.14,
+      "process_user_cpu_ms": 35.478,
+      "process_system_cpu_ms": 4.581,
+      "log": ".tiptoptyp/profiles/particle-explosion-baseline/repeat-5.log"
+    }
+  ],
+  "after_repeat_samples": [
+    {
+      "run": 1,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 384.4,
+      "process_wall_ms": 696.798,
+      "process_user_cpu_ms": 44.213,
+      "process_system_cpu_ms": 6.15,
+      "log": ".tiptoptyp/profiles/particle-explosion-after/repeat-1.log"
+    },
+    {
+      "run": 2,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 382.5,
+      "process_wall_ms": 50.617,
+      "process_user_cpu_ms": 41.919,
+      "process_system_cpu_ms": 6.292,
+      "log": ".tiptoptyp/profiles/particle-explosion-after/repeat-2.log"
+    },
+    {
+      "run": 3,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.6,
+      "active_ns_per_frame": 333.4,
+      "process_wall_ms": 44.954,
+      "process_user_cpu_ms": 37.262,
+      "process_system_cpu_ms": 6.027,
+      "log": ".tiptoptyp/profiles/particle-explosion-after/repeat-3.log"
+    },
+    {
+      "run": 4,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 374.0,
+      "process_wall_ms": 52.366,
+      "process_user_cpu_ms": 41.813,
+      "process_system_cpu_ms": 4.538,
+      "log": ".tiptoptyp/profiles/particle-explosion-after/repeat-4.log"
+    },
+    {
+      "run": 5,
+      "iterations": 100000,
+      "disabled_ns_per_frame": 1.6,
+      "active_ns_per_frame": 382.3,
+      "process_wall_ms": 54.104,
+      "process_user_cpu_ms": 42.463,
+      "process_system_cpu_ms": 5.152,
+      "log": ".tiptoptyp/profiles/particle-explosion-after/repeat-5.log"
+    }
+  ],
+  "measurement_status": "Complete: five isolated optimized before/after state measurements, final deterministic verification, real offscreen GPU checks, and the native light/dark typing journey.",
+  "native_validation": {
+    "status": "passed",
+    "command": "python3 scripts/test-desktop-ui.py --executable .tiptoptyp/desktop-ui-tests/particle-explosion-binary --journey typing_particles --capture-review",
+    "build_profile": "debug",
+    "features": [
+      "desktop-ui-tests"
+    ],
+    "binary": ".tiptoptyp/desktop-ui-tests/particle-explosion-binary",
+    "version": "tiptoptyp Dev 0.1.0 (95bd63d14b69-dirty.1792245973)",
+    "binary_sha256": "d036e4319fc3204b8bf50c407b66a126444255f4e70dedee8a69e19475cddfb6",
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "preflight": {
+      "accessibility": true,
+      "desktop": true,
+      "input": true,
+      "locked": false,
+      "screens": [
+        {
+          "height": 982,
+          "scale": 2,
+          "width": 1512
+        }
+      ]
+    },
+    "result": ".tiptoptyp/desktop-ui-tests/run-u947wuu_/result.json",
+    "result_sha256": "a14eb09725a27860ce021daec53e4bfbd79ea13fa068a826e069553ac837ca5f",
+    "events": ".tiptoptyp/desktop-ui-tests/run-u947wuu_/events.jsonl",
+    "events_sha256": "37949e453eaa092f787b1a6c2d20301ac2afcabbfcb7aee76b778a25c5e320f7",
+    "checks": [
+      "Particles default off at medium density.",
+      "Real source typing runs the instanced-glow renderer with increasing GPU draw and upload counters.",
+      "Each observed burst has 48 active instances and a 1536-byte upload, inside the observed editor clip and bounded 640 ms lifetime.",
+      "Light and dark interface appearances both render actual GPU bursts and supply fresh viewport captures.",
+      "After expiry, navigation, paste, and typing with particles disabled produce no further bursts or GPU draws.",
+      "The exact initial System appearance, disabled particle setting, original source, and tab count are restored."
+    ],
+    "active_observations": [
+      {
+        "dark": false,
+        "active_count": 48,
+        "burst_count": 1,
+        "clip": [
+          238.0,
+          30.0,
+          829.5,
+          859.0
+        ],
+        "emitted_count": 48,
+        "gpu": {
+          "backend": "instanced-glow",
+          "draws": 9,
+          "error": null,
+          "last_draw_instances": 48,
+          "ready": true,
+          "uploaded_bytes_total": 1536,
+          "uploaded_instances": 48,
+          "uploads": 1
+        },
+        "last_emission_age_ms": 104.22712499999953,
+        "lifetime_ms": 640,
+        "max_live": 48,
+        "origin": [
+          351.71875,
+          180.75
+        ],
+        "pool_limit": 256
+      },
+      {
+        "dark": false,
+        "active_count": 48,
+        "burst_count": 2,
+        "clip": [
+          238.0,
+          30.0,
+          829.5,
+          859.0
+        ],
+        "emitted_count": 96,
+        "gpu": {
+          "backend": "instanced-glow",
+          "draws": 74,
+          "error": null,
+          "last_draw_instances": 48,
+          "ready": true,
+          "uploaded_bytes_total": 3072,
+          "uploaded_instances": 48,
+          "uploads": 2
+        },
+        "last_emission_age_ms": 92.92158300000075,
+        "lifetime_ms": 640,
+        "max_live": 48,
+        "origin": [
+          361.0,
+          180.75
+        ],
+        "pool_limit": 256
+      },
+      {
+        "dark": true,
+        "active_count": 48,
+        "burst_count": 3,
+        "clip": [
+          238.0,
+          30.0,
+          829.5,
+          859.0
+        ],
+        "emitted_count": 144,
+        "gpu": {
+          "backend": "instanced-glow",
+          "draws": 96,
+          "error": null,
+          "last_draw_instances": 48,
+          "ready": true,
+          "uploaded_bytes_total": 4608,
+          "uploaded_instances": 48,
+          "uploads": 3
+        },
+        "last_emission_age_ms": 102.09062499999888,
+        "lifetime_ms": 640,
+        "max_live": 48,
+        "origin": [
+          370.28125,
+          180.75
+        ],
+        "pool_limit": 256
+      }
+    ],
+    "negative_observation": {
+      "burst_count": 3,
+      "idle_gpu_draws": 110,
+      "restored_appearance": "System"
+    },
+    "restored": {
+      "interface_theme": "System",
+      "particles": {
+        "density": "Medium",
+        "enabled": false
+      },
+      "source_fingerprint": "a189019e1da54092",
+      "tabs": 1
+    },
+    "limitations": "These viewport framebuffers verify editor particles. The isolated untitled fixture has an existing missing preview-entry notice; this journey and its images do not validate PDF preview functionality or composed native preview windows."
+  },
+  "limitations": [
+    "State timing excludes editor layout, tessellation, painting, GPU, and native input latency.",
+    "New visual defaults have a larger pool and longer lifetime; the same input cadence retains more particles.",
+    "The optimized after benchmark is tied to its preserved particle-state source; it is not provenance for the later final native-renderer build.",
+    "The native interaction run uses a debug build and is functional evidence, not an optimized latency measurement.",
+    "These local measurements do not establish cross-platform performance."
+  ],
+  "after": {
+    "schema": 1,
+    "after_head": "95bd63d14b6948951fa7ea371c49f81dcc81ba38",
+    "binary": ".tiptoptyp/profiles/particle-explosion-after/particle-state-after",
+    "original_binary": "target/release/deps/tiptoptyp-5b69894417288fa0",
+    "binary_bytes": 73299280,
+    "binary_sha256": "f219fb07549f4f03330b5d08e13b98f9b101ee8f87e704e5197062bffbe5fba5",
+    "state_source_sha256": "b0687967683f053bd9f3c7568800d33c6d82e105c82a1444c464a243857b1da2",
+    "profile": "release",
+    "profile_configuration": {
+      "lto": "thin",
+      "codegen_units": 1,
+      "strip": true
+    },
+    "command": [
+      ".tiptoptyp/profiles/particle-explosion-after/particle-state-after",
+      "particle_state_measurement",
+      "--ignored",
+      "--nocapture"
+    ],
+    "iterations": 100000,
+    "workload": {
+      "logical_hz": 120,
+      "emission": "7 particles every 3 frames",
+      "caret": [
+        400,
+        300
+      ],
+      "pool_limit": 256,
+      "lifetime_ms": 640,
+      "maximum_live": 182,
+      "theme": null,
+      "viewport": null
+    },
+    "warmup": "Original optimized Cargo test invocation completed first; five direct runs reuse the preserved executable and warm filesystem cache.",
+    "scope": "Particle state and position kernel; excludes editor layout, tessellation, painting, GPU, and native input latency.",
+    "provenance_note": "Particle-state source was unchanged throughout the optimized build. GPU alpha blending and GPU tests changed during linking; this binary is evidence only for the preserved state-source microbenchmark, not the final app renderer.",
+    "comparison_note": "Same source input cadence and frame clock; changed lifetime/pool retains up to 182 particles versus 128 before, so this is not an equal-population renderer comparison.",
+    "initial_result": {
+      "disabled_ns_per_frame": 1.3,
+      "active_ns_per_frame": 388.3
+    },
+    "repeats_utc": "2026-10-17T14:03:54.036696+00:00",
+    "median": {
+      "disabled_ns_per_frame": 1.7,
+      "active_ns_per_frame": 382.3,
+      "process_wall_ms": 52.366,
+      "process_user_cpu_ms": 41.919,
+      "process_system_cpu_ms": 6.027
+    },
+    "build_processes_before": {
+      "cargo": 0,
+      "rustc": 0,
+      "ld": 0,
+      "ld64": 0,
+      "clang": 0,
+      "cc": 0,
+      "lld": 0,
+      "rust-lld": 0,
+      "collect2": 0
+    },
+    "build_processes_after": {
+      "cargo": 0,
+      "rustc": 0,
+      "ld": 0,
+      "ld64": 0,
+      "clang": 0,
+      "cc": 0,
+      "lld": 0,
+      "rust-lld": 0,
+      "collect2": 0
+    },
+    "process_timing_note": "The first execution from the preserved binary path took 697 ms wall time while its timed kernel remained 384.4 ns/frame. Process wall time includes initialization outside the timed kernel.",
+    "state_source_matches_feature_commit": true
+  },
+  "comparison": {
+    "baseline_active_median_ns": 302.2,
+    "after_active_median_ns": 382.3,
+    "active_cost_change_percent": 26.51,
+    "explanation": "The new effect retains more particles (182 versus 128) with the same emission cadence of seven particles every three frames. This state-only result is not GPU renderer throughput or input latency."
+  },
+  "feature_commit": "3a6c78cd62726c7413f702b9839178840f216adb",
+  "verification": {
+    "clippy": {
+      "status": "passed",
+      "command": "cargo clippy --all-targets -- -D warnings"
+    },
+    "rust_tests": {
+      "status": "passed",
+      "command": "cargo test --no-fail-fast",
+      "totals": {
+        "passed": 2174,
+        "failed": 0,
+        "ignored": 56
+      },
+      "suite_count": 18,
+      "includes_doc_tests": true
+    },
+    "xtask_tests": {
+      "status": "passed",
+      "command": "cargo test --manifest-path xtask/Cargo.toml",
+      "totals": {
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0,
+        "measured": 0,
+        "filtered_out": 0
+      }
+    },
+    "offscreen_gpu_tests": {
+      "status": "passed",
+      "profile": "debug",
+      "test_filter": "app::editor_particles::gpu_tests",
+      "explicitly_enabled_ignored_tests": 2,
+      "tests": [
+        "gpu_explosion_framebuffer_review",
+        "gpu_translucent_background_preserves_valid_premultiplied_pixels"
+      ],
+      "checks": [
+        "Real instanced Glow draws in light and dark appearances at display scales 1 and 2.",
+        "Pixels remain inside the editor clip; subsequent egui painting retains texture, blend, and framebuffer state.",
+        "A shared immutable particle batch uploads once while repeated animation draws reuse its GPU buffer.",
+        "Idle batches do not draw or upload; teardown is idempotent and late callbacks remain inert.",
+        "No OpenGL errors during rendering, idle, or teardown.",
+        "Transparent alpha 0 and translucent alpha 96 backgrounds preserve valid premultiplied pixels in both appearances."
+      ],
+      "log_note": "The debug test artifact reports the macOS linker warning about its large __eh_frame section; both explicit GPU tests pass."
+    },
+    "logs": {
+      "clippy": {
+        "path": "/private/tmp/particle-explosion-clippy-final.log",
+        "sha256": "6e045b715290d2128be903e5710dad553920fa48e1700dfe9c9b08e2c0d81c74"
+      },
+      "tests": {
+        "path": "/private/tmp/particle-explosion-tests-final.log",
+        "sha256": "789b5e7193d908405d41d06c9b86ad04c80a043f1a911783f3154d030d85bc91"
+      },
+      "xtask": {
+        "path": "/private/tmp/particle-explosion-xtask-final.log",
+        "sha256": "96ac051c57cad0842ca8e5f97d26db83f680b66a4c9af0bc9ac75b4cb199a309"
+      },
+      "gpu": {
+        "path": "/private/tmp/particle-explosion-gpu-final.log",
+        "sha256": "7e00d8d5af26946b192d4d1399ce6b8a272e811f84fcca2e445d20a058f2ad23"
+      },
+      "native": {
+        "path": "/private/tmp/particle-explosion-native-final.log",
+        "sha256": "715bd1dc5416d525e3b5fb4f0c5cc2591cab2003004968937d2094b04ecc820b"
+      }
+    }
+  },
+  "visual_review": {
+    "status": "Fresh PNGs inspected",
+    "reviewer": "root; native light/dark independently inspected by universal_packaging",
+    "findings": "Thin bright sparks and small flecks remain centered on the caret; source text is readable and the editor boundaries remain intact in both appearances.",
+    "artifacts": [
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/typing-particles/light-2x-active.png",
+        "sha256": "6ec796496f920c0e26d9a75583d0142bc0b76519bcb0cf4ce80da87861b4d444",
+        "width": 720,
+        "height": 480,
+        "bytes": 11770
+      },
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/typing-particles/dark-2x-active.png",
+        "sha256": "95d636db325b52cc2a2697c4ae609a6364df77933822a97828586d07300347ac",
+        "width": 720,
+        "height": 480,
+        "bytes": 12733
+      },
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/typing-particles/light-alpha96-active.png",
+        "sha256": "3069f9c730ea729140c68f15060ca2d96328a77aabeef2ad9c4c909ad6e07bbb",
+        "width": 360,
+        "height": 240,
+        "bytes": 3006
+      },
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/typing-particles/dark-alpha96-active.png",
+        "sha256": "a6cea5bc0eb7516157dd503c0875b243ebb137a4817fab7403068f5fd23c752f",
+        "width": 360,
+        "height": 240,
+        "bytes": 3459
+      },
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/typing-particles/native-light.png",
+        "sha256": "8e8bb35dfbdc65f8553113c183598c845b7cd47c70297092323081f002dc5d9b",
+        "width": 2800,
+        "height": 1766,
+        "bytes": 3472524
+      },
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/typing-particles/native-dark.png",
+        "sha256": "d2fd013df705d39688c3e33d3e244064e14248868cfb5ca8ef526aede641a000",
+        "width": 2800,
+        "height": 1766,
+        "bytes": 3637144
+      }
+    ]
+  }
+}
