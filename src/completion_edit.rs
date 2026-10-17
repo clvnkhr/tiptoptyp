@@ -146,7 +146,7 @@ pub(crate) fn prepare_completion_application(
             new_text: item.insert_text.clone(),
         }
     });
-    let expansion = if item.insert_text_is_snippet {
+    let mut expansion = if item.insert_text_is_snippet {
         expand_lsp_snippet(&main_edit.new_text)?
     } else {
         SnippetExpansion {
@@ -155,8 +155,11 @@ pub(crate) fn prepare_completion_application(
             fields: vec![],
         }
     };
-    main_edit.new_text = expansion.text.clone();
     let main_range = range_to_scalar_range(source, &main_edit.range).into_range();
+    if item.origin == crate::lsp::protocol::CompletionOrigin::Snippet {
+        reindent_snippet(source, main_range.start, &mut expansion);
+    }
+    main_edit.new_text = expansion.text.clone();
 
     for additional in &item.additional_text_edits {
         let additional_range = range_to_scalar_range(source, &additional.range).into_range();
@@ -192,12 +195,48 @@ pub(crate) fn prepare_completion_application(
     })
 }
 
+/// Preserve relative body indentation and add only the surrounding line's
+/// leading whitespace. Offset mapping happens before the validated edit batch.
+fn reindent_snippet(source: &str, start: usize, expansion: &mut SnippetExpansion) {
+    let byte = source
+        .char_indices()
+        .nth(start)
+        .map_or(source.len(), |(at, _)| at);
+    let line = source[..byte].rsplit('\n').next().unwrap_or_default();
+    let indent: String = line
+        .chars()
+        .take_while(|c| matches!(c, ' ' | '\t'))
+        .collect();
+    if indent.is_empty() || !expansion.text.contains('\n') {
+        return;
+    }
+    let mut boundaries = vec![0];
+    let mut text = String::with_capacity(expansion.text.len());
+    let mut position = 0;
+    for c in expansion.text.chars() {
+        text.push(c);
+        position += 1;
+        if c == '\n' {
+            text.push_str(&indent);
+            position += indent.chars().count();
+        }
+        boundaries.push(position);
+    }
+    expansion.cursor = boundaries[expansion.cursor];
+    for (_, range) in &mut expansion.fields {
+        *range = boundaries[range.start]..boundaries[range.end];
+    }
+    expansion.text = text;
+}
+
 #[derive(Default)]
 struct SnippetCursorTracker {
     first_tabstop: Option<(u32, usize)>,
     final_tabstop: Option<usize>,
     fields: Vec<(u32, Range<usize>)>,
     values: std::collections::BTreeMap<u32, String>,
+    defaults: std::collections::BTreeMap<u32, Vec<char>>,
+    resolving: std::collections::BTreeSet<u32>,
 }
 
 impl SnippetCursorTracker {
@@ -217,6 +256,7 @@ pub(crate) fn expand_lsp_snippet(snippet: &str) -> Result<SnippetExpansion, Stri
     let characters = snippet.chars().collect::<Vec<_>>();
     let mut output = String::with_capacity(snippet.len());
     let mut tracker = SnippetCursorTracker::default();
+    collect_snippet_defaults(&characters, &mut tracker.defaults)?;
     expand_lsp_snippet_fragment(&characters, &mut output, &mut tracker)?;
     let cursor = tracker
         .first_tabstop
@@ -234,6 +274,35 @@ pub(crate) fn expand_lsp_snippet(snippet: &str) -> Result<SnippetExpansion, Stri
     })
 }
 
+fn collect_snippet_defaults(
+    characters: &[char],
+    defaults: &mut std::collections::BTreeMap<u32, Vec<char>>,
+) -> Result<(), String> {
+    let mut i = 0;
+    while i < characters.len() {
+        if characters[i] == '\\' {
+            i += 2;
+            continue;
+        }
+        if characters[i] == '$' && characters.get(i + 1) == Some(&'{') {
+            let end = snippet_closing_brace(characters, i + 2)
+                .ok_or_else(|| "an LSP snippet placeholder is not closed".to_owned())?;
+            let body = &characters[i + 2..end];
+            if body.first().is_some_and(char::is_ascii_digit) {
+                let (id, after) = parse_snippet_number(body, 0);
+                if body.get(after) == Some(&':') || body.get(after) == Some(&'|') {
+                    defaults.entry(id).or_insert_with(|| body[after..].to_vec());
+                }
+            }
+            collect_snippet_defaults(body, defaults)?;
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(())
+}
+
 fn expand_lsp_snippet_fragment(
     characters: &[char],
     output: &mut String,
@@ -249,15 +318,8 @@ fn expand_lsp_snippet_fragment(
                 index += 2;
             }
             '$' if index + 1 < characters.len() && characters[index + 1].is_ascii_digit() => {
-                let (tabstop, next) = parse_snippet_number(characters, index + 1);
-                let start = output.chars().count();
-                tracker.record(tabstop, start);
-                if let Some(value) = tracker.values.get(&tabstop) {
-                    output.push_str(value);
-                }
-                tracker
-                    .fields
-                    .push((tabstop, start..output.chars().count()));
+                let (_, next) = parse_snippet_number(characters, index + 1);
+                expand_braced_snippet(&characters[index + 1..next], output, tracker)?;
                 index = next;
             }
             '$' if index + 1 < characters.len() && characters[index + 1] == '{' => {
@@ -342,17 +404,24 @@ fn expand_braced_snippet(
                 .push((tabstop, cursor..output.chars().count()));
             return Ok(());
         }
-        match body.get(after_number) {
+        if !tracker.resolving.insert(tabstop) {
+            tracker.fields.push((tabstop, cursor..cursor));
+            return Ok(());
+        }
+        let default = tracker.defaults.get(&tabstop).cloned();
+        let form = default.as_deref().unwrap_or(&body[after_number..]);
+        match form.first() {
             None => {}
             Some(':') => {
-                expand_lsp_snippet_fragment(&body[after_number + 1..], output, tracker)?;
+                expand_lsp_snippet_fragment(&form[1..], output, tracker)?;
             }
-            Some('|') if body.last() == Some(&'|') => {
-                let choice = first_snippet_choice(&body[after_number + 1..body.len() - 1]);
+            Some('|') if form.last() == Some(&'|') => {
+                let choice = first_snippet_choice(&form[1..form.len() - 1]);
                 output.extend(choice);
             }
             _ => return Err("an LSP snippet tabstop has an unsupported form".to_owned()),
         }
+        tracker.resolving.remove(&tabstop);
         tracker
             .values
             .insert(tabstop, output.chars().skip(cursor).collect());

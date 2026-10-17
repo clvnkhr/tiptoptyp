@@ -317,7 +317,7 @@ mod tests {
         assert!(harness.state().1.is_empty());
         for label in [
             "alpha · Language server",
-            "beta · Custom snippet",
+            "beta · Snippet",
             "gamma · Built-in completion",
             "delta",
         ] {
@@ -325,7 +325,7 @@ mod tests {
                 (harness.get_by_label(label).rect().height() - COMPLETION_ROW_HEIGHT).abs() < 0.01
             );
         }
-        harness.get_by_label("beta · Custom snippet").hover();
+        harness.get_by_label("beta · Snippet").hover();
         harness.run_steps(8);
         assert_eq!(harness.state().0, 0, "hover never moves keyboard selection");
         assert!(harness.state().1.is_empty());
@@ -343,7 +343,7 @@ mod tests {
         );
         assert!(harness.query_by_label("Installed font").is_none());
         assert!(harness.query_by_label("Loading font preview…").is_none());
-        harness.get_by_label("beta · Custom snippet").click();
+        harness.get_by_label("beta · Snippet").click();
         harness.run_steps(8);
         assert!(harness.state().1.contains(&CompletionAction::Accept(1)));
         harness.get_by_label("Outside").click();

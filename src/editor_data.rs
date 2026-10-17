@@ -97,6 +97,15 @@ impl DiagnosticsKey {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SnippetContextCache {
+    key: DocumentKey,
+    cursor: usize,
+    kind: crate::document::DocumentKind,
+    effective: crate::document::DocumentKind,
+    scope: Option<crate::snippets::Scope>,
+}
+
 /// Revision-derived text, syntax and diagnostic data consumed by the editor.
 /// Unchanged frames only copy small values or `Arc` handles.
 pub(crate) struct EditorDerivedData {
@@ -118,6 +127,7 @@ pub(crate) struct EditorDerivedData {
     table_at_cursor: Option<TableTarget>,
     hover_query: Option<(DocumentKey, usize)>,
     hover_range: Option<Range<usize>>,
+    snippet_query: Option<SnippetContextCache>,
     diagnostics_key: Option<DiagnosticsKey>,
     line_diagnostics: Arc<[LineDiagnostic]>,
     longest_diagnostic_chars: usize,
@@ -158,6 +168,7 @@ impl Default for EditorDerivedData {
             table_at_cursor: None,
             hover_query: None,
             hover_range: None,
+            snippet_query: None,
             diagnostics_key: None,
             line_diagnostics: Arc::from([]),
             longest_diagnostic_chars: 0,
@@ -286,10 +297,7 @@ impl EditorDerivedData {
         )
     }
 
-    pub(crate) fn tex_completions(
-        &mut self,
-        cursor: usize,
-    ) -> Option<Vec<crate::tinymist::CompletionItem>> {
+    fn prepare_tex_index(&mut self) {
         self.prepare_syntax();
         if self.tex_key != self.source_key {
             // Projected dollar regions own completion even without a command:
@@ -309,13 +317,91 @@ impl EditorDerivedData {
                 self.tex_rebuilds += 1;
             }
         }
+    }
+
+    pub(crate) fn tex_completions(
+        &mut self,
+        cursor: usize,
+    ) -> Option<Vec<crate::tinymist::CompletionItem>> {
+        self.prepare_tex_index();
         self.tex_index.items(&self.source_snapshot, cursor)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn snippet_context(
+        &mut self,
+        cursor: usize,
+        kind: crate::document::DocumentKind,
+    ) -> Option<crate::snippets::Scope> {
+        self.snippet_language_context(cursor, kind).1
+    }
+
+    pub(crate) fn snippet_language_context(
+        &mut self,
+        cursor: usize,
+        kind: crate::document::DocumentKind,
+    ) -> (
+        crate::document::DocumentKind,
+        Option<crate::snippets::Scope>,
+    ) {
+        use crate::document::DocumentKind;
+        let Some(key) = self.source_key else {
+            return (kind, None);
+        };
+        if let Some(cached) = self.snippet_query
+            && cached.key == key
+            && cached.cursor == cursor
+            && cached.kind == kind
+        {
+            return (cached.effective, cached.scope);
+        }
+        let byte = self.char_to_byte(cursor);
+        let query_start = self.source_snapshot[..byte]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_alphanumeric() || matches!(c, '_' | '-'))
+            .last()
+            .map_or(byte, |(start, _)| start);
+        let projected = if kind == DocumentKind::Typst
+            && self.mitex_dollars
+            && self.source_snapshot.contains('$')
+        {
+            self.prepare_tex_index();
+            self.tex_index
+                .projected_snippet_context(&self.source_snapshot, query_start)
+        } else {
+            None
+        };
+        let (effective, scope) = if let Some(scope) = projected {
+            (DocumentKind::Tex, scope)
+        } else {
+            let scope = match kind {
+                DocumentKind::Typst => {
+                    self.prepare_syntax();
+                    crate::snippets::typst_context(&self.parsed_source, query_start)
+                }
+                DocumentKind::Tex => {
+                    crate::snippets::tex_context(&self.source_snapshot, query_start)
+                }
+                _ => None,
+            };
+            (kind, scope)
+        };
+        self.snippet_query = Some(SnippetContextCache {
+            key,
+            cursor,
+            kind,
+            effective,
+            scope,
+        });
+        (effective, scope)
     }
 
     pub(crate) fn set_mitex_dollars(&mut self, enabled: bool) {
         if self.mitex_dollars != enabled {
             self.mitex_dollars = enabled;
             self.tex_key = None;
+            self.snippet_query = None;
         }
     }
 
@@ -752,6 +838,94 @@ fn hover_leaf_range(leaf: &LinkedNode<'_>, cursor: usize) -> Option<Range<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snippet_context_reuses_revision_syntax_and_scalar_boundaries() {
+        let mut data = EditorDerivedData::default();
+        let source = "α $ ff $ #let f = ff";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        let math = source[..source.find("ff").unwrap()].chars().count() + 2;
+        assert_eq!(
+            data.snippet_context(math, crate::document::DocumentKind::Typst),
+            Some(crate::snippets::Scope::Math)
+        );
+        assert_eq!(
+            data.snippet_context(source.chars().count(), crate::document::DocumentKind::Typst),
+            Some(crate::snippets::Scope::Code)
+        );
+        assert_eq!(
+            data.snippet_context(math, crate::document::DocumentKind::Typst),
+            Some(crate::snippets::Scope::Math)
+        );
+        assert_eq!(
+            data.syntax_rebuilds, 1,
+            "one parser update per source revision, shared with other editor features"
+        );
+        data.prepare_source(&DocumentSnapshot::fixture(revision(2), "text ff"));
+        assert_eq!(
+            data.snippet_context(7, crate::document::DocumentKind::Typst),
+            Some(crate::snippets::Scope::Text)
+        );
+        assert_eq!(data.syntax_rebuilds, 2);
+    }
+
+    #[test]
+    fn projected_snippet_context_reuses_tex_islands_and_invalidates_on_mode_toggle() {
+        use crate::{document::DocumentKind, snippets::Scope};
+        let mut data = EditorDerivedData::default();
+        let source = "Préface dm\n$ \\text{bf} + frac $\n#mi(\"frac\")\n`$ frac $`\n$ x % frac\n $";
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        data.set_mitex_dollars(true);
+        let at = |needle: &str| {
+            source[..source.find(needle).unwrap() + needle.len()]
+                .chars()
+                .count()
+        };
+        let frac = at("+ frac");
+        for _ in 0..20 {
+            assert_eq!(
+                data.snippet_language_context(frac, DocumentKind::Typst),
+                (DocumentKind::Tex, Some(Scope::Math))
+            );
+        }
+        assert_eq!(
+            data.snippet_language_context(at("bf"), DocumentKind::Typst),
+            (DocumentKind::Tex, Some(Scope::Text))
+        );
+        assert_eq!(
+            data.snippet_language_context(at("dm"), DocumentKind::Typst),
+            (DocumentKind::Typst, Some(Scope::Text))
+        );
+        assert_eq!(
+            data.snippet_language_context(at("#mi(\"frac"), DocumentKind::Typst),
+            (DocumentKind::Typst, None)
+        );
+        assert_eq!(
+            data.snippet_language_context(at("`$ frac"), DocumentKind::Typst),
+            (DocumentKind::Typst, None)
+        );
+        assert_eq!(
+            data.snippet_language_context(at("% frac"), DocumentKind::Typst),
+            (DocumentKind::Tex, None)
+        );
+        assert_eq!(data.syntax_rebuilds, 1);
+        assert_eq!(
+            data.tex_rebuilds, 1,
+            "snippet context and command completion reuse the same projected region index"
+        );
+        data.set_mitex_dollars(false);
+        assert_eq!(
+            data.snippet_language_context(frac, DocumentKind::Typst),
+            (DocumentKind::Typst, Some(Scope::Math))
+        );
+        data.set_mitex_dollars(true);
+        assert_eq!(
+            data.snippet_language_context(frac, DocumentKind::Typst),
+            (DocumentKind::Tex, Some(Scope::Math))
+        );
+        assert_eq!(data.tex_rebuilds, 2);
+        assert_eq!(data.syntax_rebuilds, 1);
+    }
 
     #[test]
     fn projected_dollar_regions_keep_completion_ownership_without_commands() {

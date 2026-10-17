@@ -26,6 +26,7 @@ struct Fragment {
     range: Range<usize>,
     boundaries: Option<Vec<usize>>,
     controls: Vec<Control>,
+    projected_dollar: bool,
 }
 
 impl Fragment {
@@ -52,7 +53,7 @@ impl Index {
                 .is_none_or(|range| range.start >= fragment.range.end)
         });
         for range in ranges {
-            index.add(parsed.text(), range, false, true);
+            index.add(parsed.text(), range, false, true, true);
         }
         index.fragments.sort_by_key(|fragment| fragment.range.start);
         index
@@ -73,6 +74,7 @@ impl Index {
                 literal.payload_range,
                 literal.quoted,
                 literal.language == EmbeddedLanguage::TexMath,
+                false,
             );
             return;
         }
@@ -82,7 +84,7 @@ impl Index {
                 .find(|child| child.kind() == SyntaxKind::RawLang)
                 .is_some_and(|lang| matches!(lang.leaf_text().as_str(), "tex" | "latex"));
             if tex && let Some(range) = highlight::literal_payload_range(&node) {
-                self.add(source, range, false, false);
+                self.add(source, range, false, false, false);
             }
             return;
         }
@@ -91,7 +93,14 @@ impl Index {
         }
     }
 
-    fn add(&mut self, source: &str, range: Range<usize>, quoted: bool, math: bool) {
+    fn add(
+        &mut self,
+        source: &str,
+        range: Range<usize>,
+        quoted: bool,
+        math: bool,
+        projected_dollar: bool,
+    ) {
         let payload = &source[range.clone()];
         let (controls, boundaries) = if quoted {
             let (text, boundaries) = crate::embedded_structure::decode_literal(payload);
@@ -103,7 +112,31 @@ impl Index {
             range,
             boundaries,
             controls,
+            projected_dollar,
         });
+    }
+
+    /// Only displayed projected dollar payloads can accept direct TeX source
+    /// snippets. Quoted/raw embedded regions keep their existing insertion rules.
+    pub(crate) fn projected_snippet_context(
+        &self,
+        source: &str,
+        byte: usize,
+    ) -> Option<Option<crate::snippets::Scope>> {
+        let index = self
+            .fragments
+            .partition_point(|fragment| fragment.range.start <= byte)
+            .checked_sub(1)?;
+        let fragment = &self.fragments[index];
+        if !fragment.projected_dollar || byte > fragment.range.end {
+            return None;
+        }
+        let payload = source.get(fragment.range.start..byte)?;
+        Some(crate::snippets::tex_context_in(
+            payload,
+            payload.len(),
+            true,
+        ))
     }
 
     /// Some(empty) owns a TeX region but has no applicable command; do not ask

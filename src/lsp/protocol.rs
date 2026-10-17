@@ -59,7 +59,7 @@ impl CompletionOrigin {
     pub fn label(self) -> &'static str {
         match self {
             Self::LanguageServer => "Language server",
-            Self::Snippet => "Custom snippet",
+            Self::Snippet => "Snippet",
             Self::BuiltIn => "Built-in completion",
             Self::Font => "Installed font",
         }
