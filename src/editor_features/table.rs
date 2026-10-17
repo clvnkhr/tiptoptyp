@@ -437,12 +437,6 @@ pub(super) fn parse_column_widths(argument: &LinkedNode<'_>, source: &str) -> Op
 }
 
 impl EditableTable {
-    pub(crate) fn column_widths(&self) -> Vec<String> {
-        self.column_widths
-            .clone()
-            .unwrap_or_else(|| vec!["auto".into(); self.columns])
-    }
-
     pub(crate) fn set_column_widths(&mut self, widths: &[String]) -> Result<(), String> {
         if widths.len() != self.columns {
             return Err(format!(
@@ -858,7 +852,7 @@ mod tests {
     #[test]
     fn width_edits_are_validated_transactionally_and_can_return_to_auto() {
         let mut table = parse("#table(columns: (20%, 1fr), [A], [B])");
-        assert_eq!(table.column_widths(), ["20%", "1fr"]);
+        assert_eq!(table.column_widths.as_ref().unwrap(), &["20%", "1fr"]);
         let before = table.clone();
         assert!(
             table
@@ -878,7 +872,7 @@ mod tests {
         );
         table.reset_column_widths();
         assert!(table.render_replacement().unwrap().contains("columns: 2"));
-        assert_eq!(table.column_widths(), ["auto", "auto"]);
+        assert!(table.column_widths.is_none());
         let mut one = parse("#table(columns: auto, [A])");
         one.set_column_widths(&["2cm".into()]).unwrap();
         assert!(

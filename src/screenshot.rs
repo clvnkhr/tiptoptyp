@@ -68,6 +68,8 @@ impl UiCaptureStep {
 pub enum UiSnapshotScene {
     TableEditor,
     TableEditorNarrow,
+    TableEditorTex,
+    TableEditorTexNarrow,
     Main,
     DrawSymbol,
     Tabs,
@@ -134,9 +136,11 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 65] = [
+    pub const ALL: [Self; 67] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
+        Self::TableEditorTex,
+        Self::TableEditorTexNarrow,
         Self::Main,
         Self::DrawSymbol,
         Self::Tabs,
@@ -206,6 +210,8 @@ impl UiSnapshotScene {
         match self {
             Self::TableEditor => "table-editor",
             Self::TableEditorNarrow => "table-editor-narrow",
+            Self::TableEditorTex => "table-editor-tex",
+            Self::TableEditorTexNarrow => "table-editor-tex-narrow",
             Self::Main => "main",
             Self::DrawSymbol => "draw-symbol",
             Self::Icons => "icons",
@@ -278,7 +284,10 @@ impl UiSnapshotScene {
             Self::Templates => "templates",
             Self::EncodingImport => "encoding-import",
             Self::WritingChecks => ROOT_VIEWPORT_NAME,
-            Self::TableEditor | Self::TableEditorNarrow => "table-editor",
+            Self::TableEditor
+            | Self::TableEditorNarrow
+            | Self::TableEditorTex
+            | Self::TableEditorTexNarrow => "table-editor",
             Self::Main
             | Self::DrawSymbol
             | Self::Tabs
@@ -352,6 +361,8 @@ impl UiSnapshotScene {
             "draw-symbol" => Self::DrawSymbol,
             "table-editor" => Self::TableEditor,
             "table-editor-narrow" => Self::TableEditorNarrow,
+            "table-editor-tex" => Self::TableEditorTex,
+            "table-editor-tex-narrow" => Self::TableEditorTexNarrow,
             "tabs" => Self::Tabs,
             "empty-workspace" => Self::EmptyWorkspace,
             "tabs-pdf" => Self::TabsPdf,
@@ -1679,6 +1690,37 @@ mod tests {
         )
         .unwrap_err();
         assert!(invalid_environment.contains("settings-popup"));
+    }
+
+    #[test]
+    fn table_language_and_size_scenes_share_only_the_correct_child_framebuffer() {
+        let theme = CaptureThemeProfile {
+            name: "catppuccin-latte".into(),
+            invert: false,
+            hue_shift_degrees: 0,
+        };
+        let mut names = BTreeSet::new();
+        for scene in [
+            UiSnapshotScene::TableEditor,
+            UiSnapshotScene::TableEditorNarrow,
+            UiSnapshotScene::TableEditorTex,
+            UiSnapshotScene::TableEditorTexNarrow,
+        ] {
+            assert_eq!(UiSnapshotScene::parse(scene.as_str()).unwrap(), scene);
+            assert_eq!(scene.viewport_target(), "table-editor");
+            let capture = scene.capture_spec();
+            assert!(names.insert(latest_capture_filename(
+                &capture.target,
+                &capture.name,
+                &theme,
+                Some(scene)
+            )));
+        }
+        assert_eq!(
+            names.len(),
+            4,
+            "language/size captures must not overwrite each other"
+        );
     }
 
     #[test]

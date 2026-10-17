@@ -343,11 +343,27 @@ impl QaSession {
             }
             UiSnapshotScene::TableEditor | UiSnapshotScene::TableEditorNarrow => {
                 if app.table_editor.is_none() {
-                    const SOURCE: &str = "= Quarterly review\n\n#table(\n  columns: (2fr, 1fr, 1fr),\n  inset: 8pt,\n  stroke: 0.5pt,\n  table.cell(colspan: 3, fill: rgb(\"#dbeafe\"))[Research programme · 2026],\n  [*Milestone*], [*Owner*], [*Status*],\n  [Literature review], [Ada], [Complete],\n  [Field study], [René], [In progress],\n  [Final report], [Sam], [Planned],\n)\n\nThe code remains selectable and scrollable while the table draft is open.\n";
+                    const SOURCE: &str = include_str!("../../scripts/fixtures/table-editor.typ");
                     app.document_mut().replace_unprojected_untitled(SOURCE);
                     app.prepare_editor_source_data();
                     let cursor = SOURCE.find("table(").unwrap();
                     app.begin_table_editor(editable_table_at(SOURCE, cursor).unwrap());
+                }
+            }
+            UiSnapshotScene::TableEditorTex | UiSnapshotScene::TableEditorTexNarrow => {
+                if app.table_editor.is_none() {
+                    const SOURCE: &str = include_str!("../../scripts/fixtures/table-editor.tex");
+                    let directory = tempfile::tempdir().expect("TeX table QA fixture directory");
+                    let path = directory.path().join("quarterly-review.tex");
+                    fs::write(&path, SOURCE).expect("TeX table QA fixture");
+                    app.document_mut()
+                        .replace_loaded(SOURCE.into(), path, DocumentKind::Tex, None)
+                        .expect("ordinary TeX table QA fixture replacement");
+                    app.prepare_editor_source_data();
+                    let cursor = SOURCE.find("\\begin{tabular}").unwrap();
+                    let table = crate::editor_features::tex_table_at(SOURCE, cursor).unwrap();
+                    app.begin_table_target(TableTarget::Tex(table));
+                    self.asset_fixture = Some(directory);
                 }
             }
             UiSnapshotScene::EmptyWorkspace => {
@@ -1074,6 +1090,58 @@ fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPan
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn table_snapshot_scenes_prepare_the_real_language_and_keep_the_draft_stable() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        for scene in [
+            UiSnapshotScene::TableEditor,
+            UiSnapshotScene::TableEditorNarrow,
+            UiSnapshotScene::TableEditorTex,
+            UiSnapshotScene::TableEditorTexNarrow,
+        ] {
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            let mut qa = QaSession::default();
+            app.snapshot_scene = Some(scene);
+            qa.prepare(&mut app, &context);
+            let key = app.document().key();
+            let tex = matches!(
+                scene,
+                UiSnapshotScene::TableEditorTex | UiSnapshotScene::TableEditorTexNarrow
+            );
+            assert_eq!(
+                app.document().kind(),
+                if tex {
+                    DocumentKind::Tex
+                } else {
+                    DocumentKind::Typst
+                }
+            );
+            assert_eq!(
+                matches!(app.table_editor, Some(TableEditorDialog::Tex(_))),
+                tex
+            );
+            assert!(app.table_editor.is_some());
+            if tex {
+                let Some(TableEditorDialog::Tex(dialog)) = &app.table_editor else {
+                    panic!("TeX scene did not create the grid workbench");
+                };
+                assert!(!dialog.source_mode);
+                assert_eq!(dialog.table.cells.as_ref().unwrap().len(), 4);
+                assert_eq!(dialog.table.columns(), Some(3));
+                let path = app.document().path().as_ref().unwrap();
+                assert_eq!(fs::read_to_string(path).unwrap(), *app.document().source());
+                assert_eq!(path.extension().unwrap(), "tex");
+            }
+            qa.prepare(&mut app, &context);
+            assert_eq!(
+                app.document().key(),
+                key,
+                "capture preparation replaced its source again"
+            );
+        }
+    }
 
     #[test]
     fn reveal_scenes_freeze_the_real_source_state_and_retire_between_steps() {

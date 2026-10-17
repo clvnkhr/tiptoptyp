@@ -63,19 +63,6 @@ impl TexTableEnvironment {
             _ => ColumnDialect::Array,
         }
     }
-    pub(crate) fn column_help(self) -> &'static str {
-        match self.dialect() {
-            ColumnDialect::Tabulary => {
-                "Example: LJ. L, C, R and J are variable-width tabulary columns. Standard l, c, r and array columns also work. Width, rules and options are kept."
-            }
-            ColumnDialect::Tabularray => {
-                "Example: Q[l]X[2,r]. Edit only colspec here; width, row styling, hlines/vlines and outer options are kept. Merged cells and generated layouts use Source."
-            }
-            ColumnDialect::Array => {
-                "Example: |l|S[table-format=2.1]|. l/c/r, p/m/b{width}, array w/W{alignment}{width}, siunitx S[options], dcolumn D{input}{output}{digits} and X columns are supported. Missing packages are added to the preamble on Apply. Rules and options are kept."
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

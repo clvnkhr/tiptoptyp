@@ -79,6 +79,16 @@ fn webview_property_diff(
     }
 }
 
+fn table_window_size(scene: Option<UiSnapshotScene>) -> [f32; 2] {
+    match scene {
+        Some(UiSnapshotScene::TableEditorNarrow | UiSnapshotScene::TableEditorTexNarrow) => {
+            [620.0, 600.0]
+        }
+        Some(UiSnapshotScene::TableEditor | UiSnapshotScene::TableEditorTex) => [940.0, 700.0],
+        _ => [860.0, 560.0],
+    }
+}
+
 impl EditorApp {
     pub(super) fn open_web_preview_context_menu(
         &mut self,
@@ -294,16 +304,12 @@ impl EditorApp {
         };
         let mut requested_action = None;
         let captures = self.captures.clone();
-        let size = if self.snapshot_scene == Some(UiSnapshotScene::TableEditorNarrow) {
-            [620.0, 600.0]
-        } else {
-            [940.0, 700.0]
-        };
+        let size = table_window_size(self.snapshot_scene);
         let spec = ChildViewSpec::persistent(
             "tiptoptyp-table-editor",
             "tiptoptyp Table editor",
             size,
-            [620.0, 560.0],
+            [620.0, 420.0],
             "table-editor",
         );
         ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
@@ -1903,6 +1909,19 @@ impl EditorApp {
 #[cfg(test)]
 mod property_tests {
     use super::*;
+
+    #[test]
+    fn table_window_starts_compact_and_preserves_comparable_qa_sizes() {
+        assert_eq!(table_window_size(None), [860.0, 560.0]);
+        assert_eq!(
+            table_window_size(Some(UiSnapshotScene::TableEditor)),
+            [940.0, 700.0]
+        );
+        assert_eq!(
+            table_window_size(Some(UiSnapshotScene::TableEditorTexNarrow)),
+            [620.0, 600.0]
+        );
+    }
 
     fn rect(left: f32) -> NativeRect {
         ViewportTransform::new([0.0, 0.0], 1.0)
