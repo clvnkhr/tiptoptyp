@@ -1860,7 +1860,10 @@ mod tests {
             Arc::ptr_eq(&matches.query, &shared_query),
             "resident pages must share query storage"
         );
-        assert_eq!(matches.for_query(&characters, &Arc::from("i")), &[2..3]);
+        assert_eq!(
+            matches.for_query(&characters, &Arc::from("i")),
+            std::slice::from_ref(&(2..3))
+        );
         assert_eq!(matches.rebuilds, 2);
         assert!(matches.for_query(&characters, &Arc::from("")).is_empty());
         assert_eq!(matches.rebuilds, 3);

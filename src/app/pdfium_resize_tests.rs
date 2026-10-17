@@ -304,7 +304,7 @@ fn publishing_replacement_page_text_retires_its_search_matches() {
         resident
             .search_matches
             .for_query(&resident.characters, &Arc::from("é")),
-        &[0..1]
+        std::slice::from_ref(&(0..1))
     );
     let mut replacement = batch(&key);
     replacement.pages[0].characters = characters("other");

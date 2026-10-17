@@ -521,7 +521,7 @@ mod tests {
     fn payload_presence_cache_measurement() {
         use std::{hint::black_box, time::Instant};
         assert!(
-            !cfg!(debug_assertions),
+            black_box(!cfg!(debug_assertions)),
             "run this measurement with --release"
         );
         let name = pdfium_render::prelude::Pdfium::pdfium_platform_library_name();

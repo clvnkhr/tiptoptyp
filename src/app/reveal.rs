@@ -430,7 +430,7 @@ mod tests {
     fn source_reveal_cache_measurement() {
         use std::hint::black_box;
         assert!(
-            !cfg!(debug_assertions),
+            black_box(!cfg!(debug_assertions)),
             "use the optimized release test profile"
         );
         const ROWS: usize = 20_000;
