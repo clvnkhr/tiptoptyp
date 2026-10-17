@@ -273,9 +273,11 @@ running processes. The standalone runner has a separate build directory:
 Neither command removes your documents or preferences. Usually `cargo build
 --release` alone is sufficient; cleaning forces all dependencies to rebuild.
 
-### Build a native package
+### Build an app package
 
-Install the official cargo-packager CLI, then build a native package:
+Install the official cargo-packager CLI, then build a package. On macOS this
+produces a universal app for both Apple Silicon and Intel by default, requiring
+macOS 12 or newer (the minimum supported by the bundled PDF renderer):
 
 ```sh
 cargo install cargo-packager --locked
@@ -287,16 +289,33 @@ The installer builds, verifies and installs the production `tiptoptyp.app` bundl
 default direct Cargo build remains the visibly marked development app with its
 amber `DEV` icon badge.
 
-The package hook downloads and verifies the pinned platform archives, checks
-all reported versions, performs the release build, and installs Typst and
-Tinymist, Tectonic, TexLab, Badness and tex-fmt as external sidecars beside `tiptoptyp`. Upstream licenses and per-artifact provenance are included as resources.
+The package hook downloads and verifies the pinned platform archives and builds
+the release executable. On macOS it builds both Rust targets, verifies the
+architecture of each executable, and combines them with `lipo`. Missing Rust
+standard-library targets are installed for the repository's pinned toolchain.
+The universal app includes both architectures of Typst, Tinymist, Tectonic,
+TexLab, Badness, tex-fmt and PDFium. Helpers and PDFium ship gzip-compressed in
+resources; the app verifies and extracts only its current architecture into a
+private cache when needed. A later launch reuses verified cached files. Upstream
+licenses and per-artifact provenance remain readable in the bundle.
+
+The 11 bundled fonts and two handwriting models also ship as gzip resources,
+with one shared copy for both architectures. Fonts are verified and loaded once
+before the first interface frame; recognizers load their model on the existing
+handwriting worker when first used. They share a content-addressed cache at
+`~/Library/Caches/dev.tiptoptyp.editor/payloads/shared/`, so changing CPU slices
+does not duplicate font/model files. Development builds keep their embedded
+assets and require no packaged resource directory.
+
 The canonical `ttt` application mark is embedded in direct executable launches
 and supplied as native ICNS/ICO/PNG artwork to packaged builds.
 The committed target/URL/hash matrix is
 [`toolchain/manifest.tsv`](toolchain/manifest.tsv).
 
-For a cross-target build, give the same target to cargo-packager and its hook;
-cargo-packager does not otherwise expose its `--target` value to hook commands:
+To produce a smaller single-architecture macOS package, give the same target to
+cargo-packager and its hook; cargo-packager does not otherwise expose its
+`--target` value to hook commands. Both thin variants use the same
+`target/release/tiptoptyp.app` output location as the universal app:
 
 ```sh
 TIPTOPTYP_PACKAGE_TARGET=x86_64-apple-darwin \
@@ -307,9 +326,25 @@ macOS packages are ad-hoc signed by default so the app, sidecars, and sealed
 resources form a valid local bundle. Local ad-hoc builds use
 `packaging/macos-local.entitlements.plist` to allow the bundled PDFium library
 under hardened runtime; ad-hoc signatures have no Team ID. Package verification
-runs `tiptoptyp --check-runtime` to load PDFium without opening a window, in
-addition to checking signatures and sidecar versions. Public distribution should
-sign the app and library with the same Developer ID Application identity, omit
+runs `tiptoptyp --check-runtime` to validate shared assets and load PDFium without
+opening a window, in addition to checking signatures, payload checksums and versions.
+Architecture checks cover both slices; executing the Intel app on Apple Silicon
+requires Rosetta, and native Intel hardware remains a separate smoke test.
+For a headless first-use/cache-hit check of the finished universal bundle:
+
+```sh
+python3 scripts/test-packaged-runtime.py --output /tmp/tiptoptyp-packaged-runtime.json
+python3 scripts/test_packaged_runtime_contract.py
+```
+
+The probe uses temporary homes, checks native payload selection and shared-cache
+reuse, and requires handwriting models to remain unexpanded. Intel execution on
+Apple Silicon is reported as unavailable when Rosetta is absent. These checks do
+not measure GUI startup or interaction latency.
+The measured bundle sizes and ARM/Rosetta results are retained in the
+[2026-10-17 package receipt](docs/performance-results/package-size-universal-2026-10-17.json).
+
+Public distribution should sign the app and library with the same Developer ID Application identity, omit
 the local library-validation entitlement, and provide notarization credentials.
 
 For a local macOS build that installs the verified bundle into `/Applications`, run:
@@ -322,11 +357,14 @@ The installer does not quit an existing app or open the installed app. Launch it
 manually when ready. Set `TIPTOPTYP_APPLICATIONS_DIR="$HOME/Applications"` to install
 into a user-owned Applications directory instead.
 
-For an Intel Mac build from Apple Silicon, run `scripts/build-intel-mac.sh`
-(`--release` for an optimized binary). It cross-compiles the workspace for
-`x86_64-apple-darwin`, verifies the binary architecture, and smoke-tests it
-under Rosetta when available. The checked-in toolchain helpers and bundled
-PDFium are arm64-only, so this covers compilation, not a shippable Intel bundle.
+Use `scripts/install-macos-app.sh --target x86_64-apple-darwin` for an Intel-only
+app, or `--target aarch64-apple-darwin` for Apple Silicon only. Without an option,
+the installer always builds and verifies the universal app before copying it.
+You can copy that complete `.app` to either kind of Mac.
+
+For an Intel compilation check without packaging or installation, run
+`scripts/build-intel-mac.sh` (`--release` for an optimized binary). It verifies
+the executable architecture and smoke-tests it under Rosetta when available.
 
 ## Keyboard shortcuts
 

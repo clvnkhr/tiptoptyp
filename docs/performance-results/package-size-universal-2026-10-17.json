@@ -1,0 +1,463 @@
+{
+  "measured_utc": "2026-10-17T08:43:25.491283+00:00",
+  "measurement": "Logical installed bundle bytes, verified by streamed gzip decoding; no timed benchmark.",
+  "environment": {
+    "macos": "14.6.1",
+    "host_architecture": "arm64",
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8"
+  },
+  "source_at_measurement": {
+    "head": "d450f3da95158b26ae97e1c7e0bfd1417700ebf4",
+    "dirty": true,
+    "cargo_toml_sha256": "a5107469bb9f02f8dc4f4d2fc2962cdbd93d2371c39e429aebfab26d63c1c327",
+    "toolchain_manifest_sha256": "6b749e461c900b776741d35091ef2ae2ceb0bff6118f0fe1e0a8e398ecd29df7"
+  },
+  "build": {
+    "profile": "release",
+    "features": [
+      "production"
+    ],
+    "declared_release_settings": {
+      "lto": "thin",
+      "codegen-units": 1,
+      "strip": true
+    },
+    "macos_deployment_target": "12.0",
+    "version_output": "tiptoptyp 0.1.0 (a1bb739d42fd-dirty.1792225926)",
+    "bundle_version": "20261017.084055",
+    "minimum_system_version": "12.0",
+    "main_sha256": "4677a5f7f0201c133f62b180d13d7ca1a986df3dacb81d471f0ab8f166b9042b",
+    "main_mtime_utc": "2026-10-17T08:40:57.120877+00:00",
+    "main_slices": [
+      {
+        "architecture": "x86_64",
+        "bytes": 53745456,
+        "offset": 16384
+      },
+      {
+        "architecture": "arm64",
+        "bytes": 45483408,
+        "offset": 53772288
+      }
+    ]
+  },
+  "tool_versions": {
+    "typst": "0.15.1",
+    "tinymist": "0.15.2",
+    "tectonic": "0.17.0",
+    "texlab": "5.26.0",
+    "badness": "0.24.0",
+    "tex-fmt": "0.5.7"
+  },
+  "pdfium": {
+    "aarch64-apple-darwin": {
+      "version": "chromium/7881",
+      "provenance": "PDFium chromium/7881\nTarget: aarch64-apple-darwin\nSource: https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-mac-arm64.tgz\nArchive SHA-256: 52e94ca5aa8847934330daf3f8150c190682c5ca93831468794f8b90d4392e40\nBinding: pdfium-render 0.9.4, pdfium_7881\nNative and dependency licenses accompany this library."
+    },
+    "x86_64-apple-darwin": {
+      "version": "chromium/7881",
+      "provenance": "PDFium chromium/7881\nTarget: x86_64-apple-darwin\nSource: https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-mac-x64.tgz\nArchive SHA-256: 6dedf83990e0e3d6b7c93c9e7589c5a126b0ae14b7464d76120cff7a26afb18b\nBinding: pdfium-render 0.9.4, pdfium_7881\nNative and dependency licenses accompany this library."
+    }
+  },
+  "current_universal": {
+    "bundle_bytes": 294902534,
+    "allocated_bytes": 295129088,
+    "file_count": 86,
+    "main_bytes": 99255696,
+    "native_payloads_by_architecture": {
+      "aarch64-apple-darwin": {
+        "entries": 7,
+        "decoded_bytes": 185505600,
+        "gzip_bytes": 87593281,
+        "saved_bytes": 97912319,
+        "reduction_percent": 52.781
+      },
+      "x86_64-apple-darwin": {
+        "entries": 7,
+        "decoded_bytes": 197920704,
+        "gzip_bytes": 92563192,
+        "saved_bytes": 105357512,
+        "reduction_percent": 53.232
+      }
+    },
+    "shared_assets": {
+      "entries": 13,
+      "decoded_bytes": 17830923,
+      "gzip_bytes": 13679369,
+      "saved_bytes": 4151554,
+      "reduction_percent": 23.283
+    },
+    "all_payloads": {
+      "entries": 27,
+      "decoded_bytes": 401257227,
+      "gzip_bytes": 193835842,
+      "saved_bytes": 207421385,
+      "reduction_percent": 51.693
+    },
+    "other_bundle_bytes": 1810996,
+    "largest_files": [
+      {
+        "path": "Contents/MacOS/tiptoptyp",
+        "bytes": 99255696,
+        "allocated_bytes": 99258368
+      },
+      {
+        "path": "Contents/Resources/toolchain/x86_64-apple-darwin/tinymist.gz",
+        "bytes": 30181487,
+        "allocated_bytes": 30183424
+      },
+      {
+        "path": "Contents/Resources/toolchain/aarch64-apple-darwin/tinymist.gz",
+        "bytes": 27978716,
+        "allocated_bytes": 27979776
+      },
+      {
+        "path": "Contents/Resources/toolchain/x86_64-apple-darwin/typst.gz",
+        "bytes": 23054530,
+        "allocated_bytes": 23056384
+      },
+      {
+        "path": "Contents/Resources/toolchain/aarch64-apple-darwin/typst.gz",
+        "bytes": 21751803,
+        "allocated_bytes": 21753856
+      },
+      {
+        "path": "Contents/Resources/toolchain/x86_64-apple-darwin/tectonic.gz",
+        "bytes": 20871868,
+        "allocated_bytes": 20873216
+      },
+      {
+        "path": "Contents/Resources/toolchain/aarch64-apple-darwin/tectonic.gz",
+        "bytes": 20258925,
+        "allocated_bytes": 20262912
+      },
+      {
+        "path": "Contents/Resources/toolchain/x86_64-apple-darwin/texlab.gz",
+        "bytes": 10048884,
+        "allocated_bytes": 10051584
+      },
+      {
+        "path": "Contents/Resources/toolchain/aarch64-apple-darwin/texlab.gz",
+        "bytes": 9830927,
+        "allocated_bytes": 9834496
+      },
+      {
+        "path": "Contents/Resources/assets/shared/detexify-samples.bin.gz",
+        "bytes": 5037864,
+        "allocated_bytes": 5038080
+      },
+      {
+        "path": "Contents/Resources/assets/shared/detypify.onnx.gz",
+        "bytes": 4259670,
+        "allocated_bytes": 4259840
+      },
+      {
+        "path": "Contents/Resources/toolchain/x86_64-apple-darwin/badness.gz",
+        "bytes": 3807160,
+        "allocated_bytes": 3809280
+      }
+    ]
+  },
+  "matched_compression_comparison": {
+    "description": "Current exact stripped/signed payloads and shared-asset layout, replacing gzip files with their verified decoded bytes. Same executable, versions, notices and manifest overhead.",
+    "decoded_payload_bundle_equivalent_bytes": 502323919,
+    "actual_bundle_bytes": 294902534,
+    "saved_bytes": 207421385,
+    "reduction_percent": 41.292
+  },
+  "historical_arm_only_baseline": {
+    "receipt_sha256": "da4092edcde702576c5b5fe018d3cd49e67c917adb5aba04f2ad70698019ffde",
+    "captured_utc": "2026-10-17T07:51:59.136783+00:00",
+    "source_head": "a1bb739d42fd105ae637fbf94b4ffa4d3a152a23",
+    "profile": "existing packaged release bundle; release lto=thin codegen-units=1 strip=true",
+    "architectures": [
+      "arm64"
+    ],
+    "bundle_bytes": 262464010,
+    "main_bytes": 63426880,
+    "main_sha256": "b78720a5eb5e05142e74b7887948658cd00102f5e18e0a25493e0bc515c31e39",
+    "bundle_build": "20261017.074806",
+    "comparison_scope": "Historical ARM-only app versus newly built universal app; includes architecture and source/build changes, so this is not an isolated compression benchmark."
+  },
+  "historical_to_current_change_bytes": 32438524,
+  "shared_asset_source_copy_comparison": {
+    "description": "Asset bytes only: two raw architecture-embedded source copies versus one shared gzip copy. Excludes executable padding/linker behavior.",
+    "two_raw_source_copies_bytes": 35661846,
+    "one_shared_gzip_copy_bytes": 13679369,
+    "asset_source_bytes_avoided": 21982477
+  },
+  "verified_payloads": [
+    {
+      "scope": "aarch64-apple-darwin",
+      "name": "typst",
+      "decoded_bytes": 45047632,
+      "gzip_bytes": 21751803,
+      "decoded_sha256": "a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f"
+    },
+    {
+      "scope": "aarch64-apple-darwin",
+      "name": "tinymist",
+      "decoded_bytes": 58697344,
+      "gzip_bytes": 27978716,
+      "decoded_sha256": "9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6"
+    },
+    {
+      "scope": "aarch64-apple-darwin",
+      "name": "tectonic",
+      "decoded_bytes": 50439584,
+      "gzip_bytes": 20258925,
+      "decoded_sha256": "4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f"
+    },
+    {
+      "scope": "aarch64-apple-darwin",
+      "name": "texlab",
+      "decoded_bytes": 13880656,
+      "gzip_bytes": 9830927,
+      "decoded_sha256": "d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619"
+    },
+    {
+      "scope": "aarch64-apple-darwin",
+      "name": "badness",
+      "decoded_bytes": 8615376,
+      "gzip_bytes": 3464151,
+      "decoded_sha256": "7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401"
+    },
+    {
+      "scope": "aarch64-apple-darwin",
+      "name": "tex-fmt",
+      "decoded_bytes": 2832256,
+      "gzip_bytes": 1236451,
+      "decoded_sha256": "49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e"
+    },
+    {
+      "scope": "aarch64-apple-darwin",
+      "name": "libpdfium.dylib",
+      "decoded_bytes": 5992752,
+      "gzip_bytes": 3072308,
+      "decoded_sha256": "11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b"
+    },
+    {
+      "scope": "x86_64-apple-darwin",
+      "name": "typst",
+      "decoded_bytes": 47962320,
+      "gzip_bytes": 23054530,
+      "decoded_sha256": "c8a444a7ef284d9a4bda5fc39f7d1fd5c7553dbfdc34729c755e6b744c94691f"
+    },
+    {
+      "scope": "x86_64-apple-darwin",
+      "name": "tinymist",
+      "decoded_bytes": 65119360,
+      "gzip_bytes": 30181487,
+      "decoded_sha256": "87c300e1b8554ec20acd4f5459de82fbc5bc94ddb29650c5c3db22dbb1e4285e"
+    },
+    {
+      "scope": "x86_64-apple-darwin",
+      "name": "tectonic",
+      "decoded_bytes": 52011376,
+      "gzip_bytes": 20871868,
+      "decoded_sha256": "3f12d3d91e24904d03b3d461d394e0c7eead87a561540a9b399c1a99ae1b64b4"
+    },
+    {
+      "scope": "x86_64-apple-darwin",
+      "name": "texlab",
+      "decoded_bytes": 14188736,
+      "gzip_bytes": 10048884,
+      "decoded_sha256": "37f89808a0188a8ba9b8ad2d4bb9a12c38552200ab4b0a8577c67b69324118ba"
+    },
+    {
+      "scope": "x86_64-apple-darwin",
+      "name": "badness",
+      "decoded_bytes": 9392912,
+      "gzip_bytes": 3807160,
+      "decoded_sha256": "a335544a0f58c5de0070ce73cce692cae550f734b387462370c4daa4782c6a47"
+    },
+    {
+      "scope": "x86_64-apple-darwin",
+      "name": "tex-fmt",
+      "decoded_bytes": 3078800,
+      "gzip_bytes": 1343020,
+      "decoded_sha256": "2721c9ffcd6fc59c71034bd048b591d4f9b32c78fb0d8acc58e6b97de44df5f3"
+    },
+    {
+      "scope": "x86_64-apple-darwin",
+      "name": "libpdfium.dylib",
+      "decoded_bytes": 6167200,
+      "gzip_bytes": 3256243,
+      "decoded_sha256": "ad423a6b4fdd30f81f4848edff9afcfed90643238c3ece3ac839aa404b250adb"
+    },
+    {
+      "scope": "shared",
+      "name": "noto-sans.ttf",
+      "decoded_bytes": 2049096,
+      "gzip_bytes": 1195694,
+      "decoded_sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d"
+    },
+    {
+      "scope": "shared",
+      "name": "noto-emoji.ttf",
+      "decoded_bytes": 1982596,
+      "gzip_bytes": 1231160,
+      "decoded_sha256": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551"
+    },
+    {
+      "scope": "shared",
+      "name": "noto-symbols.ttf",
+      "decoded_bytes": 372684,
+      "gzip_bytes": 208991,
+      "decoded_sha256": "f7e7e04b4a24b6c78893d50cbfd2b2f6cae49617ab047bfef668d252adb128f7"
+    },
+    {
+      "scope": "shared",
+      "name": "noto-math.ttf",
+      "decoded_bytes": 1015396,
+      "gzip_bytes": 485045,
+      "decoded_sha256": "3f495fe933c06786e4d5f6d86b8ee70b6753a68ee3b9d87528726de0f6e2c47d"
+    },
+    {
+      "scope": "shared",
+      "name": "noto-symbols2.ttf",
+      "decoded_bytes": 1233128,
+      "gzip_bytes": 537635,
+      "decoded_sha256": "7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21"
+    },
+    {
+      "scope": "shared",
+      "name": "noto-hebrew.ttf",
+      "decoded_bytes": 112640,
+      "gzip_bytes": 71111,
+      "decoded_sha256": "7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88"
+    },
+    {
+      "scope": "shared",
+      "name": "hack-regular.ttf",
+      "decoded_bytes": 309408,
+      "gzip_bytes": 148329,
+      "decoded_sha256": "15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125"
+    },
+    {
+      "scope": "shared",
+      "name": "hack-bold.ttf",
+      "decoded_bytes": 317628,
+      "gzip_bytes": 152600,
+      "decoded_sha256": "5bbf531eff7f8a0c2559c9a0656718e2828a012a9b1f60b5f54006d59a4de8d4"
+    },
+    {
+      "scope": "shared",
+      "name": "hack-italic.ttf",
+      "decoded_bytes": 316156,
+      "gzip_bytes": 155869,
+      "decoded_sha256": "096fb67a2b85f3c866e9cb3e965b27c2c10b977315f4d3d7f095674be35091c1"
+    },
+    {
+      "scope": "shared",
+      "name": "hack-bold-italic.ttf",
+      "decoded_bytes": 322288,
+      "gzip_bytes": 158457,
+      "decoded_sha256": "64f74a079700b7dfe128551a1e28875d5ba980971e55f5e0f0596e37bdc6a6bc"
+    },
+    {
+      "scope": "shared",
+      "name": "file-icons.ttf",
+      "decoded_bytes": 47720,
+      "gzip_bytes": 36944,
+      "decoded_sha256": "7a0efd8dfb59a7f5a8c5a00bb34192f5a8a4ac147b36ccc508a9cf3e2868345f"
+    },
+    {
+      "scope": "shared",
+      "name": "detypify.onnx",
+      "decoded_bytes": 4617963,
+      "gzip_bytes": 4259670,
+      "decoded_sha256": "efb7ba853905d4532e83409b0ab82462b9b7b19af2048927f092368abb2d49e0"
+    },
+    {
+      "scope": "shared",
+      "name": "detexify-samples.bin",
+      "decoded_bytes": 5134220,
+      "gzip_bytes": 5037864,
+      "decoded_sha256": "c0a4cd2dd107a104d2dc628ecb0c96411de3f4423cc6ff13f7a14337b443e49e"
+    }
+  ],
+  "limitations": [
+    "Historical ARM-only and current universal totals have different architecture/source scope; use the matched decoded-payload equivalent to isolate gzip savings.",
+    "Logical bundle bytes are not DMG/ZIP download bytes, cache-expanded disk usage or resident memory.",
+    "No GUI startup, key-to-pixel latency, physical Intel hardware or cold filesystem performance is measured here.",
+    "Intel execution on Apple Silicon is a Rosetta compatibility check, includes translation/process costs and is not native Intel performance.",
+    "Build source identity is recorded by the executable version/hash; source_at_measurement may include later uncommitted documentation or validation changes."
+  ],
+  "runtime_probe": {
+    "receipt_sha256": "00dddf8df9a0792dc6d9f0d565c3c6bf0c2094d6bf8974def2a93ea4a81ee84e",
+    "app_version": "tiptoptyp 0.1.0 (a1bb739d42fd-dirty.1792225926)",
+    "started_utc": "2026-10-17T08:42:29.620530+00:00",
+    "timing_scope": "Headless CLI. First use has an empty payload cache; OS file cache is uncontrolled. Cache hits include process startup and per-process verification.",
+    "host_architecture": "arm64",
+    "app_architectures": [
+      "x86_64",
+      "arm64"
+    ],
+    "bundle_signature_before_and_after": "passed",
+    "skipped": {},
+    "runs": {
+      "arm64": {
+        "tools_first_use": {
+          "seconds": 4.17084,
+          "cache_bytes": 179512848
+        },
+        "tools_cache_hit": {
+          "seconds": 0.783822,
+          "cache_bytes": 179512848
+        },
+        "runtime_first_use": {
+          "seconds": 0.436357,
+          "cache_bytes": 193584340
+        },
+        "runtime_cache_hit": {
+          "seconds": 0.071618,
+          "cache_bytes": 193584340
+        }
+      },
+      "x86_64": {
+        "tools_first_use": {
+          "seconds": 22.379145,
+          "cache_bytes": 191753504
+        },
+        "tools_cache_hit": {
+          "seconds": 1.243699,
+          "cache_bytes": 191753504
+        },
+        "runtime_first_use": {
+          "seconds": 1.150293,
+          "cache_bytes": 205999444
+        },
+        "runtime_cache_hit": {
+          "seconds": 0.117908,
+          "cache_bytes": 205999444
+        }
+      }
+    },
+    "cross_architecture_reuse_file_count": 25
+  },
+  "validation": {
+    "cargo_fmt_all_check": "passed",
+    "cargo_clippy_all_targets_deny_warnings": "passed",
+    "cargo_clippy_all_targets_production_deny_warnings": "passed",
+    "cargo_test_no_fail_fast": {
+      "passed": 2156,
+      "failed": 0,
+      "ignored": 53
+    },
+    "xtask_fmt_check": "passed",
+    "xtask_tests": {
+      "passed": 27,
+      "failed": 0
+    },
+    "python_installer_and_runtime_contract_tests": {
+      "passed": 5,
+      "failed": 0
+    },
+    "verify_package": "passed; architectures, resource checksums, licenses, helper versions, native signatures and ARM/Rosetta headless runtime",
+    "packaged_runtime_cache_journey": "passed; both slices, first-use/cache-hit, private permissions, no rewritten warm files, shared fonts, lazy models, unchanged signed bundle",
+    "native_gui_interaction": "not run; no UI layout or interaction changes",
+    "physical_intel_hardware": "not tested; Intel execution used Rosetta on the ARM host"
+  }
+}

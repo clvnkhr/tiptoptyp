@@ -45,25 +45,71 @@ archive members, and streams only the exact allowlisted executable/license
 members to owned staging files. It never gives `tar` an extraction directory,
 rejects link and special-file entry types, and therefore cannot write elsewhere
 before validation. Native executables are checked with `--version`.
-cargo-packager treats the results as external binaries, including them in its
-normal platform packaging and signing flow.
+The verified executable payloads are gzip-compressed under
+`Contents/Resources/toolchain/<target>/` for macOS packaging. A per-target
+manifest records each payload's uncompressed size and SHA-256. Before first use,
+the runtime verifies and extracts the selected architecture into its private
+cache, using executable permissions for tools and preserving the native code
+signature. Readable licenses and upstream archive provenance remain separate
+bundle resources. Cache hits avoid decompression; compressed payloads are never
+executed or modified inside the signed app bundle.
 
 Linux packages use Typst's static MUSL release payload staged under the GNU app
 target expected by the packager. Tinymist continues to use its matching GNU
-payload. macOS packages are architecture-specific for now; a universal app
-would require combining all three executables before signing.
+payload. macOS packaging defaults to `universal-apple-darwin`: the hook builds
+Apple Silicon and Intel Rust executables in distinct target directories,
+validates both with `lipo`, and publishes their combined executable at
+`target/release/tiptoptyp` before bundle signing. Both architectures of every
+helper and PDFium are included as compressed resources; the runtime selects the
+architecture of the running executable. There is no Rosetta requirement on an
+Intel Mac or on an Apple Silicon Mac running the native slice.
 
-Cross-target packaging sets `TIPTOPTYP_PACKAGE_TARGET` to the same triple passed
-to cargo-packager. This explicitly propagates the target to the package hook;
-cargo-packager itself exposes formats, but not its CLI target, to hook commands.
+Single-architecture packaging remains explicit. Set `TIPTOPTYP_PACKAGE_TARGET`
+to the same triple passed to cargo-packager, or use the installer's `--target`
+option, which sets both. cargo-packager exposes formats, but not its CLI target,
+to hook commands. Universal and thin macOS bundles use the same canonical
+`target/release/tiptoptyp.app` destination. Direct `cargo build` and `cargo run`
+remain normal development builds for the compiler's selected architecture.
+
+### Shared fonts and handwriting models
+
+Since 2026-10-17, production packages store the 11 fallback/terminal/icon fonts
+and two handwriting models once under `Contents/Resources/assets/shared/`.
+`build_support/bundled_assets.rs` defines the single name/source registry used by
+both staging and runtime lookup. Each gzip resource has an uncompressed size and
+SHA-256 in `manifest.tsv`; no glyphs, variable font axes or model samples are
+removed. The two executable slices no longer each embed these large assets.
+
+All fonts are validated and loaded before the first interface frame, then their
+immutable bytes are retained once across theme changes. Handwriting models stay
+lazy on the existing recognition worker. Its existing decoded-model cache owns
+the result, and temporary raw bytes are released after decoding. Missing or
+corrupt production resources report an error; production does not fall back to
+the source checkout. Development and unit-test builds retain embedded assets.
+
+Shared resources use `~/Library/Caches/dev.tiptoptyp.editor/payloads/shared/` on
+macOS, followed by the content hash and filename. Both CPU slices reuse that
+same cache. Directories are private and shared data is non-executable. Expansion
+uses the same bounded, verified, atomic publication as tool payloads. The signed
+app bundle remains unchanged; only the user's cache is written.
+
+`python3 scripts/test-packaged-runtime.py` checks a completed universal bundle
+without opening a window. Temporary homes establish first-use and later-cache
+states, verify selected helper/library architectures and permissions, reject
+rewritten cache hits, and verify font reuse across CPU slices while both models
+remain unexpanded. It checks the bundle signature before and after. Rosetta
+availability is recorded separately from native execution. The pure failure
+contracts run with `python3 scripts/test_packaged_runtime_contract.py`; neither
+check substitutes for GUI startup or input-latency measurements.
 
 ### 2. Bundled is a preference, not an invisible assumption
 
 Typst and Tinymist have independent persisted choices: Bundled (default) or
 Custom path. Resolution order is the valid requested custom path, bundled
-sidecar beside the running app, source-tree staging path, development
-environment override, and finally `PATH`. Commands receive a resolved absolute
-path whenever a real executable exists.
+compressed payload in the app's architecture-specific resources, development
+source-tree staging path, development environment override, and finally `PATH`.
+The compressed resource is a resolution token; tool launch expands it to a
+verified absolute executable path on the existing worker.
 
 Any route other than the requested one retains a reason. Settings displays the
 requested/effective source and executable path, and the fixed bottom status bar
