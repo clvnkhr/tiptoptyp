@@ -330,6 +330,7 @@ impl ChildPaint {
             .begin_viewport(ui.ctx(), self.spec.capture_target);
         ui.set_style(self.style.clone());
         if matches!(self.spec.bounds, ChildViewBounds::Persistent { .. }) {
+            theme::apply_compact_tool_spacing(ui);
             crate::window_background::prepare_tool(ui);
         }
         if class != egui::ViewportClass::EmbeddedWindow {

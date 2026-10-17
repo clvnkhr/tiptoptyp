@@ -10,6 +10,58 @@ fn control(ui: &mut egui::Ui, icon: UiIcon, label: &str) -> egui::Response {
     response
 }
 
+fn preview_window_header(ui: &mut egui::Ui) -> (bool, bool) {
+    let mut result = (false, false);
+    egui::Panel::top("preview-title")
+        .exact_size(preview_window_header_height(ui))
+        .frame(theme::settings_title_frame(ui.style()))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                #[cfg(target_os = "macos")]
+                theme::reserve_window_controls(ui);
+                ui.strong("Preview");
+                let full_label_width = ui
+                    .painter()
+                    .layout_no_wrap(
+                        "Return to document".into(),
+                        egui::TextStyle::Button.resolve(ui.style()),
+                        ui.visuals().text_color(),
+                    )
+                    .size()
+                    .x
+                    + ui.spacing().button_padding.x * 2.0;
+                let controls_width = ui.spacing().interact_size.y
+                    + ui.spacing().button_padding.x * 2.0
+                    + ui.spacing().item_spacing.x;
+                let label = if ui.available_width() >= full_label_width + controls_width {
+                    "Return to document"
+                } else {
+                    "Dock"
+                };
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let dock = ui.button(label);
+                    dock.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            true,
+                            "Return to document",
+                        )
+                    });
+                    result.0 = dock.clicked();
+                    result.1 = icon_button(ui, UiIcon::Menu, "Preview controls").clicked();
+                });
+            });
+        });
+    result
+}
+
+fn preview_window_header_height(ui: &egui::Ui) -> f32 {
+    METRICS
+        .chrome
+        .toolbar_height
+        .max(ui.text_style_height(&egui::TextStyle::Button) + ui.spacing().button_padding.y * 2.0)
+}
+
 pub(super) const SALT: &str = "preview-controls";
 #[derive(Clone, Default, serde::Deserialize)]
 pub(super) struct Snapshot {
@@ -743,17 +795,12 @@ impl EditorApp {
             &style,
             |ui, input| {
                 close |= input.close_requested;
-                egui::Panel::top("preview-title").show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        #[cfg(target_os = "macos")]
-                        theme::reserve_window_controls(ui);
-                        close |= ui.button("Return to document").clicked();
-                        if icon_button(ui, UiIcon::Menu, "Preview controls").clicked() {
-                            self.preview_controls
-                                .toggle(self.preview_controls.popout_target);
-                        }
-                    });
-                });
+                let (return_to_document, toggle_controls) = preview_window_header(ui);
+                close |= return_to_document;
+                if toggle_controls {
+                    self.preview_controls
+                        .toggle(self.preview_controls.popout_target);
+                }
                 egui::CentralPanel::default()
                     .frame(theme::content_panel_frame(ui.style()).inner_margin(0.0))
                     .show(ui, |ui| match self.preview_controls.popout_target {
@@ -836,6 +883,45 @@ mod e2e;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn detached_header_actions_fit_minimum_width_without_changing_font_size() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for large_monospace in [false, true] {
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(360.0, 280.0))
+                .build_ui_state(
+                    |ui, header: &mut egui::Rect| {
+                        if large_monospace {
+                            for role in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                                ui.style_mut()
+                                    .text_styles
+                                    .insert(role, egui::FontId::monospace(22.0));
+                            }
+                        }
+                        super::theme::apply_compact_tool_spacing(ui);
+                        *header = egui::Rect::from_min_size(
+                            ui.max_rect().min,
+                            egui::vec2(
+                                ui.max_rect().width(),
+                                super::preview_window_header_height(ui),
+                            ),
+                        );
+                        super::preview_window_header(ui);
+                    },
+                    egui::Rect::NOTHING,
+                );
+            harness.run();
+            for label in ["Return to document", "Preview controls"] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    harness.state().contains_rect(rect),
+                    "{label}: {rect:?}, header {:?}",
+                    harness.state()
+                );
+            }
+        }
+    }
+
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
     #[test]

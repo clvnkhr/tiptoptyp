@@ -1086,8 +1086,6 @@ pub struct PopupMetrics {
     pub rename_input_height: f32,
     pub modal_window_inset: f32,
     pub modal_max_width: f32,
-    pub modal_height_inset: f32,
-    pub modal_message_min_height: f32,
     pub modal_message_max_height: f32,
     pub tooltip_width: f32,
     pub tooltip_max_width: f32,
@@ -1283,8 +1281,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         rename_input_height: 24.0,
         modal_window_inset: 52.0,
         modal_max_width: 420.0,
-        modal_height_inset: 116.0,
-        modal_message_min_height: 24.0,
         modal_message_max_height: 180.0,
         tooltip_width: 360.0,
         tooltip_max_width: 620.0,
@@ -1744,7 +1740,7 @@ pub fn popup_card_frame(style: &egui::Style) -> egui::Frame {
 pub fn dialog_card_frame(style: &egui::Style) -> egui::Frame {
     popup_card_frame(style)
         .outer_margin(egui::Margin::same(SPACE.content as i8))
-        .inner_margin(egui::Margin::same(SPACE.card as i8))
+        .inner_margin(egui::Margin::same(SPACE.content as i8))
 }
 
 pub fn tooltip_card_frame(style: &egui::Style) -> egui::Frame {
@@ -1775,13 +1771,21 @@ pub fn status_chip_frame(style: &egui::Style) -> egui::Frame {
 pub fn settings_title_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::NONE
         .fill(style.visuals.panel_fill)
-        .inner_margin(egui::Margin::symmetric(SPACE.content as i8, 0))
+        .inner_margin(egui::Margin::symmetric(SPACE.control as i8, 0))
 }
 
 pub fn settings_content_frame(style: &egui::Style) -> egui::Frame {
     egui::Frame::NONE
         .fill(style.visuals.panel_fill)
-        .inner_margin(egui::Margin::same(SPACE.content as i8))
+        .inner_margin(egui::Margin::same(SPACE.control as i8))
+}
+
+/// Tool windows share dense controls without changing user fonts or the workspace.
+pub fn apply_compact_tool_spacing(ui: &mut egui::Ui) {
+    let spacing = ui.spacing_mut();
+    spacing.item_spacing = Vec2::new(SPACE.control, SPACE.tight);
+    spacing.button_padding = Vec2::new(SPACE.control, SPACE.tight);
+    spacing.window_margin = egui::Margin::same(SPACE.control as i8);
 }
 
 pub fn apply_compact_control_spacing(ui: &mut egui::Ui) {
@@ -2198,6 +2202,35 @@ mod tests {
         let chip = status_chip_frame(&style);
         assert_eq!(chip.corner_radius, egui::CornerRadius::same(4));
         assert_eq!(chip.inner_margin, egui::Margin::symmetric(6, 3));
+    }
+
+    #[test]
+    fn tool_density_keeps_user_fonts_and_workspace_spacing() {
+        let context = egui::Context::default();
+        configure_styles(&context);
+        let original = context.style_of(context.theme());
+        context
+            .run_ui(Default::default(), |ui| {
+                ui.scope(|ui| {
+                    apply_compact_tool_spacing(ui);
+                    assert_eq!(ui.spacing().item_spacing, Vec2::new(6.0, 2.0));
+                    assert_eq!(ui.spacing().button_padding, Vec2::new(6.0, 2.0));
+                    assert_eq!(ui.style().text_styles, original.text_styles);
+                    assert_eq!(ui.spacing().interact_size, original.spacing.interact_size);
+                });
+                assert_eq!(ui.spacing(), &original.spacing);
+            })
+            .drop_without_applying_deltas();
+        assert_eq!(context.style_of(context.theme()).spacing, original.spacing);
+        let title = settings_title_frame(&original);
+        let content = settings_content_frame(&original);
+        assert_eq!(title.inner_margin.left, content.inner_margin.left);
+        assert_eq!(title.inner_margin.right, content.inner_margin.right);
+        assert_eq!(content.inner_margin, egui::Margin::same(6));
+        assert_eq!(
+            dialog_card_frame(&original).inner_margin,
+            egui::Margin::same(8)
+        );
     }
 
     #[test]

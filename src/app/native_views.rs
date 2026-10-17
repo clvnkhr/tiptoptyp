@@ -443,6 +443,7 @@ impl EditorApp {
                 .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(ui.ctx(), |ui| {
                     theme::dialog_card_frame(&style).show(ui, |ui| {
+                        theme::apply_compact_tool_spacing(ui);
                         ui.set_min_width(dialog_width);
                         ui.set_max_width(dialog_width);
                         ui.label(RichText::new("Rename").strong());
@@ -456,10 +457,11 @@ impl EditorApp {
                         }
                         submit |= response.lost_focus()
                             && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            submit |= crate::app::icons::action_button(ui, "Rename").clicked();
-                            cancel |= crate::app::icons::action_button(ui, "Cancel").clicked();
-                        });
+                        match dialog_footer(ui, "Rename", None, true, false) {
+                            Some(AppModalChoice::Primary) => submit = true,
+                            Some(AppModalChoice::Cancel) => cancel = true,
+                            _ => {}
+                        }
                     });
                 });
         });
@@ -529,14 +531,10 @@ impl EditorApp {
                     .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                     .show(ui.ctx(), |ui| {
                         theme::dialog_card_frame(&style).show(ui, |ui| {
+                            theme::apply_compact_tool_spacing(ui);
                             ui.set_width(card_width);
+                            let content_top = ui.next_widget_position().y;
                             ui.label(RichText::new("Change workspace root").strong());
-                            ui.label(
-                                RichText::new(
-                                    "Choose a recent workspace or select another folder.",
-                                )
-                                .color(ui.visuals().weak_text_color()),
-                            );
                             if !recent_workspaces.is_empty() {
                                 ui.add_space(theme::SPACE.small);
                                 ui.label(
@@ -544,9 +542,26 @@ impl EditorApp {
                                         .size(theme::TYPE.supporting)
                                         .strong(),
                                 );
+                                let used = ui.next_widget_position().y - content_top;
+                                let footer = dialog_footer_height(
+                                    ui,
+                                    card_width,
+                                    "Choose Folder…",
+                                    None,
+                                    true,
+                                );
+                                let reserved = used
+                                    + footer
+                                    + theme::SPACE.control
+                                    + theme::dialog_card_frame(&style).total_margin().sum().y
+                                    + theme::SPACE.content * 2.0;
                                 egui::ScrollArea::vertical()
                                     .id_salt("recent-workspaces")
-                                    .max_height(METRICS.popup.modal_message_max_height)
+                                    .min_scrolled_height(0.0)
+                                    .max_height(dialog_scroll_height(
+                                        window_rect.height(),
+                                        reserved,
+                                    ))
                                     .show(ui, |ui| {
                                         for path in &recent_workspaces {
                                             match show_recent_workspace_row(ui, path, card_width) {
@@ -562,12 +577,11 @@ impl EditorApp {
                                     });
                             }
                             ui.add_space(theme::SPACE.control);
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                choose_folder |=
-                                    crate::app::icons::action_button(ui, "Choose Folder…")
-                                        .clicked();
-                                cancel |= crate::app::icons::action_button(ui, "Cancel").clicked();
-                            });
+                            match dialog_footer(ui, "Choose Folder…", None, true, false) {
+                                Some(AppModalChoice::Primary) => choose_folder = true,
+                                Some(AppModalChoice::Cancel) => cancel = true,
+                                _ => {}
+                            }
                         });
                     });
                 captures.end_glow_viewport(ui, "workspace");
@@ -606,10 +620,7 @@ impl EditorApp {
         let native_theme = theme::native_theme(theme);
         let card_width = (window_rect.width() - METRICS.popup.modal_window_inset)
             .clamp(1.0, METRICS.popup.modal_max_width);
-        let message_height = (window_rect.height() - METRICS.popup.modal_height_inset).clamp(
-            METRICS.popup.modal_message_min_height,
-            METRICS.popup.modal_message_max_height,
-        );
+
         let mut choice = None;
         let mut overlay_had_focus = self.document_workflow.modal_had_focus;
         let mut suspend_overlay = false;
@@ -647,8 +658,10 @@ impl EditorApp {
                     .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                     .show(ui.ctx(), |ui| {
                         theme::dialog_card_frame(&style).show(ui, |ui| {
+                            theme::apply_compact_tool_spacing(ui);
                             ui.set_max_width(card_width);
                             ui.set_min_width(card_width);
+                            let content_top = ui.next_widget_position().y;
                             let (title, message, color) = match &modal {
                                 AppModal::Alert {
                                     title,
@@ -660,96 +673,58 @@ impl EditorApp {
                                     notice_color(*kind, ui.ctx()),
                                 ),
                                 AppModal::Unsaved { message, .. } => {
-                                    ("warning", message.as_str(), warning_color(ui.ctx()))
+                                    ("Save changes?", message.as_str(), warning_color(ui.ctx()))
                                 }
-                                AppModal::UninstallPackage { message, .. }
-                                | AppModal::RevertGit { message, .. }
-                                | AppModal::DeleteFile { message, .. }
-                                | AppModal::Overwrite { message, .. } => {
-                                    ("warning", message.as_str(), warning_color(ui.ctx()))
+                                AppModal::UninstallPackage { message, .. } => (
+                                    "Uninstall package?",
+                                    message.as_str(),
+                                    warning_color(ui.ctx()),
+                                ),
+                                AppModal::RevertGit { message, .. } => {
+                                    ("Revert changes?", message.as_str(), warning_color(ui.ctx()))
                                 }
+                                AppModal::DeleteFile { message, .. } => {
+                                    ("Delete file?", message.as_str(), warning_color(ui.ctx()))
+                                }
+                                AppModal::Overwrite { message, .. } => (
+                                    "Replace existing file?",
+                                    message.as_str(),
+                                    warning_color(ui.ctx()),
+                                ),
                             };
                             ui.label(RichText::new(title).strong().color(color));
+                            let (primary, secondary, cancel) = match &modal {
+                                AppModal::Alert { .. } => ("OK", None, false),
+                                AppModal::Unsaved { .. } => ("Save", Some("Discard"), true),
+                                AppModal::UninstallPackage { .. } => ("Uninstall", None, true),
+                                AppModal::DeleteFile { .. } => ("Delete", None, true),
+                                AppModal::RevertGit { .. } => ("Revert", None, true),
+                                AppModal::Overwrite { .. } => ("Overwrite", None, true),
+                            };
+                            let used = ui.next_widget_position().y - content_top;
+                            let footer =
+                                dialog_footer_height(ui, card_width, primary, secondary, cancel);
+                            let reserved = used
+                                + footer
+                                + theme::SPACE.control
+                                + theme::dialog_card_frame(&style).total_margin().sum().y
+                                + theme::SPACE.content * 2.0;
                             egui::ScrollArea::vertical()
-                                .max_height(message_height)
+                                .min_scrolled_height(0.0)
+                                .max_height(dialog_scroll_height(window_rect.height(), reserved))
                                 .show(ui, |ui| {
                                     ui.label(message);
                                 });
                             ui.add_space(theme::SPACE.control);
-                            ui.with_layout(
-                                Layout::right_to_left(Align::Center),
-                                |ui| match &modal {
-                                    AppModal::Alert { .. } => {
-                                        if crate::app::icons::action_button(ui, "OK").clicked() {
-                                            choice = Some(AppModalChoice::Primary);
-                                        }
-                                    }
-                                    AppModal::Unsaved { .. } => {
-                                        if crate::app::icons::action_button(ui, "Save").clicked() {
-                                            choice = Some(AppModalChoice::Primary);
-                                        }
-                                        let discard =
-                                            crate::app::icons::action_button(ui, "Discard");
-                                        let cancel = crate::app::icons::action_button(ui, "Cancel");
-                                        #[cfg(all(
-                                            feature = "desktop-ui-tests",
-                                            target_os = "macos"
-                                        ))]
-                                        {
-                                            crate::desktop_test::observe("modal.discard", &discard);
-                                            crate::desktop_test::observe("modal.cancel", &cancel);
-                                        }
-                                        if discard.clicked() {
-                                            choice = Some(AppModalChoice::Secondary);
-                                        }
-                                        if cancel.clicked() {
-                                            choice = Some(AppModalChoice::Cancel);
-                                        }
-                                    }
-                                    AppModal::UninstallPackage { .. } => {
-                                        if crate::app::icons::action_button(ui, "Uninstall")
-                                            .clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Primary);
-                                        }
-                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Cancel);
-                                        }
-                                    }
-                                    AppModal::DeleteFile { .. } => {
-                                        if crate::app::icons::action_button(ui, "Delete").clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Primary);
-                                        }
-                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Cancel);
-                                        }
-                                    }
-                                    AppModal::RevertGit { .. } => {
-                                        if crate::app::icons::action_button(ui, "Revert").clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Primary);
-                                        }
-                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Cancel);
-                                        }
-                                    }
-                                    AppModal::Overwrite { .. } => {
-                                        if crate::app::icons::action_button(ui, "Overwrite")
-                                            .clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Primary);
-                                        }
-                                        if crate::app::icons::action_button(ui, "Cancel").clicked()
-                                        {
-                                            choice = Some(AppModalChoice::Cancel);
-                                        }
-                                    }
-                                },
-                            );
+                            if let Some(clicked) = dialog_footer(
+                                ui,
+                                primary,
+                                secondary,
+                                cancel,
+                                matches!(modal, AppModal::Unsaved { .. }),
+                            ) {
+                                choice = Some(clicked);
+                            }
                         });
                     });
                 captures.end_glow_viewport(ui, "modal");
@@ -1906,9 +1881,147 @@ impl EditorApp {
     pub(super) fn hide_webview(&mut self) {}
 }
 
+fn dialog_scroll_height(owner_height: f32, reserved: f32) -> f32 {
+    (owner_height - reserved).clamp(0.0, METRICS.popup.modal_message_max_height)
+}
+
+fn dialog_footer_height(
+    ui: &egui::Ui,
+    width: f32,
+    primary: &str,
+    secondary: Option<&str>,
+    cancel: bool,
+) -> f32 {
+    let mut used = 0.0;
+    let mut height = 0.0;
+    let mut row_height = 0.0_f32;
+    let padding = ui.spacing().button_padding * 2.0
+        + Vec2::splat(ui.visuals().widgets.inactive.bg_stroke.width * 2.0);
+    for label in [Some(primary), secondary, cancel.then_some("Cancel")]
+        .into_iter()
+        .flatten()
+    {
+        let size = egui::WidgetText::from(label)
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Wrap),
+                (width - padding.x).max(1.0),
+                egui::TextStyle::Button,
+            )
+            .size()
+            + padding;
+        if used > 0.0 && used + ui.spacing().item_spacing.x + size.x > width {
+            height += row_height + ui.spacing().item_spacing.y;
+            row_height = 0.0;
+            used = 0.0;
+        }
+        used += if used == 0.0 {
+            size.x
+        } else {
+            ui.spacing().item_spacing.x + size.x
+        };
+        row_height = row_height.max(size.y.max(ui.spacing().interact_size.y));
+    }
+    height + row_height
+}
+
+fn dialog_footer(
+    ui: &mut egui::Ui,
+    primary: &str,
+    secondary: Option<&str>,
+    cancel: bool,
+    observe_modal: bool,
+) -> Option<AppModalChoice> {
+    let mut choice = None;
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), ui.spacing().interact_size.y),
+        Layout::right_to_left(Align::Center).with_main_wrap(true),
+        |ui| {
+            if ui
+                .add(egui::Button::new(primary).fill(ui.visuals().selection.bg_fill))
+                .clicked()
+            {
+                choice = Some(AppModalChoice::Primary);
+            }
+            if let Some(label) = secondary {
+                let response = ui.button(label);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if observe_modal {
+                    crate::desktop_test::observe("modal.discard", &response);
+                }
+                if response.clicked() {
+                    choice = Some(AppModalChoice::Secondary);
+                }
+            }
+            if cancel {
+                let response = ui.button("Cancel");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if observe_modal {
+                    crate::desktop_test::observe("modal.cancel", &response);
+                }
+                if response.clicked() {
+                    choice = Some(AppModalChoice::Cancel);
+                }
+            }
+        },
+    );
+    let _ = observe_modal;
+    choice
+}
+
 #[cfg(test)]
 mod property_tests {
     use super::*;
+
+    #[test]
+    fn dialog_scroll_body_reserves_title_and_footer_space_inside_short_owners() {
+        assert_eq!(dialog_scroll_height(160.0, 140.0), 20.0);
+        assert_eq!(dialog_scroll_height(160.0, 160.0), 0.0);
+        assert_eq!(dialog_scroll_height(160.0, 180.0), 0.0);
+        assert_eq!(dialog_scroll_height(900.0, 140.0), 180.0);
+    }
+
+    #[test]
+    fn labeled_dialog_footers_wrap_inside_narrow_cards_with_monospace_ui() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for (primary, secondary) in [
+            ("Save", Some("Discard")),
+            ("Choose Folder…", None),
+            ("Rename", None),
+        ] {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(168.0, 100.0))
+                .build_ui_state(
+                    move |ui, choice| {
+                        theme::apply_compact_tool_spacing(ui);
+                        for kind in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                            ui.style_mut()
+                                .text_styles
+                                .insert(kind, egui::FontId::monospace(18.0));
+                        }
+                        *choice = dialog_footer(ui, primary, secondary, true, false);
+                    },
+                    None,
+                );
+            harness.run();
+            let cancel = harness.get_by_label("Cancel").rect();
+            let first = harness.get_by_label(primary).rect();
+            assert!(cancel.top() > first.top(), "{primary}: footer did not wrap");
+            for label in [Some(primary), secondary, Some("Cancel")]
+                .into_iter()
+                .flatten()
+            {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= 168.0 && rect.bottom() <= 100.0,
+                    "{primary} / {label}: {rect:?}"
+                );
+            }
+            harness.get_by_label("Cancel").click();
+            harness.step();
+            assert_eq!(*harness.state(), Some(AppModalChoice::Cancel));
+        }
+    }
 
     #[test]
     fn table_window_starts_compact_and_preserves_comparable_qa_sizes() {
