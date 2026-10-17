@@ -1340,6 +1340,133 @@ class MathConversionPreparationContract(unittest.TestCase):
         self.assertEqual(actions, ["settings.editor.math_format"])
 
 
+class TableJourneyRecordingContract(unittest.TestCase):
+    def test_record_details_cannot_collide_with_the_event_action_argument(self):
+        import ast
+        source = Path(__file__).with_name("desktop_ui_newest_journeys.py")
+        tree = ast.parse(source.read_text(), filename=str(source))
+        collisions = [call.lineno for call in ast.walk(tree)
+                      if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                      and isinstance(call.func.value, ast.Name) and call.func.value.id == "self"
+                      and call.func.attr == "record"
+                      and any(keyword.arg == "action" for keyword in call.keywords)]
+        self.assertEqual(collisions, [], "record(action, ...) already owns the action parameter")
+
+
+class TableTypingBudgetContract(unittest.TestCase):
+    def test_long_cell_typing_keeps_the_full_fixture_inside_each_native_call_budget(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey = NewestJourneys()
+        posted = []
+        journey.native = lambda command, text: posted.append((command, text))
+        text = "Long table cell input preserves its complete content. " * 20
+        journey.type_table_cell_text(text)
+        self.assertGreater(len(posted), 1)
+        self.assertTrue(all(command == "text" and 0 < len(chunk) <= 256
+                            for command, chunk in posted))
+        self.assertEqual("".join(chunk for _, chunk in posted), text)
+
+
+class TableNativeResizeContract(unittest.TestCase):
+    def windows(self):
+        return [{"AXTitle": "journey.typ — tiptoptyp", "AXFocused": False, "size": [1400, 883]},
+                {"AXTitle": "tiptoptyp Table editor", "AXFocused": True,
+                 "AXMinimized": False, "size": [620, 448]}]
+
+    def test_actual_focused_child_size_accepts_only_small_native_chrome_tolerance(self):
+        from desktop_ui_newest_journeys import table_native_window, table_parent_sizes
+        windows = self.windows()
+        self.assertEqual(table_native_window(windows, [620, 420])["size"], [620, 448])
+        self.assertEqual(table_parent_sizes(windows), {"journey.typ — tiptoptyp": [1400, 883]})
+        for change in ({"AXFocused": False}, {"AXMinimized": True},
+                       {"size": [860, 560]}, {"size": [620, 560]}, {"size": [620, 380]},
+                       {"size": [700, 420]}, {"size": [620, float("nan")]}, {"size": [True, 420]}):
+            windows = self.windows()
+            windows[1].update(change)
+            with self.subTest(change=change):
+                self.assertIsNone(table_native_window(windows, [620, 420]))
+
+    def test_a_focused_or_resized_parent_cannot_stand_in_for_the_table(self):
+        from desktop_ui_newest_journeys import table_native_window, table_parent_sizes
+        windows = self.windows()
+        original_parents = table_parent_sizes(windows)
+        windows[0].update(AXFocused=True, size=[620, 420])
+        windows[1]["AXFocused"] = False
+        self.assertIsNone(table_native_window(windows, [620, 420]))
+        self.assertNotEqual(table_parent_sizes(windows), original_parents)
+        self.assertIsNone(table_native_window([windows[0]], [620, 420]))
+        self.assertIsNone(table_native_window(self.windows() + [self.windows()[1]], [620, 420]))
+
+
+class CompactTableGeometryContract(unittest.TestCase):
+    def state(self):
+        button = {"enabled": True, "age_ms": 0, "frame": 10,
+                  "viewport": "table-child", "width": 60, "height": 24, "y": 430}
+        return {"document": {"table_editor_open": True, "interface_scale": 1},
+                "scrolls": {"table.grid": {"x": 300, "y": 250, "frame": 10,
+                    "offset": 0, "content_height": 1320, "viewport_height": 300}},
+                "targets": {"table.apply": {**button, "x": 550},
+                            "table.cancel": {**button, "x": 470},
+                            "table.cell.1.0": {**button, "x": 100, "y": 160},
+                            "table.cell.2.0": {**button, "x": 100, "y": 196}}}
+
+    def test_reopened_scrolled_grid_is_wheeled_to_a_stable_top_before_cell_queries(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey = NewestJourneys()
+        frames = []
+        for offset in (320, 160, 0, 0, 0):
+            state = self.state()
+            state["scrolls"]["table.grid"]["offset"] = offset
+            frames.append(state)
+        states = iter(frames)
+        journey.snapshot = lambda: next(states)
+        native, records = [], []
+        journey.native = lambda *args: native.append(args)
+        journey.record = lambda *args, **detail: records.append((args, detail))
+        with patch("desktop_ui_newest_journeys.time.sleep"):
+            journey.scroll_table_grid_to_top("tex", "apply")
+        self.assertEqual(native, [("move", 300, 250), ("wheel", 300, 250, 20)])
+        self.assertEqual(list(states), [])
+        self.assertEqual(records[0][1]["before"], 320)
+        self.assertEqual(records[0][1]["after"], 0)
+        self.assertEqual(records[0][1]["stable_samples"], 3)
+
+    def test_scroll_offset_may_change_but_the_child_footer_must_stay_fixed(self):
+        from desktop_ui_newest_journeys import table_grid_geometry, assert_compact_table_rows
+        state = self.state()
+        scroll, footer = table_grid_geometry(state)
+        self.assertEqual(scroll["offset"], 0)
+        self.assertEqual(assert_compact_table_rows(state), 36)
+        state["scrolls"]["table.grid"]["offset"] = 144
+        self.assertEqual(table_grid_geometry(state, footer)[0]["offset"], 144)
+        state["targets"]["table.apply"]["y"] += 3
+        with self.assertRaisesRegex(AssertionError, "moved"):
+            table_grid_geometry(state, footer)
+
+    def test_closed_stale_unscrollable_or_overlapping_geometry_is_not_evidence(self):
+        from desktop_ui_newest_journeys import table_grid_geometry
+        mutations = [lambda s: s["document"].update(table_editor_open=False),
+                     lambda s: s["targets"]["table.cancel"].update(age_ms=800),
+                     lambda s: s["targets"]["table.cancel"].update(frame=9),
+                     lambda s: s["targets"]["table.cancel"].update(viewport="other-child"),
+                     lambda s: s["targets"]["table.apply"].update(y=380),
+                     lambda s: s["scrolls"]["table.grid"].update(content_height=320),
+                     lambda s: s["scrolls"]["table.grid"].update(offset=float("nan"))]
+        for mutate in mutations:
+            state = self.state()
+            mutate(state)
+            with self.subTest(state=state), self.assertRaises(AssertionError):
+                table_grid_geometry(state)
+
+    def test_old_tall_row_pitch_and_mixed_frame_rows_cannot_pass_compactness(self):
+        from desktop_ui_newest_journeys import assert_compact_table_rows
+        for change in ({"y": 234}, {"frame": 9}, {"viewport": "other-child"}, {"age_ms": 800}):
+            state = self.state()
+            state["targets"]["table.cell.2.0"].update(change)
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                assert_compact_table_rows(state)
+
+
 class TableDraftContract(unittest.TestCase):
     def test_table_journey_is_registered_with_the_newest_native_group(self):
         from desktop_ui_newest_journeys import NEWEST_JOURNEYS, NewestJourneys

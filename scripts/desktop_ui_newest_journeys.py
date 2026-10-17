@@ -17,6 +17,86 @@ def assert_preview_drag_position(document, baseline, delta, tolerance=3):
         raise AssertionError("preview controls drifted from the held pointer")
 
 
+TABLE_WINDOW_TITLE = "tiptoptyp Table editor"
+
+
+def table_native_window(windows, requested_size=None):
+    matches = [window for window in windows if window.get("AXTitle") == TABLE_WINDOW_TITLE]
+    if len(matches) != 1 or matches[0].get("AXFocused") is not True \
+            or matches[0].get("AXMinimized") is True:
+        return None
+    window = matches[0]
+    size = window.get("size")
+    if not isinstance(size, list) or len(size) != 2 or any(
+            type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+            for value in size):
+        return None
+    if requested_size is not None:
+        width, height = requested_size
+        # AX sizes include native window chrome; the inner minimum can add a
+        # titlebar to the requested height when AppKit clamps the outer frame.
+        if abs(size[0] - width) > 2 or not height - 2 <= size[1] <= height + 40:
+            return None
+    return window
+
+
+def table_parent_sizes(windows):
+    return {window["AXTitle"]: window.get("size") for window in windows
+            if window.get("AXTitle") and window["AXTitle"] != TABLE_WINDOW_TITLE}
+
+
+def table_grid_geometry(state, baseline_footer=None):
+    """Require a real scrollable grid and current, stationary child footer."""
+    document = state["document"]
+    scroll = state.get("scrolls", {}).get("table.grid")
+    targets = state.get("targets", {})
+    apply, cancel = targets.get("table.apply"), targets.get("table.cancel")
+    if not document.get("table_editor_open") or not scroll or not apply or not cancel:
+        raise AssertionError("table grid/footer inspection is unavailable")
+    for button in (apply, cancel):
+        if not button.get("enabled") or button.get("age_ms", 501) > 500 \
+                or button.get("frame") != scroll.get("frame") \
+                or button.get("viewport") != apply.get("viewport"):
+            raise AssertionError("table footer belongs to a stale or different child frame")
+        if any(type(button.get(key)) not in (int, float) or not math.isfinite(button[key])
+               for key in ("x", "y", "width", "height")) \
+                or button["width"] <= 0 or button["height"] <= 0:
+            raise AssertionError("table footer geometry is invalid")
+    if any(type(scroll.get(key)) not in (int, float) or not math.isfinite(scroll[key])
+           for key in ("x", "y", "offset", "content_height", "viewport_height")) \
+            or scroll["offset"] < 0 or scroll["viewport_height"] <= 0 \
+            or scroll["content_height"] <= scroll["viewport_height"] + 100:
+        raise AssertionError("table fixture did not expose its scrollable grid")
+    scale = document.get("interface_scale")
+    if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
+        raise AssertionError("table interface scale is unavailable")
+    grid_bottom = scroll["y"] + scroll["viewport_height"] * scale / 2
+    if any(button["y"] - button["height"] / 2 < grid_bottom - 2 for button in (apply, cancel)):
+        raise AssertionError("table footer overlaps the scrollable grid")
+    footer = {name: tuple(button[key] for key in ("x", "y", "width", "height"))
+              for name, button in (("apply", apply), ("cancel", cancel))}
+    if baseline_footer is not None and any(
+            abs(value - original) > 1
+            for name, geometry in footer.items()
+            for value, original in zip(geometry, baseline_footer[name])):
+        raise AssertionError("table footer moved while the grid scrolled")
+    return scroll, footer
+
+
+def assert_compact_table_rows(state):
+    targets = state.get("targets", {})
+    rows = [targets.get("table.cell.1.0"), targets.get("table.cell.2.0")]
+    if any(not row or row.get("age_ms", 501) > 500 for row in rows) \
+            or rows[0]["frame"] != rows[1]["frame"] \
+            or rows[0]["viewport"] != rows[1]["viewport"]:
+        raise AssertionError("compact table rows need fresh geometry from one child")
+    scale = state["document"]["interface_scale"]
+    pitch = (rows[1]["y"] - rows[0]["y"]) / scale
+    if not 32 <= pitch <= 40:
+        raise AssertionError("table row spacing is not compact: " + str(pitch))
+    return pitch
+
+
 class NewestJourneys:
     def newest_preview_document(self):
         self.focus_document_window()
@@ -341,6 +421,9 @@ class NewestJourneys:
         applied = '#table(\n  columns: (40%, auto),\n  inset: 3pt,\n  table.hline(y: 0, stroke: 1pt + blue),\n  [Changed],\n  [Beta],\n  [Gamma],\n  [Delta],\n)'
         if getattr(self, "capture_review", False):
             self.capture_viewport("table-editor")
+            self.click("table.format")
+            self.capture_viewport("table-editor")
+            self.click("table.format")
         close_draft("apply", applied)
         self.key(6)
         self.source_is(typst)
@@ -551,5 +634,129 @@ class NewestJourneys:
             self.key(6)
             self.source_is(tex)
             self.close_scratch(count)
+        self.compact_table_grid("typst")
+        self.compact_table_grid("tex")
         self.key(20)
         self.wait("table journey restores the split editor", lambda d: d["view_mode"] == "Split")
+
+    def scroll_table_grid_to_top(self, language, disposition):
+        scroll, footer = table_grid_geometry(self.snapshot())
+        before = scroll["offset"]
+        if before > 1:
+            self.native("move", scroll["x"], scroll["y"])
+            self.native("wheel", scroll["x"], scroll["y"], 20)
+        deadline, stable_samples = time.monotonic() + 4, 0
+        while time.monotonic() < deadline:
+            scroll, _ = table_grid_geometry(self.snapshot(), footer)
+            stable_samples = stable_samples + 1 if scroll["offset"] <= 1 else 0
+            if stable_samples >= 3:
+                self.record("table.scroll_top", language=language, disposition=disposition,
+                            before=before, after=scroll["offset"], stable_samples=stable_samples)
+                return
+            time.sleep(0.05)
+        raise AssertionError(language + " table grid did not settle at its first row after wheel input")
+
+    def type_table_cell_text(self, text):
+        # The native driver deliberately paces 16-unit key batches. Bound each
+        # call so a long-cell fixture stays inside its fixed process watchdog.
+        for start in range(0, len(text), 256):
+            self.native("text", text[start:start + 256])
+
+    def compact_table_grid(self, language):
+        from desktop_ui_journeys import fingerprint
+        long_text = ("A long table cell stays inside its own row while the footer remains visible. " * 8).rstrip()
+        edited_long = ("Edited long cell text should remain keyboard editable without expanding the entire grid. " * 10).rstrip()
+        rows = [[long_text, "Neighbour", "Status"]] + [
+            [f"Row {row}", f"Owner {row}", "Planned"] for row in range(1, 36)]
+        if language == "typst":
+            source = "#table(\n  columns: 3,\n" + "".join(
+                "  [" + cell + "],\n" for row in rows for cell in row) + ")"
+            count = self.scratch(source)
+            line = 0
+        else:
+            environment = "\\begin{tabular}{lll}\n" + "".join(
+                " & ".join(row) + "\\\\\n" for row in rows) + "\\end{tabular}"
+            source = "\\documentclass{article}\n\\begin{document}\n" + environment + "\n\\end{document}\n"
+            path = self.directory / "table-compact-grid.tex"
+            path.write_text(source)
+            count = self.snapshot()["document"]["tabs"]
+            self.open_table_fixture(path)
+            line = 2
+        applied = source.replace(long_text, edited_long).replace("Neighbour", "Edited neighbour")
+        if language == "tex":
+            # The existing grid serializer canonicalizes the first row's
+            # leading newline; Cancel and Undo still preserve the original.
+            applied = applied.replace("\\begin{tabular}{lll}\n", "\\begin{tabular}{lll}", 1)
+        for action in ("cancel", "apply"):
+            self.open_table_workbench(line=line)
+            windows = self.native_wait("the native Table editor owns focus before resizing", lambda ws:
+                                       table_native_window(ws) is not None)
+            parent_sizes = table_parent_sizes(windows)
+            if not parent_sizes:
+                raise AssertionError("table resize has no observed parent window")
+            requested_size = [620, 420]
+            self.native("resize-focused", *requested_size)
+            previous_size, stable_samples = None, 0
+            def minimum_size_settled(windows):
+                nonlocal previous_size, stable_samples
+                table = table_native_window(windows, requested_size)
+                if table is None or table_parent_sizes(windows) != parent_sizes:
+                    previous_size, stable_samples = None, 0
+                    return False
+                size = table["size"]
+                stable_samples = stable_samples + 1 if size == previous_size else 1
+                previous_size = list(size)
+                return stable_samples >= 3
+            windows = self.native_wait("minimum-size Table editor settles without resizing its parent",
+                                       minimum_size_settled)
+            self.record("table.native_size", language=language, disposition=action,
+                        requested=requested_size, actual=table_native_window(windows)["size"],
+                        parent_sizes=parent_sizes, stable_samples=stable_samples)
+            # Reopening intentionally preserves the stable grid's scroll state.
+            # Use real wheel input to reveal virtualized first-row editors.
+            self.scroll_table_grid_to_top(language, action)
+            self.table_target("table.cell.0.0")
+            self.click("table.cell.0.0")
+            self.key(0)
+            self.type_table_cell_text(edited_long)
+            if language == "typst":
+                self.key(48, "none")
+                self.wait_target("table.cell.0.1", focused=True)
+            else:
+                # TeX's code cells keep Tab available for source indentation.
+                self.click("table.cell.0.1")
+            self.key(0)
+            self.native("text", "Edited neighbour")
+            self.source_is(source)
+            self.stable_state(lambda d: d["source_fingerprint"] == fingerprint(source))
+            state = self.snapshot()
+            pitch = assert_compact_table_rows(state)
+            scroll, footer = table_grid_geometry(state)
+            before = scroll["offset"]
+            self.native("move", scroll["x"], scroll["y"])
+            self.native("wheel", scroll["x"], scroll["y"], -8)
+            deadline = time.monotonic() + 4
+            while True:
+                scroll, _ = table_grid_geometry(self.snapshot(), footer)
+                if scroll["offset"] > before + 20:
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(language + " table grid did not scroll after wheel input")
+                time.sleep(0.05)
+            for _ in range(4):
+                current, _ = table_grid_geometry(self.snapshot(), footer)
+                if current["offset"] <= before + 20:
+                    raise AssertionError(language + " table grid scroll fought back")
+            if getattr(self, "capture_review", False):
+                self.capture_viewport("table-editor")
+            self.record("table.compact_grid", language=language, disposition=action,
+                        row_pitch=pitch, offset_before=before, offset_after=current["offset"],
+                        footer=footer, long_cell_bytes=len(edited_long.encode("utf-8")))
+            self.click("table." + action)
+            self.wait("compact table draft closes once", lambda d: not d["table_editor_open"])
+            self.source_is(source if action == "cancel" else applied)
+            self.click("editor.source")
+            if action == "apply":
+                self.key(6)
+                self.source_is(source)
+        self.close_scratch(count)

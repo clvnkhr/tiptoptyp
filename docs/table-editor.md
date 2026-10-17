@@ -5,8 +5,10 @@ Table…** when the cursor is inside an editable `table`/`grid`. The latter also
 appears in the editor's context menu. Both commands can be assigned shortcuts
 in Settings. New Table does not change the source until Apply.
 
-The workbench is a movable, resizable, settings-style native window. While it
-is open, a banner marks the source editor **Read-only**. Scrolling, selection,
+The workbench is a movable, resizable native window. It opens at 860×560 points
+and can shrink to 620×420. A compact toolbar sits above the grid; labelled
+**Apply** and **Cancel** buttons stay pinned below it while the cells scroll.
+While it is open, a banner marks the source editor **Read-only**. Scrolling, selection,
 copying, and searching still work. Typing, paste, cut, undo/redo, replace,
 formatting, completions, font replacement, Git hunk changes and notation-mode
 changes cannot alter the source. Document/tab changes are held until the draft
@@ -14,6 +16,13 @@ is applied or cancelled. Apply validates the exact original document revision
 and table slice, then makes one Unicode-safe, undoable replacement.
 
 ## Cells and appearance
+
+The Typst toolbar groups row/column actions, **Remove**, **Format**,
+**Import Markdown** and **Source** in one compact row, wrapping only when
+necessary. Format opens the appearance controls for **Whole table** or
+**Selected cells**, including spans; they do not occupy a persistent inspector.
+The following selection and cell-navigation shortcuts apply to Typst grids.
+TeX cells retain normal code editing, including Tab for indentation.
 
 - Add rows/columns or remove the selected row/last column.
 - Click a cell, row number, or column heading to select. Shift-click extends
@@ -28,16 +37,16 @@ and table slice, then makes one Unicode-safe, undoable replacement.
   exposes empty cells again.
 - Border, background, alignment and padding presets apply to the whole table
   or the selected cells. Unrecognised existing expressions are shown as
-  **Custom (kept)** and are preserved unless explicitly replaced.
+  **Custom** and are preserved unless explicitly replaced.
 
 Variables now display read-only compiler samples instead of editable source.
 Typst cells containing computed markup (for example `[#price]`) and TeX cells
 using a named macro (for example `\revenue`) are locked. Literal
 neighbouring cells remain editable. Named TeX commands are conservatively sampled
 because their definitions may come from a package or imported preamble; escaped
-punctuation and literal `\verb` text remain editable. Tab skips locked cells;
-Apply also verifies
-that their original expressions are unchanged. Geometry changes and Markdown
+punctuation and literal `\verb` text remain editable. Typst's cell navigation
+skips locked cells; Apply also verifies that their original expressions are
+unchanged. Geometry changes and Markdown
 replacement are disabled while the grid contains locked cells.
 
 Generated Typst tables, including spreads and variable column counts, default
@@ -74,11 +83,11 @@ Column editing supports array's `p/m/b`, `w/W`, modifiers and repetitions;
 siunitx's `S[options]`; dcolumn's `D{input}{output}{digits}`; tabulary's `L/C/R/J`;
 and tabularray's `Q[options]` and weighted `X[options]`. For tabularray, the
 Columns field changes only `colspec`, preserving the other inner/outer options.
-The field's tooltip gives examples for the current environment. Apply adds missing `\usepackage` declarations to the preamble automatically,
+Apply adds missing `\usepackage` declarations to the preamble automatically,
 including column/rule/colour dependencies and `\UseTblrLibrary` declarations
 for tabularray. Existing declarations, options and comments are kept. Packages
 are never removed automatically: other code may still use them. The source
-change and imports are one undo step. The title tooltip explains this behaviour.
+change and imports are one undo step.
 
 The same import manager handles drawn TeX symbols (using the selected symbol's
 package metadata), math-environment conversion, TeX completions/snippets and
@@ -137,8 +146,12 @@ polling, per-frame I/O or continuous repaint. Computed tables start one finite b
 sampling job and repaint only when it finishes. Tests cover reuse and
 bounds; no cross-platform performance claim is made.
 
-Long cell text scrolls within its own clipped editing area, and the inspector
-switches to two columns in narrow windows so Apply/Cancel remain visible.
+Cells use a compact 36-point row pitch with line-number and column headings.
+Long text scrolls within its own clipped editing area rather than increasing
+row height. The complete grid scrolls independently above the pinned footer,
+so Apply/Cancel remain visible even at the minimum window size. The Typst
+footer identifies the selected cell; validation messages occupy the footer
+without expanding the grid.
 
 ## Checks
 
@@ -146,7 +159,9 @@ switches to two columns in narrow windows so Apply/Cancel remain visible.
 errors, Markdown escaping, selection, keyboard navigation, minimum window
 geometry, source locking/copy/scroll, menu availability, insertion and undo.
 
-Deterministic framebuffer scenes: `table-editor` and `table-editor-narrow`.
+Deterministic framebuffer scenes: `table-editor` and `table-editor-narrow` for Typst;
+`table-editor-tex` and `table-editor-tex-narrow` for TeX. The real source fixtures
+are in `scripts/fixtures/table-editor.typ` and `scripts/fixtures/table-editor.tex`.
 An explicit `--ui-screenshot main:table-source-lock` with the former captures
 the parent source banner separately; it does not composite the child window.
 
@@ -161,7 +176,9 @@ disabled later preview captures; resets now retain a real document tab.
 The opt-in compiler integration passed with the bundled Typst executable:
 `TIPTOPTYP_TEST_TYPST=/path/to/typst cargo test --bin tiptoptyp table_generated_spans_and_markdown_compile_with_typst -- --ignored`.
 It compiles model-generated combined spans, styling and escaped Markdown into
-a real PDF. Physical window dragging/resizing remains a manual acceptance check.
+a real PDF. The native `tables` journey resizes the workbench to 620×420,
+edits long cell text, scrolls the grid and checks the pinned footer. Framebuffer
+captures remain separate evidence for the child viewport's pixels.
 
 On 11 October 2026, 13 sampled-value regressions passed, including actual bundled
 Typst/Tectonic evaluation, imported definitions, inherited columns, generated
