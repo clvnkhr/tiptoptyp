@@ -1257,7 +1257,9 @@ impl SettingsTarget {
             Self::PreviewRevealAnimation => {
                 "preview navigation jump reveal animation effects rings pulse spotlight duration size"
             }
-            Self::EditorParticles => "editor typing particles sparks effects animation density",
+            Self::EditorParticles => {
+                "editor typing particles sparks effects animation density style weapon explosion shotgun flamethrower railgun plasma"
+            }
             Self::WrapLines => "editor soft wrapping word wrap",
             Self::IndependentDividers => {
                 "resize explorer code preview independent panel drag border width"

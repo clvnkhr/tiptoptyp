@@ -1,11 +1,19 @@
 #![allow(unsafe_code)]
 //! Real renderer coverage, kept separate from the particle simulation tests.
 use super::gpu::Renderer;
+use crate::settings::ParticleStyle;
 use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::sync::Arc;
 
 fn instances() -> Arc<[[f32; 8]]> {
-    let mut state = super::State::default();
+    instances_for_style(ParticleStyle::Explosion)
+}
+
+fn instances_for_style(style: ParticleStyle) -> Arc<[[f32; 8]]> {
+    let mut state = super::State {
+        style,
+        ..Default::default()
+    };
     state.update(
         super::Identity::new(
             crate::document::DocumentKey::new(
@@ -21,6 +29,25 @@ fn instances() -> Arc<[[f32; 8]]> {
         super::density_count(crate::settings::ParticleDensity::Medium),
     );
     state.instances()
+}
+
+#[test]
+fn every_style_uses_the_same_bounded_instance_stride_and_packed_kind() {
+    assert_eq!(std::mem::size_of::<super::gpu::Instance>(), 32);
+    for (index, style) in ParticleStyle::ALL.into_iter().enumerate() {
+        let batch = instances_for_style(style);
+        assert_eq!(
+            batch.len(),
+            super::density_count(crate::settings::ParticleDensity::Medium)
+        );
+        assert!(batch.len() <= super::LIMIT);
+        for instance in &*batch {
+            assert!(instance.iter().all(|value| value.is_finite()));
+            assert_eq!(instance[7].fract(), 0.0);
+            let packed = instance[7] as usize;
+            assert_eq!(packed / 4, index, "wrong packed style for {style:?}");
+        }
+    }
 }
 
 #[test]
@@ -323,10 +350,8 @@ fn gpu_explosion_framebuffer_review() {
     }
 }
 
-#[test]
 #[cfg(target_os = "macos")]
-#[ignore = "real Glow compositor-alpha contract for translucent particle backgrounds"]
-fn gpu_translucent_background_preserves_valid_premultiplied_pixels() {
+fn check_translucent_style(style: ParticleStyle, capture: bool) {
     use eframe::glow::{self, HasContext as _};
     for dark in [false, true] {
         for opacity in [0, 96] {
@@ -351,74 +376,246 @@ fn gpu_translucent_background_preserves_valid_premultiplied_pixels() {
                 &mut framebuffer,
                 &context,
                 &renderer,
-                instances(),
+                instances_for_style(style),
                 (dark, 1.0, opacity),
                 0.035,
-                Some(&path),
+                capture.then_some(path.as_path()),
             );
             assert!(renderer.inspected()["ready"].as_bool().unwrap_or(false));
             assert_eq!(counter(&renderer, "draws"), 1);
-            let mut changed = 0;
-            let mut alpha_increased = 0;
-            for (index, (before, after)) in baseline.pixels.iter().zip(&active.pixels).enumerate() {
-                let x = index % active.size[0];
-                let y = index / active.size[0];
-                if !(64..296).contains(&x) || !(52..188).contains(&y) {
-                    assert_eq!(before, after, "translucent GPU effect escaped its clip");
-                    continue;
+            let verified = std::panic::catch_unwind(|| {
+                let mut changed = 0;
+                let mut alpha_increased = 0;
+                for (index, (before, after)) in
+                    baseline.pixels.iter().zip(&active.pixels).enumerate()
+                {
+                    let x = index % active.size[0];
+                    let y = index / active.size[0];
+                    if !(64..296).contains(&x) || !(52..188).contains(&y) {
+                        assert_eq!(before, after, "translucent GPU effect escaped its clip");
+                        continue;
+                    }
+                    assert_eq!(
+                        before.a(),
+                        opacity,
+                        "fixture must start translucent, not opaque"
+                    );
+                    for channel in [after.r(), after.g(), after.b()] {
+                        assert!(
+                            u16::from(channel) <= u16::from(after.a()) + 1,
+                            "invalid premultiplied GPU pixel at {x},{y}: {:?}",
+                            after.to_array(),
+                        );
+                    }
+                    if dark {
+                        assert!(
+                            after.a() >= before.a(),
+                            "additive glow reduced backing alpha"
+                        );
+                        alpha_increased += usize::from(after.a() > before.a());
+                    } else {
+                        assert_eq!(
+                            after.a(),
+                            before.a(),
+                            "multiply-atop must preserve backing alpha"
+                        );
+                        if opacity == 0 {
+                            assert_eq!(
+                                after.to_array(),
+                                [0; 4],
+                                "transparent light pixels became black compositor stains"
+                            );
+                        }
+                    }
+                    changed += usize::from(before != after);
                 }
-                assert_eq!(
-                    before.a(),
-                    opacity,
-                    "fixture must start translucent, not opaque"
-                );
-                for channel in [after.r(), after.g(), after.b()] {
+                if !dark && opacity == 0 {
+                    assert_eq!(active.pixels, baseline.pixels);
+                } else {
                     assert!(
-                        u16::from(channel) <= u16::from(after.a()) + 1,
-                        "invalid premultiplied GPU pixel at {x},{y}: {:?}",
-                        after.to_array(),
+                        changed > 10,
+                        "the alpha contract must exercise a visible effect"
                     );
                 }
                 if dark {
                     assert!(
-                        after.a() >= before.a(),
-                        "additive glow reduced backing alpha"
+                        alpha_increased > 10,
+                        "additive glow needs alpha to cover its emitted RGB"
                     );
-                    alpha_increased += usize::from(after.a() > before.a());
-                } else {
-                    assert_eq!(
-                        after.a(),
-                        before.a(),
-                        "multiply-atop must preserve backing alpha"
-                    );
-                    if opacity == 0 {
-                        assert_eq!(
-                            after.to_array(),
-                            [0; 4],
-                            "transparent light pixels became black compositor stains"
-                        );
-                    }
                 }
-                changed += usize::from(before != after);
-            }
-            if !dark && opacity == 0 {
-                assert_eq!(active.pixels, baseline.pixels);
-            } else {
-                assert!(
-                    changed > 10,
-                    "the alpha contract must exercise a visible effect"
-                );
-            }
-            if dark {
-                assert!(
-                    alpha_increased > 10,
-                    "additive glow needs alpha to cover its emitted RGB"
-                );
+            });
+            if let Err(error) = verified {
+                if !capture {
+                    let path = std::path::PathBuf::from(format!(
+                        ".tiptoptyp/screenshots/agent-review/particle-variants/{}-{}-alpha{opacity}-failure.png",
+                        style.label().to_ascii_lowercase(),
+                        if dark { "dark" } else { "light" },
+                    ));
+                    save_frame(&active, &path);
+                }
+                std::panic::resume_unwind(error);
             }
             renderer.destroy(&gl);
             unsafe {
                 assert_eq!(gl.get_error(), glow::NO_ERROR);
             }
         }
+    }
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "real Glow compositor-alpha contract for translucent particle backgrounds"]
+fn gpu_translucent_background_preserves_valid_premultiplied_pixels() {
+    check_translucent_style(ParticleStyle::Explosion, true);
+}
+
+#[cfg(target_os = "macos")]
+fn save_frame(image: &egui::ColorImage, path: &std::path::Path) {
+    let pixels: Vec<_> = image.pixels.iter().flat_map(Color32::to_array).collect();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    image::save_buffer(
+        path,
+        &pixels,
+        image.size[0] as u32,
+        image.size[1] as u32,
+        image::ColorType::Rgba8,
+    )
+    .unwrap();
+}
+
+#[cfg(target_os = "macos")]
+fn changed_inside_clip(
+    baseline: &egui::ColorImage,
+    active: &egui::ColorImage,
+    scale: f32,
+) -> usize {
+    assert_eq!(baseline.size, active.size);
+    let mut changed = 0;
+    for (index, (before, after)) in baseline.pixels.iter().zip(&active.pixels).enumerate() {
+        if before == after {
+            continue;
+        }
+        changed += 1;
+        let x = (index % active.size[0]) as f32 / scale;
+        let y = (index / active.size[0]) as f32 / scale;
+        assert!(
+            (64.0..296.0).contains(&x) && (52.0..188.0).contains(&y),
+            "GPU pixels escaped clip at {x},{y}"
+        );
+    }
+    changed
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "real Glow review of five particle styles in light/dark at 1x/2x"]
+fn gpu_particle_variants_framebuffer_review() {
+    use eframe::glow::{self, HasContext as _};
+    for dark in [false, true] {
+        for scale in [1.0, 2.0] {
+            let mut previous_styles = Vec::new();
+            for style in ParticleStyle::ALL {
+                let context = egui::Context::default();
+                let renderer = Renderer::for_context(&context);
+                let mut framebuffer = crate::test_framebuffer::Framebuffer::new([
+                    (360.0 * scale) as u32,
+                    (240.0 * scale) as u32,
+                ]);
+                let gl = framebuffer.gl();
+                let empty: Arc<[[f32; 8]]> = Arc::from([]);
+                let batch = instances_for_style(style);
+                let baseline = render_frame(
+                    &mut framebuffer,
+                    &context,
+                    &renderer,
+                    empty.clone(),
+                    (dark, scale, 255),
+                    0.0,
+                    None,
+                );
+                assert!(renderer.inspected()["ready"].as_bool().unwrap_or(false));
+                let mut early = None;
+                let mut latest = None;
+                for (time, phase) in [(0.035, "early"), (0.14, "active"), (0.30, "later")] {
+                    let path = std::path::PathBuf::from(format!(
+                        ".tiptoptyp/screenshots/agent-review/particle-variants/{}-{}-2x-{phase}.png",
+                        style.label().to_ascii_lowercase(),
+                        if dark { "dark" } else { "light" },
+                    ));
+                    let frame = render_frame(
+                        &mut framebuffer,
+                        &context,
+                        &renderer,
+                        batch.clone(),
+                        (dark, scale, 255),
+                        time,
+                        (scale == 2.0 && phase != "later").then_some(path.as_path()),
+                    );
+                    let changed = changed_inside_clip(&baseline, &frame, scale);
+                    if phase == "early" {
+                        assert!(
+                            changed > (10.0 * scale * scale) as usize,
+                            "{style:?} was absent: {changed} changed pixels"
+                        );
+                        for (previous_style, pixels) in &previous_styles {
+                            assert_ne!(
+                                &frame.pixels, pixels,
+                                "{style:?} looked identical to {previous_style:?}"
+                            );
+                        }
+                        early = Some(frame.pixels.clone());
+                        previous_styles.push((style, frame.pixels.clone()));
+                    }
+                    latest = Some(frame.pixels);
+                }
+                assert_ne!(early, latest, "{style:?} did not animate or fade");
+                assert_eq!(counter(&renderer, "draws"), 3);
+                assert_eq!(counter(&renderer, "uploads"), 1);
+                assert_eq!(counter(&renderer, "uploaded_instances"), batch.len() as u64);
+                assert_eq!(
+                    counter(&renderer, "uploaded_bytes_total"),
+                    std::mem::size_of_val(&*batch) as u64
+                );
+                let expired = render_frame(
+                    &mut framebuffer,
+                    &context,
+                    &renderer,
+                    batch,
+                    (dark, scale, 255),
+                    super::LIFETIME as f32 + 0.1,
+                    None,
+                );
+                assert_eq!(
+                    baseline.pixels, expired.pixels,
+                    "{style:?} left stale pixels"
+                );
+                let draws = counter(&renderer, "draws");
+                render_frame(
+                    &mut framebuffer,
+                    &context,
+                    &renderer,
+                    empty,
+                    (dark, scale, 255),
+                    super::LIFETIME as f32 + 0.2,
+                    None,
+                );
+                assert_eq!(counter(&renderer, "draws"), draws);
+                assert_eq!(counter(&renderer, "uploads"), 1);
+                renderer.destroy(&gl);
+                unsafe {
+                    assert_eq!(gl.get_error(), glow::NO_ERROR);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "real Glow alpha 0/96 contract for all five particle styles"]
+fn gpu_particle_variants_preserve_translucent_pixels() {
+    for style in ParticleStyle::ALL {
+        check_translucent_style(style, false);
     }
 }

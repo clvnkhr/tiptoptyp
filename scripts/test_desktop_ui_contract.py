@@ -24,17 +24,18 @@ class FixtureFingerprintContract(unittest.TestCase):
 
 class TypingParticleContract(unittest.TestCase):
     def document(self):
-        return {"editor_particles": {"enabled": True, "density": "Medium"},
+        return {"editor_particles": {"enabled": True, "density": "Medium", "style": "Explosion"},
                 "typing_particles": {"active_count": 7, "burst_count": 1,
                     "emitted_count": 7, "max_live": 7, "pool_limit": 128,
                     "lifetime_ms": 480, "last_emission_age_ms": 100,
-                    "origin": [200, 100], "clip": [10, 10, 800, 500]}}
+                    "origin": [200, 100], "clip": [10, 10, 800, 500],
+                    "last_style": "Explosion", "live_styles": {"Explosion": 7}}}
 
     def test_actual_bounded_fresh_emission_and_expired_counter_history_are_distinct(self):
         from desktop_ui_journeys import typing_particle_state
         document = self.document()
         self.assertEqual(typing_particle_state(document)["active_count"], 7)
-        document["typing_particles"].update(active_count=0, last_emission_age_ms=900)
+        document["typing_particles"].update(active_count=0, live_styles={}, last_emission_age_ms=900)
         self.assertEqual(typing_particle_state(document)["burst_count"], 1)
 
     def test_missing_unbounded_disabled_or_expired_particles_cannot_pass(self):
@@ -45,7 +46,11 @@ class TypingParticleContract(unittest.TestCase):
                  {"emitted_count": 6}, {"max_live": 6}, {"burst_count": 8},
                  {"origin": [900, 100]}, {"origin": [True, 100]},
                  {"clip": [200, 100, 200, 100]},
-                 {"origin": [float("nan"), 100]}]
+                 {"origin": [float("nan"), 100]}, {"last_style": None},
+                 {"last_style": "Unknown"}, {"live_styles": None},
+                 {"live_styles": {"Unknown": 7}}, {"live_styles": {"Explosion": 6}},
+                 {"live_styles": {"Explosion": True}},
+                 {"live_styles": {"Explosion": 7, "Plasma": 0}}]
         for change in cases:
             document = self.document()
             document["typing_particles"] = ({**document["typing_particles"], **change}
@@ -54,6 +59,19 @@ class TypingParticleContract(unittest.TestCase):
                 typing_particle_state(document)
         document = self.document()
         document["editor_particles"]["enabled"] = False
+        with self.assertRaises(AssertionError):
+            typing_particle_state(document)
+
+
+    def test_birth_styles_remain_valid_when_the_selected_preference_changes(self):
+        from desktop_ui_journeys import typing_particle_state
+        document = self.document()
+        document["editor_particles"]["style"] = "Shotgun"
+        self.assertEqual(typing_particle_state(document)["live_styles"], {"Explosion": 7})
+        document["typing_particles"]["live_styles"] = {"Explosion": 4, "Shotgun": 3}
+        document["typing_particles"]["last_style"] = "Shotgun"
+        self.assertEqual(sum(typing_particle_state(document)["live_styles"].values()), 7)
+        document["editor_particles"]["style"] = "Unknown"
         with self.assertRaises(AssertionError):
             typing_particle_state(document)
 
@@ -69,7 +87,7 @@ class TypingParticleContract(unittest.TestCase):
         from desktop_ui_journeys import typing_particle_gpu_state
         document = self.gpu_document()
         self.assertEqual(typing_particle_gpu_state(document)["draws"], 3)
-        document["typing_particles"].update(active_count=0)
+        document["typing_particles"].update(active_count=0, live_styles={})
         document["typing_particles"]["gpu"].update(
             ready=False, draws=0, uploads=0, uploaded_instances=0, last_draw_instances=0)
         self.assertFalse(typing_particle_gpu_state(document)["ready"])

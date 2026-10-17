@@ -212,7 +212,7 @@ impl Draft {
 mod tests {
     #[test]
     fn motion_json_accepts_valid_options_and_rejects_impossible_or_out_of_range_values() {
-        use crate::settings::{ParticleDensity, RevealStyle};
+        use crate::settings::{ParticleDensity, ParticleStyle, RevealStyle};
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         for style in RevealStyle::ALL {
             for key in ["source_reveal_animation", "preview_reveal_animation"] {
@@ -224,6 +224,21 @@ mod tests {
             value["editor_particles"]["density"] = serde_json::to_value(density).unwrap();
             assert!(super::parse(&value.to_string()).is_ok());
         }
+        for style in ParticleStyle::ALL {
+            value["editor_particles"]["style"] = serde_json::to_value(style).unwrap();
+            assert!(super::parse(&value.to_string()).is_ok());
+        }
+        let mut invalid_style = value.clone();
+        invalid_style["editor_particles"]["style"] = serde_json::json!("Impossible");
+        let error = super::parse(&invalid_style.to_string()).unwrap_err();
+        assert!(
+            error.contains("editor_particles.style")
+                && error.contains("choose")
+                && ParticleStyle::ALL
+                    .into_iter()
+                    .all(|style| error.contains(style.label())),
+            "{error}"
+        );
         for key in ["source_reveal_animation", "preview_reveal_animation"] {
             for (field, invalid, expected) in [
                 ("duration_ms", 249, "250 and 2000"),

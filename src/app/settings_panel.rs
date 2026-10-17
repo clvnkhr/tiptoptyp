@@ -18,8 +18,8 @@ use crate::{
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
     settings::{
         AppSettings, ColorThemeChoice, DocumentTheme, EditorParticleSettings, GitDiffStyle,
-        InterfaceTheme, ParticleDensity, PreviewPreference, RevealAnimation, RevealStyle,
-        SourcePreviewTrigger,
+        InterfaceTheme, ParticleDensity, ParticleStyle, PreviewPreference, RevealAnimation,
+        RevealStyle, SourcePreviewTrigger,
     },
     shortcuts::ShortcutAction,
     theme::{self, METRICS},
@@ -1586,6 +1586,23 @@ fn typing_particle_controls(ui: &mut egui::Ui, particles: &mut EditorParticleSet
             &mut particles.enabled,
             SettingsTarget::EditorParticles.label(),
         );
+        let style_label = ui.label("Style");
+        let style = egui::ComboBox::from_id_salt("typing-particle-style")
+            .width(128.0)
+            .selected_text(particles.style.label())
+            .show_ui(ui, |ui| {
+                for value in ParticleStyle::ALL {
+                    let response = ui.selectable_value(&mut particles.style, value, value.label());
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe(
+                        &format!("settings.editor.particles.style.{}", value.label()),
+                        &response,
+                    );
+                    let _ = response;
+                }
+            })
+            .response
+            .labelled_by(style_label.id);
         let density_label = ui.label("Density");
         let density = egui::ComboBox::from_id_salt("typing-particle-density")
             .width(94.0)
@@ -1600,9 +1617,10 @@ fn typing_particle_controls(ui: &mut egui::Ui, particles: &mut EditorParticleSet
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         {
             crate::desktop_test::observe("settings.editor.particles.enabled", &enabled);
+            crate::desktop_test::observe("settings.editor.particles.style", &style);
             crate::desktop_test::observe("settings.editor.particles.density", &density);
         }
-        let _ = (enabled, density);
+        let _ = (enabled, style, density);
     });
 }
 
@@ -2074,6 +2092,41 @@ mod tests {
         );
         assert_eq!(harness.state().source_reveal_animation.duration_ms, 900);
         assert_eq!(harness.state().source_reveal_animation.size_percent, 100);
+    }
+
+    #[test]
+    fn typing_particle_style_control_selects_every_style_without_enabling_effects() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(680.0, 220.0))
+            .build_ui_state(
+                |ui, settings: &mut AppSettings| {
+                    typing_particle_controls(ui, &mut settings.editor_particles);
+                },
+                AppSettings::default(),
+            );
+        harness.run();
+        for style in ParticleStyle::ALL.into_iter().rev() {
+            harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Style")
+                .click();
+            harness.run();
+            harness.get_by_label(style.label()).click();
+            harness.run();
+            assert_eq!(harness.state().editor_particles.style, style);
+            assert!(!harness.state().editor_particles.enabled);
+            assert_eq!(
+                harness.state().editor_particles.density,
+                ParticleDensity::Medium
+            );
+            assert_eq!(
+                harness.state().source_reveal_animation,
+                RevealAnimation::default()
+            );
+            assert_eq!(
+                harness.state().preview_reveal_animation,
+                RevealAnimation::default()
+            );
+        }
     }
 
     #[test]

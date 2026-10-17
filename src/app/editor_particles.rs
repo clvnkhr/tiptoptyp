@@ -1,7 +1,7 @@
 //! Finite typing feedback over the existing editor, with no input or layout widgets.
 use crate::{
     document::DocumentKey,
-    settings::{EditorParticleSettings, ParticleDensity},
+    settings::{EditorParticleSettings, ParticleDensity, ParticleStyle},
     theme,
 };
 use eframe::egui::{self, Id, Pos2, Rect, Ui, Vec2, text_edit::TextEditOutput};
@@ -89,6 +89,7 @@ struct Particle {
     radius: f32,
     color_seed: f32,
     flash: bool,
+    style: ParticleStyle,
     born: f64,
     frame: u64,
 }
@@ -105,6 +106,7 @@ impl Particle {
 #[derive(Default)]
 struct State {
     identity: Option<Identity>,
+    style: ParticleStyle,
     particles: Vec<Particle>,
     last_frame: Option<u64>,
     last_time: f64,
@@ -185,22 +187,18 @@ impl State {
             self.particles.reserve_exact(LIMIT);
         }
         for index in 0..count {
-            // Uneven full-circle velocities give the burst the ballistic,
-            // chaotic character of small game explosions, without a rosette.
             let angle = self.random() * std::f32::consts::TAU;
-            let speed = 65.0 + self.random().powi(2) * 255.0;
-            let radius = 0.7 + self.random() * 1.0;
+            let energy = self.random();
+            let size = self.random();
             let color_seed = self.random();
+            let (velocity, radius) = launch(self.style, index, angle, energy, size, color_seed);
             self.particles.push(Particle {
                 origin,
-                velocity: if index == 0 {
-                    Vec2::ZERO
-                } else {
-                    Vec2::angled(angle) * speed
-                },
-                radius: if index == 0 { 18.0 } else { radius },
+                velocity,
+                radius,
                 color_seed,
                 flash: index == 0,
+                style: self.style,
                 born: now,
                 frame,
             });
@@ -224,21 +222,79 @@ impl State {
                             particle.radius,
                             (particle.born - self.base_time) as f32,
                             particle.color_seed,
-                            if particle.flash {
-                                1.0
-                            } else if particle.color_seed > 0.9 {
-                                3.0
-                            } else if particle.color_seed > 0.68 {
-                                2.0
-                            } else {
-                                0.0
-                            },
+                            packed_kind(particle),
                         ]
                     })
                     .collect::<Vec<_>>()
                     .into()
             })
             .clone()
+    }
+}
+
+// Keep the original eight-float instance stride: kind occupies the low two
+// bits, and the burst's immutable style occupies the remaining small integer.
+fn packed_kind(particle: &Particle) -> f32 {
+    let kind = if particle.flash {
+        1
+    } else if particle.color_seed > 0.9 {
+        if particle.style == ParticleStyle::Railgun {
+            2
+        } else {
+            3
+        }
+    } else if particle.color_seed > 0.68 && particle.style != ParticleStyle::Flamethrower {
+        2
+    } else {
+        0
+    };
+    let style = match particle.style {
+        ParticleStyle::Explosion => 0,
+        ParticleStyle::Shotgun => 1,
+        ParticleStyle::Flamethrower => 2,
+        ParticleStyle::Railgun => 3,
+        ParticleStyle::Plasma => 4,
+    };
+    (style * 4 + kind) as f32
+}
+
+fn launch(
+    style: ParticleStyle,
+    index: usize,
+    angle: f32,
+    energy: f32,
+    size: f32,
+    seed: f32,
+) -> (Vec2, f32) {
+    if index == 0 {
+        return (Vec2::ZERO, 18.0);
+    }
+    let spread = angle / std::f32::consts::TAU - 0.5;
+    match style {
+        ParticleStyle::Explosion => (
+            Vec2::angled(angle) * (65.0 + energy.powi(2) * 255.0),
+            0.7 + size,
+        ),
+        ParticleStyle::Shotgun if seed > 0.68 && seed <= 0.9 => (
+            egui::vec2(-35.0 - energy * 65.0, -55.0 - size * 90.0),
+            1.0 + size,
+        ),
+        ParticleStyle::Shotgun => (
+            Vec2::angled(-0.2 + spread * 0.8) * (180.0 + energy.powi(2) * 270.0),
+            0.7 + size * 0.7,
+        ),
+        ParticleStyle::Flamethrower => (
+            Vec2::angled(-std::f32::consts::FRAC_PI_2 + spread * 1.1) * (65.0 + energy * 145.0),
+            1.5 + size * 2.4,
+        ),
+        ParticleStyle::Railgun => (
+            Vec2::angled(spread * 0.06) * (400.0 + energy * 420.0),
+            0.7 + size * 0.4,
+        ),
+        ParticleStyle::Plasma => (
+            Vec2::angled(angle) * (90.0 + energy * 135.0),
+            1.7 + size * 1.7,
+        ),
     }
 }
 
@@ -327,6 +383,7 @@ pub(super) fn paint(
     let now = context.input(|input| input.time);
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     let bursts_before = state.bursts;
+    state.style = settings.style;
     state.update(
         Identity::new(surface.document, surface.view),
         frame,
@@ -366,6 +423,7 @@ pub(super) fn paint(
 struct Trace {
     identity: Identity,
     burst_count: u64,
+    last_style: ParticleStyle,
     emitted_count: u64,
     max_live: usize,
     last_emission: f64,
@@ -393,6 +451,7 @@ fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, cli
             .unwrap_or(Trace {
                 identity,
                 burst_count: 0,
+                last_style: particle.style,
                 emitted_count: 0,
                 max_live: 0,
                 last_emission: now,
@@ -400,6 +459,7 @@ fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, cli
                 clip,
             });
         trace.identity = identity;
+        trace.last_style = particle.style;
         trace.burst_count = trace.burst_count.saturating_add(1);
         trace.emitted_count = trace.emitted_count.saturating_add(emitted as u64);
         trace.max_live = trace.max_live.max(state.particles.len());
@@ -428,20 +488,26 @@ pub(super) fn inspected(
         )
     });
     let now = context.input(|input| input.time);
+    let mut live_styles = std::collections::BTreeMap::new();
     let active_count = state.map_or(0, |state| {
         let state = state.lock().unwrap();
         if state.identity.is_none_or(|key| key.document != identity) {
             return 0;
         }
-        state
+        for particle in state
             .particles
             .iter()
             .filter(|particle| (0.0..LIFETIME).contains(&(now - particle.born)))
-            .count()
+        {
+            *live_styles.entry(particle.style.label()).or_insert(0usize) += 1;
+        }
+        live_styles.values().sum::<usize>()
     });
     serde_json::json!({
         "gpu": Renderer::for_context(context).inspected(),
         "active_count": active_count,
+        "live_styles": live_styles,
+        "last_style": trace.as_ref().map(|trace| trace.last_style.label()),
         "burst_count": trace.as_ref().map_or(0, |trace| trace.burst_count),
         "emitted_count": trace.as_ref().map_or(0, |trace| trace.emitted_count),
         "max_live": trace.as_ref().map_or(0, |trace| trace.max_live),
@@ -567,6 +633,94 @@ mod tests {
         assert!(!Arc::ptr_eq(&second, &pruned));
         assert_eq!(pruned.len(), 12);
         state.update(key, 3, 500_001.0, None, 0);
+        assert!(state.instances().is_empty());
+    }
+
+    #[test]
+    fn styles_keep_fixed_gpu_stride_and_distinct_launch_patterns() {
+        assert_eq!(std::mem::size_of::<gpu::Instance>(), 32);
+        let mut batches = Vec::new();
+        for (code, style) in ParticleStyle::ALL.into_iter().enumerate() {
+            let mut state = State {
+                style,
+                ..Default::default()
+            };
+            state.update(identity(1, 0, View::Source), 0, 0.0, Some(Pos2::ZERO), 80);
+            let batch = state.instances();
+            assert_eq!(batch.len(), 80);
+            assert!(batch.iter().flatten().all(|value| value.is_finite()));
+            assert!(batch.iter().all(|p| (p[7] / 4.0).floor() as usize == code));
+            let moving = state.particles.iter().filter(|p| !p.flash);
+            match style {
+                ParticleStyle::Shotgun => {
+                    assert!(moving.filter(|p| p.velocity.x > 0.0).count() > 50)
+                }
+                ParticleStyle::Flamethrower => assert!(moving.clone().all(|p| p.velocity.y < 0.0)),
+                ParticleStyle::Railgun => assert!(
+                    moving
+                        .clone()
+                        .all(|p| p.velocity.x > 399.0 && p.velocity.y.abs() < p.velocity.x * 0.031)
+                ),
+                ParticleStyle::Explosion | ParticleStyle::Plasma => {
+                    let mut quadrants = [false; 4];
+                    for p in moving {
+                        quadrants[usize::from(p.velocity.x >= 0.0)
+                            + 2 * usize::from(p.velocity.y >= 0.0)] = true;
+                    }
+                    assert!(quadrants.into_iter().all(|present| present));
+                }
+            }
+            batches.push(batch);
+            for frame in 1..100 {
+                state.update(
+                    identity(1, frame, View::Source),
+                    frame,
+                    frame as f64 * 0.001,
+                    Some(Pos2::ZERO),
+                    320,
+                );
+                assert_eq!(state.particles.len(), LIMIT, "{style:?}");
+            }
+            state.update(identity(1, 100, View::Source), 100, 1.0, None, 0);
+            assert!(
+                state.particles.is_empty(),
+                "every style must stop repainting after expiry"
+            );
+        }
+        for pair in batches.windows(2) {
+            assert_ne!(pair[0], pair[1]);
+        }
+    }
+
+    #[test]
+    fn switching_style_changes_only_future_bursts_and_reuses_unchanged_gpu_batch() {
+        let mut state = State::default();
+        let key = identity(1, 0, View::Source);
+        state.update(key, 0, 0.0, Some(Pos2::ZERO), 48);
+        let explosion = state.instances();
+        state.style = ParticleStyle::Plasma;
+        state.update(key, 1, 0.01, None, 0);
+        assert_eq!(state.bursts, 1, "selection must not emit");
+        assert!(
+            Arc::ptr_eq(&explosion, &state.instances()),
+            "selection must not upload or restyle an existing batch"
+        );
+        state.update(key, 2, 0.02, Some(Pos2::new(10.0, 0.0)), 48);
+        let mixed = state.instances();
+        assert_eq!(
+            &mixed[..48],
+            &*explosion,
+            "old trajectories and shapes must remain immutable"
+        );
+        assert!(mixed[48..].iter().all(|p| (p[7] / 4.0).floor() == 4.0));
+        state.update(key, 3, 0.65, None, 0);
+        let tail = state.instances();
+        assert_eq!(
+            &*tail,
+            &mixed[48..],
+            "the older style expires independently"
+        );
+        state.update(key, 4, 0.7, None, 0);
         assert!(state.instances().is_empty());
     }
 

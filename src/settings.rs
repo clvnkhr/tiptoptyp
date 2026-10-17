@@ -238,10 +238,38 @@ impl ParticleDensity {
     }
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ParticleStyle {
+    #[default]
+    Explosion,
+    Shotgun,
+    Flamethrower,
+    Railgun,
+    Plasma,
+}
+impl ParticleStyle {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Explosion,
+        Self::Shotgun,
+        Self::Flamethrower,
+        Self::Railgun,
+        Self::Plasma,
+    ];
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Explosion => "Explosion",
+            Self::Shotgun => "Shotgun",
+            Self::Flamethrower => "Flamethrower",
+            Self::Railgun => "Railgun",
+            Self::Plasma => "Plasma",
+        }
+    }
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct EditorParticleSettings {
     pub(crate) enabled: bool,
     pub(crate) density: ParticleDensity,
+    pub(crate) style: ParticleStyle,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1611,7 +1639,8 @@ mod tests {
             defaults.editor_particles,
             EditorParticleSettings {
                 enabled: false,
-                density: ParticleDensity::Medium
+                density: ParticleDensity::Medium,
+                style: ParticleStyle::Explosion
             }
         );
         let mut value = serde_json::to_value(&defaults).unwrap();
@@ -1638,6 +1667,7 @@ mod tests {
         preview.editor_particles = EditorParticleSettings {
             enabled: true,
             density: ParticleDensity::High,
+            style: ParticleStyle::Shotgun,
         };
         let mut current = defaults.clone();
         current.apply_edits(&defaults, source);
@@ -1650,9 +1680,32 @@ mod tests {
         assert_eq!(current.preview_reveal_animation.style, RevealStyle::Pulse);
         assert!(current.editor_particles.enabled);
         assert_eq!(current.editor_particles.density, ParticleDensity::High);
+        assert_eq!(current.editor_particles.style, ParticleStyle::Shotgun);
         let mut storage = MemoryStorage::default();
         current.save(&mut storage);
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), current);
+    }
+
+    #[test]
+    fn typing_particle_styles_persist_and_default_without_enabling_effects() {
+        let mut settings = AppSettings::default();
+        let mut storage = MemoryStorage::default();
+        for style in ParticleStyle::ALL {
+            settings.editor_particles.style = style;
+            settings.save(&mut storage);
+            let loaded = AppSettings::load(Some(&storage)).unwrap();
+            assert_eq!(loaded.editor_particles.style, style);
+            assert!(!loaded.editor_particles.enabled);
+            assert_eq!(loaded.editor_particles.density, ParticleDensity::Medium);
+        }
+        let mut value = serde_json::to_value(&settings).unwrap();
+        value["editor_particles"]
+            .as_object_mut()
+            .unwrap()
+            .remove("style");
+        let loaded: AppSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded.editor_particles.style, ParticleStyle::Explosion);
+        assert!(!loaded.editor_particles.enabled);
     }
 
     #[test]

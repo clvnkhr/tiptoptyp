@@ -16,6 +16,8 @@ from desktop_ui_ime_journeys import ImeJourneys
 from desktop_ui_palette_journeys import PaletteJourneys
 from desktop_ui_jump_journeys import PreviewJumpJourneys
 
+PARTICLE_STYLES = ("Explosion", "Shotgun", "Flamethrower", "Railgun", "Plasma")
+
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
 
 
@@ -38,7 +40,8 @@ def typing_particle_state(document):
     state = document.get("typing_particles")
     settings = document.get("editor_particles")
     if not isinstance(state, dict) or not isinstance(settings, dict) \
-            or type(settings.get("enabled")) is not bool:
+            or type(settings.get("enabled")) is not bool \
+            or settings.get("style") not in PARTICLE_STYLES:
         raise AssertionError("particle settings/inspection is unavailable")
     for field in ("active_count", "burst_count", "emitted_count", "max_live", "pool_limit", "lifetime_ms"):
         if type(state.get(field)) is not int or state[field] < 0:
@@ -49,6 +52,14 @@ def typing_particle_state(document):
             or state["max_live"] > state["emitted_count"] \
             or state["burst_count"] > state["emitted_count"]:
         raise AssertionError("particle work/lifetime is not bounded or counters are inconsistent")
+    live_styles = state.get("live_styles")
+    if not isinstance(live_styles, dict) or any(
+            style not in PARTICLE_STYLES or type(count) is not int or count <= 0
+            for style, count in live_styles.items()) \
+            or sum(live_styles.values()) != state["active_count"] \
+            or (state.get("last_style") not in PARTICLE_STYLES if state["burst_count"]
+                else state.get("last_style") is not None):
+        raise AssertionError("particle styles do not identify their actual live bursts")
     if state["burst_count"]:
         origin, clip, age = state.get("origin"), state.get("clip"), state.get("last_emission_age_ms")
         if not isinstance(origin, list) or len(origin) != 2 \
@@ -1894,6 +1905,7 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
 
     def typing_particle_burst(self, text, expected, capture=False):
         before = self.snapshot()["document"]
+        style = before["editor_particles"]["style"]
         prior = typing_particle_state(before)
         prior_gpu = typing_particle_gpu_state(before)
         self.native("text", text)
@@ -1901,18 +1913,35 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             state = typing_particle_state(document)
             gpu = typing_particle_gpu_state(document)
             return (state["active_count"] > 0 and state["burst_count"] > prior["burst_count"]
+                    and state["last_style"] == style
+                    and state["live_styles"] == {style: state["active_count"]}
                     and gpu["ready"] and gpu["draws"] > prior_gpu["draws"]
                     and gpu["uploads"] > prior_gpu["uploads"]
                     and gpu["uploaded_instances"] > 0 and gpu["last_draw_instances"] > 0
                     and document["source_fingerprint"] == fingerprint(expected))
-        active = self.wait("real typing renders a bounded native GPU explosion", rendered)
-        self.record("typing_particles.active", dark=active["document"]["dark"],
+        active = self.wait("real typing renders a bounded native GPU burst: " + style, rendered)
+        self.record("typing_particles.active", style=style, dark=active["document"]["dark"],
                     observation=active["document"]["typing_particles"])
         if capture:
             self.capture_viewport("main")
         self.source_is(expected)
         self.wait("typing particles expire without further input", lambda d:
                   typing_particle_state(d)["active_count"] == 0, timeout=3)
+
+    def typing_particle_choose_style(self, style):
+        before = typing_particle_state(self.snapshot()["document"])
+        history = {field: before[field] for field in ("burst_count", "emitted_count", "last_style")}
+        self.settings()
+        self.setting_section("typing particles", "Typing particles")
+        self.click("settings.editor.particles.style")
+        self.wait_target("settings.editor.particles.style." + style)
+        self.click("settings.editor.particles.style." + style)
+        self.wait("particle style applies through Settings: " + style, lambda d:
+                  d["editor_particles"]["style"] == style)
+        self.stable_state(lambda d: all(typing_particle_state(d)[field] == value
+                                       for field, value in history.items()), frames=3)
+        self.close_settings()
+        self.record("typing_particles.style", style=style, preserved_history=history)
 
     def typing_particles(self):
         launch = self.snapshot()["document"]
@@ -1930,23 +1959,27 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         document = self.snapshot()["document"]
         appearance = document["interface_theme"]
         initial_dark = document["dark"]
+        preferences = dict(document["editor_particles"])
         state = typing_particle_state(document)
         typing_particle_gpu_state(document)
-        if document["editor_particles"] != {"enabled": False, "density": "Medium"} \
+        if preferences != {"enabled": False, "density": "Medium", "style": "Explosion"} \
                 or state["active_count"] or state["burst_count"]:
-            raise AssertionError("typing particles must default off at medium density")
-        self.settings()
-        self.setting_section("typing particles", "Typing particles")
-        self.click("settings.editor.particles.enabled")
-        self.wait("particle checkbox enables the real setting", lambda d: d["editor_particles"]["enabled"])
-        self.close_settings()
-        self.click("editor.source")
-        self.key(125)  # Cmd+Down reaches EOF even if the click landed on a blank line.
-        self.wait("source owns particle input at EOF", lambda d:
-                  d["editor_keyboard_focused"] and d["cursor"] == [len(initial), len(initial)])
-        expected = initial + "x"
-        self.typing_particle_burst("x", expected)
+            raise AssertionError("typing particles must default off at medium density with Explosion style")
+        expected = initial
         try:
+            self.settings()
+            self.setting_section("typing particles", "Typing particles")
+            self.click("settings.editor.particles.enabled")
+            self.wait("particle checkbox enables the real setting", lambda d: d["editor_particles"]["enabled"])
+            self.close_settings()
+            for style, text in zip(PARTICLE_STYLES, "esfrp"):
+                self.typing_particle_choose_style(style)
+                self.click("editor.source")
+                self.key(125)  # Cmd+Down reaches EOF even after clicking a blank line.
+                self.wait("source owns particle input at EOF", lambda d:
+                          d["editor_keyboard_focused"] and d["cursor"] == [len(expected), len(expected)])
+                expected += text
+                self.typing_particle_burst(text, expected, capture=self.capture_review)
             for theme, dark, text in (("Light", False, "l"), ("Dark", True, "d")):
                 self.settings()
                 self.setting_section("appearance", "Appearance")
@@ -1958,39 +1991,49 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                 self.key(125)
                 expected += text
                 self.typing_particle_burst(text, expected, capture=self.capture_review)
+            quiet_document = self.snapshot()["document"]
+            before = typing_particle_state(quiet_document)["burst_count"]
+            idle_draws = typing_particle_gpu_state(quiet_document)["draws"]
+            def remains_quiet(document):
+                state = typing_particle_state(document)
+                gpu = typing_particle_gpu_state(document)
+                return (state["burst_count"] == before and state["active_count"] == 0
+                        and gpu["draws"] == idle_draws)
+            self.key(123, "none")  # Moving a caret must not emit another burst.
+            self.stable_state(remains_quiet, frames=3)
+            self.key(0)
+            self.paste_source("clipboard paste")
+            self.stable_state(remains_quiet, frames=3)
+            self.settings()
+            self.setting_section("typing particles", "Typing particles")
+            self.click("settings.editor.particles.enabled")
+            self.wait("particle checkbox disables the real setting", lambda d: not d["editor_particles"]["enabled"])
+            self.close_settings()
+            self.click("editor.source")
+            self.key(124)
+            self.native("text", "z")
+            self.source_is("clipboard pastez")
+            self.stable_state(remains_quiet, frames=3)
+            self.record("typing_particles.negative", burst_count=before, idle_gpu_draws=idle_draws)
         finally:
             self.settings()
+            self.setting_section("typing particles", "Typing particles")
+            current = self.snapshot()["document"]["editor_particles"]
+            if current["style"] != preferences["style"]:
+                self.click("settings.editor.particles.style")
+                self.wait_target("settings.editor.particles.style." + preferences["style"])
+                self.click("settings.editor.particles.style." + preferences["style"])
+            if current["enabled"] != preferences["enabled"]:
+                self.click("settings.editor.particles.enabled")
+            self.wait("particle journey restores the exact initial particle preferences", lambda d:
+                      d["editor_particles"] == preferences)
             self.setting_section("appearance", "Appearance")
             self.click("settings.theme." + ("Follow system" if appearance == "System" else appearance))
             self.wait("particle journey restores the exact initial appearance", lambda d:
                       d["interface_theme"] == appearance and d["dark"] is initial_dark)
             self.close_settings()
             self.click("editor.source")
-        quiet_document = self.snapshot()["document"]
-        before = typing_particle_state(quiet_document)["burst_count"]
-        idle_draws = typing_particle_gpu_state(quiet_document)["draws"]
-        def remains_quiet(document):
-            state = typing_particle_state(document)
-            gpu = typing_particle_gpu_state(document)
-            return (state["burst_count"] == before and state["active_count"] == 0
-                    and gpu["draws"] == idle_draws)
-        self.key(123, "none")  # Moving a caret must not emit another burst.
-        self.stable_state(remains_quiet, frames=3)
-        self.key(0)
-        self.paste_source("clipboard paste")
-        self.stable_state(remains_quiet, frames=3)
-        self.settings()
-        self.setting_section("typing particles", "Typing particles")
-        self.click("settings.editor.particles.enabled")
-        self.wait("particle checkbox disables the real setting", lambda d: not d["editor_particles"]["enabled"])
-        self.close_settings()
-        self.click("editor.source")
-        self.key(124)
-        self.native("text", "z")
-        self.source_is("clipboard pastez")
-        self.stable_state(remains_quiet, frames=3)
-        self.record("typing_particles.negative", burst_count=before, idle_gpu_draws=idle_draws,
-                    restored_appearance=appearance)
+            self.record("typing_particles.restored", preferences=preferences, appearance=appearance)
         self.close_scratch(count)
 
     def settings_category(self, category, query, source, size):
