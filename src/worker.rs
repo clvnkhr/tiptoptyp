@@ -92,6 +92,23 @@ impl<T: Send + 'static> LatestJob<T> {
         self.start_with_repaint(name, None, work)
     }
 
+    /// Synchronize with actual completion without consuming the production
+    /// polling path. The timeout only guards a broken/hung test worker; it is
+    /// not an assertion about how quickly cold dependencies initialize.
+    #[cfg(test)]
+    pub(crate) fn wait_until_ready_for_test(&mut self) -> Result<(), String> {
+        let result = self
+            .receiver
+            .as_ref()
+            .ok_or("No test worker is running")?
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .map_err(|error| format!("Test worker did not complete: {error}"))?;
+        let (sender, receiver) = mpsc::channel();
+        sender.send(result).map_err(|error| error.to_string())?;
+        self.receiver = Some(receiver);
+        Ok(())
+    }
+
     pub(crate) fn start_and_repaint(
         &mut self,
         name: impl Into<String>,
@@ -217,7 +234,12 @@ mod tests {
     fn successful_job_becomes_ready_and_then_idle() {
         let mut job = LatestJob::default();
         job.start("latest-job-success", || Ok(42)).unwrap();
-        assert_eq!(poll_until_settled(&mut job), LatestJobPoll::Ready(42));
+        job.wait_until_ready_for_test().unwrap();
+        assert!(
+            job.is_running(),
+            "the test barrier leaves acceptance to poll"
+        );
+        assert_eq!(job.poll(), LatestJobPoll::Ready(42));
         assert_eq!(job.poll(), LatestJobPoll::Idle);
     }
 
@@ -275,10 +297,8 @@ mod tests {
         let mut job = LatestJob::<()>::default();
         job.start("latest-job-failure", || Err("scan failed".to_owned()))
             .unwrap();
-        assert_eq!(
-            poll_until_settled(&mut job),
-            LatestJobPoll::Failed("scan failed".to_owned())
-        );
+        job.wait_until_ready_for_test().unwrap();
+        assert_eq!(job.poll(), LatestJobPoll::Failed("scan failed".to_owned()));
         assert!(!job.is_running());
     }
 

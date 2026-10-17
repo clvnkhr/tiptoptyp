@@ -429,18 +429,19 @@ mod tests {
         }
 
         release.send(()).unwrap();
-        let timeout = Instant::now() + Duration::from_secs(5);
-        while app.writing.completed != app.writing.observed && Instant::now() < timeout {
-            app.update_writing_checks(&context);
-            assert!(
-                app.writing
-                    .diagnostics
-                    .iter()
-                    .all(|diagnostic| diagnostic.message != "obsolete writing result"),
-                "the retired worker's result must never reach the reopened document"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        app.writing.job.wait_until_ready_for_test().unwrap();
+        app.update_writing_checks(&context);
+        assert!(app.writing.completed.is_none());
+        assert!(
+            app.writing.diagnostics.is_empty(),
+            "the retired worker's result must never reach the reopened document"
+        );
+        assert!(
+            app.writing.job.is_running(),
+            "the latest revision starts only after the old worker completes"
+        );
+        app.writing.job.wait_until_ready_for_test().unwrap();
+        app.update_writing_checks(&context);
         assert_eq!(app.writing.completed, app.writing.observed);
         assert!(
             app.writing
@@ -471,11 +472,8 @@ mod tests {
         app.update_writing_checks(&context);
         app.writing.deadline = Some(Instant::now());
         app.update_writing_checks(&context);
-        let timeout = Instant::now() + Duration::from_secs(5);
-        while app.writing.completed != app.writing.observed && Instant::now() < timeout {
-            std::thread::sleep(Duration::from_millis(1));
-            app.update_writing_checks(&context);
-        }
+        app.writing.job.wait_until_ready_for_test().unwrap();
+        app.update_writing_checks(&context);
         assert_eq!(app.writing.completed, app.writing.observed);
         assert!(!app.writing.checker.is_poisoned());
         assert!(
