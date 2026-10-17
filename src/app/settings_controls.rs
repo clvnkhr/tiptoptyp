@@ -131,10 +131,14 @@ pub(super) fn show_page_appearance_sample(
             foreground,
         );
     };
-    text(12.0, "Energy estimate", 11.0);
-    text(34.0, "Let A generate a\nsemigroup on H.", 10.0);
-    text(70.0, "∂ₜu + Au = f", 12.0);
-    text(97.0, "The bound follows.", 10.0);
+    text(10.0, "Energy estimate", 11.0);
+    text(31.0, "Let A generate a\nsemigroup on H.", 10.0);
+    text(58.0, "∂ₜu + Au = f", 12.0);
+    paint_page_sample_image(
+        &painter,
+        page_sample_image_rect(paper),
+        dark && settings.dark_images,
+    );
     painter.text(
         egui::pos2(paper.center().x, paper.bottom() - 6.0),
         egui::Align2::CENTER_BOTTOM,
@@ -142,6 +146,51 @@ pub(super) fn show_page_appearance_sample(
         egui::FontId::proportional(9.0),
         foreground,
     );
+}
+
+fn page_sample_image_rect(paper: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(paper.left() + 10.0, paper.top() + 82.0),
+        egui::pos2(paper.right() - 10.0, paper.top() + 117.0),
+    )
+}
+
+// Four swatches stand in for image pixels. Cache their exact opened-image
+// transform once; the sample never decodes or uploads a texture while painting.
+fn page_sample_image_colors(dark: bool) -> [Color32; 4] {
+    const SOURCE: [[u8; 4]; 4] = [
+        [232, 242, 248, 255],
+        [239, 174, 68, 255],
+        [103, 151, 168, 255],
+        [45, 96, 120, 255],
+    ];
+    static DARK: std::sync::OnceLock<[[u8; 4]; 4]> = std::sync::OnceLock::new();
+    let pixels = if dark {
+        *DARK.get_or_init(|| {
+            let rgba = crate::preview::dark_preview_rgba(SOURCE.as_flattened());
+            std::array::from_fn(|index| rgba[index * 4..index * 4 + 4].try_into().unwrap())
+        })
+    } else {
+        SOURCE
+    };
+    pixels.map(|[r, g, b, a]| Color32::from_rgba_unmultiplied(r, g, b, a))
+}
+
+fn paint_page_sample_image(painter: &egui::Painter, image: egui::Rect, dark: bool) {
+    let [sky, sun, distant, nearby] = page_sample_image_colors(dark);
+    let at = |x: f32, y: f32| image.min + image.size() * egui::vec2(x, y);
+    painter.rect_filled(image, 0.0, sky);
+    painter.circle_filled(at(0.76, 0.28), 5.0, sun);
+    painter.add(egui::Shape::convex_polygon(
+        vec![at(0.0, 0.85), at(0.34, 0.22), at(0.81, 1.0), at(0.0, 1.0)],
+        distant,
+        egui::Stroke::NONE,
+    ));
+    painter.add(egui::Shape::convex_polygon(
+        vec![at(0.31, 1.0), at(0.73, 0.45), at(1.0, 0.8), at(1.0, 1.0)],
+        nearby,
+        egui::Stroke::NONE,
+    ));
 }
 
 pub(super) fn color_theme_choice_label(choice: &ColorThemeChoice) -> String {
@@ -1017,6 +1066,60 @@ mod layout_tests {
         assert!(settings_row_columns(359.0, 8.0).is_none());
         let (label, value) = settings_row_columns(500.0, 8.0).unwrap();
         assert_eq!(label + value + 8.0, 500.0);
+    }
+
+    #[test]
+    fn sample_image_uses_the_real_image_transform_without_changing_page_or_text() {
+        let plain = page_sample_image_colors(false);
+        let expected =
+            crate::preview::dark_preview_rgba(plain.map(|color| color.to_array()).as_flattened());
+        assert_eq!(
+            page_sample_image_colors(true)
+                .map(|color| color.to_array())
+                .as_flattened(),
+            expected.as_slice(),
+        );
+        assert_ne!(page_sample_image_colors(true), plain);
+
+        use crate::settings::{AppSettings, DocumentTheme};
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for page in [DocumentTheme::Light, DocumentTheme::Dark] {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(180.0, 200.0))
+                .build_ui_state(
+                    |ui, settings: &mut AppSettings| show_page_appearance_sample(ui, settings),
+                    AppSettings {
+                        document_theme: page,
+                        ..AppSettings::default()
+                    },
+                );
+            harness.run();
+            let sample = harness.get_by_label("Page appearance sample").rect();
+            let before = harness.output().shapes.clone();
+            harness.state_mut().dark_images = true;
+            harness.run();
+            let after = &harness.output().shapes;
+            assert_eq!(before.len(), after.len());
+            let changed = before
+                .iter()
+                .zip(after)
+                .filter(|(a, b)| a != b)
+                .collect::<Vec<_>>();
+            if page == DocumentTheme::Light {
+                assert!(changed.is_empty(), "images are unchanged on light pages");
+            } else {
+                assert_eq!(
+                    changed.len(),
+                    4,
+                    "only the four figure shapes should change"
+                );
+                let image = page_sample_image_rect(sample.shrink(4.0));
+                for (before, after) in changed {
+                    assert!(image.contains_rect(before.shape.visual_bounding_rect()));
+                    assert!(image.contains_rect(after.shape.visual_bounding_rect()));
+                }
+            }
+        }
     }
 
     #[test]

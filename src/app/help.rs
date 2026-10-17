@@ -23,7 +23,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.label("Typst defaults to Tinymist partial (experimental), keeping nearby pages ready and filling distant pages as you navigate. Select Tinymist (Typst only) for the complete renderer. This choice changes only the live viewer, not saved PDFs.");
         ui.label("On macOS, Smooth Tinymist zoom keeps a higher-resolution viewport image over the preview while it redraws. Toggle it in Settings → Preview; it works with both Tinymist viewers.");
         ui.heading("Leave part of your code untouched");
-        ui.label("Directives apply to the named tool, not every service. Select your TeX formatter in Settings → TeX. Compiler errors cannot be disabled with formatter comments.");
+        ui.label("Directives apply to the named tool, not every service. Select your TeX formatter in Settings → Tools → TeX tools. Compiler errors cannot be disabled with formatter comments.");
         ui.label(RichText::new("Typst formatter (Typstyle through Tinymist)").strong());
         ui.monospace("// @typstyle off\n#let carefully_aligned = (a: 1, b: 2)");
         ui.label("Protects the next syntax node, such as a definition. It is not an off/on region toggle.");
@@ -40,19 +40,39 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.monospace("% tex-fmt: off\n% your hand-aligned code\n% tex-fmt: on\nOne preserved line % tex-fmt: skip");
         ui.hyperlink_to("tex-fmt directives", "https://github.com/WGUNDERWOOD/tex-fmt#disabling-the-formatter");
         ui.label("Harper and TexLab do not share these region directives. Harper already excludes math and technical arguments; turn writing checks off in Settings when needed. Tool-specific capabilities depend on your installed version.");
+        ui.label("Writing checks wait briefly after typing, then reuse unchanged paragraphs. They still parse the whole source to track code and math boundaries, so sentences can continue across display equations. Old diagnostics remain visible until a fresh result arrives. Apostrophes stay part of possessives; name evidence from author lists and mathematical attributions applies throughout the document without turning off grammar checks.");
+        ui.heading("Snippets");
+        ui.label("Type a prefix such as frac inside an equation, choose the document-symbol suggestion, and press Enter. Suggestions appear with other completions; they never replace text automatically.");
+        shortcut_table(ui, "help-snippet-shortcuts", &bindings, &[A::Complete]);
+        ui.monospace("Tab / Shift+Tab   Next / previous editable field\nEscape            Finish linked editing\nUndo / Redo       Restore all linked copies together");
+        ui.label("Try mk for inline math, dm for display math, frac / sqrt / sum / int / pmat / cases inside equations, and env / sec in text. Typst also has fig / table. TeX and Typst get their own syntax; auto-miTeX dollar math uses TeX snippets. Some block templates appear only at the start of a line; indentation is allowed. Comments and raw/verbatim text are excluded.");
+        ui.label("Settings → Snippets lists every suggested and custom template, with search, filters and per-row enable, Edit and Delete actions. Edit opens that entry in its own resizable source window. Edit snippets opens the full editor for adding or restoring entries. Uncheck Enabled to disable a snippet temporarily. Duplicate copies an entry; Remove deletes it. Save snippets or Cmd/Ctrl+S applies changes; Revert changes restores the saved collection. Cmd/Ctrl+F searches this window; Cmd/Ctrl+W closes only the snippet editor and keeps its unsaved draft for reopening. Restore suggestions resets the suggested library while keeping your own entries. An enabled, eligible custom snippet overrides a suggestion with the same prefix.");
+        ui.label("Write ordinary Typst or TeX. Both languages use the same placeholders, which are removed before insertion:");
+        ui.monospace("{{1:x}}   Field 1 starts with x\n{{1}}     Repeat field 1\n{{2:y}}   Next field\n{{0}}     Final cursor position");
+        ui.label("Fields are visited in numerical order. Repeating a number links its text. Backslashes, dollars and document commands remain literal. Set Opening delimiter and Closing delimiter per snippet if {{ and }} clash with your source. Rewrite markers converts existing fields; Keep source changes the delimiters without rewriting text.");
+        ui.label("The TeX env template keeps its begin/end names in sync:");
+        ui.monospace("\\begin{{{1:equation}}}\n  {{2:x = y}}\n\\end{{{1}}}\n{{0}}");
+        ui.label("Multiline insertion keeps your line's indentation. Recognized TeX dependencies are imported automatically; Undo removes insertion and imports together. Keep fields flat: use separate numbered fields rather than nesting them. Custom templates do not execute Lua, regex triggers, transformations or choice menus.");
+        ui.horizontal_wrapped(|ui| {
+            ui.hyperlink_to("TeX LuaSnip examples", "https://github.com/iurimateus/luasnip-latex-snippets.nvim");
+            ui.hyperlink_to("Typst LuaSnip examples", "https://github.com/pseudofractal/typst-notes.nvim/blob/main/snippets/typst.lua");
+        });
         ui.heading("Try these");
         for tip in [
+            "Right-click code and choose Reveal in Preview; right-click the preview and choose Reveal in Source. Typst uses Tinymist; TeX needs its compiled SyncTeX map.",
+            "Cmd/Ctrl+Shift+P opens the command palette. Type a command, choose with Up/Down, then Enter; Escape cancels. The palette shows your current shortcut bindings.",
             "Select text, then type an opening bracket, quote or $ to surround it. Undo reverses it in one step.",
-            "Layout in the title bar groups Code, Split, Preview, Explorer and the bottom panel. Their keyboard shortcuts still work, and toggling a panel keeps its chosen size.",
+            "Layout in the title bar groups Code, Split, Preview, Explorer and the bottom panel. Their keyboard shortcuts still work, and toggling a panel keeps its chosen size. Turn off Appearance → Compact layout controls to restore the separate title-bar buttons.",
+            "For literal Chinese and Japanese punctuation such as 。 and ！, leave Convert CJK punctuation to ASCII when typing off in Settings → Writing. This option changes committed keyboard input; pasted text is always preserved.",
             "Focus an Explorer subpanel and use Find to search just that panel. Its empty search bar scrolls away.",
             "Edit → LaTeXdiff compares two TeX files or the current editor against its saved version. Generate a marked-up .tex file, then Save and open to build its PDF. Options are also under TeX tools.",
             "Edit → Edit Table opens an editable grid. Variable cells display locked compiler samples; generated Typst tables open as a read-only sampled grid. Use Source for deliberate expression changes. TeX tables, math conversion, snippets and document templates add missing package imports to the preamble automatically; Undo restores both imports and inserted code.",
             "Draw a symbol in Explorer; choose TeX or Typst insertion preferences in Settings. TeX symbols automatically add their package imports.",
             "Use the Activity panel to see which services are stale, working or failing; hover an indicator for detail.",
             "Use the eye on a tab to choose the preview document independently of the tab you edit.",
-            "Search Settings for snippets, then edit Typst or TeX directly and Save snippets. Optional ${1:name} fields repeat with ${1}; ${0} sets the final cursor. Tab advances fields. Autocomplete symbols identify language-server, custom-snippet and built-in suggestions. Font names appear in their own font.",
+            "Autocomplete symbols identify language-server, snippet and built-in suggestions. Font names appear in their own font. See Snippets above for editable templates and linked fields.",
             "Indentation guides, highlighting uses of local definitions and literal text highlights are under Editor. Their styling never changes saved source.",
-            "Appearance includes a translucent background on macOS. Adjust Background opacity, or turn the effect off, without changing PDF pages.",
+            "Appearance includes a translucent background on macOS. Blur radius and Background opacity each have independent directions and Start/End values. The chosen edge uses End, the opposite edge uses Start; either value can be higher. Opacity 100% is opaque and 0% is fully transparent. Uniform uses Start everywhere. Fullscreen disables both effects. PDF page colors stay unchanged.",
             "Settings search covers every category. Choose a result to switch pages and highlight its control. Categories keep their scroll positions and drafts; narrow windows use a selector beside search. The {} title-bar button edits validated JSON, applied only after Save.",
         ] { ui.label(format!("• {tip}")); }
     });

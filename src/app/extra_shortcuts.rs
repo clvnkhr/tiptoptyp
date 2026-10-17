@@ -63,6 +63,25 @@ impl EditorApp {
         let Some(action) = action else {
             return;
         };
+        if matches!(action, A::KeyboardShortcuts | A::UiScaleReset) {
+            self.execute_extra_shortcut(action, context);
+            return;
+        }
+        // Never act on a document behind another native child or a file dialog.
+        if viewport != context.viewport_id()
+            || self.document_flow_busy()
+            || self.process_close_pending
+        {
+            return;
+        }
+        self.execute_extra_shortcut(action, context);
+    }
+
+    pub(super) fn execute_extra_shortcut(
+        &mut self,
+        action: ShortcutAction,
+        context: &egui::Context,
+    ) {
         if action == A::KeyboardShortcuts {
             self.shortcut_editor_visible = !self.shortcut_editor_visible;
             self.shortcut_editor.capture = None;
@@ -78,17 +97,6 @@ impl EditorApp {
             self.adjust_ui_scale(100 - scale as i16, context);
             return;
         }
-        // Never act on a document behind another native child or a file dialog.
-        if viewport != context.viewport_id()
-            || self.document_flow_busy()
-            || self.process_close_pending
-        {
-            return;
-        }
-        self.execute_extra_shortcut(action, context);
-    }
-
-    fn execute_extra_shortcut(&mut self, action: ShortcutAction, context: &egui::Context) {
         let anchor =
             context.content_rect().left_top() + Vec2::new(90.0, METRICS.chrome.toolbar_height);
         match action {

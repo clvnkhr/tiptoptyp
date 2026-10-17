@@ -32,7 +32,6 @@ pub(super) struct SettingsUiState {
     pub(super) category: SettingsSection,
     pub(super) colors_open: bool,
     pub(super) json_mode: bool,
-    pub(super) snippets: Option<super::settings_snippets::Draft>,
     pub(super) help_mode: bool,
     pub(super) json_search: bool,
     pub(super) json_query: String,
@@ -43,6 +42,8 @@ pub(super) struct SettingsUiState {
     /// field. The flag is consumed after the widget is built for this frame.
     pub(super) focus_search: bool,
     pub(super) scroll_target: Option<SettingsTarget>,
+    pub(super) snippet_library: super::settings_snippets::LibraryState,
+    harper_dictionary_draft: Option<(String, String)>,
     pub(super) staged_ui_font_weight: Option<u16>,
     pub(super) staged_code_font_weight: Option<u16>,
 }
@@ -52,6 +53,8 @@ pub(super) enum SettingsAction {
     ChooseTool(ToolPickerTarget),
     ShowOverrides { dark: bool },
     ShowShortcuts,
+    ShowSnippets,
+    EditSnippet(super::settings_snippets::Selection),
     RefreshTools,
     ShowPackages,
     RetryTinymist,
@@ -307,6 +310,8 @@ impl SettingsPanel<'_> {
                     });
                 });
         }
+        // Keep the fixed search area distinct from category navigation and forms.
+        ui.separator();
         if let Some(target) = self.state.scroll_target {
             super::settings_navigation::route_target(
                 &mut self.state.category,
@@ -338,15 +343,13 @@ impl SettingsPanel<'_> {
         };
         let mut settings_scroll_target = self.state.scroll_target.take();
         if wide {
+            let rail_width = super::settings_navigation::rail_width(ui);
             ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(
-                    Vec2::new(
-                        super::settings_navigation::RAIL_WIDTH,
-                        ui.available_height(),
-                    ),
+                    Vec2::new(rail_width, ui.available_height()),
                     Layout::top_down(Align::Min),
                     |ui| {
-                        super::settings_navigation::rail(ui, &mut self.state.category);
+                        super::settings_navigation::scrolling_rail(ui, &mut self.state.category);
                     },
                 );
                 ui.separator();
@@ -390,6 +393,10 @@ impl SettingsPanel<'_> {
             self.state.category,
         ));
         ui.scope_builder(egui::UiBuilder::new().id(content_id), |ui| {
+            if self.state.category == SettingsSection::Snippets {
+                // The library owns its full remaining-height scrolling area.
+                return self.show_category(ui, edited, target, deterministic);
+            }
             let scroll = egui::ScrollArea::vertical()
                 .id_salt(("settings-scroll", self.state.category))
                 .auto_shrink([false, false]);
@@ -685,6 +692,18 @@ impl SettingsPanel<'_> {
                 });
                 settings_target_anchor(
                     ui,
+                    SettingsTarget::CompactLayoutControls,
+                    &mut settings_scroll_target,
+                );
+                let compact_layout = ui.checkbox(
+                    &mut edited.compact_layout_controls,
+                    SettingsTarget::CompactLayoutControls.label(),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.compact_layout", &compact_layout);
+                let _ = compact_layout;
+                settings_target_anchor(
+                    ui,
                     SettingsTarget::ToolbarStyle,
                     &mut settings_scroll_target,
                 );
@@ -974,6 +993,71 @@ impl SettingsPanel<'_> {
                 }).response.on_hover_text("Auto reads top-level #set text(lang: \"en\", region: \"us\") in Typst. Use region: \"gb\" for UK English. lang: \"uk\" means Ukrainian. Other languages are not checked by Harper. Computed/imported settings use the UK fallback.");
                 settings_target_anchor(
                     ui,
+                    SettingsTarget::HarperCapitalizedNames,
+                    &mut settings_scroll_target,
+                );
+                let names = ui.checkbox(
+                    &mut edited.harper_ignore_capitalized_names,
+                    SettingsTarget::HarperCapitalizedNames.label(),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.harper.ignore_names", &names);
+                #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+                let _ = names;
+                ui.label(
+                    RichText::new("Leray, MacDonald — spelling only; grammar checks stay on.")
+                        .weak(),
+                );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::HarperDictionary,
+                    &mut settings_scroll_target,
+                );
+                let label =
+                    ui.label(RichText::new(SettingsTarget::HarperDictionary.label()).strong());
+                ui.label(
+                    RichText::new(
+                        "One word per line. Built-in English and mathematics words stay included.",
+                    )
+                    .weak(),
+                );
+                let mut dictionary = self
+                    .state
+                    .harper_dictionary_draft
+                    .take()
+                    .filter(|(base, _)| base == &edited.harper_dictionary)
+                    .map(|(_, text)| text)
+                    .unwrap_or_else(|| edited.harper_dictionary.clone());
+                let dictionary_response = egui::ScrollArea::vertical()
+                    .id_salt("harper-personal-dictionary-scroll")
+                    .max_height(140.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut dictionary)
+                                .id_salt("harper-personal-dictionary")
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(6)
+                                .char_limit(65_536)
+                                .hint_text("One word per line"),
+                        )
+                        .labelled_by(label.id)
+                    })
+                    .inner;
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.harper.dictionary", &dictionary_response);
+                #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+                let _ = dictionary_response;
+                match crate::writing::validate_dictionary(&dictionary) {
+                    Ok(()) => edited.harper_dictionary = dictionary,
+                    Err(error) => {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                        self.state.harper_dictionary_draft =
+                            Some((edited.harper_dictionary.clone(), dictionary));
+                    }
+                }
+                settings_target_anchor(
+                    ui,
                     SettingsTarget::Handwriting,
                     &mut settings_scroll_target,
                 );
@@ -992,8 +1076,14 @@ impl SettingsPanel<'_> {
                     SettingsTarget::AsciiPunctuation,
                     &mut settings_scroll_target,
                 );
-                ui.checkbox(&mut edited.ascii_punctuation, SettingsTarget::AsciiPunctuation.label())
-                    .on_hover_text("Convert full-width punctuation, including 。 to a period. Off preserves the characters sent by your keyboard. Pasted text is unchanged.");
+                let ascii = ui.checkbox(
+                    &mut edited.ascii_punctuation,
+                    SettingsTarget::AsciiPunctuation.label(),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.editor.ascii", &ascii);
+                #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+                let _ = ascii;
                 settings_target_anchor(
                     ui,
                     SettingsTarget::AutoFormatMath,
@@ -1366,7 +1456,17 @@ impl SettingsPanel<'_> {
             }
             SettingsSection::Snippets => {
                 settings_target_anchor(ui, SettingsTarget::Snippets, &mut settings_scroll_target);
-                super::settings_snippets::show(ui, &mut self.state.snippets, edited, self.settings);
+                let snippets = ui.button("Edit snippets…");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("settings.snippets.open", &snippets);
+                if snippets.clicked() {
+                    self.actions.push(SettingsAction::ShowSnippets);
+                }
+                if let Some(selection) =
+                    super::settings_snippets::library(ui, &mut self.state.snippet_library, edited)
+                {
+                    self.actions.push(SettingsAction::EditSnippet(selection));
+                }
             }
             SettingsSection::Templates => {
                 settings_target_anchor(ui, SettingsTarget::Templates, &mut settings_scroll_target);
@@ -2098,6 +2198,21 @@ mod tests {
             harness.state().2.is_empty(),
             "idle Settings must not emit updates"
         );
+        category(&mut harness, SettingsSection::Snippets);
+        harness.get_by_label("Edit snippets…").click();
+        harness.run();
+        assert!(
+            harness
+                .state()
+                .2
+                .iter()
+                .any(|action| matches!(action, SettingsAction::ShowSnippets))
+        );
+        assert!(
+            harness.query_by_label("Snippet source").is_none(),
+            "the manager belongs to its own window"
+        );
+        harness.state_mut().2.clear();
         category(&mut harness, SettingsSection::Preview);
         harness
             .get_by_label("Tinymist partial (experimental)")
@@ -2137,7 +2252,7 @@ mod tests {
         harness.state_mut().2.clear();
         category(&mut harness, SettingsSection::Writing);
         harness
-            .get_by_label("Use ASCII punctuation when typing")
+            .get_by_label(SettingsTarget::AsciiPunctuation.label())
             .click();
         harness.run();
         assert!(harness.state().2.iter().any(|action| matches!(action, SettingsAction::Update(settings) if settings.ascii_punctuation)));
@@ -2509,3 +2624,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "settings_writing_tests.rs"]
+mod writing_tests;

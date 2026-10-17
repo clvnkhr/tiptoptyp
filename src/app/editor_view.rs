@@ -468,17 +468,6 @@ impl EditorApp {
         let folding = &mut record.folding;
         let generic_highlighter = &mut self.generic_highlighter;
         let pending_selection = self.pending_editor_selection.take();
-        let attention = self.editor_attention.and_then(|attention| {
-            let elapsed = Instant::now().saturating_duration_since(attention.started);
-            let progress = editor_attention_progress(elapsed);
-            (progress < 1.0).then_some((attention.char_index, progress))
-        });
-        if attention.is_some() {
-            ui.ctx()
-                .request_repaint_after(METRICS.motion.animation_frame);
-        } else {
-            self.editor_attention = None;
-        }
         let mut changed = false;
         let mut folds_changed = false;
         let mut preview_jump_char = None;
@@ -621,6 +610,18 @@ impl EditorApp {
             });
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             crate::desktop_test::observe("editor.source", &output.response);
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            if ui.memory(|memory| memory.owns_ime_events(output.response.id))
+                && let Some(cursor) = ui
+                    .ctx()
+                    .output(|output| output.ime.as_ref().map(|ime| ime.cursor_rect))
+            {
+                // A preedit may have a selected range or a collapsed caret.
+                // Observe the actual IME cursor independently of that selection.
+                let mut target = output.response.clone();
+                target.interact_rect = Rect::from_center_size(cursor.center(), Vec2::splat(1.0));
+                crate::desktop_test::observe("editor.ime_cursor", &target);
+            }
             // A closer can move the caret without modifying the document.
             // Do not invalidate completions or schedule work for that movement.
             changed = document.key() != document_before_edit;
@@ -771,7 +772,6 @@ impl EditorApp {
                 visible_viewport,
                 document.source(),
                 current_char,
-                attention,
                 &line_rows,
                 current_line_slot,
             );
@@ -844,10 +844,7 @@ impl EditorApp {
                     );
                     output.state.cursor.set_char_range(Some(cursor));
                     output.state.clone().store(ui.ctx(), output.response.id);
-                    self.editor_attention = Some(EditorAttention {
-                        char_index: cursor.primary.index.0,
-                        started: Instant::now(),
-                    });
+                    self.editor_attention = Some(EditorAttention::arm(cursor.primary.index.0));
                     folds_changed = true;
                     // A discarded pass would replay this click and toggle
                     // back. Apply the new geometry on the next input frame.
@@ -1147,6 +1144,13 @@ impl EditorApp {
                         .request_discard("realign source before presenting resized text");
                 }
             }
+            reveal::paint_editor(
+                ui,
+                visible_viewport,
+                &output.galley,
+                output.galley_pos,
+                &mut self.editor_attention,
+            );
             (
                 output.response.rect,
                 visuals.corner_radius,
@@ -1372,6 +1376,14 @@ impl EditorApp {
             ui.ctx().request_repaint();
         }
 
+        if git_gutter {
+            crate::git::editor::overview::paint(
+                ui,
+                scroll_output.inner_rect,
+                line_count,
+                &self.git_editor.hunks,
+            );
+        }
         self.show_find_overlay(ui, scroll_output.inner_rect);
     }
 
@@ -1382,7 +1394,8 @@ impl EditorApp {
             ChildViewHost::close(&context, find_bar::VIEWPORT_SALT);
             return;
         }
-        let owner_focused = context.input(|input| input.viewport().focused) != Some(false);
+        let owner_focused = context.input(|input| input.viewport().focused) != Some(false)
+            || self.palette_holds_find(&context);
         let present =
             self.snapshot_scene.is_some() || self.find_bar.present(owner_focused, Instant::now());
         if self.find_bar.blur_started.is_some() && present {
@@ -1696,6 +1709,9 @@ pub(super) fn editor_context_popup(
     }
     AppPopup::Editor {
         anchor,
+        source: character
+            .filter(|_| kind.typesetting_language().is_some())
+            .map(|char_index| preview_jump::SourceLocation { key, char_index }),
         link: typst_character.and_then(|character| editor_web_link_at(data, character)),
         table: character
             .and_then(|character| TableTarget::at(source, character, kind))

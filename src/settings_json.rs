@@ -21,7 +21,11 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     let roundtrip = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
     reject_unknown(&original, &roundtrip, "settings")?;
     settings.window_background.validate()?;
-    crate::snippets::validate(&settings.snippets)?;
+    crate::writing::validate_dictionary(&settings.harper_dictionary)
+        .map_err(|error| format!("harper_dictionary: {error}"))?;
+    crate::snippets::validate(&settings.snippet_presets)
+        .map_err(|error| format!("snippet_presets: {error}"))?;
+    crate::snippets::validate(&settings.snippets).map_err(|error| format!("snippets: {error}"))?;
     crate::tinymist::validate_server_configuration(&settings.tinymist_configuration)
         .map_err(|error| format!("tinymist_configuration: {error}"))?;
     if settings.indentation_guide_character.chars().count() != 1
@@ -195,7 +199,145 @@ impl Draft {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn personal_dictionary_json_validates_words_and_name_toggle_types() {
+        let mut settings = AppSettings {
+            harper_dictionary: "MacDonald\nÉvariste\nwell-posedness\n".into(),
+            harper_ignore_capitalized_names: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        assert_eq!(super::parse(&json).unwrap(), settings);
+        settings.harper_dictionary = "valid\ntwo words".into();
+        let error = super::parse(&serde_json::to_string(&settings).unwrap()).unwrap_err();
+        assert!(
+            error.contains("harper_dictionary") && error.contains("2"),
+            "{error}"
+        );
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["harper_ignore_capitalized_names"] = serde_json::json!("yes");
+        assert!(
+            super::parse(&value.to_string())
+                .unwrap_err()
+                .contains("harper_ignore_capitalized_names")
+        );
+    }
+
     use super::*;
+    #[test]
+    fn compact_layout_controls_json_accepts_boolean_modes_and_rejects_invalid_choices() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        for compact in [false, true] {
+            value["compact_layout_controls"] = serde_json::json!(compact);
+            let parsed = parse(&value.to_string()).unwrap();
+            assert_eq!(parsed.compact_layout_controls, compact);
+            assert_eq!(
+                parse(&serde_json::to_string(&parsed).unwrap()).unwrap(),
+                parsed
+            );
+        }
+        for invalid in [
+            serde_json::json!("old"),
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ] {
+            value["compact_layout_controls"] = invalid;
+            let error = parse(&value.to_string()).unwrap_err();
+            assert!(
+                error.contains("compact_layout_controls") && error.contains("bool"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn snippet_suggestions_default_for_missing_field_but_saved_empty_stays_empty() {
+        let defaults = AppSettings::default();
+        let mut value = serde_json::to_value(&defaults).unwrap();
+        value["snippets"] = serde_json::json!([{
+            "prefix": "mine", "description": "My template", "language": "typst",
+            "body": "$ {{1:x}} ${{0}}", "scope": "text", "line_start": false
+        }]);
+        value.as_object_mut().unwrap().remove("snippet_presets");
+        let parsed = parse(&value.to_string()).unwrap();
+        assert_eq!(parsed.snippet_presets, defaults.snippet_presets);
+        assert_eq!(parsed.snippets[0].prefix, "mine");
+        assert!(parsed.snippets[0].enabled);
+        assert_eq!(parsed.snippets[0].placeholder_open, "{{");
+        assert_eq!(parsed.snippets[0].placeholder_close, "}}");
+        value["snippet_presets"] = serde_json::json!([]);
+        let parsed = parse(&value.to_string()).unwrap();
+        assert!(parsed.snippet_presets.is_empty());
+        assert_eq!(
+            parse(&serde_json::to_string(&parsed).unwrap()).unwrap(),
+            parsed
+        );
+    }
+
+    #[test]
+    fn snippet_scope_choices_and_drafts_are_validated_for_both_lists() {
+        for name in ["snippets", "snippet_presets"] {
+            let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+            value[name] = serde_json::json!([{
+                "prefix": "mine", "description": "My template", "language": "typst",
+                "body": "{{1:x}}{{0}}", "scope": "impossible", "line_start": false
+            }]);
+            let error = parse(&value.to_string()).unwrap_err();
+            assert!(
+                error.contains(name)
+                    && error.contains("scope")
+                    && error.contains("choose")
+                    && error.contains("math"),
+                "{error}"
+            );
+            value[name][0]["scope"] = serde_json::json!("math");
+            value[name][0]["body"] = serde_json::json!("{{1:unfinished");
+            let error = parse(&value.to_string()).unwrap_err();
+            assert!(error.contains(name) && error.contains("Close"), "{error}");
+            value[name][0]["body"] = serde_json::json!("{{1:x}}{{0}}");
+            assert!(parse(&value.to_string()).is_ok());
+        }
+    }
+
+    #[test]
+    fn disabled_snippets_and_custom_placeholder_pairs_roundtrip_and_still_validate() {
+        for list in ["snippets", "snippet_presets"] {
+            let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+            value[list] = serde_json::json!([{
+                "prefix": "mine", "description": "A temporarily disabled template",
+                "language": "typst", "scope": "math", "line_start": false,
+                "enabled": false, "placeholder_open": "⟪", "placeholder_close": "⟫",
+                "body": "frac(⟪1:x⟫, ⟪2:y⟫)⟪0⟫"
+            }]);
+            let parsed = parse(&value.to_string()).unwrap();
+            let entries = if list == "snippets" {
+                &parsed.snippets
+            } else {
+                &parsed.snippet_presets
+            };
+            assert!(!entries[0].enabled);
+            assert_eq!(entries[0].placeholder_open, "⟪");
+            assert_eq!(entries[0].placeholder_close, "⟫");
+            assert_eq!(
+                parse(&serde_json::to_string(&parsed).unwrap()).unwrap(),
+                parsed
+            );
+            value[list][0]["placeholder_open"] = serde_json::json!("bad marker");
+            let error = parse(&value.to_string()).unwrap_err();
+            assert!(error.contains(list) && error.contains("marker"), "{error}");
+            value[list][0]["placeholder_open"] = serde_json::json!("⟪");
+            value[list][0]["body"] = serde_json::json!("⟪1:unfinished");
+            assert!(
+                parse(&value.to_string()).is_err(),
+                "disabled definitions must remain valid"
+            );
+            value[list][0]["body"] = serde_json::json!("⟪1:x⟫");
+            value[list][0]["field_command"] = serde_json::json!("snip");
+            let error = parse(&value.to_string()).unwrap_err();
+            assert!(error.contains("field_command"), "{error}");
+        }
+    }
+
     #[test]
     fn tinymist_configuration_uses_shared_validation_and_roundtrips() {
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();

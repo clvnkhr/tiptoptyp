@@ -593,10 +593,10 @@ impl AppShell {
     ) -> bool {
         !self.primary_visible
             && self.active == ActiveSession::Primary
-            && matches!(
+            && (matches!(
                 command,
                 AppCommand::Cut | AppCommand::Copy | AppCommand::Paste | AppCommand::SelectAll
-            )
+            ) || crate::app::snippet_editor_owns_native_command(context, command))
             && crate::app::owner_has_focused_viewport(context, egui::ViewportId::ROOT, false)
     }
 
@@ -1398,6 +1398,73 @@ mod tests {
                     crate::app::owner_has_focused_viewport(ctx, egui::ViewportId::ROOT, false),
                     !hidden
                 );
+            });
+        }
+    }
+
+    #[test]
+    fn snippet_commands_keep_the_closed_document_window_hidden() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let primary = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let shared_settings = primary.settings_snapshot();
+        let (_, open_requests) = crate::open_requests::channel();
+        let (_, native_menu_commands) = crate::native_menu::channel();
+        let shell = AppShell {
+            primary: DocumentHost::new(primary),
+            shared_settings,
+            open_requests,
+            native_menu_commands,
+            closing: Default::default(),
+            secondary: Vec::new(),
+            active: ActiveSession::Primary,
+            next_session_id: FIRST_SECONDARY_SESSION_ID,
+            pending_windows: VecDeque::new(),
+            captures: CaptureController::disabled_for_tests(),
+            capture_batch: None,
+            launch_mode: LaunchMode::Interactive,
+            primary_visible: false,
+            quit_requested: false,
+        };
+        let child =
+            crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-snippets");
+        for visible in [true, false] {
+            let mut raw = egui::RawInput::default();
+            raw.viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .focused = Some(false);
+            raw.viewports.insert(
+                child,
+                egui::ViewportInfo {
+                    focused: Some(true),
+                    occluded: Some(!visible),
+                    ..Default::default()
+                },
+            );
+            let _ = context.run_logic(&raw, |ctx| {
+                for command in [
+                    AppCommand::Save,
+                    AppCommand::CloseTab,
+                    AppCommand::Find,
+                    AppCommand::FindReplace,
+                    AppCommand::Undo,
+                    AppCommand::Redo,
+                ] {
+                    assert_eq!(
+                        shell.command_targets_hidden_root_child(ctx, command),
+                        visible,
+                        "{command:?}"
+                    );
+                }
+                for command in [
+                    AppCommand::New,
+                    AppCommand::Open,
+                    AppCommand::Format,
+                    AppCommand::SaveAs,
+                ] {
+                    assert!(!shell.command_targets_hidden_root_child(ctx, command));
+                }
             });
         }
     }

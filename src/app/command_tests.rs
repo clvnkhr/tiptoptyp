@@ -1257,7 +1257,7 @@ fn find_in_live_diff_is_visible_and_owns_typing_without_editing_source() {
             },
             app,
         );
-    harness.run();
+    harness.run_steps(4);
     let chord = harness
         .state()
         .settings
@@ -1265,17 +1265,17 @@ fn find_in_live_diff_is_visible_and_owns_typing_without_editing_source() {
         .egui(ShortcutAction::Find)
         .unwrap();
     harness.key_press_modifiers(chord.modifiers, chord.logical_key);
-    harness.run();
+    harness.run_steps(4);
     harness.get_by_label("Next match · Enter");
     assert!(find_bar::has_focus(&harness.ctx));
     harness.event(egui::Event::Text("alpha".into()));
-    harness.run();
+    harness.run_steps(4);
     assert_eq!(harness.state().find_bar.query, "alpha");
     assert!(find_bar::has_focus(&harness.ctx));
     assert_eq!(harness.state().document().source(), &source);
     assert!(harness.state().document_diff.is_some());
     harness.key_press_modifiers(chord.modifiers, chord.logical_key);
-    harness.run();
+    harness.run_steps(4);
     assert!(!harness.state().find_bar.visible);
     assert!(harness.state().document_diff.is_some());
     let editor = source_editor_id(&harness.ctx);

@@ -1107,13 +1107,6 @@ pub struct EditorMetrics {
     pub diagnostic_character_width: f32,
     pub unwrapped_width_padding: f32,
     pub unwrapped_minimum_width: f32,
-    pub attention_start_radius: f32,
-    pub attention_radius_growth: f32,
-    pub attention_ring_start_radius: f32,
-    pub attention_ring_growth: f32,
-    pub attention_ring_width: f32,
-    pub attention_ring_opacity: f32,
-    pub attention_segments: u32,
     pub diagnostic_background_opacity: f32,
     pub annotation_gap: f32,
     pub tooltip_gap: f32,
@@ -1218,7 +1211,6 @@ pub struct ProblemsMetrics {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MotionTokens {
-    pub editor_attention: Duration,
     pub hover_poll: Duration,
     pub animation_frame: Duration,
 }
@@ -1308,13 +1300,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         diagnostic_character_width: 7.2,
         unwrapped_width_padding: 100.0,
         unwrapped_minimum_width: 640.0,
-        attention_start_radius: 18.0,
-        attention_radius_growth: 46.0,
-        attention_ring_start_radius: 7.0,
-        attention_ring_growth: 34.0,
-        attention_ring_width: 1.2,
-        attention_ring_opacity: 0.72,
-        attention_segments: 28,
         diagnostic_background_opacity: 0.15,
         annotation_gap: 8.0,
         tooltip_gap: 6.0,
@@ -1397,7 +1382,6 @@ pub const METRICS: ThemeMetrics = ThemeMetrics {
         hover_opacity: 0.28,
     },
     motion: MotionTokens {
-        editor_attention: Duration::from_millis(260),
         hover_poll: Duration::from_millis(32),
         animation_frame: Duration::from_millis(16),
     },
@@ -1413,8 +1397,6 @@ pub struct Palette {
     pub neutral: Color32,
     /// Shared tint for the editor's cursor line and the active explorer row.
     pub active_row: Color32,
-    pub attention_rgb: [u8; 3],
-    pub attention_max_alpha: u8,
 }
 
 pub fn palette(context: &egui::Context) -> Palette {
@@ -1428,8 +1410,6 @@ pub fn palette(context: &egui::Context) -> Palette {
             success: color(colors.success),
             neutral: color(colors.muted),
             active_row: color(colors.current_line),
-            attention_rgb: [colors.info.r, colors.info.g, colors.info.b],
-            attention_max_alpha: if imported.dark_mode { 105 } else { 82 },
         };
     }
     default_palette(context.theme() == egui::Theme::Dark)
@@ -1444,8 +1424,6 @@ pub fn default_palette(dark_mode: bool) -> Palette {
             success: Color32::from_rgb(166, 218, 149),
             neutral: Color32::from_rgb(166, 173, 186),
             active_row: Color32::from_rgba_unmultiplied(91, 143, 190, 25),
-            attention_rgb: [74, 196, 235],
-            attention_max_alpha: 105,
         }
     } else {
         Palette {
@@ -1456,8 +1434,6 @@ pub fn default_palette(dark_mode: bool) -> Palette {
             success: Color32::from_rgb(43, 120, 48),
             neutral: Color32::from_rgb(82, 88, 99),
             active_row: Color32::from_rgba_unmultiplied(55, 122, 181, 18),
-            attention_rgb: [18, 132, 193],
-            attention_max_alpha: 82,
         }
     }
 }
@@ -2195,8 +2171,6 @@ mod tests {
             light.active_row,
             Color32::from_rgba_unmultiplied(55, 122, 181, 18)
         );
-        assert_eq!(dark.attention_rgb, [74, 196, 235]);
-        assert_eq!(light.attention_rgb, [18, 132, 193]);
         assert_eq!(
             preview_palette(true).page_fill,
             Color32::from_rgb(20, 22, 28)
@@ -2527,8 +2501,7 @@ mod tests {
     }
 
     #[test]
-    fn motion_values_preserve_attention_and_hover_animation_cadence() {
-        assert_eq!(METRICS.motion.editor_attention, Duration::from_millis(260));
+    fn motion_values_preserve_hover_animation_cadence() {
         assert_eq!(METRICS.motion.animation_frame, Duration::from_millis(16));
     }
 

@@ -414,10 +414,16 @@ pub(crate) struct AppSettings {
     pub(crate) english_grammar: bool,
     #[serde(default)]
     pub(crate) snippets: Vec<crate::snippets::Snippet>,
+    #[serde(default = "crate::snippet_presets::defaults")]
+    pub(crate) snippet_presets: Vec<crate::snippets::Snippet>,
     #[serde(default = "crate::document_templates::defaults")]
     pub(crate) templates: Vec<crate::document_templates::Template>,
     #[serde(default)]
     pub(crate) writing_language: WritingLanguage,
+    #[serde(default)]
+    pub(crate) harper_dictionary: String,
+    #[serde(default)]
+    pub(crate) harper_ignore_capitalized_names: bool,
     #[serde(default)]
     pub(crate) handwriting: HandwritingSettings,
     #[serde(default)]
@@ -471,6 +477,9 @@ pub(crate) struct AppSettings {
     pub(crate) titlebar_menus: bool,
     #[serde(default)]
     pub(crate) toolbar_style: ToolbarStyle,
+    /// Group the five workspace layout actions in one title-bar menu.
+    #[serde(default = "default_true")]
+    pub(crate) compact_layout_controls: bool,
     /// Give every document tab the same width instead of sizing it to its name.
     #[serde(default)]
     pub(crate) fixed_tab_width: bool,
@@ -523,8 +532,11 @@ impl Default for AppSettings {
             line_numbers: true,
             english_grammar: false,
             snippets: Vec::new(),
+            snippet_presets: crate::snippet_presets::defaults(),
             templates: crate::document_templates::defaults(),
             writing_language: WritingLanguage::Auto,
+            harper_dictionary: String::new(),
+            harper_ignore_capitalized_names: false,
             handwriting: HandwritingSettings::default(),
             unicode_warnings: false,
             sticky_context_rows: true,
@@ -553,6 +565,7 @@ impl Default for AppSettings {
             code_font_weight: DEFAULT_UI_FONT_WEIGHT,
             titlebar_menus: true,
             toolbar_style: ToolbarStyle::default(),
+            compact_layout_controls: true,
             fixed_tab_width: false,
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides: TypstOverrideThemes::default(),
@@ -611,8 +624,11 @@ impl AppSettings {
             line_numbers,
             english_grammar,
             snippets,
+            snippet_presets,
             templates,
             writing_language,
+            harper_dictionary,
+            harper_ignore_capitalized_names,
             handwriting,
             unicode_warnings,
             sticky_context_rows,
@@ -641,6 +657,7 @@ impl AppSettings {
             code_font_weight,
             titlebar_menus,
             toolbar_style,
+            compact_layout_controls,
             fixed_tab_width,
             shortcut_overrides,
             typst_overrides,
@@ -1090,8 +1107,11 @@ mod tests {
             line_numbers: false,
             english_grammar: false,
             snippets: Vec::new(),
+            snippet_presets: crate::snippet_presets::defaults(),
             templates: crate::document_templates::defaults(),
             writing_language: WritingLanguage::Auto,
+            harper_dictionary: String::new(),
+            harper_ignore_capitalized_names: false,
             handwriting: HandwritingSettings::default(),
             unicode_warnings: false,
             sticky_context_rows: false,
@@ -1127,6 +1147,7 @@ mod tests {
             code_font_weight: 450,
             titlebar_menus: false,
             toolbar_style: ToolbarStyle::Icons,
+            compact_layout_controls: false,
             fixed_tab_width: true,
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides,
@@ -1456,6 +1477,69 @@ mod tests {
             AppSettings::load(Some(&storage)).unwrap().git_diff_style,
             GitDiffStyle::Unified
         );
+    }
+
+    #[test]
+    fn harper_personal_settings_default_persist_and_merge_independently() {
+        let original = AppSettings::default();
+        assert!(original.harper_dictionary.is_empty());
+        assert!(!original.harper_ignore_capitalized_names);
+        let mut edited = original.clone();
+        edited.harper_dictionary = "Qzorthal\nMacDonald\nÉvariste".into();
+        edited.harper_ignore_capitalized_names = true;
+        let decoded: AppSettings =
+            serde_json::from_str(&serde_json::to_string(&edited).unwrap()).unwrap();
+        assert_eq!(decoded, edited);
+        let mut current = original.clone();
+        current.writing_language = WritingLanguage::American;
+        current.apply_edits(&original, edited);
+        assert_eq!(current.writing_language, WritingLanguage::American);
+        assert_eq!(current.harper_dictionary, "Qzorthal\nMacDonald\nÉvariste");
+        assert!(current.harper_ignore_capitalized_names);
+        let base = current.clone();
+        let mut edited = base.clone();
+        edited.harper_ignore_capitalized_names = false;
+        current.harper_dictionary = "newer entry".into();
+        current.apply_edits(&base, edited);
+        assert_eq!(current.harper_dictionary, "newer entry");
+        assert!(!current.harper_ignore_capitalized_names);
+    }
+
+    #[test]
+    fn compact_layout_controls_default_on_persist_and_merge_without_overwriting_newer_edits() {
+        let base = AppSettings::default();
+        assert!(base.compact_layout_controls);
+        let mut edited = base.clone();
+        edited.compact_layout_controls = false;
+        let mut storage = MemoryStorage::default();
+        edited.save(&mut storage);
+        assert!(
+            !AppSettings::load(Some(&storage))
+                .unwrap()
+                .compact_layout_controls
+        );
+
+        let mut value = serde_json::to_value(&edited).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("compact_layout_controls");
+        storage.set_string(STORAGE_KEY, value.to_string());
+        assert!(
+            AppSettings::load(Some(&storage))
+                .unwrap()
+                .compact_layout_controls
+        );
+
+        let mut current = base.clone();
+        current.line_numbers = false;
+        current.apply_edits(&base, edited);
+        assert!(!current.compact_layout_controls);
+        assert!(!current.line_numbers);
+        let mut unrelated = base.clone();
+        unrelated.auto_save = false;
+        current.apply_edits(&base, unrelated);
+        assert!(!current.compact_layout_controls);
     }
 
     #[test]

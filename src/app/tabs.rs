@@ -681,10 +681,35 @@ impl EditorApp {
     }
 
     pub(super) fn open_tab_path(&mut self, path: PathBuf, context: &egui::Context) -> bool {
-        let path = canonical_or_absolute(&path);
+        self.open_tab_path_with(canonical_or_absolute(&path), context, |app, path| {
+            app.load_path(path)
+        })
+    }
+
+    pub(super) fn open_git_file_diff_path(
+        &mut self,
+        path: PathBuf,
+        context: &egui::Context,
+    ) -> bool {
+        let started = Instant::now();
+        let Some((source, kind)) = crate::git::repository::diff::read_editable_source(&path) else {
+            return false;
+        };
+        let disk_fingerprint = Some(fingerprint(source.as_bytes()));
+        self.open_tab_path_with(path, context, move |app, path| {
+            app.load_prepared_path(path, source, kind, disk_fingerprint, started)
+        })
+    }
+
+    fn open_tab_path_with(
+        &mut self,
+        path: PathBuf,
+        context: &egui::Context,
+        load: impl FnOnce(&mut Self, PathBuf) -> bool,
+    ) -> bool {
         if self.tabs.is_empty() {
             self.tabs.open_first(self.workspace_root.clone());
-            if self.load_path(path) {
+            if load(self, path) {
                 return true;
             }
             self.empty_workspace(context);
@@ -698,11 +723,11 @@ impl EditorApp {
         let replace_welcome =
             self.tabs.len() == 1 && self.document().path().is_none() && !self.is_dirty();
         if replace_welcome || !self.lifecycle.allows_document_work() {
-            return self.load_path(path);
+            return load(self, path);
         }
         let old = self.tabs.active_id().expect("non-empty tab set");
         self.append_tab(context);
-        if self.load_path(path) {
+        if load(self, path) {
             return true;
         }
         let failed = self.tabs.active_id().expect("new tab is active");

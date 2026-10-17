@@ -4,7 +4,8 @@ use super::*;
 pub(super) fn empty_workspace_command(command: AppCommand) -> bool {
     matches!(
         command,
-        AppCommand::New
+        AppCommand::CommandPalette
+            | AppCommand::New
             | AppCommand::NewFromTemplate
             | AppCommand::NewWindow
             | AppCommand::Open

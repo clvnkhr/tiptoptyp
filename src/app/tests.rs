@@ -435,10 +435,7 @@ fn document_transition_reset_clears_shared_editor_transients() {
     let source = app.document().source().clone();
     app.find_bar.search.next(&source, key, "alpha", true, false);
     app.pending_editor_selection = Some(EditorSelection::Focus(0..0));
-    app.editor_attention = Some(EditorAttention {
-        char_index: 0,
-        started: Instant::now(),
-    });
+    app.editor_attention = Some(EditorAttention::arm(0));
     assert!(app.find_bar.search.selected().is_some());
 
     app.reset_transient_editor_state();
@@ -7158,16 +7155,6 @@ fn toggle_line_comments_does_not_include_a_column_zero_anchor_line() {
 }
 
 #[test]
-fn editor_attention_progress_is_short_and_monotonic() {
-    assert_eq!(editor_attention_progress(Duration::ZERO), 0.0);
-    assert!(editor_attention_progress(Duration::from_millis(210)) > 0.45);
-    assert_eq!(
-        editor_attention_progress(METRICS.motion.editor_attention),
-        1.0
-    );
-}
-
-#[test]
 fn short_editor_surface_fills_tall_and_narrow_viewports() {
     for viewport in [
         Rect::from_min_size(Pos2::new(12.0, 18.0), Vec2::new(640.0, 900.0)),
@@ -8505,11 +8492,9 @@ fn projected_application_settings_toggle_local_completion_and_block_save() {
         *source = "$ x $".into();
     });
     app.request_editor_completion(3, Rect::ZERO, true);
-    let completion = app.editor_completion.as_ref().unwrap();
-    assert!(completion.provenance.is_local());
     assert!(
-        completion.items.is_empty(),
-        "plain TeX math suppresses Typst completions"
+        app.editor_completion.is_none(),
+        "plain TeX math has no visible completion state and suppresses Typst completions"
     );
     assert!(
         app.activity.completion.is_none(),
@@ -10297,7 +10282,12 @@ fn linked_snippet_text_edit_replaces_both_fields_in_one_undo() {
         prefix: "env".into(),
         description: "environment".into(),
         language: crate::snippets::Language::Both,
-        body: "begin{${1:name}}\nend{${1}}${0}".into(),
+        enabled: true,
+        placeholder_open: "{{".into(),
+        placeholder_close: "}}".into(),
+        body: "begin{{{1:name}}}\nend{{{1}}}{{0}}".into(),
+        scope: crate::snippets::Scope::Anywhere,
+        line_start: false,
     }];
     app.pending_editor_selection = Some(EditorSelection::Focus(3..3));
     context
@@ -11554,4 +11544,193 @@ fn cmd_w_in_table_child_cancels_its_draft_without_closing_a_document() {
         assert_eq!(app.document().key(), key);
         assert_eq!(app.tabs.len(), tabs);
     }
+}
+
+#[test]
+fn saving_snippet_changes_retires_open_completions_and_disabled_entries_stay_unavailable() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.document_mut().replace_unprojected_untitled("demo");
+    app.settings.snippet_presets.clear();
+    app.settings.snippets = vec![crate::snippets::Snippet {
+        prefix: "demo".into(),
+        description: "A test field".into(),
+        language: crate::snippets::Language::Typst,
+        body: "{{1:x}}{{0}}".into(),
+        scope: crate::snippets::Scope::Anywhere,
+        line_start: false,
+        enabled: true,
+        placeholder_open: "{{".into(),
+        placeholder_close: "}}".into(),
+    }];
+    app.request_editor_completion(4, Rect::ZERO, true);
+    assert!(app.editor_completion.is_some());
+    let mut disabled = app.settings.clone();
+    disabled.snippets[0].enabled = false;
+    app.apply_shared_settings(disabled, &context);
+    assert!(app.editor_completion.is_none());
+    assert!(app.activity.completion.is_none());
+    app.receive_editor_completions(
+        EditorCompletionResponse {
+            generation: Generation(7),
+            uri: "file:///fixture.typ".into(),
+            version: revision_as_i32(app.document().revision()),
+            request_token: 42,
+            is_incomplete: false,
+            items: vec![completion_item("demo")],
+        },
+        &context,
+    );
+    assert!(
+        app.editor_completion.is_none(),
+        "late server results cannot restore a retired popup"
+    );
+    app.request_editor_completion(4, Rect::ZERO, true);
+    assert!(app.editor_completion.is_none());
+    let mut enabled = app.settings.clone();
+    enabled.snippets[0].enabled = true;
+    app.apply_shared_settings(enabled, &context);
+    app.request_editor_completion(4, Rect::ZERO, true);
+    assert!(app.editor_completion.is_some());
+    assert_eq!(app.document().source(), "demo");
+}
+
+#[test]
+fn server_completion_batches_keep_local_snippets_and_their_display_coordinates() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    app.document_mut().replace_unprojected_untitled("#f");
+    let snippets = vec![crate::snippets::Snippet {
+        prefix: "fn".into(),
+        description: "Function".into(),
+        language: crate::snippets::Language::Typst,
+        enabled: true,
+        placeholder_open: "{{".into(),
+        placeholder_close: "}}".into(),
+        body: "let {{1:name}}() = {{{0}}}".into(),
+        scope: crate::snippets::Scope::Code,
+        line_start: false,
+    }];
+    let local = crate::snippets::items(&snippets, DocumentKind::Typst, "#f", 2).unwrap();
+    let generation = Generation(7);
+    let uri = "file:///fixture.typ".to_owned();
+    let version = revision_as_i32(app.document().revision());
+    app.tinymist_sync.generation = Some(generation);
+    app.tinymist_sync.current_uri = Some(uri.clone());
+    let canonical = "different canonical prefix\n#f";
+    app.editor_completion = Some(EditorCompletionState {
+        key: app.document().key(),
+        provenance: CompletionProvenance::Server {
+            generation,
+            uri: uri.clone(),
+            request_token: 41,
+        },
+        version,
+        cursor: 2,
+        source_cursor: canonical.chars().count(),
+        anchor: Rect::ZERO,
+        explicit: true,
+        is_incomplete: false,
+        selected: 0,
+        items: local.clone(),
+        all_items: local,
+        source: canonical.into(),
+    });
+    app.receive_editor_completions(
+        EditorCompletionResponse {
+            generation,
+            uri: uri.clone(),
+            version,
+            request_token: 40,
+            is_incomplete: false,
+            items: vec![completion_item("filter")],
+        },
+        &context,
+    );
+    assert_eq!(
+        app.editor_completion.as_ref().unwrap().items.len(),
+        1,
+        "stale replies cannot replace local candidates"
+    );
+    app.receive_editor_completions(
+        EditorCompletionResponse {
+            generation,
+            uri,
+            version,
+            request_token: 41,
+            is_incomplete: false,
+            items: vec![completion_item("filter")],
+        },
+        &context,
+    );
+    let state = app.editor_completion.as_ref().unwrap();
+    assert_eq!(state.items.len(), 2);
+    assert!(state.items.iter().any(|item| item.label == "filter"));
+    let snippet = state
+        .items
+        .iter()
+        .position(|item| item.label == "fn")
+        .unwrap();
+    app.apply_editor_completion(snippet, &context);
+    assert_eq!(app.document().source(), "#let name() = {}");
+    assert_eq!(app.snippet_session.as_ref().unwrap().selection(), 5..9);
+    app.undo_editor(&context, false);
+    assert_eq!(app.document().source(), "#f");
+}
+
+#[test]
+fn projected_application_snippet_language_follows_the_displayed_tex_island() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().to_owned());
+    app.document_mut().replace_unprojected_untitled("");
+    let mut settings = app.settings.clone();
+    settings.mitex_auto_enable = true;
+    app.apply_shared_settings(settings, &context);
+    assert!(app.document().config().is_some());
+    app.document_mut().edit(CCursorRange::default(), |source| {
+        *source = "$ frac $".into()
+    });
+    app.request_editor_completion(6, Rect::ZERO, true);
+    let completion = app.editor_completion.as_ref().unwrap();
+    assert!(completion.provenance.is_local());
+    let index = completion
+        .items
+        .iter()
+        .position(|item| {
+            item.origin == crate::lsp::protocol::CompletionOrigin::Snippet && item.label == "frac"
+        })
+        .unwrap();
+    let body = crate::completion_edit::expand_lsp_snippet(&completion.items[index].insert_text)
+        .unwrap()
+        .text;
+    assert_eq!(
+        body, r"\frac{a}{b}",
+        "projected dollar math displays TeX and needs TeX snippets"
+    );
+    app.apply_editor_completion(index, &context);
+    assert_eq!(app.document().source(), r"$ \frac{a}{b} $");
+    assert_eq!(app.snippet_session.as_ref().unwrap().selection(), 8..9);
+    app.undo_editor(&context, false);
+    assert_eq!(app.document().source(), "$ frac $");
+    app.document_mut()
+        .edit(CCursorRange::default(), |source| *source = "dm".into());
+    app.request_editor_completion(2, Rect::ZERO, true);
+    let completion = app.editor_completion.as_ref().unwrap();
+    let item = completion
+        .items
+        .iter()
+        .find(|item| {
+            item.origin == crate::lsp::protocol::CompletionOrigin::Snippet && item.label == "dm"
+        })
+        .unwrap();
+    let body = crate::completion_edit::expand_lsp_snippet(&item.insert_text)
+        .unwrap()
+        .text;
+    assert!(
+        body.starts_with("$\n"),
+        "ordinary markup keeps Typst display-math templates"
+    );
 }

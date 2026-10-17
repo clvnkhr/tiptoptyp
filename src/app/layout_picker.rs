@@ -43,6 +43,79 @@ impl LayoutMenuState {
 }
 
 impl EditorApp {
+    pub(super) fn show_layout_toolbar(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
+        if !self.settings.compact_layout_controls {
+            if matches!(self.app_popup, Some(AppPopup::Layout { .. })) {
+                self.close_app_popup();
+            }
+            let state = self.layout_menu_state();
+            // The parent flows right-to-left: preserve the original on-screen
+            // Explorer / Code / Split / Preview / Panel button order.
+            for (command, icon) in [
+                (AppCommand::Panel, UiIcon::Panel),
+                (AppCommand::Preview, UiIcon::Preview),
+                (AppCommand::Split, UiIcon::Split),
+                (AppCommand::Code, UiIcon::Code),
+                (AppCommand::Explorer, UiIcon::Explorer),
+            ] {
+                let response = icons::toolbar_button(
+                    ui,
+                    state.enabled(command),
+                    state.checked(command),
+                    icon,
+                    command_spec(command).title,
+                    self.settings.toolbar_style,
+                    false,
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe(
+                    match command {
+                        AppCommand::Code => "toolbar.layout.code",
+                        AppCommand::Split => "toolbar.layout.split",
+                        AppCommand::Preview => "toolbar.layout.preview",
+                        AppCommand::Explorer => "toolbar.layout.explorer",
+                        AppCommand::Panel => "toolbar.layout.panel",
+                        _ => unreachable!("not a layout command"),
+                    },
+                    &response,
+                );
+                if response.clicked() {
+                    self.execute_app_command(command, ui.ctx(), frame);
+                }
+            }
+            return;
+        }
+        let layout_open = matches!(self.app_popup, Some(AppPopup::Layout { .. }));
+        let layout = icons::toolbar_button(
+            ui,
+            true,
+            layout_open,
+            match self.view_mode {
+                ViewMode::Code => UiIcon::Code,
+                ViewMode::Split => UiIcon::Split,
+                ViewMode::Preview => UiIcon::Preview,
+            },
+            "Layout",
+            if self.settings.toolbar_style == crate::settings::ToolbarStyle::Text {
+                crate::settings::ToolbarStyle::Text
+            } else {
+                crate::settings::ToolbarStyle::TextAndIcons
+            },
+            false,
+        );
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("toolbar.layout", &layout);
+        if layout.clicked() {
+            if layout_open {
+                self.close_app_popup();
+            } else {
+                self.open_app_popup(AppPopup::Layout {
+                    anchor: layout.rect.left_bottom(),
+                });
+            }
+        }
+    }
+
     pub(super) fn layout_menu_state(&self) -> LayoutMenuState {
         LayoutMenuState {
             mode: self.view_mode,
@@ -398,6 +471,155 @@ mod tests {
                 harness.get_by_label("Layout").click();
                 harness.run();
                 assert!(harness.state().app_popup.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn separate_layout_buttons_keep_original_order_height_and_direct_command_routes() {
+        for style in crate::settings::ToolbarStyle::ALL {
+            let root = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+            app.document_mut().replace_unprojected_untitled("unchanged");
+            app.settings.compact_layout_controls = false;
+            app.settings.toolbar_style = style;
+            app.settings.titlebar_menus = false;
+            app.explorer.open();
+            app.bottom_panel.select(PanelTab::Activity);
+            let mut fonts_configured = false;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1200.0, 600.0))
+                .build_ui_state(
+                    move |ui, app: &mut EditorApp| {
+                        if !fonts_configured {
+                            theme::configure_test_fonts(ui.ctx());
+                            fonts_configured = true;
+                            return;
+                        }
+                        let toolbar = egui::Panel::top("separate-layout-test-toolbar")
+                            .exact_size(METRICS.chrome.toolbar_height)
+                            .show(ui, |ui| app.show_toolbar(ui, None));
+                        assert_eq!(toolbar.response.rect.height(), 30.0);
+                        // Commands transfer focus to real input owners. Keep
+                        // both the editor and selected bottom tab in the tree.
+                        app.show_bottom_panel_container(ui);
+                        egui::CentralPanel::default().show(ui, |ui| app.show_editor(ui));
+                    },
+                    app,
+                );
+            harness.run();
+            assert!(harness.query_by_label("Layout").is_none());
+            let mut previous_right = 0.0;
+            for label in ["Explorer", "Code", "Split", "Preview", "Panel"] {
+                let button = harness.get_by_label(label);
+                let rect = button.rect();
+                assert!(rect.left() >= previous_right, "{style:?}: {label}");
+                assert!(rect.height() <= METRICS.chrome.toolbar_height);
+                assert!(rect.right() <= 1200.0);
+                assert!(!button.accesskit_node().is_disabled());
+                previous_right = rect.right();
+            }
+            for (label, mode) in [
+                ("Preview", ViewMode::Preview),
+                ("Code", ViewMode::Code),
+                ("Split", ViewMode::Split),
+            ] {
+                harness.get_by_label(label).click();
+                harness.run();
+                assert_eq!(harness.state().view_mode, mode);
+                assert!(harness.state().app_popup.is_none());
+                assert!(harness.state().explorer.panel_visible());
+                assert_eq!(
+                    harness.state().bottom_panel.selected(),
+                    Some(PanelTab::Activity)
+                );
+            }
+            for expected in [false, true] {
+                harness.get_by_label("Explorer").click();
+                harness.run();
+                assert_eq!(harness.state().explorer.panel_visible(), expected);
+                assert_eq!(harness.state().view_mode, ViewMode::Split);
+            }
+            for expected in [false, true] {
+                harness.get_by_label("Panel").click();
+                harness.run();
+                assert_eq!(harness.state().bottom_panel.is_visible(), expected);
+                if expected {
+                    assert_eq!(
+                        harness.state().bottom_panel.selected(),
+                        Some(PanelTab::Activity)
+                    );
+                }
+            }
+            assert_eq!(harness.state().document().source(), "unchanged");
+        }
+    }
+
+    #[test]
+    fn changing_layout_control_setting_preserves_view_panels_and_saved_sizes() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.bottom_panel.select(PanelTab::Activity);
+        app.explorer.open();
+        app.view_mode = ViewMode::Split;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(1200.0, 240.0))
+            .build_ui_state(
+                |ui, app: &mut EditorApp| {
+                    let toolbar = egui::Panel::top("layout-switch-test-toolbar")
+                        .exact_size(METRICS.chrome.toolbar_height)
+                        .show(ui, |ui| app.show_toolbar(ui, None));
+                    assert_eq!(toolbar.response.rect.height(), 30.0);
+                },
+                app,
+            );
+        let sizes = [
+            (explorer_panel_id(&harness.ctx), Vec2::new(245.0, 600.0)),
+            (editor_panel_id(&harness.ctx), Vec2::new(480.0, 600.0)),
+            (
+                crate::child_view::viewport_scoped_id(&harness.ctx, "bottom-panel"),
+                Vec2::new(1200.0, 173.0),
+            ),
+        ];
+        harness.ctx.data_mut(|data| {
+            for (id, size) in sizes {
+                data.insert_persisted(
+                    id,
+                    egui::PanelState {
+                        outer_rect: Rect::from_min_size(Pos2::ZERO, size),
+                    },
+                );
+            }
+        });
+        harness.run();
+        harness.get_by_label("Layout").click();
+        harness.run();
+        assert!(matches!(
+            harness.state().app_popup,
+            Some(AppPopup::Layout { .. })
+        ));
+        for compact in [false, true, false, true] {
+            let base = harness.state().settings.clone();
+            let mut edited = base.clone();
+            edited.compact_layout_controls = compact;
+            harness.state_mut().settings.apply_edits(&base, edited);
+            harness.run();
+            assert_eq!(harness.query_by_label("Layout").is_some(), compact);
+            assert_eq!(harness.query_by_label("Explorer").is_some(), !compact);
+            assert!(harness.state().app_popup.is_none());
+            assert_eq!(harness.state().view_mode, ViewMode::Split);
+            assert!(harness.state().explorer.panel_visible());
+            assert_eq!(
+                harness.state().bottom_panel.selected(),
+                Some(PanelTab::Activity)
+            );
+            for (id, size) in sizes {
+                assert_eq!(
+                    egui::PanelState::load(&harness.ctx, id).unwrap().size(),
+                    size
+                );
             }
         }
     }

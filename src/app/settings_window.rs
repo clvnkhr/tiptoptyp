@@ -634,6 +634,78 @@ mod tests {
     }
 
     #[test]
+    fn short_wide_settings_keeps_every_category_reachable_without_widening_the_sidebar() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        harness.set_size(Vec2::new(730.0, 260.0));
+        // Search results reduce the rail's available height at the supported
+        // native minimum, so the final categories must remain reachable.
+        harness.state_mut().ui.query = "font".into();
+        harness.run();
+        let query = by().role(egui::accesskit::Role::Button).label("Templates");
+        let last_before = harness.get(query.clone()).rect();
+        assert!(
+            last_before.bottom() > 260.0,
+            "the search-results fixture must genuinely overflow: {last_before:?}"
+        );
+        let appearance = harness
+            .get(by().role(egui::accesskit::Role::Button).label("Appearance"))
+            .rect();
+        harness.input_mut().events.extend([
+            egui::Event::PointerMoved(appearance.center()),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                phase: egui::TouchPhase::Move,
+                delta: Vec2::new(0.0, -1000.0),
+                modifiers: Modifiers::NONE,
+            },
+        ]);
+        harness.run_steps(16);
+        harness.run();
+        let last_after = harness.get(query.clone()).rect();
+        assert!(
+            last_after.bottom() <= 260.0,
+            "last category must scroll inside the window: {last_after:?}"
+        );
+        assert!(
+            last_after.top() < last_before.top(),
+            "the category list must actually scroll"
+        );
+        assert!(
+            (last_after.width() - last_before.width()).abs() < 0.01,
+            "scrollbars must not change category width"
+        );
+        harness.get(query).click();
+        harness.run();
+        assert_eq!(harness.state().ui.category, SettingsSection::Templates);
+        assert!(harness.get_by_label("Search settings").rect().top() >= 0.0);
+    }
+
+    #[test]
+    fn settings_search_has_a_full_width_horizontal_separator_at_both_window_sizes() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        for width in [360.0, 730.0] {
+            harness.set_size(Vec2::new(width, 1800.0));
+            harness.run();
+            let search = harness.get_by_label("Search settings").rect();
+            assert!(
+                harness.output().shapes.iter().any(|shape| {
+                    if let egui::Shape::LineSegment { points, .. } = &shape.shape {
+                        let [left, right] = *points;
+                        (left.y - right.y).abs() < 0.01
+                            && left.y > search.bottom()
+                            && left.y < search.bottom() + 20.0
+                            && left.x <= search.left()
+                            && right.x >= search.right()
+                    } else {
+                        false
+                    }
+                }),
+                "missing full-width search separator at {width}px"
+            );
+        }
+    }
+
+    #[test]
     fn settings_invalid_tool_drafts_survive_wide_narrow_wide_navigation() {
         let mut harness = settings_harness(SettingsWindow::default());
         harness.set_size(Vec2::new(900.0, 4000.0));

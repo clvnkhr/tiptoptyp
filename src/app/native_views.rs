@@ -5,6 +5,7 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct WebviewStyle {
     pub(super) palette: (Color32, Color32),
+    accent: Color32,
     hover: Stroke,
     focus: Stroke,
     zoom_snapshot: bool,
@@ -24,11 +25,12 @@ impl WebviewStyle {
             )
         };
         format!(
-            "window.tiptoptypSetPalette?.({}, {}, {}, {}); window.tiptoptypZoomSnapshot?.configure({});",
+            "window.tiptoptypSetPalette?.({}, {}, {}, {}, {}); window.tiptoptypZoomSnapshot?.configure({});",
             serde_json::json!([self.palette.0.r(), self.palette.0.g(), self.palette.0.b()]),
             serde_json::json!([self.palette.1.r(), self.palette.1.g(), self.palette.1.b()]),
             serde_json::json!(css(self.hover)),
             serde_json::json!(css(self.focus)),
+            serde_json::json!([self.accent.r(), self.accent.g(), self.accent.b()]),
             self.zoom_snapshot,
         )
     }
@@ -41,6 +43,7 @@ impl EditorApp {
         let visuals = &style.visuals;
         WebviewStyle {
             palette: self.preview_palette(context, self.preview.dark),
+            accent: theme::palette(context).accent,
             hover: visuals.widgets.hovered.bg_stroke,
             focus: visuals.selection.stroke,
             zoom_snapshot: self.settings.preview_zoom_snapshot && cfg!(target_os = "macos"),
@@ -74,9 +77,84 @@ fn webview_property_diff(
 }
 
 impl EditorApp {
+    pub(super) fn open_web_preview_context_menu(
+        &mut self,
+        context: &egui::Context,
+        request: preview_jump::WebMenuRequest,
+    ) {
+        if self.document_flow_busy()
+            || self.process_close_pending
+            || self.tinymist_sync.generation != Some(request.generation)
+            || !self.interactive_preview_active()
+        {
+            return;
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(applied) = self.webview_applied.filter(|applied| applied.visible)
+            && let Some(window) = self.webview_parent
+            && let Some(anchor) =
+                preview_jump::web_menu_anchor(applied.bounds, request.point, context.zoom_factor())
+        {
+            self.open_app_popup(AppPopup::PreviewSource {
+                anchor,
+                window,
+                target: preview_jump::WebSourceLocation {
+                    generation: request.generation,
+                    token: request.token,
+                    path: self.preview_document_path(),
+                    url: self.webview_url.clone().unwrap_or_default(),
+                    window,
+                },
+            });
+            context.request_repaint();
+        }
+    }
+
+    pub(super) fn reveal_web_preview_source(&mut self, target: preview_jump::WebSourceLocation) {
+        let trace = std::env::var_os("TIPTOPTYP_UI_TRACE").is_some();
+        let current = self.interactive_preview_active()
+            && self.tinymist_sync.generation == Some(target.generation)
+            && self.preview_document_path() == target.path;
+        if trace {
+            eprintln!(
+                "ui.preview.source-menu token={} current={current}",
+                target.token
+            );
+        }
+        if !current {
+            return;
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if self.webview_parent == Some(target.window)
+            && self.webview_url.as_ref() == Some(&target.url)
+            && let Some(webview) = self.webview.as_ref()
+        {
+            let script = format!("window.tiptoptypRevealSource?.({});", target.token);
+            if trace {
+                let _ = webview.evaluate_script_with_callback(&script, |result| {
+                    eprintln!("ui.preview.source-menu dispatched={result}");
+                });
+            } else {
+                let _ = webview.evaluate_script(&script);
+            }
+        } else if trace {
+            eprintln!("ui.preview.source-menu frontend-retired");
+        }
+    }
+
     /// Native objects stay on the owning UI thread; discard their cached
     /// presentation identity together so a recreated view cannot inherit it.
     pub(super) fn discard_webview(&mut self) {
+        self.pending_web_preview_menu = None;
+        if matches!(self.app_popup, Some(AppPopup::PreviewSource { .. })) {
+            self.close_app_popup();
+        }
+        if matches!(
+            self.pending_app_popup_action,
+            Some(AppPopupAction::RevealPreviewSource(_))
+        ) {
+            self.pending_app_popup_action = None;
+        }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         self.release_webview_focus();
         #[cfg(target_os = "macos")]
@@ -1137,13 +1215,22 @@ impl EditorApp {
             self.close_app_popup();
             return;
         }
+        if matches!(&self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if *window != context.viewport_id())
+        {
+            return;
+        }
         if matches!(self.app_popup, Some(AppPopup::GitChunk { .. })) {
             return;
         }
         let Some(popup) = self.app_popup.take() else {
             return;
         };
-        let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
+        let popup_owner = match &popup {
+            AppPopup::PreviewSource { window, .. } => *window,
+            _ => context.viewport_id(),
+        };
+        let Some(window_rect) = context.input_for(popup_owner, |input| input.viewport().inner_rect)
+        else {
             self.close_app_popup();
             return;
         };
@@ -1152,6 +1239,22 @@ impl EditorApp {
         let rename_path = self.document().path().clone();
         let shortcuts = self.settings.effective_shortcuts();
         let (anchor, desired_size) = match &popup {
+            AppPopup::CommandPalette { anchor } => (*anchor, Vec2::new(600.0, 260.0)),
+            AppPopup::PreviewSource { anchor, .. } => {
+                let margin = theme::menu_card_frame(&style).total_margin().sum();
+                (
+                    *anchor,
+                    Vec2::new(
+                        popup_layout::menu_row_content_width(
+                            context,
+                            &style,
+                            "Reveal in Source",
+                            "",
+                        ) + margin.x,
+                        editor_menu_content_height(1, 0) + margin.y,
+                    ),
+                )
+            }
             AppPopup::File { anchor } => (*anchor, command_popup_size(CommandMenu::File, &style)),
             AppPopup::Edit { anchor } => (*anchor, command_popup_size(CommandMenu::Edit, &style)),
             AppPopup::View { anchor } => (*anchor, command_popup_size(CommandMenu::View, &style)),
@@ -1166,6 +1269,7 @@ impl EditorApp {
                 link,
                 table,
                 math,
+                ..
             } => {
                 let can_format = self.document().kind().typesetting_language().is_some();
                 // Only TeX keeps the choice flyout; a Typst target sizes as
@@ -1238,7 +1342,9 @@ impl EditorApp {
         let can_export_pdf = self.source_preview_available();
         let can_sync_preview = (self.document().kind().is_typst()
             && self.interactive_preview_active())
-            || (self.document().kind() == DocumentKind::Tex && self.synctex.artifact.is_some());
+            || (self.document().kind() == DocumentKind::Tex
+                && self.synctex.artifact.is_some()
+                && self.tex_tools.synctex.is_some());
         let edit_availability = CommandAvailability {
             can_undo,
             can_redo,
@@ -1257,7 +1363,20 @@ impl EditorApp {
         let popup_generation = self.app_popup_generation;
         let captures = self.captures.clone();
         let is_git_chunk_popup = matches!(&popup, AppPopup::GitChunk { .. });
-        let popup_title = if is_git_chunk_popup {
+        let is_palette = matches!(&popup, AppPopup::CommandPalette { .. });
+        let palette_entries = is_palette.then(|| self.command_palette_entries(context));
+        let palette_origin = self.command_palette_origin;
+        let palette_viewport = scoped_child_viewport_id(context, "tiptoptyp-popup-overlay");
+        let owner_frame = context.cumulative_frame_nr();
+        let allow_paste = self
+            .pending_widget_paste
+            .is_some_and(|paste| paste.admits(palette_viewport, owner_frame));
+        let mut palette_paste_requested = false;
+        let mut palette_paste_admitted = false;
+        let mut explicit_palette_cancel = false;
+        let popup_title = if is_palette {
+            "tiptoptyp Command Palette"
+        } else if is_git_chunk_popup {
             "tiptoptyp Diff"
         } else {
             "tiptoptyp menu"
@@ -1271,7 +1390,8 @@ impl EditorApp {
         );
 
         ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
-            close |= input.close_requested || input.escape_pressed;
+            // The palette owns Escape so an IME composition can consume it.
+            close |= input.close_requested || (!is_palette && input.escape_pressed);
             let now = Instant::now();
             close |=
                 popup_focus_should_close(&mut had_focus, &mut blur_started, input.focused, now);
@@ -1299,6 +1419,46 @@ impl EditorApp {
                             Vec2::new(menu_width, menu_height),
                             popup_generation,
                             |ui| match &popup {
+                                AppPopup::PreviewSource { target, .. } => {
+                                    if menu_item(ui, "Reveal in Source", None).clicked() {
+                                        action = Some(AppPopupAction::RevealPreviewSource(
+                                            target.clone(),
+                                        ));
+                                    }
+                                }
+                                AppPopup::CommandPalette { .. } => {
+                                    let edits = prepare_child_widget_edit_events(
+                                        ui.ctx(),
+                                        &shortcuts,
+                                        allow_paste,
+                                    );
+                                    // Native menu edits are already resolved commands;
+                                    // inject after normalizing physical key events.
+                                    let _queued = crate::child_view::begin_queued_edit_events(
+                                        ui.ctx(),
+                                        &mut self.command_palette_edit_events,
+                                    );
+                                    palette_paste_requested |= edits.paste_requested;
+                                    palette_paste_admitted |= edits.requested_paste_admitted;
+                                    match self
+                                        .command_palette
+                                        .show(ui, palette_entries.as_deref().unwrap_or_default())
+                                    {
+                                        Some(command_palette::Action::Execute(selected)) => {
+                                            if let Some(origin) = palette_origin {
+                                                action = Some(AppPopupAction::Palette {
+                                                    action: selected,
+                                                    origin,
+                                                });
+                                            }
+                                        }
+                                        Some(command_palette::Action::Dismiss) => {
+                                            close = true;
+                                            explicit_palette_cancel = true;
+                                        }
+                                        None => {}
+                                    }
+                                }
                                 AppPopup::File { .. }
                                 | AppPopup::Edit { .. }
                                 | AppPopup::View { .. }
@@ -1361,7 +1521,11 @@ impl EditorApp {
                                     );
                                 }
                                 AppPopup::Editor {
-                                    link, table, math, ..
+                                    source,
+                                    link,
+                                    table,
+                                    math,
+                                    ..
                                 } => {
                                     let mut editor_action = None;
                                     show_editor_context_menu_ui(
@@ -1371,7 +1535,10 @@ impl EditorApp {
                                             can_redo,
                                             has_selection,
                                             can_format,
-                                            can_sync_preview,
+                                            can_sync_preview: can_sync_preview
+                                                && source.is_some_and(|target| {
+                                                    target.key == self.document().key()
+                                                }),
                                             link: link.as_deref(),
                                             table: table.as_ref(),
                                             math: math.as_ref(),
@@ -1379,7 +1546,9 @@ impl EditorApp {
                                         &shortcuts,
                                         &mut editor_action,
                                     );
-                                    if let Some(editor_action) = editor_action {
+                                    if let Some(editor_action) =
+                                        editor_action.and_then(|action| action.at_source(*source))
+                                    {
                                         action = Some(AppPopupAction::Editor(editor_action));
                                     }
                                 }
@@ -1405,9 +1574,19 @@ impl EditorApp {
         self.app_popup_had_focus = had_focus;
         self.app_popup_blur_started = blur_started;
 
+        if palette_paste_admitted {
+            self.pending_widget_paste = None;
+        }
+        if palette_paste_requested && !close && action.is_none() {
+            self.request_widget_paste(context, palette_viewport);
+        }
         let action_selected = action.is_some();
         if close || action_selected {
-            self.close_app_popup();
+            if is_palette && !action_selected {
+                self.dismiss_command_palette(context, explicit_palette_cancel);
+            } else {
+                self.close_app_popup();
+            }
             if is_git_chunk_popup {
                 self.git_editor.chunk = None;
             }
@@ -1417,7 +1596,7 @@ impl EditorApp {
         // A popup losing focus usually means the user activated another app.
         // Only an in-app menu selection should return keyboard focus to the
         // editor; reclaiming it on blur makes tiptoptyp steal activation.
-        if action_selected {
+        if action_selected && !is_palette {
             crate::window_host::return_focus(context);
         }
         if let Some(action) = action {
@@ -1727,6 +1906,42 @@ mod property_tests {
             .unwrap()
             .to_native(EguiRect::new([left, 0.0], [left + 100.0, 100.0]).unwrap())
             .unwrap()
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn webview_receives_theme_accent_even_when_page_colors_stay_the_same() {
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let before = app.preview_webview_style(&context);
+        let theme = crate::builtin_themes::find("catppuccin-mocha").unwrap();
+        theme::set_imported_palette(&context, Some((theme.dark_mode, theme.palette)));
+        let after = app.preview_webview_style(&context);
+        assert_eq!(
+            after.palette, before.palette,
+            "page appearance stays independent"
+        );
+        assert_ne!(
+            before, after,
+            "accent-only changes must reach an existing WebView"
+        );
+        let script = after.script();
+        let arguments = script
+            .strip_prefix("window.tiptoptypSetPalette?.(")
+            .unwrap()
+            .split_once(");")
+            .unwrap()
+            .0;
+        let values: serde_json::Value = serde_json::from_str(&format!("[{arguments}]")).unwrap();
+        assert_eq!(
+            values[4],
+            serde_json::json!([
+                theme.palette.accent.r,
+                theme.palette.accent.g,
+                theme.palette.accent.b
+            ])
+        );
     }
 
     #[test]

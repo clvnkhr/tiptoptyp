@@ -14,8 +14,10 @@ use icons::{UiIcon, icon_button, paint_ui_icon, square_icon_button, static_icon}
 #[cfg(test)]
 use icons::{closed_eye_icon_geometry, eye_icon_geometry, refresh_icon_geometry};
 pub(crate) mod code_editor;
+mod command_palette;
 mod completion_popup;
 mod navigation;
+mod palette_actions;
 mod settings_controls;
 use navigation::EditorSelection;
 mod explorer_view;
@@ -74,17 +76,29 @@ use crate::terminal::{BottomPanel, MAX_TERMINAL_PANES, PanelTab, TerminalTabs, t
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod help;
+#[cfg(test)]
+mod ime_geometry_tests;
 mod native_views;
+mod pdfium_render_settle;
 mod pdfium_view;
 mod preview_controls;
 mod preview_follow;
+mod preview_jump;
 mod preview_palette;
+#[cfg(test)]
+mod punctuation_input_tests;
+mod reveal;
 mod settings_navigation;
 mod settings_panel;
 mod settings_snippets;
 mod settings_view;
 mod settings_window;
 mod shortcut_editor;
+#[cfg(test)]
+mod snippet_completion_tests;
+mod snippet_window;
+#[cfg(test)]
+mod snippet_window_integration_tests;
 mod synctex;
 mod tooltips;
 use find_bar::FindBarState;
@@ -563,7 +577,9 @@ fn external_file_stamp(path: &Path) -> std::io::Result<ExternalFileStamp> {
 #[derive(Debug, Clone, Copy)]
 struct EditorAttention {
     char_index: usize,
-    started: Instant,
+    armed_at: Instant,
+    started: Option<Instant>,
+    fixed_elapsed: Option<Duration>,
 }
 
 #[cfg(test)]
@@ -768,6 +784,7 @@ enum WorkspaceCopyKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EditorMenuAction {
     Command(AppCommand),
+    RevealInPreview(preview_jump::SourceLocation),
     OpenLink(String),
     EditTable(BoundTableTarget),
     ConvertMath(crate::math_conversion::Target, String),
@@ -858,6 +875,14 @@ fn may_create_window_webview(
 
 #[derive(Debug, Clone)]
 enum AppPopup {
+    CommandPalette {
+        anchor: Pos2,
+    },
+    PreviewSource {
+        anchor: Pos2,
+        window: egui::ViewportId,
+        target: preview_jump::WebSourceLocation,
+    },
     File {
         anchor: Pos2,
     },
@@ -877,6 +902,7 @@ enum AppPopup {
     },
     Editor {
         anchor: Pos2,
+        source: Option<preview_jump::SourceLocation>,
         link: Option<String>,
         table: Option<BoundTableTarget>,
         math: Option<crate::math_conversion::Target>,
@@ -896,6 +922,11 @@ enum AppPopup {
 
 #[derive(Debug, Clone)]
 enum AppPopupAction {
+    RevealPreviewSource(preview_jump::WebSourceLocation),
+    Palette {
+        action: ShortcutAction,
+        origin: palette_actions::Origin,
+    },
     Command(AppCommand),
     Editor(EditorMenuAction),
     Workspace(WorkspaceMenuAction),
@@ -966,6 +997,8 @@ enum SettingsTarget {
     Indentation,
     AsciiPunctuation,
     EnglishGrammar,
+    HarperDictionary,
+    HarperCapitalizedNames,
     Handwriting,
     UnicodeWarnings,
     MitexDollars,
@@ -981,6 +1014,7 @@ enum SettingsTarget {
     InterfaceScale,
     TitleBarMenus,
     ToolbarStyle,
+    CompactLayoutControls,
     FixedTabWidth,
     UiFont,
     UiFontWeight,
@@ -1002,7 +1036,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 53] = [
+    const ALL: [Self; 56] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -1023,6 +1057,8 @@ impl SettingsTarget {
         Self::Indentation,
         Self::AsciiPunctuation,
         Self::EnglishGrammar,
+        Self::HarperDictionary,
+        Self::HarperCapitalizedNames,
         Self::Handwriting,
         Self::UnicodeWarnings,
         Self::MitexDollars,
@@ -1038,6 +1074,7 @@ impl SettingsTarget {
         Self::InterfaceScale,
         Self::TitleBarMenus,
         Self::ToolbarStyle,
+        Self::CompactLayoutControls,
         Self::FixedTabWidth,
         Self::UiFont,
         Self::UiFontWeight,
@@ -1078,11 +1115,13 @@ impl SettingsTarget {
             Self::StickyContextRows => "Sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
             Self::Indentation => "Tab inserts",
-            Self::AsciiPunctuation => "Use ASCII punctuation when typing",
+            Self::AsciiPunctuation => "Convert CJK punctuation to ASCII when typing",
             Self::Handwriting => "Handwriting recognition",
             Self::EnglishGrammar => "Offline English spelling and grammar (Typst / TeX)",
+            Self::HarperDictionary => "Personal dictionary",
+            Self::HarperCapitalizedNames => "Ignore capitalized names",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
-            Self::Snippets => "Custom snippets",
+            Self::Snippets => "Snippets",
             Self::Templates => "Document templates",
             Self::MitexDollars => "Auto-enable miTeX in compatible Typst documents",
             Self::AutoFormatMath => "Format after math conversion",
@@ -1095,6 +1134,7 @@ impl SettingsTarget {
             Self::InterfaceScale => "Interface scale",
             Self::TitleBarMenus => "Show title-bar menus",
             Self::ToolbarStyle => "Toolbar buttons",
+            Self::CompactLayoutControls => "Compact layout controls",
             Self::FixedTabWidth => "Fixed tab width",
             Self::UiFont => "UI font",
             Self::UiFontWeight => "UI font weight",
@@ -1130,6 +1170,7 @@ impl SettingsTarget {
             | Self::InterfaceScale
             | Self::TitleBarMenus
             | Self::ToolbarStyle
+            | Self::CompactLayoutControls
             | Self::FixedTabWidth
             | Self::UiFont
             | Self::UiFontWeight => SettingsSection::Appearance,
@@ -1152,6 +1193,8 @@ impl SettingsTarget {
             | Self::HoverDelay => SettingsSection::Editor,
             Self::AsciiPunctuation
             | Self::EnglishGrammar
+            | Self::HarperDictionary
+            | Self::HarperCapitalizedNames
             | Self::Handwriting
             | Self::UnicodeWarnings
             | Self::MitexDollars
@@ -1212,15 +1255,25 @@ impl SettingsTarget {
             Self::EnglishGrammar => {
                 "writing proofreading spelling grammar english harper offline tex typst language dialect british american UK US auto"
             }
+            Self::HarperDictionary => {
+                "harper spelling personal custom dictionary accepted words mathematics names word list"
+            }
+            Self::HarperCapitalizedNames => {
+                "harper spelling ignore proper names uppercase camelcase PascalCase capitalized names"
+            }
             Self::UnicodeWarnings => {
                 "unicode invisible characters confusable zero-width cjk lookalikes"
             }
             Self::Indentation => "editor indent tab spaces width",
-            Self::AsciiPunctuation => "editor cjk full width punctuation period keyboard input",
+            Self::AsciiPunctuation => {
+                "editor cjk chinese japanese full width punctuation period keyboard input ascii conversion"
+            }
             Self::AutoPairDelimiters => {
                 "editor automatic pairing brackets quotes dollar backspace matching"
             }
-            Self::Snippets => "custom snippets tabstop linked fields completion prefix",
+            Self::Snippets => {
+                "snippets suggestions defaults math text tabstop linked fields completion prefix"
+            }
             Self::Templates => "new from template article letter notes source starting document",
             Self::MitexDollars => {
                 "mitex latex tex dollar inline display block math package version translation"
@@ -1243,6 +1296,9 @@ impl SettingsTarget {
             Self::InterfaceScale => "editor ui zoom percent size",
             Self::TitleBarMenus => "editor titlebar file edit view chrome",
             Self::ToolbarStyle => "toolbar icons text labels find pause resume compile settings",
+            Self::CompactLayoutControls => {
+                "toolbar layout menu separate buttons old explorer code split preview bottom panel"
+            }
             Self::FixedTabWidth => "editor tabs documents fixed width size equal drag reorder",
             Self::UiFont => "editor interface family system choose",
             Self::UiFontWeight => "editor interface bold variable",
@@ -1340,6 +1396,8 @@ pub struct EditorApp {
     settings_visible: bool,
     settings_open_requested: bool,
     settings_window: Arc<std::sync::Mutex<SettingsWindow>>,
+    snippet_window: Arc<std::sync::Mutex<snippet_window::SnippetWindow>>,
+    snippets_visible: bool,
     retain_settings_viewport: bool,
     shortcut_editor_visible: bool,
     shortcut_editor: ShortcutEditorState,
@@ -1379,6 +1437,8 @@ pub struct EditorApp {
     git_editor: crate::git::editor::GitEditorState,
     git_hunk_job: crate::worker::ExclusiveJob<String>,
     pending_hunk_popup: Option<git_actions::PendingHunkPopup>,
+    pending_git_file_diff: Option<DocumentKey>,
+    pending_git_file_origin: Option<DocumentKey>,
     document_diff: Option<crate::git::editor::document_diff::DocumentDiff>,
     workspace_chooser_visible: bool,
     workspace_history_removals: Vec<PathBuf>,
@@ -1417,6 +1477,10 @@ pub struct EditorApp {
     format_after_math_conversion: Option<DocumentKey>,
     diagnostic_tooltip: Option<DiagnosticTooltipOverlay>,
     app_popup: Option<AppPopup>,
+    pending_web_preview_menu: Option<preview_jump::WebMenuRequest>,
+    command_palette: command_palette::State,
+    command_palette_origin: Option<palette_actions::Origin>,
+    command_palette_edit_events: Vec<egui::Event>,
     app_popup_generation: u64,
     app_popup_had_focus: bool,
     app_popup_blur_started: Option<Instant>,
@@ -1661,6 +1725,8 @@ impl EditorApp {
             settings_visible: false,
             settings_open_requested: false,
             settings_window: Arc::default(),
+            snippet_window: Arc::default(),
+            snippets_visible: false,
             retain_settings_viewport: false,
             shortcut_editor_visible: false,
             shortcut_editor: ShortcutEditorState::default(),
@@ -1697,6 +1763,8 @@ impl EditorApp {
             git_editor: crate::git::editor::GitEditorState::default(),
             git_hunk_job: Default::default(),
             pending_hunk_popup: None,
+            pending_git_file_diff: None,
+            pending_git_file_origin: None,
             document_diff: None,
             workspace_chooser_visible: false,
             workspace_history_removals: Vec::new(),
@@ -1744,6 +1812,10 @@ impl EditorApp {
             format_after_math_conversion: None,
             diagnostic_tooltip: None,
             app_popup: None,
+            pending_web_preview_menu: None,
+            command_palette: Default::default(),
+            command_palette_origin: None,
+            command_palette_edit_events: Vec::new(),
             app_popup_generation: 0,
             app_popup_had_focus: false,
             app_popup_blur_started: None,
@@ -1925,6 +1997,9 @@ impl EditorApp {
     }
 
     pub(crate) fn native_command_enabled(&self, command: AppCommand) -> bool {
+        if self.snippets_visible && self.snippet_window.lock().unwrap().focused {
+            return snippet_window::accepts_native_command(command);
+        }
         if self.tabs.is_empty() {
             let terminal_search = self.bottom_panel.selected() == Some(PanelTab::Terminal)
                 && !self.terminal.is_off()
@@ -2149,6 +2224,7 @@ impl EditorApp {
             self.handle_shortcuts(context, frame);
         }
         self.show_settings_window(context, frame);
+        self.show_snippet_editor_window(context);
         self.show_shortcut_editor_window(context);
         self.show_typst_overrides_window(context);
         self.show_workspace_chooser(context);
@@ -3009,13 +3085,19 @@ impl EditorApp {
         }
         // Settings is a native keyboard owner. Its callback handles its own
         // controls and shortcuts; the document router must not read that input.
-        if shortcut_viewport == scoped_child_viewport_id(context, "tiptoptyp-settings") {
+        if ["tiptoptyp-settings", snippet_window::SALT]
+            .into_iter()
+            .any(|salt| shortcut_viewport == scoped_child_viewport_id(context, salt))
+        {
             return;
         }
         if self.handle_shortcut_capture(context, shortcut_viewport) {
             return;
         }
         let shortcuts = self.settings.effective_shortcuts();
+        if self.handle_palette_shortcuts(context, shortcut_viewport, &shortcuts) {
+            return;
+        }
         if self.handle_terminal_shortcuts(context, shortcut_viewport, &shortcuts, frame) {
             return;
         }
@@ -3482,6 +3564,7 @@ impl EditorApp {
             return;
         }
         match command {
+            AppCommand::CommandPalette => self.toggle_command_palette(context),
             AppCommand::LatexDiff => self.begin_latexdiff(context),
             AppCommand::NewTable => self.begin_new_table(context),
             AppCommand::EditTable => {
@@ -3605,6 +3688,23 @@ impl EditorApp {
         let focused_viewport = focused_input_viewport(context);
         let mut widget_edit_events = Vec::new();
         while let Some(command) = self.queued_native_menu_commands.pop() {
+            if self.palette_native_command(command, context) {
+                continue;
+            }
+            if focused_viewport == scoped_child_viewport_id(context, snippet_window::SALT) {
+                let mut snippets = self.snippet_window.lock().unwrap();
+                match command {
+                    AppCommand::CloseTab => snippets.request_close(),
+                    AppCommand::Find | AppCommand::FindReplace => snippets.request_search_focus(),
+                    AppCommand::Save => snippets.request_save(),
+                    _ if settings_window::is_widget_edit_command(command) => {
+                        snippets.queue_edit_command(command);
+                    }
+                    _ => {}
+                }
+                context.request_repaint_of(focused_viewport);
+                continue;
+            }
             if focused_viewport == scoped_child_viewport_id(context, "tiptoptyp-settings") {
                 match command {
                     AppCommand::CloseTab => {
@@ -3832,6 +3932,8 @@ impl EditorApp {
     fn close_app_popup(&mut self) {
         self.pending_hunk_popup = None;
         self.app_popup = None;
+        self.command_palette_origin = None;
+        self.command_palette_edit_events.clear();
         self.app_popup_had_focus = false;
         self.app_popup_blur_started = None;
     }
@@ -4591,6 +4693,17 @@ impl EditorApp {
             String::new()
         };
         let path = path.canonicalize().unwrap_or(path);
+        self.load_prepared_path(path, source, kind, disk_fingerprint, started)
+    }
+
+    fn load_prepared_path(
+        &mut self,
+        path: PathBuf,
+        source: String,
+        kind: DocumentKind,
+        disk_fingerprint: Option<u64>,
+        started: Instant,
+    ) -> bool {
         let reloading_current_document = self
             .document()
             .path()
@@ -6208,6 +6321,9 @@ impl EditorApp {
                 self.claim_native_preview_keyboard(context);
             }
         }
+        if let Some(request) = self.pending_web_preview_menu.take() {
+            self.open_web_preview_context_menu(context, request);
+        }
     }
 
     fn claim_native_preview_keyboard(&mut self, context: &egui::Context) {
@@ -6224,6 +6340,16 @@ impl EditorApp {
             return;
         };
         if value.get("type").and_then(|v| v.as_str()) == Some("preview-loaded") {
+            self.pending_web_preview_menu = None;
+            if matches!(self.app_popup, Some(AppPopup::PreviewSource { .. })) {
+                self.close_app_popup();
+            }
+            if matches!(
+                self.pending_app_popup_action,
+                Some(AppPopupAction::RevealPreviewSource(_))
+            ) {
+                self.pending_app_popup_action = None;
+            }
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             crate::desktop_test::reset_renderer();
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -6258,6 +6384,10 @@ impl EditorApp {
             return;
         };
         match value.get("type").and_then(|value| value.as_str()) {
+            Some("preview-context-menu") => {
+                self.pending_web_preview_menu =
+                    preview_jump::WebMenuRequest::parse(&value, generation);
+            }
             Some("focus-editor") => {
                 self.preview_controls.return_to_editor = true;
             }
@@ -6460,6 +6590,7 @@ impl EditorApp {
         let Some(generation) = self.tinymist_sync.generation else {
             return;
         };
+        let char_index = preview_jump::source_reveal_offset(self.document().source(), char_index);
         let position = if self.document().config().is_none() {
             Some(scalar_position_at(
                 self.document().source(),
@@ -6477,6 +6608,29 @@ impl EditorApp {
             return;
         };
         let path = self.tinymist_document_path();
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            let trace = std::env::var_os("TIPTOPTYP_UI_TRACE").is_some();
+            if trace {
+                eprintln!(
+                    "ui.preview.reveal automatic={automatic} frontend={}",
+                    self.webview.is_some()
+                );
+            }
+            if let Some(webview) = &self.webview {
+                let script = format!(
+                    "window.tiptoptypPreviewRevealIntent?.({}); window.tiptoptypPreviewRevealState?.();",
+                    !automatic,
+                );
+                if trace {
+                    let _ = webview.evaluate_script_with_callback(&script, |result| {
+                        eprintln!("ui.preview.reveal armed={result}");
+                    });
+                } else {
+                    let _ = webview.evaluate_script(&script);
+                }
+            }
+        }
         if let Err(error) = self
             .tinymist
             .scroll_preview(generation, path, line, character)
@@ -6735,35 +6889,7 @@ impl EditorApp {
 
             let tex_available = self.tex_mode_available();
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let layout_open = matches!(self.app_popup, Some(AppPopup::Layout { .. }));
-                let layout = icons::toolbar_button(
-                    ui,
-                    true,
-                    layout_open,
-                    match self.view_mode {
-                        ViewMode::Code => UiIcon::Code,
-                        ViewMode::Split => UiIcon::Split,
-                        ViewMode::Preview => UiIcon::Preview,
-                    },
-                    "Layout",
-                    if self.settings.toolbar_style == crate::settings::ToolbarStyle::Text {
-                        crate::settings::ToolbarStyle::Text
-                    } else {
-                        crate::settings::ToolbarStyle::TextAndIcons
-                    },
-                    false,
-                );
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("toolbar.layout", &layout);
-                if layout.clicked() {
-                    if layout_open {
-                        self.close_app_popup();
-                    } else {
-                        self.open_app_popup(AppPopup::Layout {
-                            anchor: layout.rect.left_bottom(),
-                        });
-                    }
-                }
+                self.show_layout_toolbar(ui, frame);
                 if native_hover_text(
                     icons::toolbar_button(
                         ui,
@@ -7479,6 +7605,10 @@ impl EditorApp {
             return;
         };
         match action {
+            AppPopupAction::RevealPreviewSource(target) => self.reveal_web_preview_source(target),
+            AppPopupAction::Palette { action, origin } => {
+                self.execute_palette_action(action, origin, context, frame)
+            }
             AppPopupAction::Command(command) => {
                 let viewport = focused_input_viewport(context);
                 if !self.route_edit_command_to_focused_widget(command, context, viewport) {
@@ -7487,6 +7617,9 @@ impl EditorApp {
             }
             AppPopupAction::Editor(EditorMenuAction::Command(command)) => {
                 self.execute_app_command(command, context, frame)
+            }
+            AppPopupAction::Editor(EditorMenuAction::RevealInPreview(source)) => {
+                self.execute_source_menu_jump(source);
             }
             AppPopupAction::Editor(EditorMenuAction::OpenLink(target)) => {
                 self.follow_preview_link(&target)
@@ -7747,8 +7880,12 @@ impl EditorApp {
         if output.repaint {
             ui.ctx().request_repaint();
         }
-        if let Some(git) = output.git {
+        if let Some(mut git) = output.git {
+            let open_file_diff = git.open_file_diff.take();
             self.git.apply_view_output(ui.ctx(), git);
+            if let Some(path) = open_file_diff {
+                self.request_git_file_diff(ui.ctx(), path);
+            }
             if let Some(request) = self.git.take_revert_request() {
                 self.document_workflow.set_modal(AppModal::RevertGit {
                     message: request.message(),
@@ -8024,51 +8161,70 @@ impl EditorApp {
         }
     }
 
+    fn install_local_completion(
+        &mut self,
+        cursor: usize,
+        anchor: Rect,
+        explicit: bool,
+        all_items: Vec<CompletionItem>,
+    ) -> bool {
+        let items =
+            crate::completion::filtered_for_source(&all_items, self.document().source(), cursor);
+        if items.is_empty() {
+            self.editor_completion = None;
+            return false;
+        }
+        self.editor_completion = Some(EditorCompletionState {
+            key: self.document().key(),
+            provenance: CompletionProvenance::Local,
+            version: revision_as_i32(self.document().revision()),
+            cursor,
+            source_cursor: cursor,
+            anchor,
+            explicit,
+            is_incomplete: false,
+            selected: 0,
+            items,
+            all_items,
+            source: self.document().source().clone(),
+        });
+        true
+    }
+
     fn request_editor_completion(&mut self, cursor: usize, anchor: Rect, explicit: bool) {
         if self.table_editor.is_some() {
             return;
         }
         self.prepare_editor_source_data();
-        if let Some(all_items) = crate::snippets::items(
+        let kind = self.document().kind();
+        let (snippet_kind, snippet_context) =
+            self.editor_data.snippet_language_context(cursor, kind);
+        let snippet_items = crate::snippets::items_from(
+            &self.settings.snippet_presets,
             &self.settings.snippets,
-            self.document().kind(),
+            snippet_kind,
             self.document().source(),
             cursor,
+            snippet_context,
         )
-        .or_else(|| {
-            self.document()
-                .kind()
-                .is_typst()
-                .then(|| {
-                    self.editor_data.tex_completions(cursor).or_else(|| {
-                        crate::completion::font_items(
-                            self.document().source(),
-                            cursor,
-                            &self.font_catalog,
-                        )
-                    })
+        .unwrap_or_default();
+        // Embedded TeX and font arguments have dedicated local providers.
+        // Snippets add candidates; they never claim the language server's region.
+        let built_in = kind
+            .is_typst()
+            .then(|| {
+                self.editor_data.tex_completions(cursor).or_else(|| {
+                    crate::completion::font_items(
+                        self.document().source(),
+                        cursor,
+                        &self.font_catalog,
+                    )
                 })
-                .flatten()
-        }) {
-            let items = crate::completion::filtered_for_source(
-                &all_items,
-                self.document().source(),
-                cursor,
-            );
-            self.editor_completion = Some(EditorCompletionState {
-                key: self.document().key(),
-                provenance: CompletionProvenance::Local,
-                version: revision_as_i32(self.document().revision()),
-                cursor,
-                source_cursor: cursor,
-                anchor,
-                explicit,
-                is_incomplete: false,
-                selected: 0,
-                items,
-                all_items,
-                source: self.document().source().clone(),
-            });
+            })
+            .flatten();
+        if let Some(mut all_items) = built_in {
+            all_items.extend(snippet_items);
+            self.install_local_completion(cursor, anchor, explicit, all_items);
             return;
         }
         if !explicit
@@ -8085,8 +8241,9 @@ impl EditorApp {
         let ready = self.editor_lsp_ready();
         let (generation, uri) = self.editor_lsp_identity();
         let (Some(generation), Some(uri)) = (generation, uri.map(str::to_owned)) else {
-            self.editor_completion = None;
-            if explicit {
+            let local =
+                self.install_local_completion(cursor, anchor, explicit, snippet_items.clone());
+            if explicit && !local {
                 self.notice = Some(Notice {
                     message: "Completions are unavailable until the language server is ready"
                         .to_owned(),
@@ -8096,8 +8253,9 @@ impl EditorApp {
             return;
         };
         if !ready {
-            self.editor_completion = None;
-            if explicit {
+            let local =
+                self.install_local_completion(cursor, anchor, explicit, snippet_items.clone());
+            if explicit && !local {
                 self.notice = Some(Notice {
                     message: "Completions are unavailable until the language server is ready"
                         .to_owned(),
@@ -8122,8 +8280,13 @@ impl EditorApp {
             let snapshot = match self.document().canonical_snapshot() {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
-                    self.editor_completion = None;
-                    if explicit {
+                    let local = self.install_local_completion(
+                        cursor,
+                        anchor,
+                        explicit,
+                        snippet_items.clone(),
+                    );
+                    if explicit && !local {
                         self.notice = Some(Notice {
                             message: error.to_string(),
                             kind: NoticeKind::Info,
@@ -8133,10 +8296,12 @@ impl EditorApp {
                 }
             };
             let Some(position) = snapshot.canonical_lsp_position(ScalarOffset::new(cursor)) else {
+                self.install_local_completion(cursor, anchor, explicit, snippet_items);
                 return;
             };
             let Some(source_cursor) = snapshot.canonical_scalar_cursor(ScalarOffset::new(cursor))
             else {
+                self.install_local_completion(cursor, anchor, explicit, snippet_items);
                 return;
             };
             (position, source_cursor.get(), snapshot.source().to_owned())
@@ -8156,6 +8321,44 @@ impl EditorApp {
             Ok(()) => {
                 self.activity.completion = Some(request_token);
                 self.activity.intelligence_error = None;
+                // A safely rebased batch can stay visible while the new server
+                // request runs. Never carry edits from an older source/revision.
+                let cached: Vec<_> = self
+                    .editor_completion
+                    .as_ref()
+                    .filter(|state| {
+                        state.key == self.document().key()
+                            && state
+                                .provenance
+                                .is_current(Some(generation), Some(uri.as_str()))
+                            && state.cursor == cursor
+                            && state.version == version
+                            && state.source == source
+                            && state.source_cursor == source_cursor
+                    })
+                    .map(|state| {
+                        state
+                            .all_items
+                            .iter()
+                            .filter(|item| {
+                                item.origin
+                                    == crate::lsp::protocol::CompletionOrigin::LanguageServer
+                            })
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut visible = crate::completion::filtered(
+                    &snippet_items,
+                    &crate::completion::query(self.document().source(), cursor),
+                );
+                visible.extend(crate::completion::filtered_for_source(
+                    &cached,
+                    &source,
+                    source_cursor,
+                ));
+                let mut all_items = snippet_items;
+                all_items.extend(cached);
                 self.editor_completion = Some(EditorCompletionState {
                     key: self.document().key(),
                     provenance: CompletionProvenance::Server {
@@ -8170,23 +8373,15 @@ impl EditorApp {
                     explicit,
                     is_incomplete: false,
                     selected: 0,
-                    items: self
-                        .editor_completion
-                        .as_ref()
-                        .map(|state| state.items.clone())
-                        .unwrap_or_default(),
-                    all_items: self
-                        .editor_completion
-                        .as_ref()
-                        .map(|state| state.all_items.clone())
-                        .unwrap_or_default(),
+                    items: visible,
+                    all_items,
                     source,
                 });
             }
             Err(error) => {
                 self.activity.intelligence_error = Some(error.clone());
-                self.editor_completion = None;
-                if explicit {
+                let local = self.install_local_completion(cursor, anchor, explicit, snippet_items);
+                if explicit && !local {
                     self.notice = Some(Notice {
                         message: format!("Could not request completions: {error}"),
                         kind: NoticeKind::Error,
@@ -8229,6 +8424,7 @@ impl EditorApp {
         );
         let (active_generation, active_uri) = self.editor_lsp_identity();
         let active_uri = active_uri.map(str::to_owned);
+        let display_source = self.document().source().clone();
         let Some(completion) = &mut self.editor_completion else {
             return;
         };
@@ -8254,12 +8450,25 @@ impl EditorApp {
                 .cmp(right.sort_text.as_deref().unwrap_or(&right.label))
                 .then_with(|| left.label.cmp(&right.label))
         });
-        let all_items = items;
-        let items = crate::completion::filtered_for_source(
+        let mut all_items = items;
+        let mut items = crate::completion::filtered_for_source(
             &all_items,
             &completion.source,
             completion.source_cursor,
         );
+        let snippets: Vec<_> = completion
+            .all_items
+            .iter()
+            .filter(|item| item.origin == crate::lsp::protocol::CompletionOrigin::Snippet)
+            .cloned()
+            .collect();
+        let mut local = crate::completion::filtered(
+            &snippets,
+            &crate::completion::query(&display_source, completion.cursor),
+        );
+        local.append(&mut items);
+        let items = local;
+        all_items.extend(snippets);
         if items.is_empty() {
             self.editor_completion = None;
             return;
@@ -8288,7 +8497,8 @@ impl EditorApp {
         let Some(item) = completion.items.get(index).cloned() else {
             return;
         };
-        let local = completion.provenance.is_local();
+        let local = completion.provenance.is_local()
+            || item.origin == crate::lsp::protocol::CompletionOrigin::Snippet;
         let coordinates = if local {
             crate::completion_edit::CompletionCoordinates::Display
         } else {
@@ -8296,8 +8506,16 @@ impl EditorApp {
         };
         let transaction = crate::completion_edit::CompletionTransaction::prepare(
             completion.key,
-            &completion.source,
-            completion.source_cursor,
+            if local {
+                self.document().source()
+            } else {
+                &completion.source
+            },
+            if local {
+                completion.cursor
+            } else {
+                completion.source_cursor
+            },
             &item,
             coordinates,
         );
@@ -9119,9 +9337,19 @@ impl EditorApp {
 
     pub(crate) fn apply_shared_settings(&mut self, settings: AppSettings, context: &egui::Context) {
         let enable_tex = settings.mitex_auto_enable && !self.settings.mitex_auto_enable;
+        let snippets_changed = settings.snippets != self.settings.snippets
+            || settings.snippet_presets != self.settings.snippet_presets;
         let autosave_changed = settings.auto_save != self.settings.auto_save
             || settings.auto_save_delay_ms != self.settings.auto_save_delay_ms;
         self.settings = settings;
+        self.writing.configure(
+            &self.settings.harper_dictionary,
+            self.settings.harper_ignore_capitalized_names,
+        );
+        if snippets_changed {
+            self.editor_completion = None;
+            self.activity.completion = None;
+        }
         crate::window_background::publish(context, self.settings.window_background);
         if enable_tex && self.tex_mode_available() {
             self.set_tex_mode(true, context);
@@ -9349,6 +9577,7 @@ impl EditorApp {
                 document.source(),
                 projection.as_ref(),
             );
+            self.tick_git_file_diff(&context);
         }
         self.record_status_transition();
         self.record_notice_transition();
@@ -9547,6 +9776,7 @@ impl EditorApp {
         self.show_asset_hover_window(&context);
         self.show_diagnostic_tooltip_window(&context);
         self.show_settings_window(&context, frame);
+        self.show_snippet_editor_window(&context);
         self.show_shortcut_editor_window(&context);
         self.show_typst_overrides_window(&context);
         self.show_workspace_chooser(&context);
@@ -9572,6 +9802,14 @@ impl EditorApp {
             self.snapshot_scene,
             Some(UiSnapshotScene::DiagnosticTooltip | UiSnapshotScene::FunctionTooltip)
         );
+        let preview_window = scoped_child_viewport_id(context, "preview-window");
+        if !matches!(self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if window == preview_window)
+        {
+            ChildViewHost::close_viewport(
+                context,
+                crate::child_view::child_viewport_id(preview_window, "tiptoptyp-popup-overlay"),
+            );
+        }
         for (visible, salt) in [
             (self.shortcut_editor_visible, "tiptoptyp-shortcuts"),
             (self.typst_overrides_visible, "tiptoptyp-typst-overrides"),
@@ -9579,7 +9817,8 @@ impl EditorApp {
             (self.encoding_import.is_some(), "tiptoptyp-encoding-import"),
             (self.template_picker.is_some(), "tiptoptyp-templates"),
             (
-                !matches!(self.app_popup, None | Some(AppPopup::GitChunk { .. })),
+                !matches!(self.app_popup, None | Some(AppPopup::GitChunk { .. }))
+                    && !matches!(self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if window != context.viewport_id()),
                 "tiptoptyp-popup-overlay",
             ),
             (self.asset_hover.is_some(), "asset-hover-overlay"),
@@ -9657,14 +9896,12 @@ fn take_ready_export(
     if ready { pending.take() } else { None }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn paint_editor_line_backgrounds(
     ui: &egui::Ui,
     output: &egui::text_edit::TextEditOutput,
     viewport: Rect,
     source: &str,
     current_char: Option<usize>,
-    attention: Option<(usize, f32)>,
     line_rows: &[Range<usize>],
     slot: egui::layers::ShapeIdx,
 ) {
@@ -9674,47 +9911,6 @@ fn paint_editor_line_backgrounds(
         let line = line_index_at_char(source, char_index);
         let fill = theme::palette(ui.ctx()).active_row;
         push_editor_line_fill(&mut shapes, output, viewport, line_rows, line, fill, None);
-    }
-
-    if let Some((char_index, progress)) = attention {
-        let cursor = output
-            .galley
-            .pos_from_cursor(CCursor::new(char_index.min(source.chars().count())))
-            .translate(output.galley_pos.to_vec2());
-        let center = Pos2::new(cursor.left(), cursor.center().y);
-        let fade = (1.0 - progress).powi(2);
-        let radius = METRICS.editor.attention_start_radius
-            + METRICS.editor.attention_radius_growth * progress;
-        let palette = theme::palette(ui.ctx());
-        let [red, green, blue] = palette.attention_rgb;
-        let center_color = Color32::from_rgba_unmultiplied(
-            red,
-            green,
-            blue,
-            (palette.attention_max_alpha as f32 * fade) as u8,
-        );
-        let mut mesh = egui::epaint::Mesh::default();
-        mesh.colored_vertex(center, center_color);
-        for index in 0..METRICS.editor.attention_segments {
-            let angle =
-                index as f32 / METRICS.editor.attention_segments as f32 * std::f32::consts::TAU;
-            mesh.colored_vertex(center + Vec2::angled(angle) * radius, Color32::TRANSPARENT);
-        }
-        for index in 0..METRICS.editor.attention_segments {
-            mesh.add_triangle(
-                0,
-                index + 1,
-                ((index + 1) % METRICS.editor.attention_segments) + 1,
-            );
-        }
-        shapes.push(egui::Shape::mesh(mesh));
-        let ring_color = center_color.gamma_multiply(METRICS.editor.attention_ring_opacity);
-        shapes.push(egui::Shape::circle_stroke(
-            center,
-            METRICS.editor.attention_ring_start_radius
-                + METRICS.editor.attention_ring_growth * progress,
-            Stroke::new(METRICS.editor.attention_ring_width, ring_color),
-        ));
     }
 
     ui.painter()
@@ -9827,10 +10023,6 @@ fn completion_response_matches(
         && active_generation == Some(generation)
         && active_uri == Some(uri)
         && active_version == version
-}
-
-fn editor_attention_progress(elapsed: Duration) -> f32 {
-    (elapsed.as_secs_f32() / METRICS.motion.editor_attention.as_secs_f32()).clamp(0.0, 1.0)
 }
 
 fn editor_surface_rect(editor_rect: Rect, viewport_rect: Rect) -> Rect {
@@ -11341,7 +11533,7 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 17] {
+fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 19] {
     use crate::child_view::child_viewport_id;
     [
         child_viewport_id(current, find_bar::VIEWPORT_SALT),
@@ -11358,13 +11550,33 @@ fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 17] {
         child_viewport_id(current, "tiptoptyp-workspace-chooser"),
         child_viewport_id(current, "tiptoptyp-modal-overlay"),
         child_viewport_id(current, "tiptoptyp-settings"),
+        child_viewport_id(current, snippet_window::SALT),
         child_viewport_id(current, "tiptoptyp-shortcuts"),
         child_viewport_id(current, "tiptoptyp-typst-overrides"),
         child_viewport_id(current, "asset-hover-overlay"),
         child_viewport_id(current, "tiptoptyp-popup-overlay"),
+        child_viewport_id(
+            child_viewport_id(current, "preview-window"),
+            "tiptoptyp-popup-overlay",
+        ),
         child_viewport_id(current, "diagnostic-tooltip-overlay"),
         current,
     ]
+}
+
+pub(crate) fn snippet_editor_owns_native_command(
+    context: &egui::Context,
+    command: AppCommand,
+) -> bool {
+    let viewport = scoped_child_viewport_id(context, snippet_window::SALT);
+    snippet_window::accepts_native_command(command)
+        && context.input(|input| {
+            input
+                .raw
+                .viewports
+                .get(&viewport)
+                .is_some_and(|info| info.focused == Some(true) && info.visible() != Some(false))
+        })
 }
 
 pub(crate) fn owns_focused_input_viewport(context: &egui::Context) -> bool {

@@ -45,10 +45,12 @@ impl EditorApp {
         };
         let rendered = panel.show(ui, |ui| {
             self.show_bottom_panel(ui);
-            if self.bottom_panel.selected() == Some(PanelTab::Activity) {
-                // Activity content is short when there are few indicators.
-                // Keep its panel at the user's saved height when switching
-                // from Terminal or Problems.
+            if self.bottom_panel.selected() == Some(PanelTab::Activity)
+                || !self.bottom_panel.is_visible()
+            {
+                // Activity can be short, and the header's close action removes
+                // the body during this pass. Retain the allocated height so
+                // egui cannot save a smaller size just before hiding the panel.
                 ui.allocate_space(ui.available_size().max(Vec2::ZERO));
             }
         });
@@ -1318,6 +1320,95 @@ mod tests {
         assert!(!context.memory(|memory| memory.has_focus(id)));
         app.toggle_panel(&context);
         assert_eq!(app.bottom_panel.selected(), Some(PanelTab::Terminal));
+    }
+
+    #[test]
+    fn closing_panel_header_preserves_saved_height_after_hidden_layout_changes() {
+        for tab in [PanelTab::Problems, PanelTab::Terminal, PanelTab::Activity] {
+            let root = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+            app.snapshot_scene = None;
+            app.settings.titlebar_menus = false;
+            app.document_mut()
+                .replace_unprojected_untitled("unchanged source");
+            app.bottom_panel.select(tab);
+            app.terminal
+                .prepare_fixture(b"terminal fixture", root.path());
+            let mut initialized = false;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1200.0, 720.0))
+                .build_ui_state(
+                    move |ui, app: &mut EditorApp| {
+                        if !initialized {
+                            theme::configure_test_fonts(ui.ctx());
+                            let id =
+                                crate::child_view::viewport_scoped_id(ui.ctx(), "bottom-panel");
+                            ui.ctx().data_mut(|data| {
+                                data.insert_persisted(
+                                    id,
+                                    egui::PanelState {
+                                        outer_rect: Rect::from_min_size(
+                                            Pos2::ZERO,
+                                            Vec2::new(1200.0, 308.0),
+                                        ),
+                                    },
+                                );
+                            });
+                            initialized = true;
+                            return;
+                        }
+                        egui::Panel::top("close-panel-toolbar")
+                            .exact_size(METRICS.chrome.toolbar_height)
+                            .show(ui, |ui| app.show_toolbar(ui, None));
+                        app.show_bottom_panel_container(ui);
+                        egui::CentralPanel::default().show(ui, |ui| app.show_editor(ui));
+                    },
+                    app,
+                );
+            let height = |context: &egui::Context| {
+                let id = crate::child_view::viewport_scoped_id(context, "bottom-panel");
+                egui::PanelState::load(context, id).unwrap().size().y
+            };
+            harness.run();
+            assert_eq!(height(&harness.ctx), 308.0, "{tab:?}");
+            harness.get_by_label("Close panel").click();
+            harness.run();
+            assert!(!harness.state().bottom_panel.is_visible());
+            assert_eq!(
+                height(&harness.ctx),
+                308.0,
+                "close pass changed {tab:?} height"
+            );
+            harness.state_mut().settings.compact_layout_controls = false;
+            harness.run();
+            for (label, mode) in [
+                ("Code", ViewMode::Code),
+                ("Preview", ViewMode::Preview),
+                ("Split", ViewMode::Split),
+            ] {
+                harness.get_by_label(label).click();
+                harness.run();
+                assert_eq!(harness.state().view_mode, mode);
+                assert_eq!(height(&harness.ctx), 308.0);
+            }
+            for expected in [false, true] {
+                harness.get_by_label("Explorer").click();
+                harness.run();
+                assert_eq!(harness.state().explorer.panel_visible(), expected);
+            }
+            for _ in 0..2 {
+                harness.get_by_label("Panel").click();
+                harness.run();
+                assert_eq!(harness.state().bottom_panel.selected(), Some(tab));
+                assert_eq!(height(&harness.ctx), 308.0, "reopened {tab:?}");
+                harness.get_by_label("Close panel").click();
+                harness.run();
+                assert!(!harness.state().bottom_panel.is_visible());
+                assert_eq!(height(&harness.ctx), 308.0, "closed {tab:?}");
+            }
+            assert_eq!(harness.state().document().source(), "unchanged source");
+        }
     }
 
     #[test]

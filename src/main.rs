@@ -70,6 +70,7 @@ mod search;
 mod settings;
 mod settings_json;
 mod shortcuts;
+mod snippet_presets;
 mod snippets;
 mod synctex;
 mod syntax_theme;

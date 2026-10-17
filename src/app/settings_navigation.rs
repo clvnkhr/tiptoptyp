@@ -2,25 +2,64 @@
 use super::{SettingsSection, SettingsTarget};
 use eframe::egui;
 
-pub(super) const RAIL_WIDTH: f32 = 116.0;
+/// Measure what the real buttons draw, including their actual frame margins.
+/// This keeps category labels intact when the interface font or scale changes.
+pub(super) fn rail_width(ui: &egui::Ui) -> f32 {
+    let style = ui.style().button_style(
+        &egui::widget_style::Classes::default(),
+        egui::widget_style::WidgetState::Inactive,
+    );
+    let font = style.text_style.font_id;
+    let label_width = SettingsSection::ALL
+        .into_iter()
+        .map(|section| {
+            ui.fonts_mut(|fonts| {
+                fonts.layout_no_wrap(section.title().into(), font.clone(), egui::Color32::WHITE)
+            })
+            .size()
+            .x
+        })
+        .fold(0.0_f32, f32::max);
+    (label_width + style.frame.inner_margin.sum().x).ceil()
+}
 pub(super) fn uses_rail(width: f32) -> bool {
     width >= 680.0
 }
 
 pub(super) fn rail(ui: &mut egui::Ui, selected: &mut SettingsSection) {
-    ui.set_width(RAIL_WIDTH);
+    let width = rail_width(ui);
+    ui.set_width(width);
     for section in SettingsSection::ALL {
         let response = ui.add_sized(
-            [RAIL_WIDTH, ui.spacing().interact_size.y],
-            egui::Button::new(section.title())
+            [width, ui.spacing().interact_size.y],
+            egui::Button::new((section.title(), egui::Atom::grow()))
                 .selected(*selected == section)
-                .frame(false),
+                .frame_when_inactive(*selected == section)
+                .gap(0.0)
+                .wrap_mode(egui::TextWrapMode::Extend),
         );
         observe(section, &response);
         if response.clicked() {
             *selected = section;
         }
     }
+}
+
+pub(super) fn scrolling_rail(ui: &mut egui::Ui, selected: &mut SettingsSection) {
+    ui.scope(|ui| {
+        // Let short windows scroll the category list without reserving a new
+        // horizontal column or covering the measured labels with a wide bar.
+        let scroll = &mut ui.spacing_mut().scroll;
+        scroll.floating = true;
+        scroll.floating_allocated_width = 0.0;
+        scroll.bar_width = 3.0;
+        scroll.floating_width = 2.0;
+        scroll.content_margin = egui::Margin::ZERO;
+        egui::ScrollArea::vertical()
+            .id_salt("settings-category-rail")
+            .auto_shrink([false, false])
+            .show(ui, |ui| rail(ui, selected));
+    });
 }
 
 pub(super) fn selector(ui: &mut egui::Ui, selected: &mut SettingsSection) {
@@ -95,6 +134,72 @@ mod tests {
             assert_eq!(*harness.state(), section);
         }
     }
+    #[test]
+    fn rail_is_left_aligned_and_fits_exactly_the_widest_label_at_each_font_scale() {
+        for font_size in [12.0, 19.0, 28.0] {
+            for scale in [1.0, 2.0] {
+                let mut harness = Harness::builder()
+                    .with_size(Vec2::new(350.0, 500.0))
+                    .build_ui_state(rail, SettingsSection::Appearance);
+                harness.ctx.set_pixels_per_point(scale);
+                harness.ctx.style_mut_of(harness.ctx.theme(), |style| {
+                    style.text_styles.insert(
+                        egui::TextStyle::Button,
+                        egui::FontId::proportional(font_size),
+                    );
+                });
+                harness.run();
+                let rows = SettingsSection::ALL.map(|section| {
+                    let button = harness.get_by_label(section.title()).rect();
+                    let text = harness
+                        .output()
+                        .shapes
+                        .iter()
+                        .find_map(|shape| {
+                            if let egui::Shape::Text(text) = &shape.shape
+                                && text.galley.job.text == section.title()
+                            {
+                                Some(text)
+                            } else {
+                                None
+                            }
+                        })
+                        .expect("every category paints its complete label");
+                    assert!(
+                        button
+                            .contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                        "{font_size}px at {scale}x clips {}: {button:?}",
+                        section.title()
+                    );
+                    (button, text.pos.x, text.galley.size().x)
+                });
+                for (button, text_left, _) in rows {
+                    assert!((button.width() - rows[0].0.width()).abs() < 0.01);
+                    assert!(
+                        (text_left - rows[0].1).abs() < 0.01,
+                        "category text must align left"
+                    );
+                }
+                let widest = rows.into_iter().map(|row| row.2).fold(0.0_f32, f32::max);
+                let margin = harness
+                    .ctx
+                    .style_of(harness.ctx.theme())
+                    .button_style(
+                        &egui::widget_style::Classes::default(),
+                        egui::widget_style::WidgetState::Inactive,
+                    )
+                    .frame
+                    .inner_margin
+                    .sum()
+                    .x;
+                assert!(
+                    (rows[0].0.width() - widest - margin).abs() < 1.01,
+                    "rail must not reserve excess blank width"
+                );
+            }
+        }
+    }
+
     #[test]
     fn narrow_window_uses_a_selector_instead_of_squeezing_the_form() {
         assert!(!uses_rail(400.0));

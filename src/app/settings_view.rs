@@ -163,6 +163,63 @@ impl EditorApp {
         );
     }
 
+    pub(super) fn show_snippet_editor_window(&mut self, context: &egui::Context) {
+        if !self.window_host.is_root() {
+            return;
+        }
+        use super::snippet_window::{SALT, SnippetWindow, SnippetWindowInput};
+        if self.snippet_window.lock().unwrap().has_actions() {
+            let original = self.settings_snapshot();
+            let mut edited = original.clone();
+            let close = self
+                .snippet_window
+                .lock()
+                .unwrap()
+                .take_actions(&mut edited);
+            if edited != original {
+                self.queue_settings(edited, context);
+            }
+            if close {
+                self.snippets_visible = false;
+                crate::window_host::return_from_closed_window(
+                    context,
+                    scoped_child_viewport_id(context, SALT),
+                );
+            }
+        }
+        let visible = self.snippets_visible
+            && self.document_workflow.modal().is_none()
+            && self.rename_dialog.is_none();
+        if !visible {
+            if !SnippetWindow::retain_hidden(&self.snippet_window, context, &self.captures) {
+                self.snippet_window.lock().unwrap().suspend();
+                ChildViewHost::close(context, SALT);
+            }
+            return;
+        }
+        let appearance = self
+            .imported_theme
+            .as_ref()
+            .map_or(context.theme(), |theme| {
+                if theme.dark_mode {
+                    egui::Theme::Dark
+                } else {
+                    egui::Theme::Light
+                }
+            });
+        SnippetWindow::show(
+            &self.snippet_window,
+            context,
+            &self.captures,
+            SnippetWindowInput {
+                visible,
+                settings: self.settings_snapshot(),
+                appearance,
+                style: context.style_of(appearance),
+            },
+        );
+    }
+
     pub(super) fn show_shortcut_editor_window(&mut self, context: &egui::Context) {
         if !self.shortcut_editor_visible
             || self.document_workflow.modal().is_some()
@@ -501,6 +558,29 @@ impl EditorApp {
                 SettingsAction::ShowOverrides { dark } => {
                     self.typst_overrides_dark = dark;
                     self.typst_overrides_visible = true;
+                }
+                SettingsAction::ShowSnippets => {
+                    self.snippets_visible = true;
+                    context.request_repaint();
+                    crate::window_host::focus(
+                        context,
+                        scoped_child_viewport_id(context, super::snippet_window::SALT),
+                        crate::window_host::FocusCause::UserAction,
+                    );
+                }
+                SettingsAction::EditSnippet(selection) => {
+                    self.snippet_window.lock().unwrap().request_entry(selection);
+                    self.snippets_visible = true;
+                    context.request_repaint();
+                    context.request_repaint_of(scoped_child_viewport_id(
+                        context,
+                        super::snippet_window::SALT,
+                    ));
+                    crate::window_host::focus(
+                        context,
+                        scoped_child_viewport_id(context, super::snippet_window::SALT),
+                        crate::window_host::FocusCause::UserAction,
+                    );
                 }
                 SettingsAction::ShowShortcuts => self.shortcut_editor_visible = true,
                 SettingsAction::RefreshTools => self.tool_refresh_requested = true,
