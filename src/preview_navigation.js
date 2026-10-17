@@ -408,11 +408,17 @@
     if (!roots) { state.offsets = null; return null; }
     const geometry = state.pages, scale = doc.cachedDOMState.width / geometry.width * doc.currentScaleRatio;
     if (!Number.isFinite(scale) || scale <= 0) return null;
-    const viewport = doc.hookedElem.parentElement.getBoundingClientRect(), coordinates = svgCoordinates(roots.svg, state.offsetScale);
-    const point = { x: (viewport.left - coordinates.x) / coordinates.sx,
-      y: sourcePoint(geometry, state.offsets, (viewport.top - coordinates.y) / coordinates.sy), clientX: viewport.left, clientY: viewport.top };
     const plan = paperLayout(geometry, scale), candidate = plan.positions.map(position => position.y);
     const offsets = candidate.length === state.offsets.length && candidate.every((value, index) => value === state.offsets[index]) ? state.offsets : candidate;
+    // Cursor/span patches can arrive during the frontend's smooth source jump.
+    // Only a real paper layout change owns viewport anchoring; restoring the
+    // same layout would cancel that navigation as soon as it advances a pixel.
+    let point = null;
+    if (offsets !== state.offsets || Math.abs(scale - state.offsetScale) > 1e-6) {
+      const viewport = doc.hookedElem.parentElement.getBoundingClientRect(), coordinates = svgCoordinates(roots.svg, state.offsetScale);
+      point = { x: (viewport.left - coordinates.x) / coordinates.sx,
+        y: sourcePoint(geometry, state.offsets, (viewport.top - coordinates.y) / coordinates.sy), clientX: viewport.left, clientY: viewport.top };
+    }
     applyPaperLayout(state, {scale}, plan, offsets, roots);
     return {point, scale};
   };
@@ -774,6 +780,9 @@
       const state = partialDocs.get(doc);
       if (previous && next.every((value, index) => value === previous[index]) && !(fullMode(doc) && state?.fullDirty)) return;
       const full = state && fullMode(doc) ? normalizeFullGeometry(doc, state) : null;
+      // Our current layout/point supersedes any delayed frontend resize anchor,
+      // including on cursor-only repaints where navigation owns the scroll.
+      if (full) doc.clearSvgResizeAnchor?.();
       original();
       if (full) {
         state.offsetScale = svgCoordinates(doc.hookedElem.firstElementChild, full.scale).sy;

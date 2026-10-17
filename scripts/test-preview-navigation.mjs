@@ -1475,7 +1475,7 @@ test('source context resolves transformed page paper and excludes inter-page gap
 });
 
 
-for (const residue of [0, 0.25]) test(`full source navigation smooth scroll survives cursor repaint with ${residue}px layout residue`, () => {
+for (const residue of [0, 0.25, 1]) test(`full source navigation smooth scroll survives cursor repaint with ${residue}px layout residue`, () => {
   let changed = false;
   const f = partialFixture({partial:false,decorated:true,
     pages:[{width:200,height:240},{width:200,height:240},{width:200,height:240}],
@@ -1491,11 +1491,11 @@ for (const residue of [0, 0.25]) test(`full source navigation smooth scroll surv
   f.doc.cursorPosition = [3,20,20];
   f.doc.addViewportChange(); f.flush(); f.flush();
   assert.equal(smoothTarget,1380,'normal cursor repaint must not cancel pending source navigation');
-  assert.equal(corrections,0,'a no-op or rounded subpixel residual must not issue another scroll');
+  assert.equal(corrections,0,'unchanged paper layout must not interrupt smooth scroll progress');
   assert.ok(anchorsCleared > 0,'a stale frontend resize anchor must still be retired');
 });
 
-test('full rescale still corrects a visible geometry shift', () => {
+test('full resize still corrects a visible geometry shift', () => {
   let changed = false;
   const f = partialFixture({partial:false,decorated:true,
     layoutHook() { if (changed) { f.scroll.scrollLeft += 2; f.scroll.scrollTop += 3; } }});
@@ -1503,9 +1503,9 @@ test('full rescale still corrects a visible geometry shift', () => {
   let corrections = 0;
   const scrollBy = f.scroll.scrollBy.bind(f.scroll);
   f.scroll.scrollBy = (x,y) => { corrections++; scrollBy(x,y); };
+  f.scroll.clientWidth = 450;
   changed = true;
-  f.doc.cursorPosition = [3,20,20];
-  f.doc.addViewportChange(); f.flush(); f.flush();
+  f.event('resize'); f.flush();
   assert.ok(corrections > 0,'visible geometry corrections must still reach the scroll view');
   assert.equal(f.scroll.scrollLeft,0);
   assert.equal(f.scroll.scrollTop,0);
