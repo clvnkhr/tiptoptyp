@@ -69,10 +69,12 @@ these same target directories automatically and also prepares the host renderer
 when building only for another architecture. The library is PDFium chromium/7881,
 paired with `pdfium-render = 0.9.4` and its `pdfium_7881` ABI feature. The download
 has a per-target SHA-256 pin in `xtask/src/pdfium.rs`; extraction validates archive
-paths and entry types. The library, provenance and dependency licenses are included
-in the app's `pdfium` resources, and notices are included in THIRD_PARTY_NOTICES.
-Startup validates the native library before opening the editor. Package verification
-also runs `--check-runtime` from the signed bundle, so a library rejected by macOS
+paths and entry types. The library is compressed in the app's target-specific
+`toolchain` resources; provenance and dependency licenses are in its `pdfium`
+resources, with notices in THIRD_PARTY_NOTICES. Startup checks the manifest and
+resource metadata without extracting or binding PDFium. The existing PDF worker
+verifies and loads it on first use. Package verification runs `--check-runtime`
+from the signed bundle to fully load it, so a library rejected by macOS
 cannot pass by merely reporting `--version`. Local ad-hoc bundles carry the
 library-validation entitlement required because they have no Team ID; Developer ID
 bundles should sign the app and PDFium with the same team instead. Runtime loading only checks app resource locations and, in development builds,

@@ -147,8 +147,10 @@ Buffered Tinymist partial is the default Typst preview on supported platforms.
 The complete Tinymist renderer remains selectable in Settings. TeX output and
 opened PDFs always use PDFium. Tinymist may retry its own service, but failure
 never activates another renderer. Select PDFium explicitly for Typst on platforms
-without native Tinymist webviews. The bundled PDFium library is required and
-validated at startup; source builds prepare it with `cargo xtask fetch-pdfium`.
+without native Tinymist webviews. The bundled PDFium library is required. Startup checks its resource manifest; the
+existing PDF worker verifies, extracts and loads it on first use. The explicit
+`--check-runtime` probe fully loads it without opening the editor. Source builds
+prepare it with `cargo xtask fetch-pdfium`.
 
 ### Native TeX
 

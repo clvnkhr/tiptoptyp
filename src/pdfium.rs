@@ -15,14 +15,28 @@ pub(crate) const MAX_PAGES: usize = 10_000;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PIXELS: usize = 24 * 1024 * 1024;
 
+#[derive(Debug, PartialEq, Eq)]
+enum LibrarySource {
+    Packaged(PathBuf),
+    Development(PathBuf),
+}
+
 pub(crate) fn library_path() -> Result<PathBuf, String> {
-    let name = Pdfium::pdfium_platform_library_name();
-    for archive in crate::bundled_payload::packaged_candidates(&name.to_string_lossy()) {
-        if archive.exists() {
-            return crate::bundled_payload::prepare_packaged(&archive)
-                .map_err(|error| format!("Could not prepare bundled PDFium: {error}"));
-        }
+    match library_source()? {
+        LibrarySource::Packaged(archive) => crate::bundled_payload::prepare_packaged(&archive)
+            .map_err(|error| format!("Could not prepare bundled PDFium: {error}")),
+        LibrarySource::Development(path) => Ok(path),
     }
+}
+
+/// Normal startup checks the small manifest and resource metadata only. The
+/// existing raster/thumbnail worker prepares and binds PDFium on first use.
+pub(crate) fn validate_presence() -> Result<(), String> {
+    library_source().map(|_| ())
+}
+
+fn library_source() -> Result<LibrarySource, String> {
+    let name = Pdfium::pdfium_platform_library_name();
     let candidates = if cfg!(feature = "production") {
         Vec::new()
     } else {
@@ -33,7 +47,24 @@ pub(crate) fn library_path() -> Result<PathBuf, String> {
             &name,
         )
     };
-    candidates.into_iter().find(|p| p.is_file()).ok_or_else(||
+    locate_library(
+        crate::bundled_payload::packaged_candidates(&name.to_string_lossy()),
+        candidates,
+    )
+}
+
+fn locate_library(
+    archives: Vec<PathBuf>,
+    development: Vec<PathBuf>,
+) -> Result<LibrarySource, String> {
+    for archive in archives {
+        if archive.exists() {
+            crate::bundled_payload::validate_packaged(&archive)
+                .map_err(|error| format!("Could not read bundled PDFium: {error}"))?;
+            return Ok(LibrarySource::Packaged(archive));
+        }
+    }
+    development.into_iter().find(|p| p.is_file()).map(LibrarySource::Development).ok_or_else(||
         "Bundled PDFium is missing. Source builds: run cargo run --manifest-path xtask/Cargo.toml -- fetch-pdfium. Packaged builds: reinstall the complete app.".into())
 }
 
@@ -518,6 +549,37 @@ mod tests {
                 "source and package builds must select the same architecture-specific library"
             );
         }
+    }
+
+    #[test]
+    fn packaged_presence_checks_do_not_decode_or_replace_the_library() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory.path().join("libpdfium.dylib.gz");
+        // Presence is deliberately independent of gzip decoding and native
+        // loading, both of which belong to the first actual PDF request.
+        std::fs::write(&archive, b"not a gzip stream").unwrap();
+        std::fs::write(
+            directory.path().join("manifest.tsv"),
+            format!("libpdfium.dylib\t3\t{}\n", "a".repeat(64)),
+        )
+        .unwrap();
+        assert_eq!(
+            locate_library(vec![archive.clone()], Vec::new()).unwrap(),
+            LibrarySource::Packaged(archive.clone())
+        );
+        assert_eq!(std::fs::read(&archive).unwrap(), b"not a gzip stream");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+
+        let development = directory.path().join("raw-library");
+        std::fs::write(&development, b"development library").unwrap();
+        std::fs::remove_file(directory.path().join("manifest.tsv")).unwrap();
+        assert!(locate_library(vec![archive.clone()], vec![development.clone()]).is_err());
+        std::fs::remove_file(&archive).unwrap();
+        assert_eq!(
+            locate_library(vec![archive], vec![development.clone()]).unwrap(),
+            LibrarySource::Development(development)
+        );
+        assert!(locate_library(Vec::new(), Vec::new()).is_err());
     }
 
     #[test]

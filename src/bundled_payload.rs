@@ -63,6 +63,14 @@ pub(crate) fn is_packaged_payload(path: &Path) -> bool {
     describe(path).is_ok_and(|payload| payload.is_some())
 }
 
+/// Checks the manifest and resource metadata without creating a cache or
+/// reading/decompressing the payload. Full integrity is verified at first use.
+pub(crate) fn validate_packaged(path: &Path) -> io::Result<()> {
+    describe(path)?
+        .map(|_| ())
+        .ok_or_else(|| invalid("Packaged payload manifest is missing"))
+}
+
 /// A custom executable is left alone. A manifest-backed gzip path is expanded
 /// only here, after operation arguments have been validated by its caller.
 pub(crate) fn prepare_program(program: &OsStr) -> io::Result<PathBuf> {
@@ -493,6 +501,83 @@ mod tests {
         assert_eq!(expand(&payload, &cache).unwrap(), extracted);
         assert_eq!(extracted.metadata().unwrap().modified().unwrap(), modified);
         assert_eq!(fs::read_dir(fixture.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn presence_validation_requires_a_declared_resource_without_expanding_it() {
+        let (directory, archive, cache) = fixture(b"verified payload");
+        validate_packaged(&archive).unwrap();
+        assert!(!cache.exists());
+        std::fs::remove_file(&archive).unwrap();
+        assert!(validate_packaged(&archive).is_err());
+        std::fs::write(&archive, b"deferred integrity check").unwrap();
+        std::fs::remove_file(directory.path().join("manifest.tsv")).unwrap();
+        assert!(validate_packaged(&archive).is_err());
+        assert!(!cache.exists());
+    }
+
+    #[test]
+    #[ignore = "optimized PDFium payload presence versus extraction component measurement"]
+    fn payload_presence_cache_measurement() {
+        use std::{hint::black_box, time::Instant};
+        assert!(
+            !cfg!(debug_assertions),
+            "run this measurement with --release"
+        );
+        let name = pdfium_render::prelude::Pdfium::pdfium_platform_library_name();
+        let archive = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("toolchain/payloads")
+            .join(crate::toolchain::target_triple())
+            .join(format!("{}.gz", name.to_string_lossy()));
+        let payload = describe(&archive).unwrap().unwrap();
+        assert!(payload.bytes <= 64 * 1024 * 1024);
+        // Warm archive I/O equally before both paths. This measures a fresh
+        // application cache, never a claimed cold filesystem or whole launch.
+        let compressed = fs::read(&archive).unwrap();
+        let compressed_sha256 = format!("{:x}", Sha256::digest(&compressed));
+        let compressed_bytes = compressed.len();
+        drop(compressed);
+        let directory = tempfile::tempdir().unwrap();
+        let reused_cache = directory.path().join("reused");
+        let extracted = expand(&payload, &reused_cache).unwrap();
+        let mut presence_us = Vec::new();
+        let mut fresh_cache_us = Vec::new();
+        let mut existing_cache_first_use_us = Vec::new();
+        let mut memo_hit_us = Vec::new();
+        const SAMPLES: usize = 5;
+        for sample in 0..SAMPLES {
+            let cache = directory.path().join(format!("fresh-{sample}"));
+            let started = Instant::now();
+            black_box(expand(&describe(&archive).unwrap().unwrap(), &cache).unwrap());
+            fresh_cache_us.push(started.elapsed().as_secs_f64() * 1e6);
+
+            verified_files().lock().unwrap().remove(&extracted);
+            let started = Instant::now();
+            black_box(expand(&describe(&archive).unwrap().unwrap(), &reused_cache).unwrap());
+            existing_cache_first_use_us.push(started.elapsed().as_secs_f64() * 1e6);
+
+            let started = Instant::now();
+            black_box(expand(&describe(&archive).unwrap().unwrap(), &reused_cache).unwrap());
+            memo_hit_us.push(started.elapsed().as_secs_f64() * 1e6);
+
+            let started = Instant::now();
+            validate_packaged(black_box(&archive)).unwrap();
+            presence_us.push(started.elapsed().as_secs_f64() * 1e6);
+        }
+        println!(
+            "PAYLOAD_PRESENCE_CACHE {}",
+            serde_json::json!({
+                "profile": "release", "target": crate::toolchain::target_triple(),
+                "fixture": archive.strip_prefix(env!("CARGO_MANIFEST_DIR")).unwrap(),
+                "compressed_bytes": compressed_bytes, "compressed_sha256": compressed_sha256,
+                "uncompressed_bytes": payload.bytes, "uncompressed_sha256": payload.sha256,
+                "samples": SAMPLES, "warmup_extractions": 1,
+                "reference_fresh_application_cache_us": fresh_cache_us,
+                "reference_existing_cache_first_use_us": existing_cache_first_use_us,
+                "reference_memo_hit_us": memo_hit_us, "presence_only_us": presence_us,
+                "scope": "manifest/resource presence versus prepare (decode/hash/atomic publication or cache verification), warmed source archive; excludes native library binding, fonts, process startup, GUI and whole-app launch"
+            })
+        );
     }
 
     #[test]

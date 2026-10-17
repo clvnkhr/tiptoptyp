@@ -123,7 +123,7 @@ fn main() -> eframe::Result {
             .nth(1)
             .is_some_and(|arg| arg == "--check-runtime")
     {
-        validate_runtime()?;
+        validate_runtime(RuntimeCheck::Initialize)?;
         println!("PDF runtime initialized successfully");
         return Ok(());
     }
@@ -145,9 +145,26 @@ fn main() -> eframe::Result {
     result.and(recorded)
 }
 
-fn validate_runtime() -> eframe::Result {
+#[derive(Clone, Copy)]
+enum RuntimeCheck {
+    Presence,
+    Initialize,
+}
+
+fn check_pdf_runtime(
+    mode: RuntimeCheck,
+    presence: impl FnOnce() -> Result<(), String>,
+    initialize: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    match mode {
+        RuntimeCheck::Presence => presence(),
+        RuntimeCheck::Initialize => initialize(),
+    }
+}
+
+fn validate_runtime(mode: RuntimeCheck) -> eframe::Result {
     bundled_assets::validate().map_err(invalid_launch_configuration)?;
-    pdfium::validate().map_err(|error| {
+    check_pdf_runtime(mode, pdfium::validate_presence, pdfium::validate).map_err(|error| {
         eframe::Error::AppCreation(
             std::io::Error::other(format!("Could not initialize PDF renderer: {error}")).into(),
         )
@@ -155,7 +172,6 @@ fn validate_runtime() -> eframe::Result {
 }
 
 fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
-    bundled_assets::validate().map_err(invalid_launch_configuration)?;
     let launch =
         LaunchOptions::from_process(profile_storage).map_err(invalid_launch_configuration)?;
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -189,7 +205,7 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
             step.theme.name
         )));
     }
-    validate_runtime()?;
+    validate_runtime(RuntimeCheck::Presence)?;
     let launch_mode = launch.mode;
     let initial_path = launch.initial_path;
     let theme_profile = launch.theme_profile;
@@ -308,7 +324,38 @@ fn native_options(deterministic_snapshot: bool) -> eframe::NativeOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::native_options;
+    use super::{RuntimeCheck, check_pdf_runtime, native_options};
+
+    #[test]
+    fn startup_checks_presence_without_initializing_the_pdf_engine() {
+        let presence_checks = std::cell::Cell::new(0);
+        let initializations = std::cell::Cell::new(0);
+        check_pdf_runtime(
+            RuntimeCheck::Presence,
+            || {
+                presence_checks.set(presence_checks.get() + 1);
+                Ok(())
+            },
+            || {
+                initializations.set(initializations.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(presence_checks.get(), 1);
+        assert_eq!(initializations.get(), 0);
+    }
+
+    #[test]
+    fn explicit_runtime_probe_initializes_the_engine_and_reports_failure() {
+        let error = check_pdf_runtime(
+            RuntimeCheck::Initialize,
+            || panic!("the runtime probe must fully load the engine"),
+            || Err("renderer could not bind".to_owned()),
+        )
+        .unwrap_err();
+        assert_eq!(error, "renderer could not bind");
+    }
 
     #[test]
     fn main_window_is_centered_even_when_size_persistence_is_enabled() {
