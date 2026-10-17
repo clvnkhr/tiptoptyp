@@ -3,12 +3,29 @@
 (() => {
   const plan = (width, height) => ({ x: -width / 2, y: -height, width: width * 2, height: height * 3 });
   const overlaps = (a, b) => a.right > b.x && a.left < b.x + b.width && a.bottom > b.y && a.top < b.y + b.height;
+  // Resolve the actual opaque viewport backdrop, including transparent parent
+  // layers. This bounded ancestor walk runs only during idle capture admission.
+  window.tiptoptypSnapshotBackdrop = frame => {
+    let alpha = 0, color = [0, 0, 0], node = frame.svg?.parentElement ?? document.body;
+    for (let depth = 0; node && depth < 32 && alpha < 1; depth++, node = node.parentElement) {
+      const css = getComputedStyle(node).backgroundColor;
+      const values = css?.match(/^rgba?\(([^)]+)\)$/)?.[1].trim().split(/[\s,/]+/).map(Number);
+      if (!values || values.length < 3 || !values.every(Number.isFinite)) continue;
+      const opacity = Math.max(0, Math.min(1, values[3] ?? 1)), weight = (1 - alpha) * opacity;
+      color = color.map((value, index) => value + values[index] * weight); alpha += weight;
+    }
+    return [...color.map((value, index) => value + (frame.background?.[index] ?? 255) * (1 - alpha)), 1];
+  };
   window.tiptoptypSnapshotBuffer = frame => {
     const svg = frame.svg, rect = svg.getBoundingClientRect();
     if (![rect.left, rect.top, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) return null;
     const area = plan(frame.width, frame.height);
     const copy = svg.cloneNode(false);
-    copy.style.cssText = `position:absolute;left:${rect.left-area.x}px;top:${rect.top-area.y}px;width:${rect.width}px;height:${rect.height}px;transform:none;`;
+    // The SVG is transparent between papers; its live parent supplies the
+    // gutter. Keep that backdrop in the inert copy, including at page edges.
+    const paperBackground = window.tiptoptypSnapshotBackdrop(frame);
+    const gutter = `rgb(${paperBackground.slice(0,3).join(',')})`;
+    copy.style.cssText = `${copy.style.cssText || ''};position:absolute;left:${rect.left-area.x}px;top:${rect.top-area.y}px;width:${rect.width}px;height:${rect.height}px;transform:none;background:${gutter};overflow:hidden;`;
     const queue = [], included = new Set(), ink = [], definitions = [];
     const enqueue = id => { if (!included.has(id)) { included.add(id); queue.push(id); } };
     let decoder;
@@ -61,9 +78,9 @@
       try { return [...sheet.cssRules].map(rule => rule.cssText); } catch (_) { return []; }
     }).join('\n');
     const variables = ['--tiptoptyp-paper','--tiptoptyp-ink','--tiptoptyp-preview-filter'].map(name => `${name}:${getComputedStyle(document.documentElement).getPropertyValue(name)};`).join('');
-    const background = `rgb(${frame.background.join(',')})`;
+    const background = gutter;
     const html = `<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'"><style>${styles} html,body{margin:0!important;overflow:hidden!important;background:${background}!important;} :root{${variables}}</style></head><body><div id="typst-container">${markup}</div></body></html>`;
     // Pathological SVGs fall back to a viewport capture, not an unbounded IPC.
-    return html.length <= 20_000_000 ? { ...area, html } : null;
+    return html.length <= 20_000_000 ? { ...area, html, paperBackground } : null;
   };
 })();

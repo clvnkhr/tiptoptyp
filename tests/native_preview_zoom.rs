@@ -63,14 +63,20 @@ fn run() {
     let parent = native_window::NativeWindowHandle::from_test_view(window.contentView().unwrap());
     let (sender, receiver) = mpsc::channel();
     let enabled = !baseline;
+    let pixel_anchors = std::env::args().any(|arg| arg == "--pixel-anchors");
     let helper = include_str!("../src/preview_zoom_snapshot.js");
     let buffer = include_str!("../src/preview_snapshot_buffer.js");
     let html = format!(
-        r##"<html><body style="margin:0;background:#eee;overflow:hidden"><svg id="drawing" width="640" height="1260"><rect width="640" height="420" fill="#fff"/><path d="M30 25 L30 120 L200 120 M50 45 L150 45" stroke="#163b50" stroke-width="5" fill="none"/><text x="30" y="175" font-size="32">Cached native zoom</text><rect x="550" y="20" width="50" height="40" fill="#d55427"/></svg><script>
+        r##"<html><body style="margin:0;background:#eee;overflow:hidden"><svg id="drawing" width="640" height="1260"><rect width="640" height="420" fill="#fff"/><path d="M30 25 L30 120 L200 120 M50 45 L150 45" stroke="#163b50" stroke-width="5" fill="none"/><text x="30" y="175" font-size="32">Cached native zoom</text><rect x="550" y="20" width="50" height="40" fill="#d55427"/><rect x="300" y="100" width="20" height="10" fill="#ff0000"/></svg><script>
     window.tiptoptypCaptureZoomSnapshot=m=>window.ipc.postMessage(JSON.stringify({{type:'preview-zoom-snapshot',...m}}));
     {helper}
     {buffer}
     const frame={{doc:{{}},svg:document.getElementById('drawing'),scale:1,width:640,height:420,fitWidth:640,left:0,top:0,background:[238,238,238],geometry:{{paper:[0,0,640,1260],viewport:[0,0,640,420],view:[640,420],scroll:[0,0]}},ready:true}};
+    if ({pixel_anchors}) {{
+      document.body.style.background = '#525659';
+      frame.svg.innerHTML = [0,1,2].map(index=>`<rect class="typst-page-inner" data-page-number="${{index}}" x="0" y="${{index*210}}" width="640" height="200" fill="white"/><g class="typst-page" data-page-number="${{index}}"><rect x="300" y="${{index*210+100}}" width="20" height="10" fill="${{['#ff0000','#00ff00','#0000ff'][index]}}"/></g>`).join('');
+      frame.geometry = {{paper:[0,0,640,620],viewport:[0,0,640,420],view:[640,420],scroll:[0,0],source_scale:1,pages:[[0,200],[210,200],[420,200]]}};
+    }}
     const send=m=>window.ipc.postMessage(JSON.stringify(m));
     window.tiptoptypZoomSnapshot.attach(()=>frame);
     window.tiptoptypZoomSnapshot.configure({enabled});
@@ -78,7 +84,7 @@ fn run() {
     let requests=0;
     window.tiptoptypNativeZoom=request=>{{
       requests++; window.tiptoptypZoomSnapshot.native(request); frame.ready=false;
-      setTimeout(()=>{{frame.scale=request.scale;frame.width=innerWidth;frame.height=innerHeight;frame.fitWidth=innerWidth;frame.ready=true;frame.svg.style.transformOrigin='0 0';frame.svg.style.transform=`scale(${{frame.scale*innerWidth/640}})`;frame.svg.style.position='absolute';frame.svg.style.left=`${{Math.max(0,(innerWidth-Math.ceil(innerWidth*frame.scale))/2)}}px`;const rect=frame.svg.getBoundingClientRect();frame.geometry={{paper:[rect.left,rect.top,rect.width,rect.height],viewport:[0,0,innerWidth,innerHeight],view:[innerWidth,innerHeight],scroll:[0,0]}};window.tiptoptypZoomSnapshot.rendered();send({{type:'vector',scale:frame.scale,requests}});}},30);
+      setTimeout(()=>{{frame.scale=request.scale;frame.width=innerWidth;frame.height=innerHeight;frame.fitWidth=innerWidth;frame.ready=true;frame.svg.style.transformOrigin='0 0';frame.svg.style.transform=`scale(${{frame.scale*innerWidth/640}})`;frame.svg.style.position='absolute';frame.svg.style.left=`${{Math.max(0,(innerWidth-Math.ceil(innerWidth*frame.scale))/2)}}px`;const rect=frame.svg.getBoundingClientRect();frame.geometry={{paper:[rect.left,rect.top,rect.width,rect.height],viewport:[0,0,innerWidth,innerHeight],view:[innerWidth,innerHeight],scroll:[0,0]}};window.tiptoptypZoomSnapshot.rendered();send({{type:'vector',scale:frame.scale,requests}});}},30);return true;
     }};
     window.addEventListener('keydown',event=>{{
       if((event.metaKey||event.ctrlKey)&&event.key==='='){{event.preventDefault();frame.scale*=1.1;frame.svg.style.transformOrigin='0 0';frame.svg.style.transform=`scale(${{frame.scale}})`;send({{type:'web-input',scale:frame.scale,at:Date.now()}});}}
@@ -90,6 +96,7 @@ fn run() {
     let mut builder = wry::WebViewBuilder::new();
     if let Some(url) = &live_url {
         let adapter = include_str!("../src/preview_navigation.js");
+        let dark = std::env::args().any(|arg| arg == "--dark");
         let setup = format!(
             r#"
             let requests=0;
@@ -137,6 +144,7 @@ fn run() {
                 send({{type:'zoom-observation',label,request_id,at:performance.now(),ready:!!frame?.ready&&!error,
                     available:!!frame&&!error,error,visibility:document.visibilityState,
                     scale:frame?.scale,geometry:frame?.geometry,location,
+                    scroll_limits:frame?.doc?.hookedElem?.parentElement ? [frame.doc.hookedElem.parentElement.scrollWidth-frame.doc.hookedElem.parentElement.clientWidth,frame.doc.hookedElem.parentElement.scrollHeight-frame.doc.hookedElem.parentElement.clientHeight] : null,
                     cache,request:window.tiptoptypLastNativeZoom}});
             }};
             {adapter}
@@ -156,7 +164,10 @@ fn run() {
                     cache:window.tiptoptypZoomSnapshot.inspect()}});
             }};
             const ready=()=>{{const doc=document.getElementById('typst-container')?.documents?.[0]?.impl;
-                if(doc?.moduleInitialized)send({{type:'loaded',partial:doc.partialRendering}});
+                if(doc?.moduleInitialized){{
+                    if({dark})window.tiptoptypSetPalette([40,40,40],[235,219,178],'1px solid transparent','1px solid transparent');
+                    send({{type:'loaded',partial:doc.partialRendering}});
+                }}
                 else{{if(performance.now()-lastDiagnostic>500){{lastDiagnostic=performance.now();diagnostic('waiting');}}setTimeout(ready,25);}}
             }};
             diagnostic('initialization-installed');
@@ -287,6 +298,122 @@ fn run() {
                     state.inspect()["image_size"],
                     serde_json::json!([1280.0, 1260.0])
                 );
+            }
+            if std::env::args().any(|arg| arg == "--pixel-anchors") {
+                assert!(
+                    live_url.is_none(),
+                    "pixel marker uses the owned SVG fixture"
+                );
+                // Run directly from the first warm, idle capture: page slices have
+                // unique colors and source positions, independent of native transforms.
+                assert_eq!(state.inspect()["image_layers"], 3);
+                let mut receipt = serde_json::json!({"viewport":[640,420],"source_pages":[[0,200],[210,200],[420,200]],"warmup_seconds":3});
+                let file = std::env::var_os("TIPTOPTYP_NATIVE_ZOOM_PNG")
+                    .expect("pixel anchors require a PNG evidence path");
+                let file = std::path::PathBuf::from(file);
+                let capture = |label: &str| {
+                    let path = file.with_extension(format!("{label}.png"));
+                    state.write_overlay_png(&path);
+                    let pixels = image::open(&path).unwrap().to_rgba8();
+                    let mut sums = [[0.; 3]; 3];
+                    for (px, py, pixel) in pixels.enumerate_pixels() {
+                        for (index, sums) in sums.iter_mut().enumerate() {
+                            if pixel[index] > 220
+                                && (0..3)
+                                    .filter(|channel| *channel != index)
+                                    .all(|channel| pixel[channel] < 20)
+                            {
+                                sums[0] += f64::from(px);
+                                sums[1] += f64::from(py);
+                                sums[2] += 1.;
+                            }
+                        }
+                    }
+                    assert!(
+                        sums[0][2] > 0. && sums[1][2] > 0.,
+                        "missing first/second page markers: {}",
+                        path.display()
+                    );
+                    assert_eq!(
+                        sums[2][2], 0.,
+                        "third page incorrectly appeared in the first two page slices"
+                    );
+                    [
+                        [sums[0][0] / sums[0][2], sums[0][1] / sums[0][2]],
+                        [sums[1][0] / sums[1][2], sums[1][1] / sums[1][2]],
+                    ]
+                };
+                // Reveal the idle raster without materially changing scale.
+                state.message(
+                    &web,
+                    &serde_json::json!({"op":"zoom","factor":1.00000000001,"x":0,"y":0}),
+                    true,
+                );
+                let before = capture("before");
+                web.set_bounds(wry::Rect {
+                    position: wry::dpi::LogicalPosition::new(0., 0.).into(),
+                    size: wry::dpi::LogicalSize::new(560., 420.).into(),
+                })
+                .unwrap();
+                state.layout(&web);
+                let resized = capture("resize");
+                state.message(
+                    &web,
+                    &serde_json::json!({"op":"zoom","factor":1.2,"x":100,"y":300}),
+                    true,
+                );
+                let pointer = capture("pointer");
+                // Ten-pixel gaps do not scale. At y=300 the cursor is on page two:
+                // preserve its source point, then independently project both markers.
+                let expectations = [
+                    [[310., 105.], [310., 315.]],
+                    [[271.25, 91.875], [271.25, 276.875]],
+                    [[305.5, 52.25], [305.5, 272.25]],
+                ];
+                let observed = [before, resized, pointer];
+                let errors = observed
+                    .iter()
+                    .zip(expectations)
+                    .map(|(a, b)| {
+                        std::array::from_fn::<_, 2, _>(|page| {
+                            [a[page][0] - b[page][0], a[page][1] - b[page][1]]
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let passed = errors
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .all(|value| value.abs() <= 1.0);
+                receipt["pixel_anchors"] = serde_json::json!({"passed":passed,"source_marker_centers":[[310,105],[310,315],[310,525]],"inputs":{"resize":[640,560],"zoom":1.2,"cursor":[100,300]},"observed":observed,"expected":expectations,"errors_css_pixels":errors,"scope":"offscreen CALayer page pixels in host coordinates; composed GPU presentation checked separately"});
+                // Fit all three papers inside the viewport. Pixels beyond the
+                // last paper must match the live gutter, not frame.background.
+                state.message(
+                    &web,
+                    &serde_json::json!({"op":"zoom","factor":0.35 / 1.2,"x":100,"y":0}),
+                    true,
+                );
+                let below_path = file.with_extension("below-document.png");
+                state.write_overlay_png(&below_path);
+                let below = image::open(&below_path).unwrap().to_rgba8();
+                let backdrop = below.get_pixel(280, 410).0;
+                receipt["below_document_backdrop"] = serde_json::json!({"observed":backdrop,"expected":[82,86,89,255],"passed":backdrop==[82,86,89,255]});
+                if let Some(path) = output.as_deref() {
+                    std::fs::write(path, serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+                }
+                state.allowed(false);
+                window.orderOut(None);
+                assert!(
+                    passed,
+                    "cached pixels did not preserve the independent top/cursor anchor: {errors:?}"
+                );
+                assert_eq!(
+                    backdrop,
+                    [82, 86, 89, 255],
+                    "viewport below the final paper differs from the live backdrop"
+                );
+                println!("{receipt}");
+                return;
             }
             if std::env::args().any(|arg| arg == "--image-bench") {
                 // Measure only production AppKit submission, excluding startup,
@@ -613,12 +740,19 @@ fn run() {
             let path = std::path::PathBuf::from(path).with_file_name("native-buffer-zoom-out.png");
             state.write_overlay_png(&path);
             let pixels = image::open(&path).unwrap().to_rgba8();
-            assert_eq!(pixels.dimensions(), (636, 416));
+            assert_eq!(pixels.dimensions(), (640, 420));
             assert_eq!(
                 pixels.get_pixel(10, 200).0,
                 [238, 238, 238, 255],
                 "uncovered edge leaked live magenta content"
             );
+            for (x, y) in [(0, 0), (639, 0), (0, 419), (639, 419), (639, 200)] {
+                assert_ne!(
+                    pixels.get_pixel(x, y).0,
+                    [255, 0, 255, 255],
+                    "live magenta leaked through an unmasked edge"
+                );
+            }
             let white: Vec<_> = pixels
                 .enumerate_pixels()
                 .filter(|(_, _, p)| p.0 == [255, 255, 255, 255])
@@ -627,7 +761,7 @@ fn run() {
             assert!(!white.is_empty(), "buffered paper was not retained");
             let middle = (*white.iter().min().unwrap() + *white.iter().max().unwrap()) as f64 / 2.0;
             assert!(
-                (middle - 318.0).abs() <= 1.0,
+                (middle - 320.0).abs() <= 1.0,
                 "scaled paper is not horizontally centered"
             );
             assert!(
@@ -877,6 +1011,30 @@ fn live_transition_regression(
     use std::time::{Duration, Instant};
     use wry::WebViewExtMacOS;
 
+    fn anchor_error(image: &Value, sharp: &Value) -> Option<[f64; 2]> {
+        let source_anchor = &image["source_anchor"];
+        let geometry = &sharp["geometry"];
+        let actual = geometry["paper"].as_array()?;
+        let scale = geometry["source_scale"]
+            .as_f64()
+            .filter(|scale| *scale > 0.0)?;
+        let pages = geometry["pages"].as_array()?;
+        let y = &source_anchor["y"];
+        let projected = if let Some(page) = y["page"].as_u64() {
+            pages.get(page as usize)?[0].as_f64()? + y["local"].as_f64()?
+        } else {
+            let before = pages.get(y["before"].as_u64()? as usize)?;
+            let after = pages.get(y["after"].as_u64()? as usize)?;
+            let end = before[0].as_f64()? + before[1].as_f64()?;
+            end + y["fraction"].as_f64()? * (after[0].as_f64()? - end)
+        };
+        Some([
+            actual[0].as_f64()? + source_anchor["x"].as_f64()? * scale
+                - source_anchor["clientX"].as_f64()?,
+            actual[1].as_f64()? + projected * scale - source_anchor["clientY"].as_f64()?,
+        ])
+    }
+
     struct Probe<'a, F: Fn()> {
         web: &'a wry::WebView,
         state: &'a preview_zoom_snapshot::CaptureState,
@@ -885,6 +1043,7 @@ fn live_transition_regression(
         observation: Option<Value>,
         handoff: Option<Value>,
         request_id: u64,
+        blocked: bool,
         observation_timeout: Duration,
         capture_timings: &'a mut CaptureTimings,
     }
@@ -894,7 +1053,9 @@ fn live_transition_regression(
             for message in self.receiver.try_iter() {
                 let value: Value = serde_json::from_str(&message).unwrap();
                 self.capture_timings.record(&value);
-                if value["type"] == "preview-zoom-snapshot" {
+                if value["type"] == "blocked" {
+                    self.blocked = true;
+                } else if value["type"] == "preview-zoom-snapshot" {
                     self.state.message(self.web, &value, true);
                 } else if value["type"] == "zoom-observation" {
                     if value["label"] == "handoff" {
@@ -998,6 +1159,7 @@ fn live_transition_regression(
         observation: None,
         handoff: None,
         request_id: 0,
+        blocked: false,
         observation_timeout: Duration::from_secs(if dense_full_mode { 15 } else { 4 }),
         capture_timings,
     };
@@ -1066,17 +1228,130 @@ fn live_transition_regression(
         steps.push(json!({"kind":"reset","frame":reset,"native":state.inspect()}));
         save(&steps, &failures, receipt, probe.capture_timings);
 
-        // Move the zoom anchor away from the viewport's top before resizing.
-        // A stale previous pinch anchor must not own divider handoff.
-        let handoffs = state.inspect()["handoffs"].as_u64().unwrap();
+        // A sent resize can become obsolete while WebContent is busy. The
+        // serial slot must still complete at the CURRENT fitted layout so its
+        // queued replacement can run; a frozen dispatched width deadlocks it.
+        let before_race = state.inspect();
+        probe.blocked = false;
+        web.evaluate_script("window.blockRenderer();")
+            .map_err(|error| error.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while !probe.blocked {
+            probe.tick();
+            if Instant::now() > deadline {
+                return Err("renderer did not start the owned stall".into());
+            }
+        }
+        web.set_bounds(wry::Rect {
+            position: wry::dpi::LogicalPosition::new(0., 0.).into(),
+            size: wry::dpi::LogicalSize::new(560., 420.).into(),
+        })
+        .map_err(|error| error.to_string())?;
+        state.layout(web);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state.inspect()["in_flight"].is_null() {
+            probe.tick();
+            if Instant::now() > deadline {
+                return Err("first resize was not dispatched during the stall".into());
+            }
+        }
+        web.set_bounds(wry::Rect {
+            position: wry::dpi::LogicalPosition::new(0., 0.).into(),
+            size: wry::dpi::LogicalSize::new(480., 420.).into(),
+        })
+        .map_err(|error| error.to_string())?;
+        state.layout(web);
+        let queued = state.inspect();
+        if queued["pending"].is_null() {
+            return Err("newer divider width was not queued behind the old flight".into());
+        }
+        let sharp = probe.sharp(
+            before_race["handoffs"].as_u64().unwrap(),
+            "resize-flight-race",
+        )?;
+        if sharp["geometry"]["view"][0].as_f64().unwrap() != 480. {
+            return Err("serial resize completed at an obsolete viewport".into());
+        }
+        steps.push(json!({"kind":"resize-flight-race","widths":[640,560,480],"stall_ms":800,"before":before_race,"queued":queued,"sharp":sharp,"after":state.inspect()}));
+        save(&steps, &failures, receipt, probe.capture_timings);
+        let restore = state.inspect();
+        web.set_bounds(wry::Rect {
+            position: wry::dpi::LogicalPosition::new(0., 0.).into(),
+            size: wry::dpi::LogicalSize::new(640., 420.).into(),
+        })
+        .map_err(|error| error.to_string())?;
+        state.layout(web);
+        probe.sharp(
+            restore["handoffs"].as_u64().unwrap(),
+            "resize-flight-race-restore",
+        )?;
+        probe.idle_image("resize-flight-race-idle", true)?;
+
+        // Actual WebKit callback acceptance is terminal too: a renderer reset
+        // can refuse a request without any render acknowledgement. Verify the
+        // native serial slot recovers, captures again, and accepts the next zoom.
+        web.evaluate_script("window.acceptedNativeZoom=window.tiptoptypNativeZoom;window.tiptoptypNativeZoom=()=>false;")
+            .map_err(|error|error.to_string())?;
+        probe.observe("before-native-rejection")?;
+        let before_reject = state.inspect();
+        state.message(web, &json!({"op":"zoom","factor":1.01,"x":50,"y":50}), true);
+        probe.idle_image("native-rejection-recovered", true)?;
+        let rejected = state.inspect();
+        if rejected["in_flight"].is_number()
+            || rejected["pending"].is_number()
+            || rejected["active"] == true
+        {
+            return Err("refused WebKit request left a native owner active".into());
+        }
+        web.evaluate_script("window.tiptoptypNativeZoom=window.acceptedNativeZoom;delete window.acceptedNativeZoom;")
+            .map_err(|error|error.to_string())?;
+        probe.observe("restored-native-renderer")?;
+        state.message(web, &json!({"op":"zoom","factor":1.01,"x":50,"y":50}), true);
+        let recovered = probe.sharp(
+            rejected["handoffs"].as_u64().unwrap(),
+            "native-rejection-next-zoom",
+        )?;
+        steps.push(json!({"kind":"native-rejection-recovery","before":before_reject,"rejected":rejected,"next_zoom":recovered,"after":state.inspect()}));
+        save(&steps, &failures, receipt, probe.capture_timings);
         state.message(
             web,
-            &json!({"op":"zoom","factor":1.04,"x":355,"y":235}),
+            &json!({"op":"zoom","factor":1,"reset":true,"x":50,"y":50}),
             true,
         );
-        let shifted = probe.sharp(handoffs, "off-center-zoom")?;
-        steps.push(json!({"kind":"off-center-zoom","frame":shifted,"native":state.inspect()}));
-        save(&steps, &failures, receipt, probe.capture_timings);
+        probe.idle_image("native-rejection-restored-fit", true)?;
+
+        // Opposite off-center positions prove both proxy and sharp SVG preserve
+        // the source point under the pointer. Divider input later discards this
+        // pinch anchor and preserves the viewport's top instead.
+        for (point, factor) in [([56.0, 330.0], 1.04), ([590.0, 80.0], 1.0 / 1.04)] {
+            probe.idle_image("before-off-center-zoom", false)?;
+            let before = state.inspect();
+            state.message(
+                web,
+                &json!({"op":"zoom","factor":factor,"x":point[0],"y":point[1]}),
+                true,
+            );
+            let image = state.inspect();
+            let source = &image["source_anchor"];
+            if source["clientX"].as_f64() != Some(point[0])
+                || source["clientY"].as_f64() != Some(point[1])
+            {
+                failures.push(format!("off-center zoom used a different anchor: {source}"));
+            }
+            let shifted = probe.sharp(before["handoffs"].as_u64().unwrap(), "off-center-zoom")?;
+            let error =
+                anchor_error(&image, &shifted).ok_or("missing off-center anchor geometry")?;
+            if error.iter().any(|value| value.abs() > 1.1) {
+                failures.push(format!(
+                    "off-center zoom jumped under pointer {point:?}: {error:?}"
+                ));
+            }
+            if image["active"] != true {
+                failures.push("off-center zoom missed the idle raster".into());
+            }
+            steps.push(json!({"kind":"off-center-zoom","point":point,"image":image,"frame":shifted,"anchor_error_css_pixels":error,"native":state.inspect()}));
+            save(&steps, &failures, receipt, probe.capture_timings);
+        }
         probe.idle_image("before-real-divider", false)?;
 
         // Deterministically deliver the duplicate DOM notification between the
@@ -1091,6 +1366,17 @@ fn live_transition_regression(
             };"#,
         )
         .map_err(|error| error.to_string())?;
+
+        if std::env::args().any(|arg| arg == "--scroll-race") {
+            // WebKit can clamp scroll before delivering its resize notification.
+            // Exercise that order over real DOM geometry and the native owner.
+            web.evaluate_script(r#"const resizeSnapshot=window.tiptoptypZoomSnapshot.resize;
+                let delivering=false;
+                window.tiptoptypZoomSnapshot.resize=()=>{
+                    if(!delivering){delivering=true;try{window.tiptoptypZoomSnapshot.scrolled();}finally{delivering=false;}}
+                    return resizeSnapshot();
+                };"#).map_err(|error|error.to_string())?;
+        }
 
         for width in [560.0, 640.0] {
             let before = state.inspect();
@@ -1134,28 +1420,8 @@ fn live_transition_regression(
                 actual[1].as_f64().unwrap() - expected[1],
                 actual[2].as_f64().unwrap() - expected[2],
             ];
-            let source_anchor = &image["source_anchor"];
             let geometry = &sharp["geometry"];
-            let anchor_error = (|| -> Option<[f64; 2]> {
-                let scale = geometry["source_scale"]
-                    .as_f64()
-                    .filter(|scale| *scale > 0.0)?;
-                let pages = geometry["pages"].as_array()?;
-                let y = &source_anchor["y"];
-                let projected = if let Some(page) = y["page"].as_u64() {
-                    pages.get(page as usize)?[0].as_f64()? + y["local"].as_f64()?
-                } else {
-                    let before = pages.get(y["before"].as_u64()? as usize)?;
-                    let after = pages.get(y["after"].as_u64()? as usize)?;
-                    let end = before[0].as_f64()? + before[1].as_f64()?;
-                    end + y["fraction"].as_f64()? * (after[0].as_f64()? - end)
-                };
-                Some([
-                    actual[0].as_f64()? + source_anchor["x"].as_f64()? * scale
-                        - source_anchor["clientX"].as_f64()?,
-                    actual[1].as_f64()? + projected * scale - source_anchor["clientY"].as_f64()?,
-                ])
-            })();
+            let anchor_error = anchor_error(&image, &sharp);
             let scroll_error = (|| -> Option<[f64; 2]> {
                 if !geometry["pages"].as_array()?.is_empty() {
                     return None;
@@ -1318,10 +1584,101 @@ fn live_transition_regression(
         let sharp = probe.sharp(before["handoffs"].as_u64().unwrap(), "coverage-return")?;
         steps.push(json!({"kind":"coverage-return-sharp","frame":sharp,"native":state.inspect()}));
         save(&steps, &failures, receipt, probe.capture_timings);
+        if std::env::args().any(|arg| arg == "--scroll-race") {
+            for edge in ["top", "bottom"] {
+                web.evaluate_script(&format!(
+                    "{{window.tiptoptypZoomSnapshot.invalidate();const s=window.tiptoptypNativeZoomFrame().doc.hookedElem.parentElement;s.scrollTo(0,{});window.tiptoptypZoomSnapshot.settle();}}",
+                    if edge == "top" {0} else {100_000_000})).map_err(|e|e.to_string())?;
+                let deadline = Instant::now() + Duration::from_secs(8);
+                loop {
+                    let observed = probe.observe("edge-reset-observation")?;
+                    let top = observed["geometry"]["scroll"][1]
+                        .as_f64()
+                        .ok_or("missing actual edge scroll")?;
+                    let target = if edge == "top" {
+                        0.0
+                    } else {
+                        observed["scroll_limits"][1]
+                            .as_f64()
+                            .ok_or("missing real browser scroll limit")?
+                    };
+                    if (top - target).abs() < 1.0 {
+                        break;
+                    }
+                    if Instant::now() > deadline {
+                        return Err(format!(
+                            "did not reach actual {edge} edge: {top} vs {target}"
+                        ));
+                    }
+                }
+                probe.idle_image("edge-reset", true)?;
+                for factor in [0.95, 1.2, 1.0 / 1.14] {
+                    let before = state.inspect();
+                    let started = Instant::now();
+                    state.message(
+                        web,
+                        &json!({"op":"zoom","factor":factor,"x":630,"y":400}),
+                        true,
+                    );
+                    let image = state.inspect();
+                    if edge == "bottom"
+                        && factor == 0.95
+                        && std::env::args().any(|arg| arg == "--dark")
+                        && let Some(path) = std::env::var_os("TIPTOPTYP_NATIVE_ZOOM_PNG")
+                    {
+                        let path = std::path::PathBuf::from(path).with_extension("edge.png");
+                        state.write_overlay_png(&path);
+                        let pixels = image::open(&path).map_err(|e| e.to_string())?.to_rgba8();
+                        let ratio = image["transform"][0].as_f64().unwrap();
+                        let right = image["source_paper"][0].as_f64().unwrap() * ratio
+                            + image["transform"][1].as_f64().unwrap()
+                            + image["source_paper"][2].as_f64().unwrap() * ratio;
+                        let x = (right - 8.0)
+                            .floor()
+                            .clamp(0.0, (pixels.width() - 1) as f64)
+                            as u32;
+                        let pixel = pixels.get_pixel(x, pixels.height() / 2).0;
+                        if pixel != [82, 86, 89, 255] {
+                            failures.push(format!(
+                                "cached right gutter contains {pixel:?}, expected opaque live gray"
+                            ));
+                        }
+                        if pixels
+                            .pixels()
+                            .any(|p| p.0[0] > 245 && p.0[1] > 245 && p.0[2] > 245)
+                        {
+                            failures
+                                .push("unexpected white pixels in the dark cached preview".into());
+                        }
+                    }
+                    let sharp = probe.sharp(before["handoffs"].as_u64().unwrap(), "edge-sharp")?;
+                    let ratio = image["transform"][0].as_f64().unwrap();
+                    let expected_top = image["source_paper"][1].as_f64().unwrap() * ratio
+                        + image["transform"][2].as_f64().unwrap();
+                    let error = sharp["geometry"]["paper"][1].as_f64().unwrap() - expected_top;
+                    if error.abs() > 1.1 {
+                        failures.push(format!("{edge} zoom {factor} jumped {error}px"));
+                    }
+                    if image["active"] != true {
+                        failures.push(format!("{edge} zoom {factor} discarded warmed pixels"));
+                    }
+                    steps.push(json!({"kind":"edge","edge":edge,"factor":factor,"before":before,"image":image,"sharp":sharp,"error":error,"input_to_sharp_ms":started.elapsed().as_secs_f64()*1000.0}));
+                    save(&steps, &failures, receipt, probe.capture_timings);
+                }
+            }
+        }
         Ok(())
     })();
     if let Err(error) = run {
         failures.push(error);
+    }
+    if probe
+        .capture_timings
+        .frontend
+        .iter()
+        .any(|value| value["type"] == "frontend-error" || value["type"] == "reset-error")
+    {
+        failures.push("frontend exception during native transition regression".into());
     }
     save(&steps, &failures, receipt, probe.capture_timings);
     receipt["transition_regression"]["latest_observation"] = serde_json::json!(probe.observation);

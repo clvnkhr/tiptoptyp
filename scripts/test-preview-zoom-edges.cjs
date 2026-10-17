@@ -79,15 +79,17 @@ async function lane(mode) {
 (async () => {
   const cases = [...await lane('full'), ...await lane('partial')];
   const output = {tinymist: '0.15.2', fixture_sha256: crypto.createHash('sha256').update(fs.readFileSync(fixture)).digest('hex'), viewport: [900, 700], cases};
+  // Preserve observed geometry on failure; stale references must not hide the
+  // actual viewer layout that produced a failing comparison.
+  const destination = process.env.TIPTOPTYP_ZOOM_EDGE_RECEIPT;
+  if (destination) fs.writeFileSync(destination, JSON.stringify(output, null, 2) + '\n');
   const reference = JSON.parse(read(path.join(root, 'tests/fixtures/tinymist-zoom-edges.json')));
   assert.equal(output.fixture_sha256, reference.fixture_sha256);
   for (let i = 0; i < cases.length; i++) {
     for (const phase of ['before', 'after']) for (const field of ['paper', 'viewport', 'scroll', 'view']) {
       cases[i][phase].geometry[field].forEach((n, j) => assert.ok(Math.abs(n - reference.cases[i][phase].geometry[field][j]) <= 1,
-        `${cases[i].mode} ${cases[i].edge} ${cases[i].scale}: ${phase}.${field}[${j}] changed`));
+        `${cases[i].mode} ${cases[i].edge} ${cases[i].scale}: ${phase}.${field}[${j}] actual=${n}, reference=${reference.cases[i][phase].geometry[field][j]}`));
     }
   }
-  const destination = process.env.TIPTOPTYP_ZOOM_EDGE_RECEIPT;
-  if (destination) fs.writeFileSync(destination, JSON.stringify(output, null, 2) + '\n');
   console.log(`Real full/partial Tinymist edge geometry: ${cases.length} cases passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

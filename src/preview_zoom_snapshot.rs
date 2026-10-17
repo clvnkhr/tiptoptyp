@@ -42,6 +42,31 @@ fn manual_scroll(dx: f64, dy: f64) -> bool {
     dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0)
 }
 
+// Magnification events can carry a gesture's original/central position. The
+// live window cursor owns pinch zoom, while wheel events retain their location.
+fn input_position(kind: NSEventType, event: NSPoint, cursor: NSPoint) -> NSPoint {
+    if kind == NSEventType::Magnify {
+        cursor
+    } else {
+        event
+    }
+}
+
+fn viewport_point(pointer: NSPoint, bounds: NSRect, flipped: bool) -> Option<(f64, f64)> {
+    let x = pointer.x - bounds.origin.x;
+    let y = pointer.y - bounds.origin.y;
+    if !x.is_finite()
+        || !y.is_finite()
+        || x < 0.0
+        || y < 0.0
+        || x >= bounds.size.width
+        || y >= bounds.size.height
+    {
+        return None;
+    }
+    Some((x, if flipped { y } else { bounds.size.height - y }))
+}
+
 /// Native deadlines don't wait behind WebContent. One one-shot timer is moved
 /// forward on input; an explicit pinch end bypasses the quiet period.
 #[derive(Default)]
@@ -217,6 +242,10 @@ struct Geometry {
     #[serde(default)]
     source_scale: f64,
     #[serde(default)]
+    content_size: [f64; 2],
+    #[serde(default)]
+    pixel_rounded: bool,
+    #[serde(default)]
     pages: Vec<[f64; 2]>,
 }
 impl Geometry {
@@ -232,6 +261,12 @@ impl Geometry {
                 .chain(&self.viewport[2..])
                 .all(|n| *n > 0.0)
             && self.scroll.iter().all(|n| *n >= 0.0)
+            && self
+                .content_size
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+            && (!self.pixel_rounded
+                || (self.content_size.iter().all(|value| *value > 0.0) && self.source_scale > 0.0))
             && self.pages.len() <= 10_000
             && (self.pages.is_empty() || (self.source_scale.is_finite() && self.source_scale > 0.0))
             && self
@@ -245,7 +280,43 @@ impl Geometry {
     fn offset(&self, index: usize, ratio: f64) -> f64 {
         self.pages[index][0] * self.source_scale * ratio + index as f64 * 10.0 * (1.0 - ratio)
     }
+    fn pixels(value: f64) -> f64 {
+        // The predicted CSS dimension may be an integer plus floating-point
+        // noise. Do not invent another scrollable pixel at that boundary.
+        if (value - value.round()).abs() < 1e-7 {
+            value.round()
+        } else {
+            value.ceil()
+        }
+    }
+    fn render_ratio(&self, ratio: f64, fit_width: f64, scale: f64) -> f64 {
+        if !self.pixel_rounded {
+            return ratio;
+        }
+        // Full SVG rounds its CSS box, then fits the viewBox inside it. Its ink
+        // scale differs slightly from the requested scale; over many pages that
+        // fractional error becomes a visible last-page clamp/handoff mismatch.
+        let layout = fit_width / self.content_size[0] * scale;
+        let gaps = self.pages.len().saturating_sub(1) as f64 * 10.0;
+        let sx = (self.content_size[0] * layout).ceil() / self.content_size[0];
+        let sy = (((self.content_size[1] + gaps / layout) * layout).ceil() - gaps)
+            / self.content_size[1];
+        sx.min(sy) / self.source_scale
+    }
+    fn width(&self, ratio: f64) -> f64 {
+        if self.pixel_rounded {
+            Self::pixels(self.content_size[0] * self.source_scale * ratio)
+        } else {
+            (self.paper[2] * ratio).ceil()
+        }
+    }
     fn height(&self, ratio: f64) -> f64 {
+        if self.pixel_rounded {
+            return Self::pixels(
+                self.content_size[1] * self.source_scale * ratio
+                    + self.pages.len().saturating_sub(1) as f64 * 10.0,
+            );
+        }
         self.pages
             .last()
             .map_or(self.paper[3] * ratio, |last| {
@@ -255,7 +326,7 @@ impl Geometry {
     }
     fn natural_x(&self, ratio: f64, size: NSSize) -> f64 {
         let width = (self.viewport[2] + size.width - self.view[0]).max(1.0);
-        self.viewport[0] + ((width - (self.paper[2] * ratio).ceil()) / 2.0).max(0.0)
+        self.viewport[0] + ((width - self.width(ratio)) / 2.0).max(0.0)
     }
     fn locate(&self, y: f64, ratio: f64) -> SourceY {
         let mut lo = 0;
@@ -290,12 +361,12 @@ impl Geometry {
         }
     }
     fn constrain(&self, mut t: Transform, size: NSSize) -> Transform {
-        let [px, py, pw, _] = self.paper;
+        let [px, py, _, _] = self.paper;
         let width = (self.viewport[2] + size.width - self.view[0]).max(1.0);
         let height = (self.viewport[3] + size.height - self.view[1]).max(1.0);
         let natural_x = self.natural_x(t.ratio, size);
         let natural_y = py + self.scroll[1];
-        let max_x = ((pw * t.ratio).ceil() - width).max(0.0);
+        let max_x = (self.width(t.ratio) - width).max(0.0);
         let max_y = (self.height(t.ratio) - height).max(0.0);
         let x = px * t.ratio + t.dx;
         t.dx = x.clamp(natural_x - max_x, natural_x) - px * t.ratio;
@@ -352,10 +423,10 @@ impl Geometry {
     }
 
     fn target(&self, t: Transform, size: NSSize) -> serde_json::Value {
-        let [px, py, pw, _] = self.paper;
+        let [px, py, _, _] = self.paper;
         let [vx, _, _, _] = self.viewport;
         let width = self.viewport[2] + size.width - self.view[0];
-        let natural_x = vx + ((width - (pw * t.ratio).ceil()) / 2.0).max(0.0);
+        let natural_x = vx + ((width - self.width(t.ratio)) / 2.0).max(0.0);
         let natural_y = py + self.scroll[1];
         serde_json::json!({"left":(natural_x - px*t.ratio-t.dx).max(0.0),
             "top":(natural_y - py*t.ratio-t.dy).max(0.0)})
@@ -370,10 +441,10 @@ fn image_covers(g: &Geometry, t: Transform, origin: NSPoint, image: NSSize, view
     }
     let x = g.paper[0] * t.ratio + t.dx;
     let y = g.paper[1] * t.ratio + t.dy;
-    let left = x.max(2.0);
-    let right = (x + g.paper[2] * t.ratio).min(view.width - 2.0);
-    let top = y.max(2.0);
-    let bottom = (y + g.height(t.ratio)).min(view.height - 2.0);
+    let left = x.max(0.0);
+    let right = (x + g.width(t.ratio)).min(view.width);
+    let top = y.max(0.0);
+    let bottom = (y + g.height(t.ratio)).min(view.height);
     if right <= left || bottom <= top {
         return true;
     }
@@ -389,6 +460,35 @@ fn image_covers(g: &Geometry, t: Transform, origin: NSPoint, image: NSSize, view
         && (right - t.dx) / t.ratio <= origin.x + image.width + EPSILON
         && source_y(top) >= origin.y - EPSILON
         && source_y(bottom) <= origin.y + image.height + EPSILON
+}
+
+fn capture_geometry(request: &serde_json::Value, size: NSSize) -> Option<Geometry> {
+    let g: Geometry = serde_json::from_value(request["geometry"].clone()).ok()?;
+    (g.valid()
+        && [
+            (g.view[0], size.width),
+            (g.view[1], size.height),
+            (request["width"].as_f64()?, size.width),
+            (request["height"].as_f64()?, size.height),
+        ]
+        .iter()
+        .all(|(a, b)| (a - b).abs() <= 0.5))
+    .then_some(g)
+}
+
+fn paper_clip(g: &Geometry, t: Transform, clip: NSSize) -> Option<NSRect> {
+    let x = g.paper[0] * t.ratio + t.dx;
+    let y = g.paper[1] * t.ratio + t.dy;
+    let left = x.max(0.0);
+    let top = y.max(0.0);
+    let right = (x + g.width(t.ratio)).min(clip.width);
+    let bottom = (y + g.height(t.ratio)).min(clip.height);
+    (right > left && bottom > top).then(|| {
+        NSRect::new(
+            NSPoint::new(left, top),
+            NSSize::new(right - left, bottom - top),
+        )
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -415,13 +515,25 @@ struct PreparedImage {
     capture: Capture,
     clip: Retained<AnyObject>,
     layers: Vec<ImageLayer>,
+    paper_layer: Retained<AnyObject>,
+    outline_layer: Retained<AnyObject>,
     pixels: (usize, usize),
 }
 
 fn image_slices(geometry: Option<&Geometry>, origin: NSPoint, size: NSSize) -> Vec<ImageSlice> {
+    let paper = geometry
+        .map(|g| {
+            let left = origin.x.max(g.paper[0]);
+            let right = (origin.x + size.width).min(g.paper[0] + g.paper[2]);
+            (left, (right - left).max(0.0))
+        })
+        .unwrap_or((origin.x, size.width));
     let Some(g) = geometry.filter(|g| !g.pages.is_empty()) else {
         return vec![ImageSlice {
-            source: NSRect::new(origin, size),
+            source: NSRect::new(
+                NSPoint::new(paper.0, origin.y),
+                NSSize::new(paper.1, size.height),
+            ),
             page: None,
         }];
     };
@@ -439,8 +551,8 @@ fn image_slices(geometry: Option<&Geometry>, origin: NSPoint, size: NSSize) -> V
         if end > start {
             slices.push(ImageSlice {
                 source: NSRect::new(
-                    NSPoint::new(origin.x, start),
-                    NSSize::new(size.width, end - start),
+                    NSPoint::new(paper.0, start),
+                    NSSize::new(paper.1, end - start),
                 ),
                 page: Some(index),
             });
@@ -465,11 +577,11 @@ fn image_crop(
     clip: NSSize,
 ) -> Option<(NSRect, NSRect)> {
     let source = slice.source;
-    let mut y = source.origin.y * t.ratio + t.dy - 2.0;
+    let mut y = source.origin.y * t.ratio + t.dy;
     if let Some((g, index)) = geometry.zip(slice.page) {
         y += g.offset(index, t.ratio) - g.offset(index, 1.0) * t.ratio;
     }
-    let x = source.origin.x * t.ratio + t.dx - 2.0;
+    let x = source.origin.x * t.ratio + t.dx;
     let width = source.size.width * t.ratio;
     let height = source.size.height * t.ratio;
     let left = x.max(0.0);
@@ -479,15 +591,17 @@ fn image_crop(
     if right <= left || bottom <= top {
         return None;
     }
+    let texture_height = (bottom - top) / t.ratio / image.height;
+    let texture_top = (source.origin.y - origin.y + (top - y) / t.ratio) / image.height;
+    // The snapshot is top-origin. Keep its crop in the same coordinates as
+    // the AppKit-managed WebKit parent; do not flip the crop or child geometry.
+    // A second flip can reverse page slices while reported anchors still agree.
     let contents = NSRect::new(
         NSPoint::new(
             (source.origin.x - origin.x + (left - x) / t.ratio) / image.width,
-            (source.origin.y - origin.y + (top - y) / t.ratio) / image.height,
+            texture_top,
         ),
-        NSSize::new(
-            (right - left) / t.ratio / image.width,
-            (bottom - top) / t.ratio / image.height,
-        ),
+        NSSize::new((right - left) / t.ratio / image.width, texture_height),
     );
     Some((
         NSRect::new(
@@ -509,6 +623,7 @@ struct Capture {
     density: f64,
     geometry: Option<Geometry>,
     background: [f64; 4],
+    paper_background: [f64; 4],
     buffered: bool,
 }
 
@@ -651,6 +766,10 @@ struct Native {
     monitor: Option<Retained<AnyObject>>,
     clip: Option<Retained<AnyObject>>,
     image_layers: Vec<ImageLayer>,
+    paper_layer: Option<Retained<AnyObject>>,
+    outline_layer: Option<Retained<AnyObject>>,
+    outline_width: f64,
+    outline_color: [f64; 4],
     enabled: bool,
     allowed: bool,
     initialized: bool,
@@ -729,6 +848,11 @@ impl Native {
         self.token = Some(image.capture.token);
         self.clip = Some(image.clip);
         self.image_layers = image.layers;
+        self.paper_layer = Some(image.paper_layer);
+        self.outline_layer = Some(image.outline_layer);
+        if let Some(layer) = &self.outline_layer {
+            set_outline(layer, self.outline_width, self.outline_color);
+        }
         self.size = image.capture.viewport;
         self.layout_size = image.capture.viewport;
         self.image_origin = image.capture.origin;
@@ -741,6 +865,21 @@ impl Native {
         self.transform = Transform::default();
         self.overlay_visible = false;
         true
+    }
+
+    fn observe_frame(&mut self, scale: f64, size: NSSize) {
+        self.initialized = true;
+        if self.pipeline.flight.is_none() && self.pipeline.latest.is_none() {
+            if self.token.is_some() && (self.pipeline.scale - scale).abs() > 1e-9 {
+                self.retire_image();
+            }
+            if self.token.is_none() {
+                self.pipeline.scale = scale;
+                self.layout_size = size;
+            }
+            // With warmed pixels, layout_size records the last native layout,
+            // not a browser observation which can race ahead of that layout.
+        }
     }
 
     fn hide_feedback(&mut self) {
@@ -762,6 +901,16 @@ impl Native {
                 let _: () = msg_send![&**layer, setHidden: true];
             }
         }
+        if let Some(layer) = self.outline_layer.take() {
+            unsafe {
+                let _: () = msg_send![&*layer, removeFromSuperlayer];
+            }
+        }
+        if let Some(layer) = self.paper_layer.take() {
+            unsafe {
+                let _: () = msg_send![&*layer, removeFromSuperlayer];
+            }
+        }
         for image in self.image_layers.drain(..) {
             unsafe {
                 let _: () = msg_send![&*image.layer, removeFromSuperlayer];
@@ -778,6 +927,22 @@ impl Native {
         self.pipeline.pending_transform = Transform::default();
         self.pipeline.pending_base = None;
         self.flight_token = None;
+    }
+
+    fn reject_request(&mut self, revision: u64) -> bool {
+        if !self
+            .pipeline
+            .flight
+            .is_some_and(|request| request.revision == revision)
+        {
+            return false;
+        }
+        // A missing/reset renderer cannot own the queued anchors. Wait for a
+        // fresh ready frame to restore scale and layout before accepting input.
+        self.clear();
+        self.stop_capture();
+        self.initialized = false;
+        true
     }
 
     fn stop_capture(&mut self) {
@@ -856,8 +1021,38 @@ impl Native {
         );
         // Queue one vector request without waiting. Further events update the
         // native bitmap and replace latest; they do not queue WebKit scripts.
+        let weak = self.owner.clone();
+        let completion = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
+            if zoom_request_accepted(unsafe { result.as_ref() }, !error.is_null()) {
+                return;
+            }
+            let Some(owner) = weak.upgrade() else {
+                return;
+            };
+            let web = {
+                let mut native = owner.borrow_mut();
+                if !native.reject_request(request.revision) {
+                    return;
+                }
+                native.web.clone()
+            };
+            if let Some(web) = web {
+                unsafe {
+                    web.evaluateJavaScript_completionHandler(
+                        &NSString::from_str(&format!(
+                            "window.tiptoptypZoomSnapshot?.rejected({});",
+                            request.revision
+                        )),
+                        None,
+                    );
+                }
+            }
+        });
         unsafe {
-            web.evaluateJavaScript_completionHandler(&NSString::from_str(&script), None);
+            web.evaluateJavaScript_completionHandler(
+                &NSString::from_str(&script),
+                Some(&completion),
+            );
         }
     }
 
@@ -909,6 +1104,13 @@ impl Native {
         let ratio = self.pipeline.scale / self.base_scale
             * (bounds.size.width - (self.size.width - self.fit_width)).max(1.0)
             / self.fit_width.max(1.0);
+        let ratio = self.geometry.as_ref().map_or(ratio, |g| {
+            g.render_ratio(
+                ratio,
+                (bounds.size.width - (self.size.width - self.fit_width)).max(1.0),
+                self.pipeline.scale,
+            )
+        });
         self.transform = self.geometry.as_ref().map_or_else(
             || self.transform.zoom(ratio, x, y),
             |g| {
@@ -941,6 +1143,17 @@ impl Native {
             unsafe {
                 let _: () = msg_send![class!(CATransaction), begin];
                 let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+                if let Some(layer) = &self.outline_layer {
+                    let _: () = msg_send![&**layer,setFrame:NSRect::new(NSPoint::new(0.0,0.0),clip_bounds(bounds).size)];
+                }
+                if let Some((layer, g)) = self.paper_layer.as_ref().zip(self.geometry.as_ref()) {
+                    if let Some(frame) = paper_clip(g, self.transform, clip_bounds(bounds).size) {
+                        let _: () = msg_send![&**layer, setFrame: frame];
+                        let _: () = msg_send![&**layer, setHidden: false];
+                    } else {
+                        let _: () = msg_send![&**layer, setHidden: true];
+                    }
+                }
                 for image in &self.image_layers {
                     if let Some((frame, contents)) = image_crop(
                         image.slice,
@@ -993,13 +1206,59 @@ impl Native {
 pub(crate) struct CaptureState(Rc<RefCell<Native>>);
 
 fn clip_bounds(bounds: NSRect) -> NSRect {
+    // Leaving even one unmasked pixel can expose live glyph fragments while
+    // cached ink moves. The focus outline is a separate layer above this mask.
     NSRect::new(
-        NSPoint::new(bounds.origin.x + 2.0, bounds.origin.y + 2.0),
-        NSSize::new(
-            (bounds.size.width - 4.0).max(0.0),
-            (bounds.size.height - 4.0).max(0.0),
-        ),
+        bounds.origin,
+        NSSize::new(bounds.size.width.max(0.0), bounds.size.height.max(0.0)),
     )
+}
+
+fn outline(value: &serde_json::Value) -> Option<(f64, [f64; 4])> {
+    let width = value["width"]
+        .as_f64()
+        .filter(|v| v.is_finite() && (0.0..=64.0).contains(v))?;
+    let color = value["color"].as_array().filter(|v| v.len() == 4)?;
+    let rgba = [
+        color[0].as_f64()? / 255.0,
+        color[1].as_f64()? / 255.0,
+        color[2].as_f64()? / 255.0,
+        color[3].as_f64()?,
+    ];
+    rgba.iter()
+        .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+        .then_some((width, rgba))
+}
+
+fn set_outline(layer: &AnyObject, width: f64, rgba: [f64; 4]) {
+    unsafe extern "C" {
+        static kCGColorSpaceSRGB: *const std::ffi::c_void;
+        fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+        fn CGColorCreate(
+            space: *const std::ffi::c_void,
+            components: *const f64,
+        ) -> *mut std::ffi::c_void;
+        fn CGColorRelease(color: *mut std::ffi::c_void);
+    }
+    unsafe {
+        let _: () = msg_send![class!(CATransaction), begin];
+        let _: () = msg_send![class!(CATransaction),setDisableActions:true];
+        let space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        let color = CGColorCreate(space, rgba.as_ptr());
+        let _: () = msg_send![layer,setBorderWidth:width];
+        let _: () = msg_send![layer,setBorderColor:color];
+        CGColorRelease(color);
+        CGColorSpaceRelease(space);
+        let _: () = msg_send![class!(CATransaction), commit];
+    }
+}
+
+fn zoom_request_accepted(result: Option<&AnyObject>, failed: bool) -> bool {
+    !failed
+        && result
+            .and_then(|value| value.downcast_ref::<NSNumber>())
+            .is_some_and(NSNumber::boolValue)
 }
 
 fn snapshot_width(width: f64, height: f64, backing: f64, density: f64) -> Option<f64> {
@@ -1043,13 +1302,16 @@ impl CaptureState {
             let Some(web) = &native.web else {
                 return event as *const NSEvent as *mut NSEvent;
             };
+            let Some(window) = web.window() else {
+                return event as *const NSEvent as *mut NSEvent;
+            };
             if web.isHiddenOrHasHiddenAncestor()
                 || event
                     .window(
                         MainThreadMarker::new().expect("local monitor runs on the AppKit thread"),
                     )
                     .as_deref()
-                    != web.window().as_deref()
+                    != Some(&*window)
             {
                 return event as *const NSEvent as *mut NSEvent;
             }
@@ -1061,20 +1323,16 @@ impl CaptureState {
                 return event as *const NSEvent as *mut NSEvent;
             }
             let key = kind == NSEventType::KeyDown;
-            let pointer = web.convertPoint_fromView(event.locationInWindow(), None);
-            let bounds = web.bounds();
-            let inside = pointer.x >= bounds.origin.x
-                && pointer.x < bounds.origin.x + bounds.size.width
-                && pointer.y >= bounds.origin.y
-                && pointer.y < bounds.origin.y + bounds.size.height;
-            let point = (
-                pointer.x - bounds.origin.x,
-                if web.isFlipped() {
-                    pointer.y - bounds.origin.y
-                } else {
-                    bounds.size.height - (pointer.y - bounds.origin.y)
-                },
-            );
+            let event_position = event.locationInWindow();
+            let cursor = if kind == NSEventType::Magnify {
+                window.mouseLocationOutsideOfEventStream()
+            } else {
+                event_position
+            };
+            let pointer =
+                web.convertPoint_fromView(input_position(kind, event_position, cursor), None);
+            let point = viewport_point(pointer, web.bounds(), web.isFlipped());
+            let inside = point.is_some();
             let pinch_end = kind == NSEventType::Magnify
                 && inside
                 && event
@@ -1086,7 +1344,7 @@ impl CaptureState {
                     .phase()
                     .intersects(NSEventPhase::Began | NSEventPhase::Changed);
             let factor = if kind == NSEventType::Magnify && inside {
-                Some((1.0 + event.magnification(), false, Some(point)))
+                Some((1.0 + event.magnification(), false, point))
             } else if kind == NSEventType::ScrollWheel
                 && inside
                 && modifiers.contains(NSEventModifierFlags::Control)
@@ -1096,11 +1354,7 @@ impl CaptureState {
                 } else {
                     20.0
                 };
-                Some((
-                    (event.scrollingDeltaY() * unit * 0.002).exp(),
-                    false,
-                    Some(point),
-                ))
+                Some(((event.scrollingDeltaY() * unit * 0.002).exp(), false, point))
             } else if key
                 && modifiers
                     .intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control)
@@ -1132,6 +1386,10 @@ impl CaptureState {
             } else {
                 if kind == NSEventType::ScrollWheel
                     && inside
+                    // An idle edge wheel or a pinch's incidental scroll phase
+                    // may not move the browser. Let actual DOM motion retire
+                    // idle pixels; only real navigation interrupts a proxy.
+                    && (native.overlay_visible || native.pipeline.flight.is_some() || native.pipeline.latest.is_some()) && !native.gate.pinch
                     && manual_scroll(event.scrollingDeltaX(), event.scrollingDeltaY())
                 {
                     native.retire_image();
@@ -1258,28 +1516,21 @@ impl CaptureState {
                     native.stop_capture();
                 }
             }
+            Some("outline") => {
+                if let Some((width, color)) = outline(value) {
+                    native.outline_width = width;
+                    native.outline_color = color;
+                    if let Some(layer) = &native.outline_layer {
+                        set_outline(layer, width, color);
+                    }
+                }
+            }
             Some("frame") if allowed => {
                 if let Some(scale) = value["scale"]
                     .as_f64()
                     .filter(|scale| scale.is_finite() && (0.1..=10.0).contains(scale))
                 {
-                    native.initialized = true;
-                    if native.pipeline.flight.is_none() && native.pipeline.latest.is_none() {
-                        native.layout_size = web.bounds().size;
-                    }
-                    if native.pipeline.flight.is_none()
-                        && native.pipeline.latest.is_none()
-                        && native.token.is_some()
-                        && (native.pipeline.scale - scale).abs() > 1e-9
-                    {
-                        native.retire_image();
-                    }
-                    if native.pipeline.flight.is_none()
-                        && native.pipeline.latest.is_none()
-                        && native.token.is_none()
-                    {
-                        native.pipeline.scale = scale;
-                    }
+                    native.observe_frame(scale, web.bounds().size);
                 }
             }
             Some("invalidate") => {
@@ -1288,6 +1539,11 @@ impl CaptureState {
                 } else {
                     native.retire_image();
                     native.flush(true);
+                }
+            }
+            Some("abandon") => {
+                if let Some(revision) = value["revision"].as_u64() {
+                    native.reject_request(revision);
                 }
             }
             Some("reject") => {
@@ -1361,6 +1617,10 @@ impl CaptureState {
             return;
         };
         let bounds = web.bounds();
+        let Some(geometry) = capture_geometry(request, bounds.size) else {
+            Self::resolve_failure(&web, token);
+            return;
+        };
         let buffer = &request["buffer"];
         let buffered = buffer["html"]
             .as_str()
@@ -1417,6 +1677,19 @@ impl CaptureState {
             .map_or([1.0, 1.0, 1.0, 1.0], |v| {
                 [v[0] / 255.0, v[1] / 255.0, v[2] / 255.0, 1.0]
             });
+        let paper_background = buffer["paperBackground"]
+            .as_array()
+            .filter(|v| v.len() == 4)
+            .and_then(|v| {
+                Some([
+                    v[0].as_f64()? / 255.0,
+                    v[1].as_f64()? / 255.0,
+                    v[2].as_f64()? / 255.0,
+                    v[3].as_f64()?,
+                ])
+            })
+            .filter(|v| v.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)))
+            .unwrap_or(background);
         native.busy = Some(Capture {
             token: token.to_owned(),
             revision: native.pipeline.revision,
@@ -1425,14 +1698,13 @@ impl CaptureState {
             size,
             density,
             background,
+            paper_background,
             buffered,
             fit_width: request["fitWidth"]
                 .as_f64()
                 .filter(|v| v.is_finite() && *v > 0.0 && *v <= bounds.size.width)
                 .unwrap_or(bounds.size.width),
-            geometry: serde_json::from_value::<Geometry>(request["geometry"].clone())
-                .ok()
-                .filter(Geometry::valid),
+            geometry: Some(geometry),
         });
         if buffered {
             let html = buffer["html"].as_str().unwrap();
@@ -1558,7 +1830,9 @@ impl CaptureState {
                                 let _: () =
                                     msg_send![class!(CATransaction), setDisableActions: true];
                                 let _: () = msg_send![&*clip, setFrame: clip_bounds(web.bounds())];
-                                let _: () = msg_send![&*clip, setGeometryFlipped: true];
+                                // WKWebView's backing layer already supplies
+                                // AppKit's flipped coordinates. A standalone
+                                // child must not apply that flip a second time.
                                 let _: () = msg_send![&*clip, setMasksToBounds: true];
                                 let _: () = msg_send![&*clip, setZPosition: 1_000_000.0f64];
                                 unsafe extern "C" {
@@ -1579,6 +1853,14 @@ impl CaptureState {
                                 let color = CGColorCreate(space, capture.background.as_ptr());
                                 let _: () = msg_send![&*clip, setBackgroundColor: color];
                                 CGColorRelease(color);
+                                let paper_layer: Retained<AnyObject> =
+                                    msg_send![class!(CALayer), layer];
+                                let paper_color =
+                                    CGColorCreate(space, capture.paper_background.as_ptr());
+                                let _: () = msg_send![&*paper_layer,setBackgroundColor:paper_color];
+                                let _: () = msg_send![&*paper_layer,setHidden:true];
+                                let _: () = msg_send![&*clip,addSublayer:&*paper_layer];
+                                CGColorRelease(paper_color);
                                 CGColorSpaceRelease(space);
                                 let _: () = msg_send![&*clip, setHidden: true];
                                 let mut layers = Vec::with_capacity(slices.len());
@@ -1590,11 +1872,17 @@ impl CaptureState {
                                     let _: () = msg_send![&*clip,addSublayer:&*layer];
                                     layers.push(ImageLayer { layer, slice });
                                 }
+                                let outline_layer: Retained<AnyObject> =
+                                    msg_send![class!(CALayer), layer];
+                                let _: () = msg_send![&*outline_layer,setFrame:NSRect::new(NSPoint::new(0.0,0.0),clip_bounds(web.bounds()).size)];
+                                let _: () = msg_send![&*clip,addSublayer:&*outline_layer];
                                 let _: () = msg_send![class!(CATransaction), commit];
                                 native.candidate = Some(PreparedImage {
                                     capture: capture.clone(),
                                     clip,
                                     layers,
+                                    paper_layer,
+                                    outline_layer,
                                     pixels,
                                 });
                                 result = serde_json::json!({"width":pixels.0,"height":pixels.1});
@@ -1647,6 +1935,8 @@ impl CaptureState {
                 bitmap: u32,
             ) -> *mut std::ffi::c_void;
             fn CGContextRelease(context: *mut std::ffi::c_void);
+            fn CGContextTranslateCTM(context: *mut std::ffi::c_void, x: f64, y: f64);
+            fn CGContextScaleCTM(context: *mut std::ffi::c_void, x: f64, y: f64);
         }
         unsafe {
             let space = CGColorSpaceCreateDeviceRGB();
@@ -1660,6 +1950,11 @@ impl CaptureState {
                 0x4001,
             );
             assert!(!context.is_null());
+            // A bitmap CGContext starts bottom-up; PNG rows and the WebKit
+            // viewport start at the top. Apply the host coordinate conversion,
+            // leaving the actual layer frames and texture crops untouched.
+            CGContextTranslateCTM(context, 0.0, height as f64);
+            CGContextScaleCTM(context, 1.0, -1.0);
             let _: () = msg_send![&**layer, renderInContext: context];
             CGContextRelease(context);
             CGColorSpaceRelease(space);
@@ -1686,7 +1981,20 @@ impl CaptureState {
                 ..Default::default()
             }
         };
-        serde_json::json!({"enabled":native.enabled,"cached":native.token.is_some(),"active":native.overlay_visible,
+        let mask = native.clip.as_ref().map(|layer| {
+            let frame: NSRect = unsafe { msg_send![&**layer, frame] };
+            [
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+            ]
+        });
+        let view_size = native
+            .web
+            .as_ref()
+            .map(|web| [web.bounds().size.width, web.bounds().size.height]);
+        serde_json::json!({"mask_bounds":mask,"view_size":view_size,"enabled":native.enabled,"cached":native.token.is_some(),"active":native.overlay_visible,
             "token":native.token.as_deref(),"source_pages":native.geometry.as_ref().map(|g|&g.pages),
             "source_scale":native.geometry.as_ref().map(|g|g.source_scale),
             "inputs":native.inputs,"hits":native.hits,"handoffs":native.handoffs,"scale":native.pipeline.scale,
@@ -1712,6 +2020,162 @@ mod tests {
     }
 
     #[test]
+    fn full_svg_last_page_uses_rounded_css_box_not_a_scaled_capture_height() {
+        // Measured from the real full viewer at its bottom edge, 48 pages with
+        // unequal widths. A 5% zoom previously overshot the real edge by 1px;
+        // the following 20% zoom amplified the stale source point to 1.2px.
+        let g = Geometry {
+            paper: [0.0, -41377.0, 699.0, 41796.0],
+            viewport: [0.0, -1.0, 640.0, 420.0],
+            view: [640.0, 420.0],
+            scroll: [0.0, 41376.0],
+            source_scale: 1.2661148735757832,
+
+            content_size: [552.0, 32640.0],
+            pixel_rounded: true,
+            pages: (0..48)
+                .map(|i| [i as f64 * (680.0 + 10.0 / 1.2661148735757832), 680.0])
+                .collect(),
+        };
+        let ratio = g.render_ratio(0.95, 640.0, 1.092 * 0.95);
+        assert_eq!(g.height(ratio), 39729.0);
+        assert_eq!(g.width(ratio), 664.0);
+        let size = NSSize::new(640.0, 420.0);
+        let t = g.zoom(
+            Transform::default(),
+            ratio,
+            NSPoint::new(630.0, 400.0),
+            size,
+            size,
+            false,
+        );
+        assert!((g.paper[1] * ratio + t.dy + 39310.0).abs() < 1e-7);
+        assert_eq!(g.target(t, size)["top"], 39309.0);
+    }
+
+    #[test]
+    fn texture_crop_keeps_svg_top_pixels_in_the_on_screen_layer() {
+        let slice = ImageSlice {
+            source: NSRect::new(NSPoint::new(0., 0.), NSSize::new(640., 1260.)),
+            page: None,
+        };
+        let (frame, texture) = image_crop(
+            slice,
+            None,
+            Transform {
+                ratio: 0.875,
+                dx: 0.,
+                dy: 0.,
+            },
+            NSPoint::new(-320., -420.),
+            NSSize::new(1280., 1260.),
+            NSSize::new(560., 420.),
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            NSRect::new(NSPoint::new(0., 0.), NSSize::new(560., 420.))
+        );
+        assert!((texture.origin.y - 1. / 3.).abs() < 1e-12);
+        // Recover the source's top from the on-screen texture crop.
+        let source_top = -420. + texture.origin.y * 1260.;
+        assert!(source_top.abs() < 1e-10);
+    }
+
+    #[test]
+    fn pinch_uses_live_cursor_even_when_event_reports_the_center() {
+        let event = NSPoint::new(320.0, 210.0);
+        let cursor = NSPoint::new(56.0, 330.0);
+        assert_eq!(input_position(NSEventType::Magnify, event, cursor), cursor);
+        assert_eq!(
+            input_position(NSEventType::ScrollWheel, event, cursor),
+            event
+        );
+        let bounds = NSRect::new(NSPoint::new(10.0, 20.0), NSSize::new(640.0, 420.0));
+        assert_eq!(viewport_point(cursor, bounds, true), Some((46.0, 310.0)));
+        assert_eq!(viewport_point(cursor, bounds, false), Some((46.0, 110.0)));
+        assert!(viewport_point(NSPoint::new(9.0, 20.0), bounds, true).is_none());
+        assert!(viewport_point(NSPoint::new(650.0, 20.0), bounds, true).is_none());
+        assert!(viewport_point(NSPoint::new(f64::NAN, 20.0), bounds, true).is_none());
+    }
+
+    #[test]
+    fn outline_above_the_mask_validates_theme_strokes() {
+        let value = serde_json::json!({"width":2,"color":[255,128,0,0.5]});
+        assert_eq!(outline(&value), Some((2.0, [1.0, 128.0 / 255.0, 0.0, 0.5])));
+        assert!(outline(&serde_json::json!({"width":-1,"color":[0,0,0,1]})).is_none());
+        assert!(outline(&serde_json::json!({"width":1,"color":[0,0,0,2]})).is_none());
+    }
+
+    #[test]
+    fn browser_frame_cannot_claim_a_resize_before_the_native_cache_owner() {
+        let mut native = Native::default();
+        native.pipeline.scale = 1.0;
+        native.token = Some("warm-raster".into());
+        native.layout_size = NSSize::new(640.0, 420.0);
+        native.observe_frame(1.0, NSSize::new(560.0, 420.0));
+        assert_eq!(native.layout_size, NSSize::new(640.0, 420.0));
+        assert_eq!(native.token.as_deref(), Some("warm-raster"));
+        native.observe_frame(1.1, NSSize::new(560.0, 420.0));
+        assert!(native.token.is_none());
+        assert_eq!(native.layout_size, NSSize::new(560.0, 420.0));
+        assert_eq!(native.pipeline.scale, 1.1);
+    }
+
+    #[test]
+    fn capture_rejects_missing_unstable_and_mismatched_geometry() {
+        let data: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/tinymist-zoom-edges.json"))
+                .unwrap();
+        let mut request = serde_json::json!({"width":900,"height":700,"geometry":data["cases"][0]["before"]["geometry"]});
+        let size = NSSize::new(900.0, 700.0);
+        assert!(capture_geometry(&request, size).is_some());
+        assert!(capture_geometry(&request, NSSize::new(640.0, 700.0)).is_none());
+        request["geometry"]["scroll"][1] = (-1.0).into();
+        assert!(capture_geometry(&request, size).is_none());
+        request["geometry"] = serde_json::Value::Null;
+        assert!(capture_geometry(&request, size).is_none());
+    }
+
+    #[test]
+    fn cached_slices_cannot_rescale_chrome_outside_paper_into_the_view() {
+        let g = Geometry {
+            paper: [80.0, 0.0, 440.0, 1210.0],
+            viewport: [0.0, 0.0, 600.0, 400.0],
+            view: [600.0, 400.0],
+            scroll: [0.0, 0.0],
+            source_scale: 1.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
+            pages: vec![[0.0, 600.0], [610.0, 600.0]],
+        };
+        let slices = image_slices(
+            Some(&g),
+            NSPoint::new(-300.0, -400.0),
+            NSSize::new(1200.0, 1200.0),
+        );
+        for slice in slices {
+            assert_eq!(slice.source.origin.x, 80.0);
+            assert_eq!(slice.source.size.width, 440.0);
+        }
+        let bounds = paper_clip(
+            &g,
+            Transform {
+                ratio: 0.5,
+                dx: 150.0,
+                dy: 0.0,
+            },
+            NSSize::new(596.0, 396.0),
+        )
+        .unwrap();
+        assert_eq!(bounds.origin.x, 190.0);
+        assert_eq!(bounds.size.width, 220.0);
+        assert_eq!(bounds.origin.y, 0.0);
+        assert_eq!(bounds.size.height, 396.0);
+    }
+
+    #[test]
     fn zoom_out_centers_paper_and_clamps_to_document_edges() {
         let g = Geometry {
             paper: [0.0, 0.0, 600.0, 2400.0],
@@ -1719,6 +2183,9 @@ mod tests {
             view: [600.0, 400.0],
             scroll: [0.0, 0.0],
             source_scale: 0.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: vec![],
         };
         // The old freely scaled viewport would move the first page down 100px.
@@ -1754,6 +2221,9 @@ mod tests {
             view: [600.0, 400.0],
             scroll: [0.0, 0.0],
             source_scale: 0.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: vec![],
         };
         // No AppKit objects are required for this cache/state invariant.
@@ -1805,6 +2275,9 @@ mod tests {
             view: [600.0, 400.0],
             scroll: [0.0, 11790.0],
             source_scale: 1.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: (0..20).map(|i| [i as f64 * 610.0, 600.0]).collect(),
         };
         let size = NSSize::new(600.0, 400.0);
@@ -1828,6 +2301,9 @@ mod tests {
             view: [615.0, 415.0],
             scroll: [80.0, 900.0],
             source_scale: 0.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: vec![],
         };
         let size = NSSize::new(815.0, 415.0);
@@ -1877,6 +2353,9 @@ mod tests {
             view: [600.0, 400.0],
             scroll: [0.0, 620.0],
             source_scale: 1.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: vec![[0.0, 600.0], [610.0, 600.0], [1220.0, 600.0]],
         };
         let size = NSSize::new(600.0, 400.0);
@@ -1917,7 +2396,8 @@ mod tests {
             let g: Geometry = serde_json::from_value(case["before"]["geometry"].clone()).unwrap();
             let actual: Geometry =
                 serde_json::from_value(case["after"]["geometry"].clone()).unwrap();
-            let ratio = case["scale"].as_f64().unwrap();
+            let scale = case["scale"].as_f64().unwrap();
+            let ratio = g.render_ratio(scale, case["before"]["fitWidth"].as_f64().unwrap(), scale);
             let size = NSSize::new(g.view[0], g.view[1]);
             let anchor = NSPoint::new(
                 case["anchor"][0].as_f64().unwrap(),
@@ -1948,6 +2428,9 @@ mod tests {
             scroll: [0.0, 650.0],
             view: [600.0, 400.0],
             source_scale: 1.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: (0..5).map(|i| [i as f64 * 610.0, 600.0]).collect(),
         };
         let size = NSSize::new(600.0, 400.0);
@@ -1975,6 +2458,9 @@ mod tests {
             scroll: [150.0, 900.0],
             view: [600.0, 400.0],
             source_scale: 0.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: vec![],
         };
         let previous = NSSize::new(600.0, 400.0);
@@ -2008,6 +2494,9 @@ mod tests {
             scroll: [0.0, 610.0 * 5000.0],
             view: [600.0, 400.0],
             source_scale: 1.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: (0..10_000).map(|i| [i as f64 * 610.0, 600.0]).collect(),
         };
         let slices = image_slices(
@@ -2147,6 +2636,9 @@ mod tests {
             scroll: [0.0, 0.0],
             view: [640.0, 420.0],
             source_scale: 0.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: vec![],
         };
         let origin = NSPoint::new(-320.0, -420.0);
@@ -2179,6 +2671,9 @@ mod tests {
         ));
         let partial = Geometry {
             source_scale: 1.0,
+
+            content_size: [0.0, 0.0],
+            pixel_rounded: false,
             pages: (0..100).map(|i| [i as f64 * 610.0, 600.0]).collect(),
             ..full
         };
@@ -2250,6 +2745,133 @@ mod tests {
         assert!(native.pipeline.latest.is_some() && native.gate.due.is_some());
         native.clear();
         assert!(native.pipeline.latest.is_none() && native.gate.due.is_none());
+    }
+
+    #[test]
+    fn zoom_evaluation_requires_an_accepted_result_without_an_error() {
+        let accepted = NSNumber::new_bool(true);
+        let rejected = NSNumber::new_bool(false);
+        assert!(zoom_request_accepted(Some(&accepted), false));
+        assert!(!zoom_request_accepted(Some(&rejected), false));
+        assert!(!zoom_request_accepted(None, false));
+        assert!(!zoom_request_accepted(Some(&accepted), true));
+        assert!(!zoom_request_accepted(
+            Some(&NSString::from_str("true")),
+            false
+        ));
+    }
+
+    #[test]
+    fn rejected_flight_discards_obsolete_inputs_and_waits_for_a_ready_renderer() {
+        let mut native = Native::default();
+        native.initialized = true;
+        native.pipeline.scale = 1.0;
+        let first = native.pipeline.input(1.1, false, 300.0, 200.0).unwrap();
+        native.pipeline.queue(1.1, false, 400.0, 300.0, true);
+        let revision = native.pipeline.revision;
+        native.gate.pinch = true;
+        native.gate.input(Instant::now());
+        native.token = Some("obsolete".into());
+        native.flight_token = native.token.clone();
+        native.overlay_visible = true;
+        native.transform = Transform {
+            ratio: 1.21,
+            dx: -70.0,
+            dy: -50.0,
+        };
+
+        assert!(native.reject_request(first.revision));
+        assert!(!native.initialized);
+        assert!(native.pipeline.flight.is_none());
+        assert!(native.pipeline.latest.is_none());
+        assert_eq!(native.pipeline.revision, revision);
+        assert!(native.pipeline.pending_base.is_none());
+        assert_eq!(native.pipeline.pending_transform.ratio, 0.0);
+        assert!(native.gate.due.is_none());
+        assert!(!native.gate.pinch);
+        assert!(native.token.is_none() && native.flight_token.is_none());
+        assert!(!native.overlay_visible);
+        assert_eq!(native.transform.ratio, 0.0);
+    }
+
+    #[test]
+    fn abandoned_renderer_stops_an_idle_capture_and_discards_queued_zoom() {
+        let mut native = Native::default();
+        native.initialized = true;
+        native.pipeline.scale = 1.0;
+        let size = NSSize::new(640.0, 420.0);
+        native.busy = Some(Capture {
+            token: "pre-input-capture".into(),
+            revision: native.pipeline.revision,
+            viewport: size,
+            origin: NSPoint::new(0.0, 0.0),
+            size,
+            fit_width: size.width,
+            density: 1.0,
+            geometry: None,
+            background: [1.0; 4],
+            paper_background: [1.0; 4],
+            buffered: false,
+        });
+        native.rasterizing = true;
+        let abandoned = native.pipeline.input(1.1, false, 300.0, 200.0).unwrap();
+        native.pipeline.queue(1.1, false, 400.0, 300.0, true);
+
+        assert!(native.reject_request(abandoned.revision));
+        assert!(native.busy.is_none());
+        assert!(!native.rasterizing);
+        assert!(!native.initialized);
+        assert!(native.pipeline.flight.is_none() && native.pipeline.latest.is_none());
+        assert!(!native.reject_request(abandoned.revision));
+    }
+
+    #[test]
+    fn late_rejection_cannot_cancel_a_newer_flight_or_its_pending_input() {
+        let mut native = Native::default();
+        native.initialized = true;
+        native.pipeline.scale = 1.0;
+        let first = native.pipeline.input(1.1, false, 300.0, 200.0).unwrap();
+        assert!(native.pipeline.ready(first.revision, first.scale));
+        let current = native.pipeline.input(1.1, false, 400.0, 300.0).unwrap();
+        native.pipeline.queue(1.1, false, 450.0, 350.0, true);
+        let pending = native.pipeline.latest.unwrap().revision;
+        native.gate.input(Instant::now());
+        native.token = Some("current".into());
+        native.flight_token = native.token.clone();
+        native.overlay_visible = true;
+
+        assert!(!native.reject_request(first.revision));
+        assert!(native.initialized && native.overlay_visible);
+        assert_eq!(native.pipeline.flight.unwrap().revision, current.revision);
+        assert_eq!(native.pipeline.latest.unwrap().revision, pending);
+        assert_eq!(native.token.as_deref(), Some("current"));
+        assert_eq!(native.flight_token.as_deref(), Some("current"));
+        assert!(native.gate.due.is_some());
+        assert!(native.pipeline.ready(current.revision, current.scale));
+        assert_eq!(native.pipeline.dispatch().unwrap().revision, pending);
+    }
+
+    #[test]
+    fn ready_renderer_restores_zoom_after_a_rejected_request() {
+        let mut native = Native::default();
+        native.initialized = true;
+        native.pipeline.scale = 1.0;
+        let rejected = native.pipeline.input(1.1, false, 300.0, 200.0).unwrap();
+        native.pipeline.queue(1.1, false, 400.0, 300.0, true);
+        let obsolete_revision = native.pipeline.revision;
+        assert!(native.reject_request(rejected.revision));
+        assert!(!native.initialized);
+
+        let size = NSSize::new(560.0, 420.0);
+        native.observe_frame(0.85, size);
+        assert!(native.initialized);
+        assert_eq!(native.layout_size, size);
+        assert_eq!(native.pipeline.scale, 0.85);
+        let next = native.pipeline.input(1.1, false, 280.0, 210.0).unwrap();
+        assert!(next.revision > obsolete_revision);
+        assert!((next.scale - 0.935).abs() < 1e-9);
+        assert!(!native.reject_request(rejected.revision));
+        assert!(native.pipeline.ready(next.revision, next.scale));
     }
 
     #[test]
@@ -2371,15 +2993,15 @@ mod tests {
     }
 
     #[test]
-    fn overlay_clip_leaves_the_focus_outline_and_respects_tiny_views() {
+    fn overlay_mask_covers_every_native_edge_and_respects_tiny_views() {
         let bounds = clip_bounds(NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(640.0, 420.0),
         ));
-        assert_eq!(bounds.origin, NSPoint::new(2.0, 2.0));
-        assert_eq!(bounds.size, NSSize::new(636.0, 416.0));
+        assert_eq!(bounds.origin, NSPoint::new(0.0, 0.0));
+        assert_eq!(bounds.size, NSSize::new(640.0, 420.0));
         let tiny = clip_bounds(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1.0, 1.0)));
-        assert_eq!(tiny.size, NSSize::new(0.0, 0.0));
+        assert_eq!(tiny.size, NSSize::new(1.0, 1.0));
     }
 
     #[test]

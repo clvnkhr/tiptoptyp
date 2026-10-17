@@ -3,6 +3,7 @@
 (() => {
   let frame = 0;
   let pending = null;
+  let sourceContextRequest = null;
   const prepared = new WeakSet();
   // The optional renderer keeps SVG ink only for the viewport and one viewport
   // on either side, snapped outwards to whole pages. Tinymist still supplies
@@ -12,6 +13,134 @@
   const partialMode = doc => doc.partialRendering && doc.renderMode === 'svg' && doc.previewMode === 0 && !doc.isContentPreview;
   const fullMode = doc => !doc.partialRendering && doc.renderMode === 'svg' && doc.previewMode === 0 && !doc.isContentPreview;
   const connected = doc => document.getElementById('typst-container')?.documents?.some(value => value.impl === doc);
+  // Only an explicit navigation request owns a beacon. Automatic source-follow
+  // updates still scroll through the same frontend hook, without a typing pulse.
+  const revealWindows = new WeakMap();
+  let reveal = null, revealFrame = 0;
+  const revealDebug = { intents: 0, explicit: 0, locations: 0, retired: null, last_intent: null, last_location: null };
+  const revealViewport = state => {
+    const scroll = state?.doc?.hookedElem.parentElement;
+    return [0, 0, window.innerWidth ?? scroll?.clientWidth ?? 0, window.innerHeight ?? scroll?.clientHeight ?? 0];
+  };
+  const retireReveal = (recapture = true, reason = 'finished') => {
+    if (!reveal) return;
+    if (revealFrame) cancelAnimationFrame(revealFrame);
+    revealFrame = 0;
+    reveal.element?.remove();
+    revealDebug.retired = reason;
+    reveal = null;
+    window.tiptoptypZoomSnapshot?.invalidate();
+    if (recapture) window.tiptoptypZoomSnapshot?.settle();
+  };
+  const revealPage = state => {
+    const svg = state.doc.hookedElem.firstElementChild;
+    if (!svg || svg.isConnected === false) return null;
+    const cached = partialDocs.get(state.doc);
+    if (cached?.nodeSVG === svg && cached.nodes) return cached.nodes[state.page] ?? null;
+    if (state.svg !== svg || state.node?.isConnected === false) {
+      state.svg = svg;
+      // A renderer without a geometry cache is scanned once per replaced SVG,
+      // never once per animation frame and never through the document ink.
+      state.node = [...svg.children].find(node => node.classList?.contains('typst-page') &&
+        Number(node.getAttribute('data-page-number')) === state.page) ?? null;
+    }
+    return state.node;
+  };
+  const drawReveal = state => {
+    if (!state.element) {
+      const element = document.createElement('div');
+      element.className = 'tiptoptyp-reveal-beacon';
+      element.setAttribute('aria-hidden', 'true');
+      for (const name of ['halo', 'ring', 'ring second', 'center']) {
+        const part = document.createElement('span');
+        part.className = `tiptoptyp-reveal-${name.replace(' ', ' tiptoptyp-reveal-')}`;
+        element.append(part);
+      }
+      document.body.append(element);
+      state.element = element;
+    }
+    state.element.style.left = `${state.center[0]}px`;
+    state.element.style.top = `${state.center[1]}px`;
+  };
+  const revealExpired = (state, now) => now - (state.started ?? state.armed) >= (state.started === null ? 3000 : 900);
+  const currentReveal = now => reveal && !revealExpired(reveal, now) ? reveal : null;
+  const tickReveal = () => {
+    revealFrame = 0;
+    const state = reveal;
+    if (!state) return;
+    const now = performance.now();
+    if ((state.doc && (!connected(state.doc) || state.doc.hookedElem.isConnected === false || partialDocs.get(state.doc)?.disposed)) ||
+        revealExpired(state, now)) {
+      retireReveal(true, state.started === null ? 'arrival-timeout-or-disconnected' : 'finished-or-disconnected'); return;
+    }
+    if (state.page !== null) {
+      const page = revealPage(state), geometry = page && sourcePageGeometry(page);
+      if (geometry && page.getAttribute('data-dummy') !== '1') {
+        const [, width, height, a, b, c, d, e, f] = geometry;
+        const point = [a * state.x + c * state.y + e, b * state.x + d * state.y + f];
+        if (state.started !== null) state.center = point;
+        const rect = state.doc.hookedElem.parentElement.getBoundingClientRect();
+        const viewport = revealViewport(state);
+        const visible = state.x >= 0 && state.y >= 0 && state.x <= width && state.y <= height &&
+          point[0] >= Math.max(0, rect.left) && point[0] <= Math.min(viewport[2], rect.right ?? rect.left + state.doc.hookedElem.parentElement.clientWidth) &&
+          point[1] >= Math.max(0, rect.top) && point[1] <= Math.min(viewport[3], rect.bottom ?? rect.top + state.doc.hookedElem.parentElement.clientHeight);
+        if (visible) {
+          state.center = point;
+          state.started ??= now;
+          drawReveal(state);
+          state.element.style.visibility = 'visible';
+        } else if (state.element) state.element.style.visibility = 'hidden';
+      } else if (state.element) state.element.style.visibility = 'hidden';
+    }
+    revealFrame = requestAnimationFrame(tickReveal);
+  };
+  const installRevealWindow = windowElem => {
+    const original = windowElem?.handleTypstLocation;
+    if (typeof original !== 'function' || revealWindows.get(windowElem) === original) return;
+    const handler = function(elem, page, x, y, ...args) {
+      const state = reveal;
+      revealDebug.locations = Math.min(Number.MAX_SAFE_INTEGER, revealDebug.locations + 1);
+      revealDebug.last_location = performance.now();
+      if (state && state.page === null && Number.isSafeInteger(page) && page > 0 && [x, y].every(Number.isFinite)) {
+        const docs = [...new Set((windowElem.documents ?? []).map(value => value.impl))];
+        const doc = docs.find(value => value.hookedElem.firstElementChild === elem || value.hookedElem.firstElementChild?.contains?.(elem)) ??
+          (docs.length === 1 ? docs[0] : null);
+        if (doc && (!state.doc || state.doc === doc)) {
+          state.doc = doc; state.page = page - 1; state.x = x; state.y = y;
+        }
+      }
+      try { return original.call(this, elem, page, x, y, ...args); }
+      catch (error) { retireReveal(true, 'handler-error'); throw error; }
+    };
+    revealWindows.set(windowElem, handler);
+    windowElem.handleTypstLocation = handler;
+    if (window.handleTypstLocation === original) window.handleTypstLocation = handler;
+  };
+  window.tiptoptypPreviewRevealIntent = explicit => {
+    const wasActive = reveal !== null;
+    revealDebug.intents = Math.min(Number.MAX_SAFE_INTEGER, revealDebug.intents + 1);
+    revealDebug.explicit += explicit && revealDebug.explicit < Number.MAX_SAFE_INTEGER ? 1 : 0;
+    revealDebug.last_intent = performance.now();
+    retireReveal(false, explicit ? 'superseded' : 'automatic-follow');
+    if (!explicit) { if (wasActive) window.tiptoptypZoomSnapshot?.settle(); return; }
+    const doc = documentRenderer();
+    if (doc) installRevealWindow(doc.windowElem);
+    reveal = { doc, page: null, x: 0, y: 0, armed: performance.now(), started: null, center: null, element: null, svg: null, node: null };
+    window.tiptoptypZoomSnapshot?.invalidate();
+    revealFrame = requestAnimationFrame(tickReveal);
+  };
+  window.tiptoptypPreviewRevealActive = () => currentReveal(performance.now()) !== null;
+  window.tiptoptypPreviewRevealState = () => {
+    const now = performance.now(), state = currentReveal(now);
+    return {
+      active: state !== null, pending: state !== null && state.started === null, page: state?.page ?? null,
+      center: state?.center?.slice() ?? null, viewport: revealViewport(state),
+      elapsed_ms: state ? now - (state.started ?? state.armed) : 0,
+      debug: { intents: revealDebug.intents, explicit: revealDebug.explicit, locations: revealDebug.locations, retired: revealDebug.retired,
+        intent_age_ms: revealDebug.last_intent === null ? null : now - revealDebug.last_intent,
+        location_age_ms: revealDebug.last_location === null ? null : now - revealDebug.last_location },
+    };
+  };
   const pageGeometry = (doc, state) => {
     if (state.pages) return state.pages;
     let y = 0, sourceY = 0, width = 0;
@@ -78,6 +207,7 @@
   };
   const acknowledgePartialPatch = (doc, state) => {
     const svg = doc.hookedElem.firstElementChild;
+    if (svg) setAttributeIfChanged(svg, 'preserveAspectRatio', 'xMinYMin');
     state.coverage = { ...state.requested, svg };
     state.nodeSVG = svg;
     state.nodes = svg ? [...svg.children].filter(node => node.classList.contains('typst-page')) : [];
@@ -168,8 +298,11 @@
     if (!Number.isFinite(y)) return false;
     const rect = fullMode(doc) ? null : svg.getBoundingClientRect();
     const coordinates = rect ? {x: rect.left, y: rect.top, sx: scale, sy: scale} : svgCoordinates(svg, scale);
-    doc.hookedElem.parentElement.scrollBy(coordinates.x + point.x * coordinates.sx - point.clientX,
-      coordinates.y + y * coordinates.sy - point.clientY);
+    const dx = coordinates.x + point.x * coordinates.sx - point.clientX;
+    const dy = coordinates.y + y * coordinates.sy - point.clientY;
+    // Even a no-op scrollBy cancels an in-flight WebKit smooth navigation.
+    // Rounded SVG bounds can leave subpixel residue without a visible change.
+    if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) doc.hookedElem.parentElement.scrollBy(dx, dy);
     // This explicit source point owns the transition. A saved frontend resize
     // anchor must not override it during a later paper-gap repair/rescale.
     doc.clearSvgResizeAnchor?.();
@@ -215,7 +348,7 @@
         !Number.isFinite(Number(node.getAttribute('ry'))) || Number(node.getAttribute('rx')) <= 0 || Number(node.getAttribute('ry')) <= 0)) return null;
     return { svg, backgrounds, outer: outers[0], circle: circles[0], cursorPage, ellipses };
   };
-  const applyPaperLayout = (state, view, plan, offsets, roots) => {
+  const applyPaperLayout = (state, view, plan, offsets, roots, alignOrigin = false) => {
     const oldScale = state.offsetScale;
     for (let index = 0; index < state.nodes.length; index++) {
       const position = plan.positions[index], translate = `translate(${position.x}, ${position.y})`;
@@ -228,6 +361,10 @@
     setAttributeIfChanged(roots.outer, 'height', Math.ceil(plan.height));
     setAttributeIfChanged(roots.svg, 'data-height', plan.height);
     setAttributeIfChanged(roots.svg, 'viewBox', `0 0 ${plan.width} ${plan.height}`);
+    // SVG's default centered alignment adds fractional top padding when its
+    // CSS height is rounded. Keep ink at the paper origin so cached page slices
+    // and source anchors survive resize without that extra letterbox offset.
+    if (alignOrigin) setAttributeIfChanged(roots.svg, 'preserveAspectRatio', 'xMinYMin');
     if (roots.circle) {
       const position = plan.positions[roots.cursorPage];
       setAttributeIfChanged(roots.circle, 'r', 500 / view.scale);
@@ -270,7 +407,7 @@
     if (!samePageRange(pageRange(target, 1), coverage)) return null;
     const roots = geometryRoots(doc, state);
     if (!roots) return null;
-    applyPaperLayout(state, view, plan, offsets, roots);
+    applyPaperLayout(state, view, plan, offsets, roots, true);
     doc.r.rescale();
     restorePartialZoomPoint(doc, state, point);
     const after = partialViewport(doc, state);
@@ -377,6 +514,7 @@
       nodeSVG: null, nodes: null, offsets: null, ellipses: [], offsetScale: 0, renderView: null, disposed: false, fullDirty: true };
     partialDocs.set(doc, state);
     const windowElem = doc.windowElem;
+    installRevealWindow(windowElem);
     if (typeof windowElem?.initTypstSvg === 'function' && !svgLinkWindows.has(windowElem)) {
       svgLinkWindows.add(windowElem);
       const initialize = windowElem.initTypstSvg, initializedLinks = new WeakSet();
@@ -427,6 +565,13 @@
     };
     const add = doc.addChangement;
     doc.addChangement = function(change, ...args) {
+      if (change[0] === 'new' || change[0] === 'diff-v1') {
+        if (sourceContextRequest?.doc === this) sourceContextRequest = null;
+        // scrollPreview also emits tiny diff-v1 cursor/span decorations after
+        // its jump. Retain the real page point through incremental patches;
+        // the next animation frame rebinds its geometry to the current SVG.
+        if (change[0] === 'new' && reveal?.doc === this) retireReveal(true, 'source-replacement');
+      }
       if (change[0] !== 'viewport-change') window.tiptoptypZoomSnapshot?.invalidate();
       if (!partialMode(this)) {
         if (fullMode(this) && (change[0] === 'new' || change[0] === 'diff-v1')) invalidateFullGeometry(state);
@@ -442,13 +587,17 @@
     };
     const reset = doc.reset;
     if (typeof reset === 'function') doc.reset = function(...args) {
-      window.tiptoptypZoomSnapshot?.invalidate();
+      if (sourceContextRequest?.doc === this) sourceContextRequest = null;
+      if (reveal?.doc === this) retireReveal(false, 'reset');
+      if (!window.tiptoptypZoomSnapshot?.retireDocument?.(this)) window.tiptoptypZoomSnapshot?.invalidate();
       if (partialMode(this)) { state.pages = null; state.coverage = null; state.offsets = null; }
       else if (fullMode(this)) invalidateFullGeometry(state);
       return reset.apply(this, args);
     };
     doc.disposeList?.push(() => {
-      window.tiptoptypZoomSnapshot?.invalidate();
+      if (sourceContextRequest?.doc === doc) sourceContextRequest = null;
+      if (reveal?.doc === doc) retireReveal(false, 'dispose');
+      if (!window.tiptoptypZoomSnapshot?.retireDocument?.(doc)) window.tiptoptypZoomSnapshot?.invalidate();
       state.disposed = true; cancelPartialFrame(state);
       if (partialMode(doc)) doc.isRendering = false;
     });
@@ -459,11 +608,20 @@
   const watchDocuments = values => {
     if (!Array.isArray(values) || watchedArrays.has(values)) return values;
     watchedArrays.add(values);
-    values.forEach(value => installPartialDocument(value.impl));
+    const identities = new Set();
+    let count = 0;
+    for (const value of values) {
+      if (identities.has(value.impl)) continue;
+      identities.add(value.impl); values[count++] = value; installPartialDocument(value.impl);
+    }
+    values.length = count;
     const push = values.push;
     values.push = function(...items) {
-      items.forEach(value => installPartialDocument(value.impl));
-      return push.apply(this, items);
+      for (const value of items) {
+        if (this.some(existing => existing.impl === value.impl)) continue;
+        installPartialDocument(value.impl); push.call(this, value);
+      }
+      return this.length;
     };
     return values;
   };
@@ -483,14 +641,99 @@
   }
   const documentRenderer = () => {
     const docs = document.getElementById('typst-container')?.documents;
-    if (docs?.length !== 1) return null;
+    if (!docs?.length) return null;
+    // Pinned Tinymist registers the same document again on socket reconnect.
+    // Accept one renderer identity; genuinely distinct documents stay ambiguous.
     const doc = docs[0].impl;
+    if (docs.some(value => value.impl !== doc)) return null;
     return doc?.moduleInitialized && doc.renderMode === 'svg' && doc.previewMode === 0 &&
       doc.hookedElem?.firstElementChild?.tagName.toLowerCase() === 'svg' &&
       typeof doc.retrieveDOMState === 'function' && typeof doc.r?.rescale === 'function'
       ? doc : null;
   };
+  // The pinned SVG frontend already owns point-to-source mapping. Keep only
+  // the context-menu request, then invoke that hook after the native choice;
+  // dispatching a click here would also follow document links.
+  let sourceContextToken = 0;
+  const sourceContextElement = (target, svg) => {
+    const element = target?.nodeType === 3 ? target.parentElement : target;
+    return element?.isConnected === true && svg?.contains?.(element) ? element : null;
+  };
+  const sourcePageGeometry = page => {
+    const pageNumber = page.getAttribute('data-page-number');
+    const number = Number(pageNumber);
+    const width = Number(page.getAttribute('data-page-width'));
+    const height = Number(page.getAttribute('data-page-height'));
+    const matrix = page.getScreenCTM?.();
+    if (pageNumber === null || pageNumber.trim() === '' || !Number.isSafeInteger(number) || number < 0 ||
+        !Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0 || !matrix) return null;
+    const geometry = [number, width, height, matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f];
+    return geometry.every(Number.isFinite) && matrix.a * matrix.d - matrix.b * matrix.c !== 0 ? geometry : null;
+  };
+  const sourcePageAtPoint = (svg, x, y) => {
+    for (const page of svg.children) {
+      if (page.tagName?.toLowerCase() !== 'g' || !page.classList?.contains('typst-page')) continue;
+      const geometry = sourcePageGeometry(page);
+      if (!geometry) continue;
+      const [, width, height, a, b, c, d, e, f] = geometry;
+      const determinant = a * d - b * c;
+      const localX = (d * (x - e) - c * (y - f)) / determinant;
+      const localY = (a * (y - f) - b * (x - e)) / determinant;
+      if (localX < 0 || localY < 0 || localX > width || localY > height) continue;
+      return page.getAttribute('data-dummy') === '1' ? null : { page, geometry };
+    }
+    return null;
+  };
+  const sourceContextGeometry = doc => {
+    const scroll = doc.hookedElem.parentElement;
+    return [doc.currentScaleRatio, scroll?.clientWidth, scroll?.clientHeight, scroll?.scrollLeft, scroll?.scrollTop];
+  };
+  window.tiptoptypRevealSource = token => {
+    if (!Number.isSafeInteger(token) || token !== sourceContextRequest?.token) return false;
+    const request = sourceContextRequest;
+    sourceContextRequest = null;
+    const doc = documentRenderer();
+    if (doc !== request.doc || doc.hookedElem !== request.hook ||
+        doc.hookedElem.firstElementChild !== request.svg || request.svg.isConnected !== true ||
+        doc.hookedElem.sourceMappingHandler !== request.handler ||
+        !sourceContextGeometry(doc).every((value, index) => value === request.geometry[index])) return false;
+    const resolved = sourcePageAtPoint(request.svg, request.x, request.y);
+    if (resolved?.page !== request.page ||
+        !resolved.geometry.every((value, index) => value === request.pageGeometry[index])) return false;
+    try {
+      const pending = request.handler.call(request.hook, {
+        target: request.page, clientX: request.x, clientY: request.y,
+      });
+      // Its socket may close after admission; never leave a rejected async
+      // source-map request as an unhandled page error.
+      pending?.catch?.(() => {});
+      return true;
+    } catch (_) { return false; }
+  };
+  document.addEventListener('contextmenu', event => {
+    sourceContextRequest = null;
+    const { clientX: x, clientY: y } = event;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 ||
+        typeof window.ipc?.postMessage !== 'function') return;
+    const doc = documentRenderer();
+    const hook = doc?.hookedElem, svg = hook?.firstElementChild;
+    if (!sourceContextElement(event.target, svg) || svg.isConnected !== true ||
+        typeof hook?.sourceMappingHandler !== 'function' || sourceContextToken >= Number.MAX_SAFE_INTEGER) return;
+    // WebKit can retain an old page as the hit-test target after a programmatic
+    // scroll. Resolve the current paper under the point instead of that target.
+    const resolved = sourcePageAtPoint(svg, x, y);
+    if (!resolved) return;
+    const geometry = sourceContextGeometry(doc);
+    if (!geometry.every(Number.isFinite)) return;
+    const token = ++sourceContextToken;
+    sourceContextRequest = { token, doc, hook, svg, page: resolved.page, pageGeometry: resolved.geometry,
+      handler: hook.sourceMappingHandler, geometry, x, y };
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    window.ipc.postMessage(JSON.stringify({ type: 'preview-context-menu', token, x, y }));
+  }, true);
   const prepare = doc => {
+    installRevealWindow(doc.windowElem);
     if (prepared.has(doc)) return;
     prepared.add(doc);
     // Tinymist rescales before, during, and after a viewport render. Only the
@@ -530,7 +773,14 @@
       const input = pending;
       pending = null;
       const doc = documentRenderer();
-      if (!doc || doc !== input.doc) return;
+      if (!doc || doc !== input.doc) {
+        // Acceptance is not completion: a reset/disposal can remove this owner
+        // between the native script and its queued frame. Terminate the serial
+        // request so the next initialized renderer can accept input again.
+        if (Number.isSafeInteger(input.nativeRevision)) window.tiptoptypZoomSnapshot?.abandon(input.nativeRevision);
+        return;
+      }
+      if (Number.isSafeInteger(input.nativeRevision) && window.tiptoptypZoomSnapshot?.owns?.(input.nativeRevision, doc) === false) return;
       doc.cachedDOMState = doc.retrieveDOMState();
       const scroll = doc.hookedElem.parentElement;
       let zoomPoint = input.source ?? null, deferredView = null;
@@ -603,12 +853,13 @@
   };
   window.tiptoptypNativeZoom = request => {
     const doc = documentRenderer();
-    if (!doc || !window.tiptoptypZoomSnapshot?.native(request)) return false;
+    if (!doc || !window.tiptoptypZoomSnapshot?.native(request, doc)) return false;
     enqueue(doc, input => {
       input.scale = Math.min(10, Math.max(0.1, request.scale));
       input.zoom = !request.resize; input.resize = !!request.resize; input.x = request.x; input.y = request.y;
       input.scroll = request.scroll; input.source = request.source;
       input.panX = request.panX; input.panY = request.panY;
+      input.nativeRevision = request.revision;
     });
     return true;
   };
@@ -762,10 +1013,13 @@
       geometry: { paper:[paper.left,paper.top,paper.width,paper.height], viewport:[viewport.left,viewport.top,scroll.clientWidth,scroll.clientHeight],
         view:[window.innerWidth ?? scroll.clientWidth,window.innerHeight ?? scroll.clientHeight], scroll:[scroll.scrollLeft,scroll.scrollTop],
         source_scale:piecewise ? state.offsetScale : 0,
+        content_size:piecewise ? [state.pages.width,state.pages.height] : [0,0],
+        pixel_rounded:piecewise && fullMode(doc),
         pages:piecewise ? state.snapshotPages : [] },
       width: window.innerWidth ?? scroll.clientWidth, height: window.innerHeight ?? scroll.clientHeight,
       fitWidth: doc.cachedDOMState.width, x: 0, y: 0, left: scroll.scrollLeft, top: scroll.scrollTop,
       ready: doc.moduleInitialized && !doc.isRendering && !doc.patchQueue.length && !pending &&
+        doc.cachedDOMState.width === scroll.clientWidth &&
         (!partialMode(doc) || (state?.coverage?.svg === svg &&
           Math.abs(state.coverage.scale - doc.cachedDOMState.width / (state.pages?.width || 1) * doc.currentScaleRatio) < 1e-6)) };
   });
@@ -786,6 +1040,7 @@
       const doc = documentRenderer();
       if (doc && Number.isFinite(value?.page) && Number.isFinite(value?.x) && Number.isFinite(value?.y)) {
         prepareHistory();
+        window.tiptoptypPreviewRevealIntent(true);
         doc.windowElem.handleTypstLocation?.(doc.hookedElem.firstElementChild,value.page+1,value.x,value.y);
         requestPartialViewport(doc, true);
       }
@@ -801,6 +1056,21 @@
   };
   let palette = [[255,255,255],[0,0,0]];
   let borders = ['1px solid transparent', '1px solid transparent'];
+  let accent = [0,0,0];
+  const applyAccent = () => {
+    document.documentElement.style.setProperty('--tiptoptyp-reveal-accent', `rgb(${accent.join(',')})`);
+    document.documentElement.style.setProperty('--tiptoptyp-reveal-wash', `rgba(${accent.join(',')},0.2)`);
+  };
+  const applyBorders = () => {
+    document.documentElement.style.setProperty('--tiptoptyp-hover-border', borders[0]);
+    document.documentElement.style.setProperty('--tiptoptyp-focus-border', borders[1]);
+  };
+  let hovering=false;
+  const reportOutline=()=>{
+    const stroke=document.hasFocus()?borders[1]:hovering?borders[0]:'';
+    const match=(stroke??'').match(/^([\d.]+)px solid rgba\(([^)]+)\)$/);
+    window.tiptoptypZoomSnapshot?.outline?.(match?Number(match[1]):0,match?match[2].split(',').map(Number):[0,0,0,0]);
+  };
   let filter;
   const applyPalette = () => {
     if (!document.body) return;
@@ -830,13 +1100,24 @@
     });
     document.documentElement.style.setProperty('--tiptoptyp-paper', `rgb(${bg.join(',')})`);
     document.documentElement.style.setProperty('--tiptoptyp-ink', `rgb(${fg.join(',')})`);
-    document.documentElement.style.setProperty('--tiptoptyp-hover-border', borders[0]);
-    document.documentElement.style.setProperty('--tiptoptyp-focus-border', borders[1]);
+    applyBorders(); applyAccent();
   };
-  window.tiptoptypSetPalette = (bg,fg,hover,focus) => {
-    if (JSON.stringify(palette) !== JSON.stringify([bg,fg])) window.tiptoptypZoomSnapshot?.invalidate();
-    palette = [bg,fg]; borders = [hover,focus]; applyPalette();
-    window.tiptoptypZoomSnapshot?.settle();
+  window.tiptoptypSetPalette = (bg,fg,hover,focus,nextAccent) => {
+    const equal = (left,right) => left.every((channel,index) => channel === right[index]);
+    const paperChanged = !equal(palette[0],bg) || !equal(palette[1],fg);
+    const bordersChanged = borders[0] !== hover || borders[1] !== focus;
+    const accentChanged = !equal(accent,nextAccent);
+    if (!paperChanged && !bordersChanged && !accentChanged) return;
+    palette = [bg,fg]; borders = [hover,focus]; accent = nextAccent;
+    if (paperChanged) {
+      window.tiptoptypZoomSnapshot?.invalidate();
+      applyPalette();
+    } else {
+      if (bordersChanged) applyBorders();
+      if (accentChanged) applyAccent();
+    }
+    if (bordersChanged) reportOutline();
+    if (paperChanged || bordersChanged) window.tiptoptypZoomSnapshot?.settle();
   };
   const mount = () => {
     const style = document.createElement('style');
@@ -849,6 +1130,25 @@
         border: var(--tiptoptyp-hover-border);
       }
       html.tiptoptyp-preview-focused::before { border: var(--tiptoptyp-focus-border); }
+      /* Preserve the pinned ripple's animationend cleanup, while replacing its
+         subtle teal ring with our explicit-navigation-only destination cue. */
+      .typst-jump-ripple { visibility: hidden !important; pointer-events: none !important; }
+      .tiptoptyp-reveal-beacon { position: fixed; width: 0; height: 0; z-index: 2147483645; pointer-events: none; color: var(--tiptoptyp-reveal-accent); }
+      .tiptoptyp-reveal-beacon span { position: absolute; box-sizing: border-box; pointer-events: none; }
+      .tiptoptyp-reveal-halo { width: 34px; height: 34px; left: -17px; top: -17px; border-radius: 50%;
+        border: 2px solid #fff; box-shadow: 0 0 0 2px #171717, inset 0 0 0 2px #171717;
+        background: var(--tiptoptyp-reveal-wash); animation: tiptoptyp-reveal-center 900ms ease-out both; }
+      .tiptoptyp-reveal-ring { width: 18px; height: 18px; left: 0; top: 0; transform: translate(-50%, -50%); border: 3px solid currentColor; border-radius: 50%;
+        box-shadow: 0 0 0 1px #171717, inset 0 0 0 1px #fff; animation: tiptoptyp-reveal-ring 900ms ease-out both; }
+      .tiptoptyp-reveal-second { animation-duration: 740ms; animation-delay: 160ms; }
+      .tiptoptyp-reveal-center { width: 20px; height: 20px; left: -10px; top: -10px;
+        animation: tiptoptyp-reveal-center 900ms ease-out both; }
+      .tiptoptyp-reveal-center::before, .tiptoptyp-reveal-center::after { content: ''; position: absolute; background: currentColor;
+        box-shadow: 0 0 0 1px #171717, 0 0 0 2px #fff; border-radius: 1px; }
+      .tiptoptyp-reveal-center::before { width: 20px; height: 2px; left: 0; top: 9px; }
+      .tiptoptyp-reveal-center::after { width: 2px; height: 20px; left: 9px; top: 0; }
+      @keyframes tiptoptyp-reveal-ring { from { width: 18px; height: 18px; opacity: 1; } to { width: 126px; height: 126px; opacity: 0; } }
+      @keyframes tiptoptyp-reveal-center { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }
       #typst-container-top { display: none !important; }
       body { background: var(--tiptoptyp-paper) !important; }
       #typst-container .typst-page-inner { fill: var(--tiptoptyp-paper); }
@@ -856,7 +1156,9 @@
     `;
     document.head.append(style);
     applyPalette();
-    updateControls();
+    document.documentElement?.addEventListener?.('mouseenter',()=>{hovering=true;reportOutline();});
+    document.documentElement?.addEventListener?.('mouseleave',()=>{hovering=false;reportOutline();});
+    reportOutline(); updateControls();
     const container = document.getElementById('typst-container');
     if (container) new MutationObserver(() => {
       // Mutations during our zoom are the live patch being covered. Source
@@ -889,8 +1191,8 @@
     updateControls(partialView);
   };
   window.addEventListener('tiptoptyp-preview-zoom', event => command(event.detail));
-  window.addEventListener('focus', updateControls);
-  window.addEventListener('blur', updateControls);
+  window.addEventListener('focus',()=>{reportOutline();updateControls();});
+  window.addEventListener('blur',()=>{reportOutline();updateControls();});
   window.addEventListener('keydown', event => {
     if (!document.hasFocus()) return;
     if (event.key === 'Escape') {

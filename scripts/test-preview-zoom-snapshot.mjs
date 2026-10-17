@@ -20,13 +20,14 @@ function fixture({ provider = true, ready = true, density = 2 } = {}) {
   const cache = window.tiptoptypZoomSnapshot;
   cache.attach(() => ({ ...current })); cache.configure(true);
   const tick = () => { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()); };
-  const paint = () => { const callbacks = frames.splice(0); callbacks.forEach(fn => fn()); };
+  const nextFrame = () => { const callbacks = frames.splice(0); callbacks.forEach(fn => fn()); };
+  const paint = () => { nextFrame(); nextFrame(); };
   const captures = () => messages.filter(value => value.op === 'capture');
   const admit = (request = captures().at(-1), result = { width: 2239, height: 1742 }) => {
     cache.resolve(request.token, result);
     if (cache.inspect().admitting) cache.admitted(request.token, true);
   };
-  return { cache, current, svg, doc, messages, timers, frames, tick, paint, admit, captures };
+  return { cache, current, svg, doc, messages, timers, frames, tick, paint, nextFrame, admit, captures, window };
 }
 
 test('idle capture is bounded and admits only metadata; no decoding, DOM overlay or idle RAF', () => {
@@ -102,8 +103,8 @@ test('buffered capture includes its opaque palette and keeps the physical pixel 
 test('native divider resize cancels idle capture and retains pixels until its acknowledged sharp frame',()=>{
   const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
   f.current.width=800;assert.equal(f.cache.resize(),true);assert.equal(f.messages.at(-1).op,'resize');
-  f.cache.rendered();f.tick();assert.equal(f.captures().length,1);assert.equal(f.cache.inspect().active,true);
-  f.current.width=800;f.cache.native({token,revision:1,scale:1,resize:true});f.cache.rendered();f.paint();
+  f.current.ready=false;f.cache.rendered();f.tick();assert.equal(f.captures().length,1);assert.equal(f.cache.inspect().active,false);
+  f.current.ready=true;f.current.width=800;f.cache.native({token,revision:1,scale:1,resize:true});f.cache.rendered();f.paint();
   assert.equal(f.messages.filter(m=>m.op==='ready').at(-1).revision,1);
   assert.equal(f.cache.inspect().active,false);
 });
@@ -275,5 +276,175 @@ test('a delayed resize for the acknowledged viewport does not create an ownerles
   assert.equal(f.cache.inspect().active,false);
   f.tick();assert.equal(f.captures().length,2,'idle refresh must still run');
   f.current.width=700;assert.equal(f.cache.resize(),true);
-  assert.equal(f.cache.inspect().active,true,'a changed viewport still owns real resizing');
+  assert.equal(f.cache.inspect().active,false,'only a dispatched native request owns resizing');
+});
+
+
+test('a scroll notification without movement keeps the idle raster',()=>{
+  const f=fixture();f.tick();f.admit();f.cache.scrolled();assert.equal(f.cache.inspect().cached,true);
+  assert.equal(f.cache.inspect().active,false);
+});
+test('resize-induced scroll arriving before resize retains the native anchor and raster',()=>{
+  const f=fixture();f.tick();f.admit();f.current.width=500;f.current.top=80;f.cache.scrolled();
+  assert.equal(f.cache.inspect().cached,true);assert.equal(f.cache.inspect().active,false);
+  assert.equal(f.messages.at(-1).op,'resize');
+  const token=f.captures()[0].token;f.cache.native({token,revision:1,scale:1});f.cache.rendered();f.paint();
+  assert.equal(f.cache.inspect().active,false);assert.equal(f.cache.inspect().cached,true);
+  f.current.top=100;f.cache.scrolled();assert.equal(f.cache.inspect().cached,false);
+});
+
+test('WebKit rubber-band scroll origins are never admitted as idle captures',()=>{
+  const f=fixture();f.current.geometry={paper:[0,2,900,2000],scroll:[0,-2],pages:[]};f.tick();
+  assert.equal(f.captures().length,0);
+  f.current.geometry={paper:[0,0,900,2000],scroll:[0,0],pages:[]};f.cache.rendered();f.tick();
+  assert.equal(f.captures().length,1);
+});
+
+test('same-position scroll from another document still discards obsolete pixels',()=>{
+  const f=fixture();f.tick();f.admit();f.current.doc={};f.current.width=500;f.cache.scrolled();
+  assert.equal(f.cache.inspect().cached,false);assert.equal(f.cache.inspect().active,false);
+});
+
+test('a former document handoff cannot suppress scroll invalidation in a new document',()=>{
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:1,scale:1});f.cache.rendered();f.paint();
+  f.current.doc={};f.cache.scrolled();assert.equal(f.cache.inspect().cached,false);
+});
+
+test('the outline is separate from opaque image coverage and posts only when it changes',()=>{
+  const f=fixture();f.cache.outline(2,[255,128,0,1]);
+  const first=f.messages.filter(m=>m.op==='outline').length;
+  for(let i=0;i<50;i++)f.cache.outline(2,[255,128,0,1]);
+  assert.equal(f.messages.filter(m=>m.op==='outline').length,first);
+  f.cache.outline(0,[0,0,0,0]);assert.equal(f.messages.at(-1).width,0);
+  f.cache.configure(false);f.cache.outline(1,[1,2,3,1]);f.cache.configure(true);
+  assert.equal(f.messages.filter(m=>m.op==='outline').at(-1).width,1);
+});
+
+test('cached pixels survive the first frame before the latest vector is presented',()=>{
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:1,scale:1.2});f.current.scale=1.2;f.cache.rendered();
+  const callbacks=f.frames.splice(0);callbacks.forEach(fn=>fn());
+  assert.equal(f.cache.inspect().active,true,'ready was sent before a completed paint opportunity');
+  assert.equal(f.messages.filter(m=>m.op==='ready').length,0);
+});
+
+test('resize completion waits for live renderer readiness even when zoom scale is unchanged',()=>{
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:1,scale:1});f.current.width=800;f.current.ready=false;
+  f.cache.rendered();f.paint();assert.equal(f.cache.inspect().active,true);assert.equal(f.frames.length,0);
+  f.current.fitWidth=780;f.current.ready=true;f.cache.rendered();f.paint();assert.equal(f.cache.inspect().active,false);
+});
+test('geometry movement between paint boundaries retains the cache until stable',()=>{
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:1,scale:1.2});f.current.scale=1.2;f.cache.rendered();f.nextFrame();
+  f.current.top+=20;f.nextFrame();assert.equal(f.cache.inspect().active,true);
+  assert.equal(f.messages.filter(m=>m.op==='ready').length,0);assert.equal(f.frames.length,1);
+  f.paint();assert.equal(f.cache.inspect().handoffs,1);assert.equal(f.frames.length,0);
+});
+test('new divider direction during the paint boundary cannot reveal the previous zoom',()=>{
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:1,scale:1});f.current.fitWidth=780;f.cache.rendered();f.nextFrame();
+  f.cache.native({token,revision:2,scale:1});f.nextFrame();
+  assert.equal(f.messages.filter(m=>m.op==='ready').length,0);assert.equal(f.cache.inspect().active,true);
+  f.current.fitWidth=900;f.cache.rendered();f.paint();assert.equal(f.messages.filter(m=>m.op==='ready').at(-1).revision,2);
+});
+test('capture uses the live opaque backdrop even if an oversized SVG falls back to viewport capture',()=>{
+  for(const buffered of [false,true]){
+    const f=fixture();f.window.tiptoptypSnapshotBackdrop=()=>[82,86,89,1];
+    if(buffered)f.window.tiptoptypSnapshotBuffer=()=>({width:1800,height:2100,paperBackground:[82,86,89,1]});
+    f.current.background=[24,31,42];f.tick();assert.deepEqual(Array.from(f.captures()[0].background),[82,86,89]);
+  }
+});
+
+test('a second divider size and a source update cannot trap a ready serial flight at its former width',()=>{
+  for (const sourceEdit of [false,true]) {
+    const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+    f.cache.native({token,revision:1,scale:1,resize:true});
+    f.current.width=750;f.current.fitWidth=730;
+    if(sourceEdit)f.cache.invalidate();
+    for(let i=0;i<100;i++){f.cache.rendered();f.paint();}
+    assert.equal(f.messages.filter(m=>m.op==='ready').length,1,'old fitted width deadlocked the serial flight');
+    assert.equal(f.cache.inspect().active,false);
+  }
+});
+test('a resize notification alone cannot become an ownerless active zoom',()=>{
+  const f=fixture();f.tick();f.admit();f.current.width=800;f.current.fitWidth=780;
+  f.cache.resize();f.cache.rendered();f.paint();
+  assert.equal(f.cache.inspect().active,false,'native may no-op an already applied resize');
+});
+
+test('a rejected native request retires its owner and publishes fresh readiness without restart',()=>{
+  const f=fixture();f.tick();f.admit();f.cache.native({token:f.captures()[0].token,revision:1,scale:1.2});
+  f.current.scale=1.2;f.cache.rendered();f.nextFrame();
+  assert.equal(f.cache.rejected(1),true);f.paint();
+  assert.equal(f.cache.inspect().active,false);assert.equal(f.cache.inspect().cached,false);
+  assert.equal(f.messages.filter(m=>m.op==='ready').length,0);assert.equal(f.messages.at(-1).op,'frame');
+  f.tick();f.admit();assert.equal(f.cache.inspect().cached,true);
+  f.cache.native({token:f.captures().at(-1).token,revision:2,scale:1.3});f.current.scale=1.3;f.cache.rendered();f.paint();
+  assert.equal(f.cache.inspect().handoffs,1);
+});
+test('a late rejection cannot cancel a newer native owner',()=>{
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:2,scale:1.3});assert.equal(f.cache.rejected(1),false);
+  assert.equal(f.cache.inspect().active,true);f.current.scale=1.3;f.cache.rendered();f.paint();assert.equal(f.cache.inspect().handoffs,1);
+});
+
+test('native rejection never echoes an unversioned abort into a potentially newer native flight',()=>{
+  const f=fixture();f.tick();f.admit();f.cache.native({token:f.captures()[0].token,revision:1,scale:1.2});
+  const before=f.messages.filter(m=>m.op==='invalidate').length;f.cache.rejected(1);
+  assert.equal(f.messages.filter(m=>m.op==='invalidate').length,before);
+});
+test('abandon terminates only the matching serial owner and locally releases its stale image',()=>{
+  const f=fixture();f.tick();f.admit();f.cache.native({token:f.captures()[0].token,revision:2,scale:1.2});
+  assert.equal(f.cache.abandon(1),false);assert.equal(f.cache.inspect().active,true);
+  assert.equal(f.cache.abandon(2),true);assert.equal(f.cache.inspect().active,false);
+  assert.deepEqual(f.messages.filter(m=>m.op==='abandon').map(m=>m.revision),[2]);
+  assert.equal(f.messages.filter(m=>m.op==='invalidate').length,1,'abandon must use its versioned native terminal message');
+});
+
+for (const atPaintBoundary of [false,true]) test(`renderer replacement ${atPaintBoundary?'during':'before'} sharp painting terminates the old serial owner`,()=>{
+  const f=fixture();f.tick();f.admit();f.cache.native({token:f.captures()[0].token,revision:4,scale:1.2});
+  f.current.scale=1.2;f.cache.rendered();if(atPaintBoundary)f.nextFrame();
+  f.current.doc={};f.current.scale=1;f.cache.invalidate();
+  for(let i=0;i<100;i++){f.cache.rendered();f.paint();}
+  assert.equal(f.cache.inspect().active,false);assert.deepEqual(f.messages.filter(m=>m.op==='abandon').map(m=>m.revision),[4]);
+});
+
+test('reset and disposal retire only the document owning the unacknowledged native flight',()=>{
+  const f=fixture();f.tick();f.admit();f.cache.native({token:f.captures()[0].token,revision:5,scale:1.2});
+  assert.equal(f.cache.retireDocument({}),false);assert.equal(f.cache.inspect().active,true);
+  assert.equal(f.cache.retireDocument(f.doc),true);assert.equal(f.cache.inspect().active,false);
+  assert.deepEqual(f.messages.filter(m=>m.op==='abandon').map(m=>m.revision),[5]);
+});
+
+test('same-scale renderer replacement between paint callbacks cannot acknowledge an old document',()=>{
+  const f=fixture();f.tick();f.admit();f.cache.native({token:f.captures()[0].token,revision:6,scale:1.2});
+  f.current.scale=1.2;f.cache.rendered();f.nextFrame();f.current.doc={};f.nextFrame();
+  assert.equal(f.cache.inspect().active,false);assert.equal(f.messages.filter(m=>m.op==='ready').length,0);
+  assert.deepEqual(f.messages.filter(m=>m.op==='abandon').map(m=>m.revision),[6]);
+});
+
+
+test('pending and visible reveal beacons never enter the persistent zoom cache', () => {
+  const f = fixture();
+  let revealing = true;
+  f.window.tiptoptypPreviewRevealActive = () => revealing;
+  f.tick();
+  assert.equal(f.captures().length, 0);
+  for (let i = 0; i < 100; i++) f.cache.settle();
+  assert.equal(f.timers.size, 0);
+  revealing = false; f.cache.settle(); f.tick();
+  const capture = f.captures().at(-1);
+  revealing = true; f.admit(capture);
+  assert.equal(f.cache.inspect().cached, false);
+  assert.equal(f.timers.size, 0);
+  revealing = false; f.cache.settle(); f.tick();
+  const next = f.captures().at(-1);
+  f.cache.resolve(next.token, {width: 1800, height: 1400});
+  revealing = true; f.cache.admitted(next.token, true);
+  assert.equal(f.cache.inspect().cached, false);
+  revealing = false; f.cache.settle(); f.tick(); f.admit();
+  assert.equal(f.cache.inspect().cached, true);
+  assert.equal(f.frames.length, 0);
 });

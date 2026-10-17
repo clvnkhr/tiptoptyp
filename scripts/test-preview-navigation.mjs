@@ -60,6 +60,7 @@ function fixture() {
     setFocus(value) { focused = value; },
     styles, properties, activeClasses, body, palette: (...args) => window.tiptoptypSetPalette(...args),
     doc, scroll, frames, container, messages, action: value => window.tiptoptypPreviewAction(value),
+    revealSource: token => window.tiptoptypRevealSource(token),
     get rescales() { return rescales; }, get clearedAnchors() { return clearedAnchors; },
     get demands() { return demands; },
     flush() { frames.splice(0).forEach(f => f()); },
@@ -184,16 +185,28 @@ test('preview hotkeys require keyboard focus, and Escape returns to the editor',
   assert.equal(f.frames.length, 0);
 });
 
+test('an initially unchanged native palette is applied when the preview DOM mounts', () => {
+  const f=fixture();
+  f.palette([255,255,255],[0,0,0],'1px solid transparent','1px solid transparent',[0,0,0]);
+  assert.equal(f.properties.size,0);
+  f.event('DOMContentLoaded');
+  assert.equal(f.properties.get('--tiptoptyp-paper'),'rgb(255,255,255)');
+  assert.equal(f.properties.get('--tiptoptyp-focus-border'),'1px solid transparent');
+  assert.equal(f.properties.get('--tiptoptyp-reveal-accent'),'rgb(0,0,0)');
+  assert.equal(f.properties.get('--tiptoptyp-reveal-wash'),'rgba(0,0,0,0.2)');
+  assert.equal(f.frames.length,0);
+});
+
 test('preview focus uses a theme border, never a badge, with no layout or pointer interception', () => {
   const f = fixture();
-  f.palette([255,255,255], [0,0,0], '1px solid rgba(1,2,3,1)', '2px solid rgba(4,5,6,1)');
+  f.palette([255,255,255], [0,0,0], '1px solid rgba(1,2,3,1)', '2px solid rgba(4,5,6,1)', [79,140,255]);
   f.event('DOMContentLoaded');
   assert.equal(f.properties.get('--tiptoptyp-hover-border'), '1px solid rgba(1,2,3,1)');
-  assert.equal(f.properties.get('--tiptoptyp-focus-border'), '2px solid rgba(4,5,6,1)');
+  assert.equal(f.properties.get('--tiptoptyp-focus-border'), '2px solid rgba(4,5,6,1)', [79,140,255]);
   assert.match(f.styles[0], /html:hover::before/);
   assert.match(f.styles[0], /position: fixed/);
   assert.match(f.styles[0], /pointer-events: none/);
-  assert.doesNotMatch(f.styles[0], /Preview focused|::after/);
+  assert.doesNotMatch(f.styles[0], /Preview focused|html[^{}]*::after/);
   assert.ok(f.activeClasses.has('tiptoptyp-preview-focused'));
   f.setFocus(false); f.event('blur');
   assert.ok(!f.activeClasses.has('tiptoptyp-preview-focused'));
@@ -206,7 +219,7 @@ test('preview focus uses a theme border, never a badge, with no layout or pointe
 // The first document is pushed before the socket enables partial rendering.
 function partialFixture({ pages = Array.from({length:48}, () => ({width:600, height:300})), startup = true, partial = true, lateContainer = false, initializeLinks = null, decorated = false, configure = null, zoomSnapshot = null, layoutHook = null } = {}) {
   const handlers = new Map(), frames = new Map(), windows = [], merges = [], errors = [];
-  let nextFrame = 1, canvasPages = 0, postRenders = 0, layouts = 0, reads = 0, timeouts = 0, rectReads = 0, domReads = 0, cursorSearches = 0;
+  let nextFrame = 1, now = 0, canvasPages = 0, postRenders = 0, layouts = 0, reads = 0, timeouts = 0, rectReads = 0, domReads = 0, cursorSearches = 0;
   const classes = {toggle() {}, contains: name => name === 'typst-page'};
   const scroll = {clientWidth:600, clientHeight:300, scrollTop:0, scrollLeft:0, classList:classes,
     getBoundingClientRect() { rectReads++; return {left:23, top:37, bottom:37+this.clientHeight}; },
@@ -269,7 +282,7 @@ function partialFixture({ pages = Array.from({length:48}, () => ({width:600, hei
       const dummy=moduleY+sourcePage.height<=bounds[1]||moduleY>=bounds[3], transform=`translate(${x}, ${top})`;
       const node=svgNode('g',{'data-page-width':page.width,'data-page-height':page.height,'data-page-number':index,
         'data-x':x,'data-y':top,'data-dummy':dummy?'1':'0',transform},'typst-page');
-      node.getScreenCTM=()=>({a:scale(),d:scale(),e:23-scroll.scrollLeft+x*scale(),f:37-scroll.scrollTop+Number(node.getAttribute('data-y'))*scale()});
+      node.getScreenCTM=()=>({a:scale(),b:0,c:0,d:scale(),e:23-scroll.scrollLeft+x*scale(),f:37-scroll.scrollTop+Number(node.getAttribute('data-y'))*scale()});
       append(node);
       if(decorated) {
         append(svgNode('rect',{'data-page-number':index,'data-page-width':page.width,'data-page-height':page.height,
@@ -294,20 +307,31 @@ function partialFixture({ pages = Array.from({length:48}, () => ({width:600, hei
   const observers=[];
   const requestAnimationFrame=callback=>{const id=nextFrame++;frames.set(id,callback);return id;};
   const cancelAnimationFrame=id=>frames.delete(id);
-  const element=()=>({style:{setProperty() {}},children:[],setAttribute(){},append(child){this.children.push(child);},get firstElementChild(){return this.children[0];}});
-  const window={addEventListener:(name,handler)=>handlers.set(name,handler),ipc:{postMessage(){}},tiptoptypZoomSnapshot:zoomSnapshot};
+  const properties=new Map();let propertyWrites=0;
+  const element=()=>({style:{setProperty(name,value) {propertyWrites++;properties.set(name,value);}},children:[],setAttribute(){},append(child){child.parentElement=this;this.children.push(child);},
+    remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);},
+    get firstElementChild(){return this.children[0];}});
+  const body=element(),head=element();
+  const messages=[];
+  const window={innerWidth:646,innerHeight:374,addEventListener:(name,handler)=>handlers.set(name,handler),ipc:{postMessage:value=>messages.push(JSON.parse(value))},tiptoptypZoomSnapshot:zoomSnapshot};
   runInNewContext(source,{window,
-    document:{getElementById:()=>availableContainer,readyState:'loading',hasFocus:()=>true,documentElement:{...element(),classList:classes},body:element(),head:element(),
+    document:{getElementById:()=>availableContainer,readyState:'loading',hasFocus:()=>true,documentElement:{...element(),classList:classes},body,head,
       createElement:element,createElementNS:element,addEventListener:(name,handler)=>handlers.set(name,handler)},
     MutationObserver:class {constructor(callback){observers.push(callback);}observe(){}disconnect(){observerDisconnects++;}},
-    requestAnimationFrame,cancelAnimationFrame,performance:{now:()=>0},
+    requestAnimationFrame,cancelAnimationFrame,performance:{now:()=>now},
     setTimeout(){timeouts++;return timeouts;},clearTimeout(){},console:{error:e=>errors.push(e),log(){}}});
   if(lateContainer) {availableContainer=container;observers.forEach(callback=>callback());}
   container.documents=[]; // Assignment in the frontend's module initialization.
   container.documents.push({impl:doc,setPartialRendering(value){doc.partialRendering=value;}});
   doc.partialRendering=partial;
   if(!startup)patch([0,0,600,600]);
-  return {doc,scroll,windows,merges,errors,frames,container,
+  return {doc,scroll,windows,merges,errors,frames,container,messages,body,head,properties,
+    palette:(...args)=>window.tiptoptypSetPalette(...args),get propertyWrites(){return propertyWrites;},
+    advance(ms){now+=ms;},
+    revealIntent:explicit=>window.tiptoptypPreviewRevealIntent(explicit),
+    revealActive:()=>window.tiptoptypPreviewRevealActive(),
+    revealState:()=>JSON.parse(JSON.stringify(window.tiptoptypPreviewRevealState())),
+    revealSource:token=>window.tiptoptypRevealSource(token),
     resetGeometryReads(){rectReads=0;domReads=0;},get rectReads(){return rectReads;},get domReads(){return domReads;},
     get cursorSearches(){return cursorSearches;},get observerDisconnects(){return observerDisconnects;},get canvasPages(){return canvasPages;},get layouts(){return layouts;},get reads(){return reads;},get timeouts(){return timeouts;},get postRenders(){return postRenders;},
     start(){doc.addChangement(['new',pages]);},
@@ -511,19 +535,19 @@ test('full and partial identity palettes bypass filtering while tinted and inver
     assert.match(f.styles[0], /#typst-container g\[data-page-width\] \{ filter: var\(--tiptoptyp-preview-filter, url\(#tiptoptyp-palette\)\); \}/);
     assert.doesNotMatch(f.styles[0], /tiptoptyp-partial-filter/);
     const channels=f.body.children[0].children[0].children[0].children;
-    const bg=[24,31,42],fg=[200,210,220];f.palette(bg,fg);
+    const bg=[24,31,42],fg=[200,210,220];f.palette(bg,fg,'1px solid transparent','1px solid transparent',[79,140,255]);
     assert.equal(f.properties.get('--tiptoptyp-preview-filter'),'url(#tiptoptyp-palette)');
     channels.forEach((channel,index)=>{
       assert.equal(channel.getAttribute('slope'),String((bg[index]-fg[index])/255));
       assert.equal(channel.getAttribute('intercept'),String(fg[index]/255));
     });
-    f.palette([0,0,0],[255,255,255]);
+    f.palette([0,0,0],[255,255,255],'1px solid transparent','1px solid transparent',[79,140,255]);
     assert.equal(f.properties.get('--tiptoptyp-preview-filter'),'url(#tiptoptyp-palette)');
     channels.forEach(channel=>{assert.equal(channel.getAttribute('slope'),'-1');assert.equal(channel.getAttribute('intercept'),'1');});
     for(const [bg,fg]of[[[254,255,255],[0,0,0]],[[255,255,255],[0,0,1]]]) {
-      f.palette(bg,fg);assert.equal(f.properties.get('--tiptoptyp-preview-filter'),'url(#tiptoptyp-palette)');
+      f.palette(bg,fg,'1px solid transparent','1px solid transparent',[79,140,255]);assert.equal(f.properties.get('--tiptoptyp-preview-filter'),'url(#tiptoptyp-palette)');
     }
-    f.palette([255,255,255],[0,0,0]);assert.equal(f.properties.get('--tiptoptyp-preview-filter'),'none');
+    f.palette([255,255,255],[0,0,0],'1px solid transparent','1px solid transparent',[79,140,255]);assert.equal(f.properties.get('--tiptoptyp-preview-filter'),'none');
     channels.forEach(channel=>{assert.equal(channel.getAttribute('slope'),'1');assert.equal(channel.getAttribute('intercept'),'0');});
     assert.equal(f.doc.partialRendering,partial);assert.equal(f.frames.length,0);
   }
@@ -1153,4 +1177,606 @@ test('full source projection permits finite page-local coordinates outside the p
     assert.ok(Math.abs(matrix.f + local * matrix.d - 137) < 1e-8);
   }
   assert.deepEqual(f.errors, []);
+});
+
+for (const partial of [false, true]) test(`${partial ? 'partial' : 'full'} paper origin remains consistent through fractional resize and a replacement patch`, () => {
+  const pages=[{width:600,height:301},{width:400,height:307},{width:600,height:313}];
+  const f=partialFixture({partial,decorated:true,pages});
+  f.start();f.flush();f.flush();
+  const expected=partial?'xMinYMin':null;
+  assert.equal(f.doc.hookedElem.firstElementChild.getAttribute('preserveAspectRatio'),expected);
+  f.scroll.clientWidth=593;f.event('resize');f.flush();f.flush();
+  assert.equal(f.doc.hookedElem.firstElementChild.getAttribute('preserveAspectRatio'),expected);
+  f.doc.addChangement(['diff-v1',pages]);f.flush();f.flush();
+  assert.equal(f.doc.hookedElem.firstElementChild.getAttribute('preserveAspectRatio'),expected);
+  assert.deepEqual(f.errors,[]);
+});
+
+for (const partial of [false,true]) test(`${partial?'partial':'full'} duplicate socket registration keeps one live renderer and source updates working`,()=>{
+  let read,accepted=0;
+  const helper={attach(fn){read=fn;},rendered(){},invalidate(){},begin(){},scrolled(){},native(){accepted++;return true;}};
+  const f=partialFixture({partial,decorated:true,zoomSnapshot:helper});f.start();f.flush();f.flush();
+  for(let reconnect=0;reconnect<3;reconnect++)f.container.documents.push(f.container.documents[0]);
+  f.action({action:'zoom-in'});f.flush();f.flush();
+  assert.equal(f.doc.currentScaleRatio,1.1,'reconnect disabled zoom while keeping source alive');
+  assert.equal(f.nativeZoom({revision:1,scale:1.2,token:null}),true);f.flush();f.flush();
+  assert.equal(accepted,1);assert.equal(read().scale,1.2);
+  f.doc.addChangement(['diff-v1',[{width:600,height:350}]]);f.flush();f.flush();
+  assert.equal(read().geometry.pages[0][1],350);assert.deepEqual(f.errors,[]);
+});
+test('ready requires fitted SVG geometry to match the current live container width',()=>{
+  let read;
+  const helper={attach(fn){read=fn;},rendered(){},invalidate(){},begin(){},scrolled(){}};
+  const f=partialFixture({decorated:true,zoomSnapshot:helper});f.start();f.flush();f.flush();
+  assert.equal(read().ready,true);f.scroll.clientWidth=593;
+  assert.equal(read().ready,false,'old cached DOM width was treated as the current sharp frame');
+  f.event('resize');f.flush();f.flush();assert.equal(read().ready,true);
+});
+
+test('distinct live renderer identities stay ambiguous after reconnect deduplication',()=>{
+  let read;
+  const helper={attach(fn){read=fn;},rendered(){},invalidate(){},begin(){},scrolled(){},native(){throw Error('must not choose an ambiguous document');}};
+  const f=partialFixture({decorated:true,zoomSnapshot:helper});f.start();f.flush();f.flush();
+  f.container.documents.push({impl:{...f.doc}});assert.equal(read(),null);
+  assert.equal(f.nativeZoom({revision:1,scale:1.2,token:null}),false);
+  f.action({action:'zoom-in'});f.flush();assert.equal(f.doc.currentScaleRatio,1);
+});
+
+for (const replacement of [false,true]) test(`accepted native request terminates when its renderer ${replacement?'is replaced':'disappears'} before the queued frame`,()=>{
+  const abandoned=[];
+  const helper={attach(){},rendered(){},invalidate(){},begin(){},scrolled(){},native(){return true;},abandon(revision){abandoned.push(revision);}};
+  const f=partialFixture({decorated:true,zoomSnapshot:helper});f.start();f.flush();f.flush();
+  const original=f.container.documents[0];
+  assert.equal(f.nativeZoom({revision:7,scale:1.2,token:null}),true);
+  f.container.documents=replacement?[{impl:{...f.doc}}]:[];f.flush();
+  assert.deepEqual(abandoned,[7],'accepted native flight was silently discarded');
+  f.container.documents=[original];assert.equal(f.nativeZoom({revision:8,scale:1.3,token:null}),true);f.flush();f.flush();
+  assert.equal(f.doc.currentScaleRatio,1.3);assert.deepEqual(abandoned,[7]);
+});
+
+for(const dispose of [false,true]) test(`renderer ${dispose?'disposal':'reset'} retires an already applied native flight before acknowledgement`,()=>{
+  const retired=[];
+  const helper={attach(){},rendered(){},invalidate(){},begin(){},scrolled(){},native(){return true;},retireDocument(doc){retired.push(doc);return true;}};
+  const f=partialFixture({decorated:true,zoomSnapshot:helper});f.start();f.flush();f.flush();retired.length=0;
+  assert.equal(f.nativeZoom({revision:9,scale:1.2,token:null}),true);f.flush();assert.equal(f.doc.currentScaleRatio,1.2);
+  if(dispose)f.doc.disposeList.forEach(fn=>fn());else f.doc.reset();
+  assert.deepEqual(retired,[f.doc]);
+});
+
+test('repeated socket registration retains one renderer entry and does not grow per-frame lookup work',()=>{
+  const f=partialFixture({decorated:true});f.start();f.flush();f.flush();
+  const original=f.container.documents[0], renders=f.windows.length;
+  for(let i=0;i<10000;i++)f.container.documents.push(original);
+  assert.equal(f.container.documents.length,1);assert.equal(f.windows.length,renders);assert.equal(f.frames.size,0);
+});
+
+test('source reset cannot replay a cancelled native anchor from the queued input frame',()=>{
+  let owns=false;
+  const helper={attach(){},rendered(){},invalidate(){},begin(){},scrolled(){},native(){owns=true;return true;},
+    owns(){return owns;},retireDocument(){owns=false;return true;},abandon(){owns=false;}};
+  const f=partialFixture({decorated:true,zoomSnapshot:helper});f.start();f.flush();f.flush();
+  f.doc.addChangement(['new',[{width:600,height:350},{width:600,height:350}]]);
+  assert.equal(f.nativeZoom({revision:10,scale:1.2,token:null,source:{x:0,y:{page:18,local:30},clientX:0,clientY:0}}),true);
+  f.flush();f.flush();assert.equal(f.doc.currentScaleRatio,1,'cancelled input was applied to reset source');assert.deepEqual(f.errors,[]);
+});
+
+
+function sourceContextFixture(partial = false) {
+  const f = fixture();
+  f.doc.partialRendering = partial;
+  const svg = f.doc.hookedElem.firstElementChild;
+  svg.isConnected = true;
+  svg.contains = target => {
+    for (let node = target; node; node = node.parentElement) if (node === svg) return true;
+    return false;
+  };
+  const attrs = { 'data-page-number': '0', 'data-page-width': '600', 'data-page-height': '800' };
+  const matrix = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  const page = { tagName: 'g', parentElement: svg, classList: { contains: name => name === 'typst-page' },
+    getAttribute: name => attrs[name] ?? null, getScreenCTM: () => matrix };
+  svg.children = [page];
+  const target = { isConnected: true, parentElement: page, closest: selector => selector === '.typst-page' ? page : null,
+    click() { throw Error('right-click source navigation must not follow links'); },
+    dispatchEvent() { throw Error('source navigation must not synthesize clicks'); } };
+  const calls = [];
+  f.doc.hookedElem.sourceMappingHandler = function(event) { calls.push({ receiver: this, event }); };
+  return { ...f, svg, page, target, attrs, matrix, calls };
+}
+
+for (const partial of [false, true]) test(`${partial ? 'partial' : 'full'} right-click reveals the clicked source once without following links`, () => {
+  const f = sourceContextFixture(partial);
+  const event = f.event('contextmenu', { target: f.target, clientX: 123.25, clientY: 287.5 });
+  assert.ok(event.prevented && event.stopped);
+  const request = f.messages.at(-1);
+  assert.equal(request.type, 'preview-context-menu');
+  assert.equal(request.x, 123.25); assert.equal(request.y, 287.5);
+  assert.ok(Number.isSafeInteger(request.token));
+  assert.equal(f.calls.length, 0, 'opening the menu must not navigate');
+  assert.equal(f.revealSource(request.token), true);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].receiver, f.doc.hookedElem);
+  assert.equal(f.calls[0].event.target, f.page);
+  assert.equal(f.calls[0].event.clientX, 123.25);
+  assert.equal(f.calls[0].event.clientY, 287.5);
+  assert.equal(f.revealSource(request.token), false);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.frames.length, 0, 'menus add no rendering or idle work');
+});
+
+test('new context requests supersede old tokens without allowing stale choices to consume them', () => {
+  const f = sourceContextFixture();
+  f.event('contextmenu', { target: f.target, clientX: 10, clientY: 20 });
+  const first = f.messages.at(-1).token;
+  f.event('contextmenu', { target: f.target, clientX: 30, clientY: 40 });
+  const second = f.messages.at(-1).token;
+  assert.ok(second > first);
+  for (const invalid of [first, -1, NaN, Infinity, 1.5, String(second), null]) {
+    assert.equal(f.revealSource(invalid), false);
+  }
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.revealSource(second), true);
+  assert.equal(f.calls[0].event.clientX, 30);
+  assert.equal(f.calls[0].event.clientY, 40);
+});
+
+for (const stale of ['page', 'svg', 'renderer', 'missing renderer', 'handler', 'dummy page', 'zoom', 'scroll', 'resize', 'page transform', 'page size', 'page identity']) {
+  test(`source context choices reject a stale ${stale}`, () => {
+    const f = sourceContextFixture();
+    f.event('contextmenu', { target: f.target, clientX: 10, clientY: 20 });
+    const token = f.messages.at(-1).token;
+    if (stale === 'page') f.svg.children = [];
+    else if (stale === 'svg') f.doc.hookedElem.firstElementChild = { ...f.svg };
+    else if (stale === 'renderer') f.container.documents = [{ impl: { ...f.doc } }];
+    else if (stale === 'missing renderer') f.container.documents = [];
+    else if (stale === 'handler') f.doc.hookedElem.sourceMappingHandler = () => assert.fail('replacement handler invoked');
+    else if (stale === 'dummy page') f.attrs['data-dummy'] = '1';
+    else if (stale === 'zoom') f.doc.currentScaleRatio = 1.2;
+    else if (stale === 'scroll') f.scroll.y = 15;
+    else if (stale === 'resize') f.scroll.clientWidth = 700;
+    else if (stale === 'page transform') f.matrix.e = 1;
+    else if (stale === 'page size') f.attrs['data-page-height'] = '810';
+    else if (stale === 'page identity') f.attrs['data-page-number'] = '2';
+    assert.equal(f.revealSource(token), false);
+    assert.equal(f.revealSource(token), false, 'matching requests are retired even when their page becomes stale');
+    assert.equal(f.calls.length, 0);
+  });
+}
+
+test('unmapped pages, unsupported handlers and invalid click positions retain ordinary browser context menus', () => {
+  const cases = [
+    f => ({ target: null }),
+    f => ({ target: {} }),
+    f => ({ target: { ...f.target, isConnected: false } }),
+    f => ({ clientX: 601 }),
+    f => ({ clientY: 801 }),
+    f => { f.matrix.a = 0; return {}; },
+    f => { f.matrix.e = NaN; return {}; },
+    f => ({ target: { ...f.target, parentElement: null } }),
+    f => { f.attrs['data-dummy'] = '1'; return {}; },
+    f => { f.attrs['data-page-width'] = '0'; return {}; },
+    f => { f.attrs['data-page-number'] = '-1'; return {}; },
+    f => { delete f.attrs['data-page-number']; return {}; },
+    f => { f.attrs['data-page-number'] = ' '; return {}; },
+    f => { delete f.doc.hookedElem.sourceMappingHandler; return {}; },
+    f => { f.doc.renderMode = 'canvas'; return {}; },
+    () => ({ clientX: NaN }),
+    () => ({ clientX: Infinity }),
+    () => ({ clientX: '10' }),
+    () => ({ clientX: -1 }),
+    () => ({ clientY: -1 }),
+    () => ({ clientY: NaN }),
+    () => ({ clientY: Infinity }),
+  ];
+  for (const invalidate of cases) {
+    const f = sourceContextFixture();
+    const event = f.event('contextmenu', { target: f.target, clientX: 10, clientY: 20, ...invalidate(f) });
+    assert.equal(event.prevented, false);
+    assert.equal(event.stopped, false);
+    assert.equal(f.messages.length, 0);
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test('a text-node target is normalized safely and later ordinary context menus retire its request', () => {
+  const f = sourceContextFixture();
+  f.event('contextmenu', { target: { nodeType: 3, parentElement: f.target }, clientX: 10, clientY: 20 });
+  assert.equal(f.revealSource(f.messages.at(-1).token), true);
+  assert.equal(f.calls[0].event.target, f.page);
+  f.event('contextmenu', { target: f.target, clientX: 10, clientY: 20 });
+  const token = f.messages.at(-1).token;
+  const event = f.event('contextmenu', { target: null, clientX: 10, clientY: 20 });
+  assert.equal(event.prevented, false);
+  assert.equal(f.revealSource(token), false);
+  assert.equal(f.calls.length, 1);
+});
+
+
+test('source mapping hook failures retire the request and never escape as menu errors', async () => {
+  for (const asynchronous of [false, true]) {
+    const f = sourceContextFixture();
+    let calls = 0;
+    f.doc.hookedElem.sourceMappingHandler = () => {
+      calls++;
+      if (asynchronous) return Promise.reject(Error('socket closed'));
+      throw Error('socket closed');
+    };
+    f.event('contextmenu', { target: f.target, clientX: 10, clientY: 20 });
+    const token = f.messages.at(-1).token;
+    assert.equal(f.revealSource(token), asynchronous);
+    assert.equal(f.revealSource(token), false);
+    await Promise.resolve();
+    assert.equal(calls, 1);
+  }
+});
+
+
+for (const partial of [false, true]) for (const change of ['new', 'diff-v1', 'reset', 'dispose', 'viewport-change']) {
+  test(`${partial ? 'partial' : 'full'} source context survives only viewport updates, never ${change} retirement`, () => {
+    const f = partialFixture({ partial, decorated: true });
+    f.start(); f.flush(); f.flush();
+    const svg = f.doc.hookedElem.firstElementChild;
+    svg.isConnected = true;
+    svg.contains = target => {
+      for (let node = target; node; node = node.parentElement) if (node === svg) return true;
+      return false;
+    };
+    const page = svg.children.find(node => node.classList.contains('typst-page'));
+    const target = { isConnected: true, parentElement: page, closest: () => page };
+    let calls = 0;
+    f.doc.hookedElem.sourceMappingHandler = () => calls++;
+    f.event('contextmenu', { target, clientX: 100, clientY: 150 });
+    const token = f.messages.at(-1).token;
+    if (change === 'dispose') f.doc.disposeList.forEach(dispose => dispose());
+    else if (change === 'reset') {
+      f.doc.reset();
+      f.doc.moduleInitialized = true;
+    } else f.doc.addChangement([change, []]);
+    assert.equal(f.doc.hookedElem.firstElementChild, svg, 'the request must retire before a same-SVG source patch renders');
+    assert.equal(f.revealSource(token), change === 'viewport-change');
+    assert.equal(calls, change === 'viewport-change' ? 1 : 0);
+    assert.equal(f.revealSource(token), false);
+  });
+}
+
+
+for (const partial of [false, true]) test(`${partial ? 'partial' : 'full'} source context maps the visible page when WebKit reports an old page target`, () => {
+  const f = sourceContextFixture(partial);
+  const attrs = { 'data-page-number': '2', 'data-page-width': '600', 'data-page-height': '800' };
+  const oldPage = { tagName:'g', parentElement:f.svg, classList:{contains:name=>name==='typst-page'},
+    getAttribute:name=>attrs[name] ?? null, getScreenCTM:()=>({a:1,b:0,c:0,d:1,e:0,f:1620}) };
+  f.svg.children.push(oldPage);
+  f.target.parentElement = oldPage;
+  f.target.closest = () => oldPage;
+  const event = f.event('contextmenu', {target:f.target, clientX:123.25, clientY:287.5});
+  assert.ok(event.prevented && event.stopped);
+  const token = f.messages.at(-1).token;
+  // Partial rendering may discard the stale hit-test element before the native menu is chosen.
+  f.target.isConnected = false;
+  f.svg.children = [f.page];
+  assert.equal(f.revealSource(token), true);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].event.target, f.page);
+  assert.equal(f.calls[0].event.clientX, 123.25);
+  assert.equal(f.calls[0].event.clientY, 287.5);
+});
+
+test('source context resolves transformed page paper and excludes inter-page gaps', () => {
+  const f = sourceContextFixture();
+  Object.assign(f.matrix, {a:2,b:0,c:.25,d:2,e:10,f:30});
+  f.event('contextmenu', {target:f.target, clientX:130, clientY:190});
+  assert.equal(f.revealSource(f.messages.at(-1).token), true);
+  assert.equal(f.calls[0].event.target, f.page);
+  const outside = f.event('contextmenu', {target:f.target, clientX:5, clientY:190});
+  assert.equal(outside.prevented, false);
+  Object.assign(f.matrix, {a:1,b:0,c:0,d:1,e:0,f:810});
+  const gap = f.event('contextmenu', {target:f.target, clientX:100, clientY:805});
+  assert.equal(gap.prevented, false);
+});
+
+
+for (const residue of [0, 0.25]) test(`full source navigation smooth scroll survives cursor repaint with ${residue}px layout residue`, () => {
+  let changed = false;
+  const f = partialFixture({partial:false,decorated:true,
+    pages:[{width:200,height:240},{width:200,height:240},{width:200,height:240}],
+    layoutHook() { if (changed) { f.scroll.scrollLeft += residue; f.scroll.scrollTop += residue; } }});
+  f.start(); f.flush(); f.flush();
+  let smoothTarget = null, corrections = 0, anchorsCleared = 0;
+  const scrollBy = f.scroll.scrollBy.bind(f.scroll);
+  f.scroll.scrollBy = (x,y) => { corrections++; smoothTarget = null; scrollBy(x,y); };
+  f.scroll.scrollTo = options => { smoothTarget = options.behavior === 'smooth' ? options.top : null; };
+  f.doc.clearSvgResizeAnchor = () => { anchorsCleared++; };
+  f.scroll.scrollTo({top:1380,behavior:'smooth'});
+  changed = true;
+  f.doc.cursorPosition = [3,20,20];
+  f.doc.addViewportChange(); f.flush(); f.flush();
+  assert.equal(smoothTarget,1380,'normal cursor repaint must not cancel pending source navigation');
+  assert.equal(corrections,0,'a no-op or rounded subpixel residual must not issue another scroll');
+  assert.ok(anchorsCleared > 0,'a stale frontend resize anchor must still be retired');
+});
+
+test('full rescale still corrects a visible geometry shift', () => {
+  let changed = false;
+  const f = partialFixture({partial:false,decorated:true,
+    layoutHook() { if (changed) { f.scroll.scrollLeft += 2; f.scroll.scrollTop += 3; } }});
+  f.start(); f.flush(); f.flush();
+  let corrections = 0;
+  const scrollBy = f.scroll.scrollBy.bind(f.scroll);
+  f.scroll.scrollBy = (x,y) => { corrections++; scrollBy(x,y); };
+  changed = true;
+  f.doc.cursorPosition = [3,20,20];
+  f.doc.addViewportChange(); f.flush(); f.flush();
+  assert.ok(corrections > 0,'visible geometry corrections must still reach the scroll view');
+  assert.equal(f.scroll.scrollLeft,0);
+  assert.equal(f.scroll.scrollTop,0);
+});
+
+
+function revealFixture(options = {}) {
+  const calls = [], snapshots = {invalidates:0, settles:0};
+  const f = partialFixture({pages:[{width:600,height:300},{width:600,height:300}],
+    zoomSnapshot:{attach(){},invalidate(){snapshots.invalidates++;},settle(){snapshots.settles++;},rendered(){}},
+    ...options,
+    configure(doc) {
+      doc.windowElem.handleTypstLocation = function(...args) { calls.push({owner:this,args}); };
+      options.configure?.(doc);
+    },
+  });
+  f.start(); f.flush(); f.flush(); f.flush();
+  assert.equal(f.frames.size,0);
+  return {...f,calls,snapshots,
+    get propertyWrites(){return f.propertyWrites;},get layouts(){return f.layouts;},get reads(){return f.reads;},
+    locate(page=0,x=100,y=100){f.doc.windowElem.handleTypstLocation(f.doc.hookedElem.firstElementChild,page+1,x,y);},
+    beacon(){return f.body.children.find(node=>node.className==='tiptoptyp-reveal-beacon');},
+  };
+}
+
+for (const partial of [false,true]) {
+  test(`${partial?'partial':'full'} explicit native location has a centered finite beacon without changing frontend navigation`, () => {
+    const f=revealFixture({partial});
+    f.revealIntent(true);
+    assert.equal(f.revealActive(),true);
+    assert.deepEqual(f.revealState().center,null);
+    assert.equal(f.revealState().pending,true);
+    f.locate(0,100,80); f.flush();
+    assert.deepEqual({...f.revealState(),debug:undefined},{active:true,pending:false,page:0,center:[123,117],viewport:[0,0,646,374],elapsed_ms:0,debug:undefined});
+    assert.equal(f.beacon().style.left,'123px');
+    assert.equal(f.beacon().style.top,'117px');
+    assert.equal(f.beacon().children.length,4);
+    assert.equal(f.calls.length,1);
+    assert.equal(f.calls[0].owner,f.doc.windowElem);
+    assert.deepEqual(f.calls[0].args.slice(1),[1,100,80]);
+    assert.equal(f.scroll.scrollTop,0);
+    assert.equal(f.frames.size,1);
+    f.advance(899); f.flush();
+    assert.equal(f.revealActive(),true);
+    f.advance(1); f.flush();
+    assert.equal(f.revealActive(),false);
+    assert.equal(f.beacon(),undefined);
+    assert.equal(f.frames.size,0);
+    assert.ok(f.snapshots.invalidates>=2);
+    assert.ok(f.snapshots.settles>=1);
+    assert.deepEqual({...f.revealState(),debug:undefined},{active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,debug:undefined});
+  });
+}
+
+for (const partial of [false,true]) for (const pending of [false,true]) {
+  test(`${partial?'partial':'full'} ${pending?'pending':'visible'} beacon observations expire even when animation frames are delayed`, () => {
+    const f=revealFixture({partial});
+    f.revealIntent(true);
+    if(!pending){f.locate();f.flush();}
+    const limit=pending?3000:900;
+    f.advance(limit-1);
+    assert.equal(f.revealActive(),true);
+    const beacon=f.beacon(),snapshots={...f.snapshots};
+    assert.equal(f.frames.size,1);
+    f.advance(1);
+    const inactive={active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,debug:undefined};
+    for(let index=0;index<100;index++){
+      assert.equal(f.revealActive(),false);
+      assert.deepEqual({...f.revealState(),debug:undefined},inactive);
+    }
+    assert.equal(f.beacon(),beacon,'read-only queries leave DOM cleanup to the next animation frame');
+    assert.deepEqual(f.snapshots,snapshots,'read-only queries cannot trigger snapshot work');
+    assert.equal(f.frames.size,1);
+    f.flush();
+    assert.equal(f.beacon(),undefined);
+    assert.equal(f.frames.size,0,'the eventual cleanup cannot schedule another frame');
+    assert.deepEqual({...f.revealState(),debug:undefined},inactive);
+    const retired={...f.snapshots};
+    for(let index=0;index<100;index++){
+      assert.equal(f.revealActive(),false);f.revealState();
+    }
+    assert.deepEqual(f.snapshots,retired);assert.equal(f.frames.size,0);
+  });
+}
+
+test('automatic follow keeps the same location hook silent and cancels a previous beacon', () => {
+  const f=revealFixture();
+  const before={...f.snapshots};
+  f.revealIntent(false); f.locate(); f.flush();
+  assert.deepEqual(f.snapshots,before);
+  assert.equal(f.revealActive(),false);
+  assert.equal(f.frames.size,0);
+  f.revealIntent(true); f.locate(); f.flush();
+  assert.ok(f.beacon());
+  f.revealIntent(false); f.locate(); f.flush();
+  assert.equal(f.calls.length,3);
+  assert.equal(f.beacon(),undefined);
+  assert.equal(f.revealActive(),false);
+  assert.equal(f.frames.size,0);
+});
+
+test('manual location actions arm a beacon and preserve the page-local destination', () => {
+  const f=revealFixture();
+  f.action({action:'location',value:{page:0,x:145,y:65}}); f.flush();
+  assert.deepEqual(f.revealState().center,[168,102]);
+  assert.equal(f.revealState().page,0);
+  assert.deepEqual(f.calls[0].args.slice(1),[1,145,65]);
+});
+
+test('beacons wait for the real destination to enter view and track it during smooth scroll', () => {
+  const f=revealFixture({partial:false});
+  f.revealIntent(true); f.locate(1,140,150); f.flush();
+  assert.equal(f.revealState().pending,true);
+  assert.equal(f.revealState().center,null);
+  assert.equal(f.beacon(),undefined);
+  f.advance(240); f.scroll.scrollTop=220; f.flush();
+  assert.equal(f.revealState().pending,false);
+  assert.deepEqual(f.revealState().center,[163,277]);
+  f.scroll.scrollTop=260; f.advance(100); f.flush();
+  assert.deepEqual(f.revealState().center,[163,237]);
+  assert.equal(f.beacon().style.top,'237px');
+  f.advance(800); f.flush();
+  assert.equal(f.revealActive(),false);
+  assert.equal(f.frames.size,0);
+});
+
+test('pending locations expire within three seconds, including absent callbacks and invisible targets', () => {
+  for (const callback of [false,true]) {
+    const f=revealFixture();
+    f.revealIntent(true);
+    if(callback)f.locate(1,100,280);
+    f.advance(2999); f.flush();
+    assert.equal(f.revealActive(),true);
+    assert.equal(f.revealState().pending,true);
+    f.advance(1); f.flush();
+    assert.equal(f.revealActive(),false);
+    assert.equal(f.frames.size,0);
+    assert.equal(f.beacon(),undefined);
+  }
+});
+
+test('beacons project the complete page matrix, including skew and nonuniform scale', () => {
+  const f=revealFixture({partial:false});
+  const page=f.doc.hookedElem.firstElementChild.children.find(node=>node.classList.contains('typst-page'));
+  page.getScreenCTM=()=>({a:1.2,b:0.2,c:0.15,d:0.9,e:30,f:40});
+  f.revealIntent(true); f.locate(0,100,80); f.flush();
+  assert.deepEqual(f.revealState().center,[162,132]);
+});
+
+test('viewport patches rebind the active beacon to the new SVG without restarting its lifetime', () => {
+  const f=revealFixture();
+  f.revealIntent(true); f.locate(); f.flush();
+  const first=f.doc.hookedElem.firstElementChild;
+  f.advance(300);
+  f.doc.addViewportChange(); f.flush();
+  assert.notEqual(f.doc.hookedElem.firstElementChild,first);
+  assert.deepEqual(f.revealState().center,[123,137]);
+  assert.equal(f.revealState().elapsed_ms,300);
+  f.advance(600); f.flush();
+  assert.equal(f.revealActive(),false);
+  assert.equal(f.frames.size,0);
+});
+
+test('source replacement, reset, disposal and disconnection retire an active destination beacon', () => {
+  for(const retire of [f=>f.doc.addChangement(['new',[{width:600,height:300}]]),f=>f.doc.reset(),
+      f=>f.doc.disposeList.forEach(dispose=>dispose()),f=>{f.container.documents=[];},f=>{f.doc.hookedElem.isConnected=false;}]) {
+    const f=revealFixture();
+    f.revealIntent(true); f.locate(); f.flush();
+    assert.ok(f.beacon());
+    retire(f); f.flush();
+    assert.equal(f.revealActive(),false);
+    assert.equal(f.beacon(),undefined);
+    assert.equal(f.frames.size,0);
+  }
+});
+
+test('beacon styling is pointer transparent and preserves the hidden frontend ripple cleanup animation', () => {
+  const f=revealFixture();
+  f.event('DOMContentLoaded');
+  const css=f.head.children[0].textContent;
+  assert.match(css,/\.typst-jump-ripple\s*\{ visibility: hidden !important; pointer-events: none !important;/);
+  assert.doesNotMatch(css,/\.typst-jump-ripple\s*\{[^}]*display:/);
+  assert.match(css,/\.tiptoptyp-reveal-beacon\s*\{[^}]*position: fixed;[^}]*pointer-events: none;[^}]*var\(--tiptoptyp-reveal-accent\)/);
+  assert.match(css,/animation: tiptoptyp-reveal-ring 900ms/);
+  assert.match(css,/animation-delay: 160ms/);
+});
+
+
+for (const partial of [false,true]) test(`${partial?'partial':'full'} active beacon changes theme accent without restarting or rendering and identical palettes do no work`, () => {
+  const f=revealFixture({partial});
+  const palette=accent=>f.palette([255,255,255],[0,0,0],'1px solid transparent','1px solid transparent',accent);
+  palette([79,140,255]);
+  assert.equal(f.properties.get('--tiptoptyp-reveal-accent'),'rgb(79,140,255)');
+  assert.equal(f.properties.get('--tiptoptyp-reveal-wash'),'rgba(79,140,255,0.2)');
+  f.revealIntent(true); f.locate(); f.flush(); f.advance(300); f.flush();
+  const beacon=f.beacon(),snapshots={...f.snapshots},layouts=f.layouts,reads=f.reads;
+  const before=f.propertyWrites;
+  palette([166,218,149]);
+  assert.equal(f.propertyWrites-before,2,'accent changes only the two inherited beacon colors');
+  assert.equal(f.properties.get('--tiptoptyp-reveal-accent'),'rgb(166,218,149)');
+  assert.equal(f.properties.get('--tiptoptyp-reveal-wash'),'rgba(166,218,149,0.2)');
+  assert.equal(f.beacon(),beacon);
+  assert.equal(f.revealState().elapsed_ms,300);
+  assert.deepEqual(f.snapshots,snapshots,'beacons are excluded from screenshot caches');
+  assert.equal(f.layouts,layouts);assert.equal(f.reads,reads);
+  const writes=f.propertyWrites;
+  for(let index=0;index<100;index++)palette([166,218,149]);
+  assert.equal(f.propertyWrites,writes);assert.deepEqual(f.snapshots,snapshots);
+  assert.equal(f.frames.size,1,'only the existing finite animation remains scheduled');
+  f.advance(600);f.flush();
+  assert.equal(f.beacon(),undefined);assert.equal(f.frames.size,0);
+  palette([166,218,149]);
+  assert.equal(f.propertyWrites,writes);assert.equal(f.frames.size,0);
+});
+
+test('late frontend location hooks are installed by the next explicit intent without wrapper growth', () => {
+  const f=revealFixture();
+  let calls=0;
+  const replacement=function(elem,page,x,y){calls++;assert.equal(this,f.doc.windowElem);return [elem,page,x,y];};
+  f.doc.windowElem.handleTypstLocation=replacement;
+  f.revealIntent(true);
+  const wrapper=f.doc.windowElem.handleTypstLocation;
+  const svg=f.doc.hookedElem.firstElementChild;
+  assert.deepEqual(wrapper.call(f.doc.windowElem,svg,1,100,80).slice(1),[1,100,80]);
+  f.flush();
+  assert.deepEqual(f.revealState().center,[123,117]);
+  f.revealIntent(true);
+  assert.equal(f.doc.windowElem.handleTypstLocation,wrapper);
+  f.locate(); f.flush();
+  assert.equal(calls,2);
+  assert.equal(f.frames.size,1);
+});
+
+test('frontend location exceptions remain observable and retire the pending beacon', () => {
+  const expected=new Error('native frontend location failed');
+  const f=revealFixture({configure(doc){doc.windowElem.handleTypstLocation=()=>{throw expected;};}});
+  f.revealIntent(true);
+  assert.throws(()=>f.locate(),error=>error===expected);
+  assert.equal(f.revealActive(),false);
+  assert.equal(f.frames.size,0);
+});
+
+
+test('navigation decoration diff arriving immediately after the real jump preserves its pending beacon', () => {
+  for(const partial of [true,false]) {
+    const f=revealFixture({partial});
+    f.revealIntent(true); f.locate(0,100,80);
+    f.doc.addChangement(['diff-v1',[{width:600,height:300},{width:600,height:300}]]);
+    f.flush(); f.flush();
+    assert.equal(f.revealActive(),true,'source-scroll decorations must not cancel their reveal');
+    assert.deepEqual(f.revealState().center,[123,117]);
+    f.advance(900); f.flush();
+    assert.equal(f.revealActive(),false);
+    assert.equal(f.frames.size,0);
+  }
+});
+
+
+test('incremental patches rebind the revealed page matrix without extending its lifetime', () => {
+  for(const partial of [true,false]) {
+    const f=revealFixture({partial});
+    f.scroll.scrollTop=250;
+    f.revealIntent(true); f.locate(1,100,80); f.flush();
+    assert.deepEqual(f.revealState().center,[123,177]);
+    f.advance(300);
+    f.doc.addChangement(['diff-v1',[{width:600,height:400},{width:600,height:300}]]);
+    f.flush(); f.flush();
+    assert.equal(f.revealActive(),true);
+    assert.deepEqual(f.revealState().center,[123,277]);
+    assert.equal(f.revealState().elapsed_ms,300);
+    f.advance(600); f.flush();
+    assert.equal(f.revealActive(),false);
+    assert.equal(f.frames.size,0);
+  }
 });

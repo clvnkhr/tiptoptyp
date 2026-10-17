@@ -21,7 +21,7 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def run(binary, mode, output, refresh_race=False, transitions=False, fixture=None):
+def run(binary, mode, output, refresh_race=False, transitions=False, fixture=None, scroll_race=False, dark=False):
     source_fixture = (fixture or ROOT / "scripts/fixtures/tinymist-zoom-stress.typ").resolve()
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ttt-native-zoom-") as directory:
@@ -54,7 +54,9 @@ def run(binary, mode, output, refresh_race=False, transitions=False, fixture=Non
                                "TIPTOPTYP_NATIVE_ZOOM_PNG": str(image_dir / f"native-{mode}-{output.name}.png")}
                 native_command = [str(binary), "--background",
                                   *(["--refresh-race"] if refresh_race else []),
-                                  *(["--transition-regression"] if transitions else [])]
+                                  *(["--transition-regression"] if transitions else []),
+                                  *(["--scroll-race"] if scroll_race else []),
+                                  *(["--dark"] if dark else [])]
                 started = time.monotonic()
                 started_utc = datetime.now(timezone.utc).isoformat()
                 with (output / f"native-{mode}.log").open("w") as native_log:
@@ -110,9 +112,13 @@ if __name__ == "__main__":
     parser.add_argument("--refresh-race", action="store_true")
     parser.add_argument("--transition-regression", action="store_true",
                         help="Check real mid-page divider anchors and repeated injected zoom/cache transitions; not physical pinch")
+    parser.add_argument("--dark", action="store_true", help="Use Gruvbox page/ink colors for native pixel checks")
+    parser.add_argument("--scroll-race", action="store_true", help="Exercise scroll-before-resize ordering and retained-image page-edge zooms; requires --transition-regression")
     parser.add_argument("--measure-only", action="store_true",
                         help="Keep failed before/after receipts and continue both modes without a nonzero exit; failures remain explicit")
     args = parser.parse_args()
+    if args.scroll_race and not args.transition_regression:
+        parser.error("--scroll-race requires --transition-regression")
     binary = args.binary.resolve()
     if not binary.is_file():
         parser.error(f"Missing native probe: {binary}")
@@ -122,5 +128,5 @@ if __name__ == "__main__":
     output = (args.output or ROOT / ".tiptoptyp/profiles" / ("zoom-native-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))).resolve()
     passed = []
     for mode in (["full", "partial"] if args.mode == "both" else [args.mode]):
-        passed.append(run(binary, mode, output, args.refresh_race, args.transition_regression, fixture))
+        passed.append(run(binary, mode, output, args.refresh_race, args.transition_regression, fixture, args.scroll_race, args.dark))
     sys.exit(0 if all(passed) or args.measure_only else 1)

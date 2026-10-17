@@ -33,7 +33,8 @@ if (process.argv.includes('--large')) {
     const control = `ws://${log.match(/Control panel server listening on: ([\d.:]+)/)[1]}`;
     browser = await chromium.launch({ headless:true, ...(process.env.TIPTOPTYP_TEST_CHROME ? {executablePath:process.env.TIPTOPTYP_TEST_CHROME}: {}) });
     const page = await browser.newPage({viewport:{width:800,height:600}});
-    const errors = []; page.on('pageerror',e=>errors.push(e.message));
+    const errors = [], frontend = []; page.on('pageerror',e=>errors.push(e.message));
+    page.on('console',message=>{const text=message.text();if(/^(recv|batch|cursor)/.test(text)){frontend.push(text);if(frontend.length>48)frontend.shift();}});
     await page.addInitScript(() => {
       window.messages = [];
       window.ipc = { postMessage: message => window.messages.push(JSON.parse(message)) };
@@ -83,7 +84,7 @@ if (process.argv.includes('--large')) {
     // Check rendered pixels, not merely CSS attributes: both paper and ink
     // must respond to appearance changes without rebuilding the document.
     const assertPalette = async (bg,fg) => {
-      await page.evaluate(([bg,fg]) => window.tiptoptypSetPalette(bg,fg),[bg,fg]);
+      await page.evaluate(([bg,fg]) => window.tiptoptypSetPalette(bg,fg,'1px solid transparent','1px solid transparent',[79,140,255]),[bg,fg]);
       const placement = await page.evaluate(() => ({
         host: getComputedStyle(document.getElementById('typst-container')).filter,
         page: getComputedStyle(document.querySelector('#typst-container g[data-page-width]')).filter,
@@ -104,7 +105,7 @@ if (process.argv.includes('--large')) {
         background:getComputedStyle(document.body).backgroundColor}));
       assert.equal(copied.paper,placement.paper);
       assert.equal(copied.filter,placement.page);
-      assert.equal(copied.background,`rgb(${bg.join(', ')})`);
+      assert.equal(copied.background,`rgb(${buffer.paperBackground.slice(0,3).join(', ')})`,'buffer retains the actual live gutter backdrop');
       await mirror.close();
       const png = await page.screenshot();
       const counts = await page.evaluate(async ({png,bg,fg}) => {
@@ -125,6 +126,87 @@ if (process.argv.includes('--large')) {
     for (const [bg,fg] of [[[0,0,0],[255,255,255]],[[24,31,42],[200,210,220]],[[245,239,228],[42,35,26]],[[255,255,255],[0,0,0]]]) {
       await assertPalette(bg,fg);
     }
+    // Exercise the actual pinned location handler, including its smooth scroll,
+    // page transform and legacy ripple. Freeze only WebAnimations for pixels;
+    // production arrival/expiry and source coordinates remain untouched.
+    const revealTarget=await page.evaluate(()=>{
+      const doc=document.getElementById('typst-container').documents[0].impl;
+      const target=window.outline[1].position;
+      window.tiptoptypPreviewRevealIntent(true);
+      doc.windowElem.handleTypstLocation(doc.hookedElem.firstElementChild,target.page_no,target.x,target.y);
+      return {page:target.page_no-1,x:target.x,y:target.y,legacy:[...document.querySelectorAll('.typst-jump-ripple')].map(node=>getComputedStyle(node).visibility)};
+    });
+    await page.waitForFunction(target=>{
+      const state=window.tiptoptypPreviewRevealState();
+      return state.active&&!state.pending&&state.page===target.page&&state.elapsed_ms>=250;
+    },revealTarget);
+    const revealProbe=await page.evaluate(target=>{
+      const state=window.tiptoptypPreviewRevealState();
+      const doc=document.getElementById('typst-container').documents[0].impl;
+      const node=[...doc.hookedElem.firstElementChild.children].find(node=>node.classList.contains('typst-page')&&Number(node.getAttribute('data-page-number'))===target.page);
+      const matrix=node.getScreenCTM();
+      const projected=[matrix.a*target.x+matrix.c*target.y+matrix.e,matrix.b*target.x+matrix.d*target.y+matrix.f];
+      const beacon=document.querySelector('.tiptoptyp-reveal-beacon');
+      const bounds=beacon.getBoundingClientRect();
+      const animations=beacon.getAnimations({subtree:true});
+      animations.forEach(animation=>{animation.pause();animation.currentTime=300;});
+      const initialColor=getComputedStyle(beacon).color;
+      window.tiptoptypSetPalette([255,255,255],[0,0,0],'1px solid transparent','1px solid transparent',[166,218,149]);
+      const sameAnimations=beacon.getAnimations({subtree:true}).every((animation,index)=>animation===animations[index]&&animation.currentTime===300);
+      const accent=getComputedStyle(beacon).color;
+      const wash=getComputedStyle(beacon.querySelector('.tiptoptyp-reveal-halo')).backgroundColor;
+      const legacy=[...document.querySelectorAll('.typst-jump-ripple')].map(node=>getComputedStyle(node).visibility);
+      return {state,projected,center:[bounds.x,bounds.y],animations:animations.length,legacy,initialColor,accent,wash,sameAnimations,
+        pointerEvents:getComputedStyle(beacon).pointerEvents,pageDummy:node.getAttribute('data-dummy'),ink:!!node.querySelector('use,path,text')};
+    },revealTarget);
+    assert.equal(revealProbe.state.page,revealTarget.page);
+    assert.equal(revealProbe.state.pending,false);
+    assert.notEqual(revealProbe.pageDummy,'1','revealed destination must not be a placeholder');
+    assert.equal(revealProbe.ink,true,'revealed destination must have live SVG ink');
+    assert.ok(revealTarget.legacy.length>0,'actual pinned location handler must create its legacy ripple');
+    assert.ok(revealTarget.legacy.every(visibility=>visibility==='hidden'),'legacy cue must be hidden from creation');
+    assert.equal(revealProbe.pointerEvents,'none');
+    assert.equal(revealProbe.animations,4,'two rings, halo and center marker must be real WebAnimations');
+    assert.equal(revealProbe.initialColor,'rgb(79, 140, 255)');
+    assert.equal(revealProbe.accent,'rgb(166, 218, 149)');
+    assert.equal(revealProbe.wash,'rgba(166, 218, 149, 0.2)');
+    assert.equal(revealProbe.sameAnimations,true,'theme changes must not restart the active cue');
+    for(let axis=0;axis<2;axis++) {
+      assert.ok(Math.abs(revealProbe.state.center[axis]-revealProbe.projected[axis])<1,JSON.stringify(revealProbe));
+      assert.ok(Math.abs(revealProbe.center[axis]-revealProbe.projected[axis])<1,JSON.stringify(revealProbe));
+      assert.ok(revealProbe.center[axis]>=0&&revealProbe.center[axis]<=revealProbe.state.viewport[axis+2],JSON.stringify(revealProbe));
+    }
+    assert.ok(revealProbe.legacy.every(visibility=>visibility==='hidden'),'old teal cue must never paint');
+    const revealDirectory=path.join(__dirname,'../.tiptoptyp/screenshots/agent-review/reveal');
+    fs.mkdirSync(revealDirectory,{recursive:true});
+    const revealScreenshot=path.join(revealDirectory,`tinymist-${partial?'partial':'full'}-${Date.now()}.png`);
+    await page.screenshot({path:revealScreenshot});
+    await page.waitForFunction(()=>!window.tiptoptypPreviewRevealActive());
+    await page.waitForFunction(()=>!document.querySelector('.tiptoptyp-reveal-beacon'),null,{timeout:3000});
+    assert.equal(await page.locator('.tiptoptyp-reveal-beacon').count(),0,'cue must retire even with its WebAnimations paused');
+    // The app's LSP scrollPreview forwards this same panelScrollTo event. Its
+    // real data-plane response must preserve intent through cursor/patch work.
+    await page.evaluate(file=>{
+      window.tiptoptypPreviewRevealIntent(true);
+      window.control.send(JSON.stringify({event:'panelScrollTo',filepath:file,line:6,character:3}));
+    },file);
+    await page.waitForFunction(()=>{
+      const reveal=window.tiptoptypPreviewRevealState();
+      return reveal.active&&!reveal.pending&&reveal.page===2;
+    },null,{timeout:3000}).catch(async error=>{throw Error(`${error.message}\n${JSON.stringify({reveal:await page.evaluate(()=>window.tiptoptypPreviewRevealState()),frontend,log:log.slice(-2000)})}`);});
+    const sourceScrollReveal=await page.evaluate(()=>window.tiptoptypPreviewRevealState());
+    await page.waitForFunction(()=>!window.tiptoptypPreviewRevealActive());
+    await page.evaluate(()=>{
+      const doc=document.getElementById('typst-container').documents[0].impl,target=window.outline[2].position;
+      window.tiptoptypPreviewRevealIntent(false);
+      doc.windowElem.handleTypstLocation(doc.hookedElem.firstElementChild,target.page_no,target.x,target.y);
+    });
+    await page.waitForFunction(()=>window.messages.at(-1)?.page===2);
+    assert.equal(await page.evaluate(()=>window.tiptoptypPreviewRevealActive()),false,'automatic follow must not flash');
+    assert.equal(await page.locator('.tiptoptyp-reveal-beacon').count(),0);
+    await page.evaluate(()=>window.tiptoptypPreviewAction({action:'page',value:0}));
+    await page.waitForFunction(()=>window.messages.at(-1)?.page===0);
+    await page.waitForTimeout(500);
     // Actual document clicks exercise the capture handler and the pinned
     // frontend together; directly invoking our location action cannot do that.
     await page.locator('svg a').first().click();
@@ -157,7 +239,7 @@ if (process.argv.includes('--large')) {
       window.tiptoptypPreviewAction({action:'forward'}); await settle(); const forward = scroll.scrollTop;
       let rerenders=0; const original=doc.r.rerender; doc.r.rerender=(...args)=>{rerenders++;return original.apply(doc.r,args);};
       const start=performance.now();
-      for(let i=0;i<50;i++) window.tiptoptypSetPalette(i%2?[255,255,255]:[24,31,42],i%2?[0,0,0]:[200,210,220]);
+      for(let i=0;i<50;i++) window.tiptoptypSetPalette(i%2?[255,255,255]:[24,31,42],i%2?[0,0,0]:[200,210,220],'1px solid transparent','1px solid transparent',[79,140,255]);
       const paletteMs=performance.now()-start;
       const nodesBefore=doc.hookedElem.childElementCount;
       await settle();
@@ -198,7 +280,7 @@ if (process.argv.includes('--large')) {
     await page.waitForFunction(() => window.messages.at(-1)?.page === 3);
     await assertPalette([24,31,42],[200,210,220]);
     assert.deepEqual(errors,[]);
-    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,partial,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','rendered light/dark palette without rerender','text editing and viewer shortcuts','live source update'],result},null,2));
+    console.log(JSON.stringify({browser:await browser.version(),platform:process.platform,arch:process.arch,partial,viewport:[800,600],adapterSha256:crypto.createHash('sha256').update(adapter).digest('hex'),scenarios:['internal link/back/forward','page navigation across resize','compiled outline','zoom/fit','rendered light/dark palette without rerender','text editing and viewer shortcuts','live source update','explicit reveal CTM beacon, finite expiry and silent automatic follow'],reveal:{target:revealTarget,probe:revealProbe,sourceScroll:sourceScrollReveal,screenshot:revealScreenshot},result},null,2));
   } finally {
     clearTimeout(watchdog); await browser?.close(); server.kill(); fs.rmSync(directory,{recursive:true,force:true});
   }

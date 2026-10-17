@@ -1,0 +1,1075 @@
+{
+  "date": "2026-10-13",
+  "problem": "Cached First/Second/Third pages reverse during divider resize and restore on sharp handoff.",
+  "reproduction": {
+    "user_recording": "Screen Recording 2026-10-13 at 12.37.31.mov",
+    "observed": "Second/Third replaces First during drag; sharp returns First on release"
+  },
+  "fix": "Keep ordinary child-layer geometry under the AppKit-flipped WebKit parent and top-origin snapshot crops; convert the test CGContext to host coordinates.",
+  "environment": {
+    "os": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "profile": "optimized rustc opt-level=3, thin LTO, one codegen unit",
+    "fixture": "owned three-page SVG; distinct RGB markers; 640x420 viewport",
+    "warmup_seconds": 3
+  },
+  "page_pixels": {
+    "before": {
+      "errors_css_pixels": [
+        [
+          [
+            -0.1686046511628092,
+            209.02906976744185
+          ],
+          [
+            -0.1686046511628092,
+            -210.97093023255815
+          ]
+        ],
+        [
+          [
+            -0.3177966101694665,
+            184.15042372881356
+          ],
+          [
+            -0.25,
+            -185.875
+          ]
+        ],
+        [
+          [
+            -0.1296296296296191,
+            219.25
+          ],
+          [
+            -0.1685082872928092,
+            -221.22237569060775
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          [
+            310.0,
+            105.0
+          ],
+          [
+            310.0,
+            315.0
+          ]
+        ],
+        [
+          [
+            271.25,
+            91.875
+          ],
+          [
+            271.25,
+            276.875
+          ]
+        ],
+        [
+          [
+            305.5,
+            52.25
+          ],
+          [
+            305.5,
+            272.25
+          ]
+        ]
+      ],
+      "inputs": {
+        "cursor": [
+          100,
+          300
+        ],
+        "resize": [
+          640,
+          560
+        ],
+        "zoom": 1.2
+      },
+      "observed": [
+        [
+          [
+            309.8313953488372,
+            314.02906976744185
+          ],
+          [
+            309.8313953488372,
+            104.02906976744185
+          ]
+        ],
+        [
+          [
+            270.93220338983053,
+            276.02542372881356
+          ],
+          [
+            271.0,
+            91.0
+          ]
+        ],
+        [
+          [
+            305.3703703703704,
+            271.5
+          ],
+          [
+            305.3314917127072,
+            51.027624309392266
+          ]
+        ]
+      ],
+      "passed": false,
+      "scope": "offscreen CALayer page pixels in host coordinates; composed GPU presentation checked separately",
+      "source_marker_centers": [
+        [
+          310,
+          105
+        ],
+        [
+          310,
+          315
+        ],
+        [
+          310,
+          525
+        ]
+      ]
+    },
+    "after": {
+      "errors_css_pixels": [
+        [
+          [
+            -0.1686046511628092,
+            -0.029069767441853855
+          ],
+          [
+            -0.1686046511628092,
+            -0.029069767441853855
+          ]
+        ],
+        [
+          [
+            -0.36940298507460056,
+            -0.375
+          ],
+          [
+            -0.3177966101694665,
+            0.09957627118643586
+          ]
+        ],
+        [
+          [
+            -0.11538461538464162,
+            -0.25
+          ],
+          [
+            -0.1685082872928092,
+            -0.2279005524861759
+          ]
+        ]
+      ],
+      "expected": [
+        [
+          [
+            310.0,
+            105.0
+          ],
+          [
+            310.0,
+            315.0
+          ]
+        ],
+        [
+          [
+            271.25,
+            91.875
+          ],
+          [
+            271.25,
+            276.875
+          ]
+        ],
+        [
+          [
+            305.5,
+            52.25
+          ],
+          [
+            305.5,
+            272.25
+          ]
+        ]
+      ],
+      "inputs": {
+        "cursor": [
+          100,
+          300
+        ],
+        "resize": [
+          640,
+          560
+        ],
+        "zoom": 1.2
+      },
+      "observed": [
+        [
+          [
+            309.8313953488372,
+            104.97093023255815
+          ],
+          [
+            309.8313953488372,
+            314.97093023255815
+          ]
+        ],
+        [
+          [
+            270.8805970149254,
+            91.5
+          ],
+          [
+            270.93220338983053,
+            276.97457627118644
+          ]
+        ],
+        [
+          [
+            305.38461538461536,
+            52.0
+          ],
+          [
+            305.3314917127072,
+            272.0220994475138
+          ]
+        ]
+      ],
+      "passed": true,
+      "scope": "offscreen CALayer page pixels in host coordinates; composed GPU presentation checked separately",
+      "source_marker_centers": [
+        [
+          310,
+          105
+        ],
+        [
+          310,
+          315
+        ],
+        [
+          310,
+          525
+        ]
+      ]
+    },
+    "before_max_error_css_pixels": 221.22237569060775,
+    "after_max_error_css_pixels": 0.375,
+    "baseline_delta": "only duplicate clip geometry flip restored",
+    "before_binary_sha256": "ebfb6952735cacf218cc26a9760c4c4724218716b8791c039da5a0bbc089dbd6",
+    "after_binary_sha256": "1fa6c25d02ef381e9e45ed355101b577ac50382d6f64ecbbae12243c3c98a8e0",
+    "scope": "offscreen layer pixels in host coordinates; excludes GPU presentation and physical pinch"
+  },
+  "idle_buffer_real_tinymist": {
+    "layout": [
+      {
+        "mode": "full",
+        "frame": {
+          "width": 558,
+          "height": 829,
+          "geometry": {
+            "paper": [
+              0,
+              -1,
+              558,
+              1694
+            ],
+            "viewport": [
+              0,
+              -1,
+              558,
+              829
+            ],
+            "view": [
+              558,
+              829
+            ],
+            "scroll": [
+              0,
+              0
+            ],
+            "source_scale": 2.79,
+            "content_size": [
+              200,
+              600
+            ],
+            "pixel_rounded": true,
+            "pages": [
+              [
+                0,
+                200
+              ],
+              [
+                203.584229390681,
+                200
+              ],
+              [
+                407.168458781362,
+                200
+              ]
+            ]
+          }
+        },
+        "original": [
+          0,
+          -1,
+          558,
+          1694
+        ],
+        "mirror": [
+          279,
+          828,
+          558,
+          1694
+        ],
+        "error": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "mode": "partial",
+        "frame": {
+          "width": 558,
+          "height": 829,
+          "geometry": {
+            "paper": [
+              0,
+              -1,
+              558,
+              1694
+            ],
+            "viewport": [
+              0,
+              -1,
+              558,
+              829
+            ],
+            "view": [
+              558,
+              829
+            ],
+            "scroll": [
+              0,
+              0
+            ],
+            "source_scale": 2.79,
+            "content_size": [
+              200,
+              600
+            ],
+            "pixel_rounded": false,
+            "pages": [
+              [
+                0,
+                200
+              ],
+              [
+                203.584229390681,
+                200
+              ],
+              [
+                407.168458781362,
+                200
+              ]
+            ]
+          }
+        },
+        "original": [
+          0,
+          -1,
+          558,
+          1694
+        ],
+        "mirror": [
+          279,
+          828,
+          558,
+          1694
+        ],
+        "error": [
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "pixels": [
+      {
+        "mode": "full",
+        "viewport": [
+          558,
+          829
+        ],
+        "different_pixels": 0,
+        "total_pixels": 462582,
+        "difference_bounds": null
+      },
+      {
+        "mode": "partial",
+        "viewport": [
+          558,
+          829
+        ],
+        "different_pixels": 1,
+        "total_pixels": 462582,
+        "difference_bounds": [
+          275,
+          125,
+          276,
+          126
+        ]
+      }
+    ],
+    "scope": "headless real pinned Tinymist frontend and inert buffer, not the composed Mac editor"
+  },
+  "native_submission": {
+    "scope": "wall time of native image transform submissions, not CPU time or screen presentation; desktop locked in both lanes; no concurrent builds",
+    "warmup_events": 128,
+    "events_per_batch": 2000,
+    "batches": 5,
+    "lanes": {
+      "host-before": {
+        "submission_ms_per_2000_events": [
+          48.243874999999996,
+          31.761290999999996,
+          41.374458000000004,
+          34.504542,
+          34.415583
+        ],
+        "median_us_per_event": 17.252271,
+        "metadata": {
+          "process_exit": 0,
+          "started_unix": 1791894380.777995,
+          "binary_sha256": "ebfb6952735cacf218cc26a9760c4c4724218716b8791c039da5a0bbc089dbd6",
+          "desktop_locked": true,
+          "scope": "native cached-image submission only; no screen presentation or real input"
+        }
+      },
+      "host-fixed": {
+        "submission_ms_per_2000_events": [
+          30.085792,
+          28.55225,
+          29.2515,
+          32.543417,
+          28.321125
+        ],
+        "median_us_per_event": 14.62575,
+        "metadata": {
+          "process_exit": 0,
+          "started_unix": 1791894384.346483,
+          "binary_sha256": "1fa6c25d02ef381e9e45ed355101b577ac50382d6f64ecbbae12243c3c98a8e0",
+          "desktop_locked": true,
+          "scope": "native cached-image submission only; no screen presentation or real input"
+        }
+      }
+    }
+  },
+  "checks": {
+    "fmt": "passed",
+    "clippy_all_targets": "passed",
+    "clippy_desktop_ui_and_profiling": "passed",
+    "focused": {
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0
+    },
+    "default": {
+      "passed": 1892,
+      "failed": 0,
+      "ignored": 50
+    },
+    "profiling": {
+      "passed": 1900,
+      "failed": 0,
+      "ignored": 50
+    },
+    "xtask": {
+      "passed": 17,
+      "failed": 0,
+      "ignored": 0
+    },
+    "javascript": {
+      "passed": 118,
+      "failed": 0
+    },
+    "profiling_test_scope": "profiling tests passed during the layer-coordinate phase; final default suite and optional profiling/native clippy passed after the backdrop/handoff follow-up"
+  },
+  "composed_native_journey": {
+    "status": "passed",
+    "journey": "partial_cache_edges",
+    "evidence": ".tiptoptyp/desktop-ui-tests/run-uh300jjx",
+    "preflight": {
+      "accessibility": true,
+      "desktop": true,
+      "input": true,
+      "locked": false,
+      "screens": [
+        {
+          "height": 982,
+          "scale": 2,
+          "width": 1512
+        }
+      ]
+    },
+    "coverage": "six actual narrow/widen drags per effective Tinymist backend, preserved original top-of-view source point, off-center positioned Ctrl-wheel, warmed cache/handoff checks",
+    "geometry_trace_sample": [
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,859.0) clip=(838.5,30.0)-(1400.0,859.0) egui=(842.5,30.0)-(1400.0,859.0) native=(842.5,30.0)-(1400.0,859.0) viewport=(0.0,0.0)-(1400.0,883.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000",
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,859.0) clip=(838.5,30.0)-(1400.0,859.0) egui=(842.5,30.0)-(1400.0,859.0) native=(842.5,30.0)-(1400.0,859.0) viewport=(0.0,0.0)-(1400.0,883.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000",
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,859.0) clip=(838.5,30.0)-(1400.0,859.0) egui=(842.5,30.0)-(1400.0,859.0) native=(842.5,30.0)-(1400.0,859.0) viewport=(0.0,0.0)-(1400.0,883.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000",
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,859.0) clip=(838.5,30.0)-(1400.0,859.0) egui=(842.5,30.0)-(1400.0,859.0) native=(842.5,30.0)-(1400.0,859.0) viewport=(0.0,0.0)-(1400.0,883.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000"
+    ]
+  },
+  "release_app_sha256": "999cee5ae661a935412f8b9c5b4b3daf2497286b8402f38b92ee322f0ad4640d",
+  "production_performance": "Layer transformation cost unchanged. Backdrop composition is bounded and idle-only; latest stable sharp pixels get one extra paint opportunity before the raster mask is released.",
+  "approved_whole_window_observation": {
+    "method": "cua.getScreenshot and getAXStateAndScreenshot on the owned editor window",
+    "evidence": ".tiptoptyp/desktop-ui-tests/run-2puehh8b",
+    "backend": "Tinymist partial",
+    "workload": "12-second 220-point actual native divider drag; fresh composed before/during/after observations",
+    "result": "First remains above Second and Third during cached resize and after sharp handoff; no restored-page swap",
+    "source_top_anchor": {
+      "clientX": 0.0,
+      "clientY": -1.0,
+      "x": 0.0,
+      "y": {
+        "local": 0.0,
+        "page": 0
+      }
+    },
+    "cache_hits": 214,
+    "handoffs": 1,
+    "scope": "partial composed view observed directly; additional full-mode composed drag interrupted by foreground app switching, not counted as a pass. Automated full mode journey passed."
+  },
+  "remaining_limitations": [
+    "Physical trackpad magnify input is not synthesized. Positioned native Ctrl-wheel plus pure live-cursor selection tests cover the same anchor path."
+  ],
+  "followup_backdrop_and_handoff": {
+    "problems": [
+      "Viewport beyond the final page used the interface palette rather than the live Tinymist backdrop.",
+      "Single RAF acknowledged the sharp vector before a paint opportunity; unchanged zoom scale alone could accept an older divider fit width.",
+      "Partial SVG default centering introduced fractional top padding after CSS height rounding."
+    ],
+    "fixes": [
+      "Resolve and compose at most 32 backdrop ancestors during idle admission, then use the opaque color for the inert capture and the entire native mask.",
+      "Retain warmed pixels across two RAF boundaries; match the requested fitted width and unchanged current geometry; newer input invalidates older release callbacks.",
+      "Pin partial SVG ink to the top-left origin through patches and geometry reuse. Keep full-mode SVG alignment unchanged."
+    ],
+    "deterministic_js": {
+      "passed": 118,
+      "failed": 0,
+      "suites": [
+        "preview navigation",
+        "snapshot buffer",
+        "snapshot coordinator"
+      ],
+      "regressions": [
+        "below-document background",
+        "transparent ancestor composition and bounded cycles",
+        "first paint opportunity",
+        "obsolete fitted width",
+        "geometry movement between paint boundaries",
+        "new divider direction during handoff",
+        "oversized-buffer fallback backdrop",
+        "partial/full origin through fractional resize and source replacement"
+      ]
+    },
+    "native_pixels": {
+      "below_document_backdrop": {
+        "expected": [
+          82,
+          86,
+          89,
+          255
+        ],
+        "observed": [
+          82,
+          86,
+          89,
+          255
+        ],
+        "passed": true
+      },
+      "pixel_anchors": {
+        "errors_css_pixels": [
+          [
+            [
+              -0.1686046511628092,
+              -0.029069767441853855
+            ],
+            [
+              -0.1686046511628092,
+              -0.029069767441853855
+            ]
+          ],
+          [
+            [
+              -0.36940298507460056,
+              -0.375
+            ],
+            [
+              -0.3177966101694665,
+              0.09957627118643586
+            ]
+          ],
+          [
+            [
+              -0.11538461538464162,
+              -0.25
+            ],
+            [
+              -0.1685082872928092,
+              -0.2279005524861759
+            ]
+          ]
+        ],
+        "expected": [
+          [
+            [
+              310.0,
+              105.0
+            ],
+            [
+              310.0,
+              315.0
+            ]
+          ],
+          [
+            [
+              271.25,
+              91.875
+            ],
+            [
+              271.25,
+              276.875
+            ]
+          ],
+          [
+            [
+              305.5,
+              52.25
+            ],
+            [
+              305.5,
+              272.25
+            ]
+          ]
+        ],
+        "inputs": {
+          "cursor": [
+            100,
+            300
+          ],
+          "resize": [
+            640,
+            560
+          ],
+          "zoom": 1.2
+        },
+        "observed": [
+          [
+            [
+              309.8313953488372,
+              104.97093023255815
+            ],
+            [
+              309.8313953488372,
+              314.97093023255815
+            ]
+          ],
+          [
+            [
+              270.8805970149254,
+              91.5
+            ],
+            [
+              270.93220338983053,
+              276.97457627118644
+            ]
+          ],
+          [
+            [
+              305.38461538461536,
+              52.0
+            ],
+            [
+              305.3314917127072,
+              272.0220994475138
+            ]
+          ]
+        ],
+        "passed": true,
+        "scope": "offscreen CALayer page pixels in host coordinates; composed GPU presentation checked separately",
+        "source_marker_centers": [
+          [
+            310,
+            105
+          ],
+          [
+            310,
+            315
+          ],
+          [
+            310,
+            525
+          ]
+        ]
+      },
+      "source_pages": [
+        [
+          0,
+          200
+        ],
+        [
+          210,
+          200
+        ],
+        [
+          420,
+          200
+        ]
+      ],
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3
+    },
+    "actual_tinymist_native_probes": {
+      "full": {
+        "started_utc": "2026-10-13T13:26:02.242419+00:00",
+        "command": [
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/handoff-backdrop-fixed-regression",
+          "--background",
+          "--transition-regression",
+          "--scroll-race",
+          "--dark"
+        ],
+        "returncode": 0,
+        "process_seconds": 23.106908750000002,
+        "checks": {
+          "native_process": true,
+          "actual_tinymist": true,
+          "actual_partial": true,
+          "responsive_during_block": true,
+          "one_final_vector_request": true,
+          "transition_regression": true
+        },
+        "binary_sha256": "604ab6cb3df12cb98b1ccd9a20488b10b96227a574317302c5f610fb54a72612",
+        "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+        "fixture_sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82",
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+        "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+        "not_established": "physical trackpad pinch or GPU presentation",
+        "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/handoff-backdrop-fixed-real/native-full.json"
+      },
+      "partial": {
+        "started_utc": "2026-10-13T13:26:25.622618+00:00",
+        "command": [
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/handoff-backdrop-fixed-regression",
+          "--background",
+          "--transition-regression",
+          "--scroll-race",
+          "--dark"
+        ],
+        "returncode": 0,
+        "process_seconds": 9.987944583001081,
+        "checks": {
+          "native_process": true,
+          "actual_tinymist": true,
+          "actual_partial": true,
+          "responsive_during_block": true,
+          "one_final_vector_request": true,
+          "transition_regression": true
+        },
+        "binary_sha256": "604ab6cb3df12cb98b1ccd9a20488b10b96227a574317302c5f610fb54a72612",
+        "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+        "fixture_sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82",
+        "viewport": [
+          640,
+          420
+        ],
+        "warmup_seconds": 3,
+        "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+        "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+        "not_established": "physical trackpad pinch or GPU presentation",
+        "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/handoff-backdrop-fixed-real/native-partial.json"
+      }
+    },
+    "idle_buffer_below_document": {
+      "layout": [
+        {
+          "mode": "full",
+          "frame": {
+            "width": 172,
+            "height": 829,
+            "geometry": {
+              "paper": [
+                0,
+                -1,
+                172,
+                536
+              ],
+              "viewport": [
+                0,
+                -1,
+                172,
+                829
+              ],
+              "view": [
+                172,
+                829
+              ],
+              "scroll": [
+                0,
+                0
+              ],
+              "source_scale": 0.86,
+              "content_size": [
+                200,
+                600
+              ],
+              "pixel_rounded": true,
+              "pages": [
+                [
+                  0,
+                  200
+                ],
+                [
+                  211.62790697674419,
+                  200
+                ],
+                [
+                  423.25581395348837,
+                  200
+                ]
+              ]
+            }
+          },
+          "original": [
+            0,
+            -1,
+            172,
+            536
+          ],
+          "mirror": [
+            86,
+            828,
+            172,
+            536
+          ],
+          "error": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "mode": "partial",
+          "frame": {
+            "width": 172,
+            "height": 829,
+            "geometry": {
+              "paper": [
+                0,
+                -1,
+                172,
+                536
+              ],
+              "viewport": [
+                0,
+                -1,
+                172,
+                829
+              ],
+              "view": [
+                172,
+                829
+              ],
+              "scroll": [
+                0,
+                0
+              ],
+              "source_scale": 0.86,
+              "content_size": [
+                200,
+                600
+              ],
+              "pixel_rounded": false,
+              "pages": [
+                [
+                  0,
+                  200
+                ],
+                [
+                  211.6279069767442,
+                  200
+                ],
+                [
+                  423.25581395348837,
+                  200
+                ]
+              ]
+            }
+          },
+          "original": [
+            0,
+            -1,
+            172,
+            536
+          ],
+          "mirror": [
+            86,
+            828,
+            172,
+            536
+          ],
+          "error": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "pixels": [
+        {
+          "mode": "full",
+          "viewport": [
+            172,
+            829
+          ],
+          "different_pixels": 172,
+          "total_pixels": 142588,
+          "difference_bounds": [
+            0,
+            828,
+            172,
+            829
+          ],
+          "below_document_live": [
+            82,
+            86,
+            89
+          ],
+          "below_document_cached": [
+            82,
+            86,
+            89
+          ]
+        },
+        {
+          "mode": "partial",
+          "viewport": [
+            172,
+            829
+          ],
+          "different_pixels": 172,
+          "total_pixels": 142588,
+          "difference_bounds": [
+            0,
+            828,
+            172,
+            829
+          ],
+          "below_document_live": [
+            82,
+            86,
+            89
+          ],
+          "below_document_cached": [
+            82,
+            86,
+            89
+          ]
+        }
+      ],
+      "scope": "headless pinned frontend and inert buffer; all differing pixels lie in the existing one-pixel strip outside the bottom of the live scroll container"
+    },
+    "performance": {
+      "hot_input_path": "Native image transformations unchanged. Bounded backdrop reads run only on idle admission; release adds one paint opportunity and at most one pending handoff chain per request.",
+      "scope": "Matched optimized owned SVG with fixed 800ms renderer stall, two pairs, no concurrent builds; submission/ready acknowledgement wall times, not CPU or GPU presentation.",
+      "runs": [
+        {
+          "pair": 0,
+          "lane": "host-fixed",
+          "started_unix": 1791898783.4868019,
+          "binary_sha256": "1fa6c25d02ef381e9e45ed355101b577ac50382d6f64ecbbae12243c3c98a8e0",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/host-fixed-regression",
+            "--background",
+            "--handoff-bench"
+          ],
+          "cached_after_sharp": true,
+          "cached_feedback_us": 71.5,
+          "input_to_sharp_ms": 829.038458
+        },
+        {
+          "pair": 0,
+          "lane": "handoff-backdrop-fixed",
+          "started_unix": 1791898788.539605,
+          "binary_sha256": "604ab6cb3df12cb98b1ccd9a20488b10b96227a574317302c5f610fb54a72612",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/handoff-backdrop-fixed-regression",
+            "--background",
+            "--handoff-bench"
+          ],
+          "cached_after_sharp": true,
+          "cached_feedback_us": 58.666,
+          "input_to_sharp_ms": 838.8061660000001
+        },
+        {
+          "pair": 1,
+          "lane": "host-fixed",
+          "started_unix": 1791898793.542964,
+          "binary_sha256": "1fa6c25d02ef381e9e45ed355101b577ac50382d6f64ecbbae12243c3c98a8e0",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/host-fixed-regression",
+            "--background",
+            "--handoff-bench"
+          ],
+          "cached_after_sharp": true,
+          "cached_feedback_us": 59.916,
+          "input_to_sharp_ms": 831.1655
+        },
+        {
+          "pair": 1,
+          "lane": "handoff-backdrop-fixed",
+          "started_unix": 1791898798.546537,
+          "binary_sha256": "604ab6cb3df12cb98b1ccd9a20488b10b96227a574317302c5f610fb54a72612",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/handoff-backdrop-fixed-regression",
+            "--background",
+            "--handoff-bench"
+          ],
+          "cached_after_sharp": true,
+          "cached_feedback_us": 65.0,
+          "input_to_sharp_ms": 839.6245409999999
+        }
+      ]
+    },
+    "extra_composed_observation": "Final CUA screenshot showed the correct rebuilt partial editor, but extra CUA divider actions did not move it and the read-only inspector did not publish a fresh frame. This is not counted as transition evidence. The final actual native-input journey passed separately."
+  }
+}

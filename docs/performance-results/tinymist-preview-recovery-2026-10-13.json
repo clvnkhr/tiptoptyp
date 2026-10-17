@@ -1,0 +1,675 @@
+{
+  "date": "2026-10-13",
+  "problem": "Screenshot overlay stays active after divider release; zoom stops despite live source responses.",
+  "causes": [
+    "A dispatched fitted-width guard could never match a newer viewport, withholding the completion required to dispatch the queued replacement.",
+    "A resize notification marked JS active without any dispatched request; a native no-op had no terminal acknowledgement.",
+    "Pinned Tinymist reconnect registered the same renderer again; the single-document selector rejected it while source updates continued.",
+    "Unavailable, disposed, reset or replaced renderers could silently discard accepted native work before its final acknowledgement."
+  ],
+  "fixes": [
+    "Sharp readiness compares cached fitted geometry with the CURRENT live container width, rather than the obsolete request width; native serial completion retains the raster while dispatching queued work.",
+    "Only an accepted native request establishes JS ownership.",
+    "Renderer registration deduplicates identical implementations and remains bounded; distinct implementations remain ambiguous.",
+    "Versioned rejection/abandonment releases exactly the failed request, retires capture and waits for fresh renderer readiness. Paint/input callbacks verify renderer identity and exact ownership. Rejection never echoes an unversioned abort."
+  ],
+  "checks": {
+    "javascript": {
+      "passed": 138,
+      "failed": 0
+    },
+    "focused_native_lifecycle": {
+      "passed": 39,
+      "failed": 0
+    },
+    "desktop_contract": {
+      "passed": 57,
+      "failed": 0
+    },
+    "fmt": "passed",
+    "clippy_all_targets": "passed",
+    "clippy_native_and_profiling": "passed",
+    "default_tests": "passed",
+    "xtask_tests": {
+      "passed": 17,
+      "failed": 0
+    }
+  },
+  "native_actual_frontend": {
+    "profile": "optimized opt-level=3, thin LTO, one codegen unit",
+    "fixture": "scripts/fixtures/tinymist-zoom-boundaries.typ",
+    "viewport": [
+      640,
+      420
+    ],
+    "warmup_seconds": 3,
+    "workload": "800ms owned WebContent stall, sent width560, queued width480, complete latest and restore640; off-center zoom, page edges, scroll ordering, explicit WebKit refusal/recovery",
+    "before": {
+      "full": {
+        "metadata": {
+          "started_utc": "2026-10-13T16:13:36.019523+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-before-regression",
+            "--background",
+            "--transition-regression",
+            "--scroll-race",
+            "--dark"
+          ],
+          "returncode": 101,
+          "process_seconds": 14.6704204580019,
+          "checks": {
+            "native_process": false,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": false
+          },
+          "binary_sha256": "c9fea0ac140705cb75e027a24ca279b9cd266997d23e0aa069e4f53d48d71fbc",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+          "fixture_sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-before-real/native-full.json"
+        },
+        "passed": false,
+        "steps": [
+          "reset"
+        ],
+        "failures": [
+          "no sharp handoff for resize-flight-race: {\"active\":true,\"base_scale\":1.0,\"cached\":true,\"capture_view\":[1.0,1.0],\"capturing\":false,\"deferred\":false,\"enabled\":true,\"handoffs\":2,\"hits\":7,\"image_layers\":3,\"image_origin\":[-320.0,-420.0],\"image_size\":[1280.0,1260.0],\"in_flight\":6,\"inputs\":5,\"mask_bounds\":[0.0,0.0,480.0,420.0],\"pending\":7,\"pinch\":false,\"pixels\":[1990,1959],\"prepared\":false,\"revision\":7,\"scale\":1.0,\"source_anchor\":{\"clientX\":0.0,\"clientY\":-1.0,\"x\":0.0,\"y\":{\"local\":101.51249999999916,\"page\":18}},\"source_pages\":[[0.0,680.0],[688.625,680.0],[1377.25,680.0],[2065.875,680.0],[2754.5,680.0],[3443.125,680.0],[4131.75,680.0],[4820.375,680.0],[5509.0,680.0],[6197.625,680.0],[6886.25,680.0],[7574.875,680.0],[8263.5,680.0],[8952.125,680.0],[9640.75,680.0],[10329.375,680.0],[11018.0,680.0],[11706.625,680.0],[12395.25,680.0],[13083.875,680.0],[13772.5,680.0],[14461.125,680.0],[15149.75,680.0],[15838.375,680.0],[16527.0,680.0],[17215.625,680.0],[17904.25,680.0],[18592.875,680.0],[19281.5,680.0],[19970.125,680.0],[20658.75,680.0],[21347.375,680.0],[22036.0,680.0],[22724.625,680.0],[23413.25,680.0],[24101.875,680.0],[24790.5,680.0],[25479.125,680.0],[26167.75,680.0],[26856.375,680.0],[27545.0,680.0],[28233.625,680.0],[28922.25,680.0],[29610.875,680.0],[30299.5,680.0],[30988.125,680.0],[31676.75,680.0],[32365.375,680.0]],\"source_paper\":[0.0,-14490.0,640.0,38314.0],\"source_scale\":1.1594202898550725,\"target_scroll\":{\"left\":0.0,\"top\":10911.75},\"token\":\"mv6vrmfw-303d4x3f7jy:2\",\"transform\":[0.75,0.0,-45.25],\"view_size\":[480.0,420.0]}"
+        ],
+        "evidence": ".tiptoptyp/profiles/zoom-20261013/stuck-before-real/native-full.json"
+      },
+      "partial": {
+        "metadata": {
+          "started_utc": "2026-10-13T16:13:50.791683+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-before-regression",
+            "--background",
+            "--transition-regression",
+            "--scroll-race",
+            "--dark"
+          ],
+          "returncode": 101,
+          "process_seconds": 13.127438041999994,
+          "checks": {
+            "native_process": false,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": false
+          },
+          "binary_sha256": "c9fea0ac140705cb75e027a24ca279b9cd266997d23e0aa069e4f53d48d71fbc",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+          "fixture_sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-before-real/native-partial.json"
+        },
+        "passed": false,
+        "steps": [
+          "reset"
+        ],
+        "failures": [
+          "no sharp handoff for resize-flight-race: {\"active\":true,\"base_scale\":1.0,\"cached\":true,\"capture_view\":[1.0,1.0],\"capturing\":false,\"deferred\":false,\"enabled\":true,\"handoffs\":2,\"hits\":7,\"image_layers\":3,\"image_origin\":[-320.0,-420.0],\"image_size\":[1280.0,1260.0],\"in_flight\":6,\"inputs\":5,\"mask_bounds\":[0.0,0.0,480.0,420.0],\"pending\":7,\"pinch\":false,\"pixels\":[1990,1959],\"prepared\":false,\"revision\":7,\"scale\":1.0,\"source_anchor\":{\"clientX\":0.0,\"clientY\":-1.0,\"x\":0.0,\"y\":{\"local\":101.51249999999916,\"page\":18}},\"source_pages\":[[0.0,680.0],[688.625,680.0],[1377.25,680.0],[2065.875,680.0],[2754.5,680.0],[3443.125,680.0],[4131.75,680.0],[4820.375,680.0],[5509.0,680.0],[6197.625,680.0],[6886.25,680.0],[7574.875,680.0],[8263.5,680.0],[8952.125,680.0],[9640.75,680.0],[10329.375,680.0],[11018.0,680.0],[11706.625,680.0],[12395.25,680.0],[13083.875,680.0],[13772.5,680.0],[14461.125,680.0],[15149.75,680.0],[15838.375,680.0],[16527.0,680.0],[17215.625,680.0],[17904.25,680.0],[18592.875,680.0],[19281.5,680.0],[19970.125,680.0],[20658.75,680.0],[21347.375,680.0],[22036.0,680.0],[22724.625,680.0],[23413.25,680.0],[24101.875,680.0],[24790.5,680.0],[25479.125,680.0],[26167.75,680.0],[26856.375,680.0],[27545.0,680.0],[28233.625,680.0],[28922.25,680.0],[29610.875,680.0],[30299.5,680.0],[30988.125,680.0],[31676.75,680.0],[32365.375,680.0]],\"source_paper\":[0.0,-14490.0,640.0,38314.0],\"source_scale\":1.1594202898550725,\"target_scroll\":{\"left\":0.0,\"top\":10911.75},\"token\":\"mv6vrxny-uqmkgfkkto:2\",\"transform\":[0.75,0.0,-45.25],\"view_size\":[480.0,420.0]}"
+        ],
+        "evidence": ".tiptoptyp/profiles/zoom-20261013/stuck-before-real/native-partial.json"
+      }
+    },
+    "after": {
+      "full": {
+        "metadata": {
+          "started_utc": "2026-10-13T16:20:07.199603+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-final-regression",
+            "--background",
+            "--transition-regression",
+            "--scroll-race",
+            "--dark"
+          ],
+          "returncode": 0,
+          "process_seconds": 21.622903082999983,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "dffb8d2f2f65239a98459038f2aafd4b8add53eb0093b66af88096ac71ca16ac",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+          "fixture_sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-final-real/native-full.json"
+        },
+        "passed": true,
+        "steps": [
+          "reset",
+          "resize-flight-race",
+          "native-rejection-recovery",
+          "off-center-zoom",
+          "off-center-zoom",
+          "divider",
+          "divider",
+          "successive-gesture",
+          "successive-gesture",
+          "successive-gesture",
+          "coverage-excursion",
+          "coverage-return-sharp",
+          "edge",
+          "edge",
+          "edge",
+          "edge",
+          "edge",
+          "edge"
+        ],
+        "failures": [],
+        "evidence": ".tiptoptyp/profiles/zoom-20261013/stuck-final-real/native-full.json",
+        "lifecycle": [
+          {
+            "kind": "resize-flight-race",
+            "after": {
+              "active": false,
+              "in_flight": null,
+              "pending": null,
+              "cached": true,
+              "revision": 7,
+              "handoffs": 3
+            }
+          },
+          {
+            "kind": "native-rejection-recovery",
+            "after": {
+              "active": false,
+              "in_flight": null,
+              "pending": null,
+              "cached": true,
+              "revision": 10,
+              "handoffs": 5
+            }
+          }
+        ]
+      },
+      "partial": {
+        "metadata": {
+          "started_utc": "2026-10-13T16:20:28.926183+00:00",
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-final-regression",
+            "--background",
+            "--transition-regression",
+            "--scroll-race",
+            "--dark"
+          ],
+          "returncode": 0,
+          "process_seconds": 11.196441790998506,
+          "checks": {
+            "native_process": true,
+            "actual_tinymist": true,
+            "actual_partial": true,
+            "responsive_during_block": true,
+            "one_final_vector_request": true,
+            "transition_regression": true
+          },
+          "binary_sha256": "dffb8d2f2f65239a98459038f2aafd4b8add53eb0093b66af88096ac71ca16ac",
+          "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+          "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+          "fixture_sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82",
+          "viewport": [
+            640,
+            420
+          ],
+          "warmup_seconds": 3,
+          "input": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+          "window_mode": "Prohibited throughout; floating level3 owned window ordered front without making key or activating app",
+          "not_established": "physical trackpad pinch or GPU presentation",
+          "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/stuck-final-real/native-partial.json"
+        },
+        "passed": true,
+        "steps": [
+          "reset",
+          "resize-flight-race",
+          "native-rejection-recovery",
+          "off-center-zoom",
+          "off-center-zoom",
+          "divider",
+          "divider",
+          "successive-gesture",
+          "successive-gesture",
+          "successive-gesture",
+          "coverage-excursion",
+          "coverage-return-sharp",
+          "edge",
+          "edge",
+          "edge",
+          "edge",
+          "edge",
+          "edge"
+        ],
+        "failures": [],
+        "evidence": ".tiptoptyp/profiles/zoom-20261013/stuck-final-real/native-partial.json",
+        "lifecycle": [
+          {
+            "kind": "resize-flight-race",
+            "after": {
+              "active": false,
+              "in_flight": null,
+              "pending": null,
+              "cached": true,
+              "revision": 7,
+              "handoffs": 3
+            }
+          },
+          {
+            "kind": "native-rejection-recovery",
+            "after": {
+              "active": false,
+              "in_flight": null,
+              "pending": null,
+              "cached": true,
+              "revision": 10,
+              "handoffs": 5
+            }
+          }
+        ]
+      }
+    }
+  },
+  "real_socket_reconnect": {
+    "before": {
+      "started_utc": "2026-10-13T15:59:16.430Z",
+      "fixture": {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+        "sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82"
+      },
+      "adapter": {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/zoom-20261013/handoff-backdrop-fixed-source/preview_navigation.js",
+        "sha256": "e65ce36e0e008c27c4db69d1a81e31f12314ed4c1c02e434054aa9e4368106c3"
+      },
+      "viewport": {
+        "width": 900,
+        "height": 700
+      },
+      "input": "owned page WebSocket.close, control-channel source changes, and JavaScript adapter actions",
+      "not_established": "native editor interaction, native snapshot composition, or physical trackpad input",
+      "lanes": [
+        {
+          "requested_backend": "tinymist-full",
+          "partial": false,
+          "observations": [
+            {
+              "reconnect": 1,
+              "document_entries": 2,
+              "unique_renderers": 1,
+              "source_pages": 49,
+              "expected_pages": 49,
+              "source_responded": true,
+              "scale_before": 1,
+              "scroll_before": 0,
+              "target_page": 2,
+              "snapshot_available": false,
+              "source_sha256": "f0ba5722433fe6e7742fe446a489540e1bb057eb8e6cef67679435420daea13a",
+              "navigation_worked": false,
+              "target_paper_top": 2237.8491927437153,
+              "scroll_after": 0,
+              "scale_after_zoom": 1,
+              "zoom_worked": false,
+              "native_request_accepted": false,
+              "scale_after_native": 1,
+              "native_request_applied": false,
+              "passed": false
+            },
+            {
+              "reconnect": 2,
+              "document_entries": 3,
+              "unique_renderers": 1,
+              "source_pages": 50,
+              "expected_pages": 50,
+              "source_responded": true,
+              "scale_before": 1,
+              "scroll_before": 0,
+              "target_page": 4,
+              "snapshot_available": false,
+              "source_sha256": "2648466f7f90aea01acbbdd0f0af9216b977709ada8b7ef2fa958939f4879c77",
+              "navigation_worked": false,
+              "target_paper_top": 4474.890004033626,
+              "scroll_after": 0,
+              "scale_after_zoom": 1,
+              "zoom_worked": false,
+              "native_request_accepted": false,
+              "scale_after_native": 1,
+              "native_request_applied": false,
+              "passed": false
+            }
+          ],
+          "errors": [],
+          "passed": false,
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "preview",
+            "--no-open",
+            "--partial-rendering=false",
+            "--root",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-mIeo65",
+            "--host",
+            "127.0.0.1:0",
+            "--data-plane-host",
+            "127.0.0.1:0",
+            "--control-plane-host",
+            "127.0.0.1:0",
+            "--invert-colors",
+            "never",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-mIeo65/main.typ"
+          ],
+          "browser_version": "155.0.8059.40",
+          "phase": "complete",
+          "failure": "Source updated after reconnect, but the adapter failed navigation, zoom, or native request acceptance."
+        },
+        {
+          "requested_backend": "tinymist-partial",
+          "partial": true,
+          "observations": [
+            {
+              "reconnect": 1,
+              "document_entries": 2,
+              "unique_renderers": 1,
+              "source_pages": 49,
+              "expected_pages": 49,
+              "source_responded": true,
+              "scale_before": 1,
+              "scroll_before": 0,
+              "target_page": 2,
+              "snapshot_available": false,
+              "source_sha256": "f0ba5722433fe6e7742fe446a489540e1bb057eb8e6cef67679435420daea13a",
+              "navigation_worked": false,
+              "target_paper_top": 2237.3913972274117,
+              "scroll_after": 0,
+              "scale_after_zoom": 1,
+              "zoom_worked": false,
+              "native_request_accepted": false,
+              "scale_after_native": 1,
+              "native_request_applied": false,
+              "passed": false
+            },
+            {
+              "reconnect": 2,
+              "document_entries": 3,
+              "unique_renderers": 1,
+              "source_pages": 50,
+              "expected_pages": 50,
+              "source_responded": true,
+              "scale_before": 1,
+              "scroll_before": 0,
+              "target_page": 4,
+              "snapshot_available": false,
+              "source_sha256": "2648466f7f90aea01acbbdd0f0af9216b977709ada8b7ef2fa958939f4879c77",
+              "navigation_worked": false,
+              "target_paper_top": 4474.7827944548235,
+              "scroll_after": 0,
+              "scale_after_zoom": 1,
+              "zoom_worked": false,
+              "native_request_accepted": false,
+              "scale_after_native": 1,
+              "native_request_applied": false,
+              "passed": false
+            }
+          ],
+          "errors": [],
+          "passed": false,
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "preview",
+            "--no-open",
+            "--partial-rendering=true",
+            "--root",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-pt61kv",
+            "--host",
+            "127.0.0.1:0",
+            "--data-plane-host",
+            "127.0.0.1:0",
+            "--control-plane-host",
+            "127.0.0.1:0",
+            "--invert-colors",
+            "never",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-pt61kv/main.typ"
+          ],
+          "browser_version": "155.0.8059.40",
+          "phase": "complete",
+          "failure": "Source updated after reconnect, but the adapter failed navigation, zoom, or native request acceptance."
+        }
+      ],
+      "passed": false,
+      "tinymist": {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+        "sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "version": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9"
+      }
+    },
+    "after": {
+      "started_utc": "2026-10-13T16:16:08.753Z",
+      "fixture": {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-boundaries.typ",
+        "sha256": "2b078b6c396f0c5e9766c0b2637f75ac4637565875855bce9f1228d481a0cd82"
+      },
+      "adapter": {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+        "sha256": "4a8106606ac774d1b5f1e6e360ddd454378d8cefbd3361b9a503bb7715bc3f1f"
+      },
+      "viewport": {
+        "width": 900,
+        "height": 700
+      },
+      "input": "owned page WebSocket.close, control-channel source changes, and JavaScript adapter actions",
+      "not_established": "native editor interaction, native snapshot composition, or physical trackpad input",
+      "lanes": [
+        {
+          "requested_backend": "tinymist-full",
+          "partial": false,
+          "observations": [
+            {
+              "reconnect": 1,
+              "document_entries": 1,
+              "unique_renderers": 1,
+              "source_pages": 49,
+              "expected_pages": 49,
+              "source_responded": true,
+              "scale_before": 1,
+              "scroll_before": 0,
+              "target_page": 2,
+              "snapshot_available": true,
+              "source_sha256": "f0ba5722433fe6e7742fe446a489540e1bb057eb8e6cef67679435420daea13a",
+              "navigation_worked": true,
+              "target_paper_top": -0.15080725628467917,
+              "scroll_after": 2238,
+              "scale_after_zoom": 1.1,
+              "zoom_worked": true,
+              "native_request_accepted": true,
+              "scale_after_native": 1.15,
+              "native_request_applied": true,
+              "passed": true
+            },
+            {
+              "reconnect": 2,
+              "document_entries": 1,
+              "unique_renderers": 1,
+              "source_pages": 50,
+              "expected_pages": 50,
+              "source_responded": true,
+              "scale_before": 1.15,
+              "scroll_before": 2622,
+              "target_page": 4,
+              "snapshot_available": true,
+              "source_sha256": "2648466f7f90aea01acbbdd0f0af9216b977709ada8b7ef2fa958939f4879c77",
+              "navigation_worked": true,
+              "target_paper_top": 0.0010681152361939894,
+              "scroll_after": 5140,
+              "scale_after_zoom": 1.265,
+              "zoom_worked": true,
+              "native_request_accepted": true,
+              "scale_after_native": 1.3,
+              "native_request_applied": true,
+              "passed": true
+            }
+          ],
+          "errors": [],
+          "passed": true,
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "preview",
+            "--no-open",
+            "--partial-rendering=false",
+            "--root",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-2Zkibt",
+            "--host",
+            "127.0.0.1:0",
+            "--data-plane-host",
+            "127.0.0.1:0",
+            "--control-plane-host",
+            "127.0.0.1:0",
+            "--invert-colors",
+            "never",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-2Zkibt/main.typ"
+          ],
+          "browser_version": "155.0.8059.40",
+          "phase": "complete"
+        },
+        {
+          "requested_backend": "tinymist-partial",
+          "partial": true,
+          "observations": [
+            {
+              "reconnect": 1,
+              "document_entries": 1,
+              "unique_renderers": 1,
+              "source_pages": 49,
+              "expected_pages": 49,
+              "source_responded": true,
+              "scale_before": 1,
+              "scroll_before": 0,
+              "target_page": 2,
+              "snapshot_available": true,
+              "source_sha256": "f0ba5722433fe6e7742fe446a489540e1bb057eb8e6cef67679435420daea13a",
+              "navigation_worked": true,
+              "target_paper_top": 0.3913972274117441,
+              "scroll_after": 2237,
+              "scale_after_zoom": 1.1,
+              "zoom_worked": true,
+              "native_request_accepted": true,
+              "scale_after_native": 1.15,
+              "native_request_applied": true,
+              "passed": true
+            },
+            {
+              "reconnect": 2,
+              "document_entries": 1,
+              "unique_renderers": 1,
+              "source_pages": 50,
+              "expected_pages": 50,
+              "source_responded": true,
+              "scale_before": 1.15,
+              "scroll_before": 2622,
+              "target_page": 4,
+              "snapshot_available": true,
+              "source_sha256": "2648466f7f90aea01acbbdd0f0af9216b977709ada8b7ef2fa958939f4879c77",
+              "navigation_worked": true,
+              "target_paper_top": -0.000152587890625,
+              "scroll_after": 5140,
+              "scale_after_zoom": 1.265,
+              "zoom_worked": true,
+              "native_request_accepted": true,
+              "scale_after_native": 1.3,
+              "native_request_applied": true,
+              "passed": true
+            }
+          ],
+          "errors": [],
+          "passed": true,
+          "command": [
+            "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+            "preview",
+            "--no-open",
+            "--partial-rendering=true",
+            "--root",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-U6Lii0",
+            "--host",
+            "127.0.0.1:0",
+            "--data-plane-host",
+            "127.0.0.1:0",
+            "--control-plane-host",
+            "127.0.0.1:0",
+            "--invert-colors",
+            "never",
+            "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-preview-reconnect-U6Lii0/main.typ"
+          ],
+          "browser_version": "155.0.8059.40",
+          "phase": "complete"
+        }
+      ],
+      "passed": true,
+      "tinymist": {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+        "sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+        "version": "tinymist \nBuild Timestamp:     2026-06-22T10:37:22.819803000Z\nBuild Git Describe:  v0.15.2\nCommit SHA:          92babed1bc00540882effd29bc56ebc5986792c2\nCommit Date:         None\nCommit Branch:       None\nCargo Target Triple: aarch64-apple-darwin\nTypst Version:       0.15.0\nTypst Source:        git+https://github.com/Myriad-Dreamin/typst.git?tag=tinymist/v0.15.0#391c2dcd698aabf2917db0336868d16f197057d9"
+      }
+    },
+    "scope": "Owned headless pinned frontend, two real WebSocket closes per mode, source changes48\u219249\u219250 pages; not composed desktop input."
+  },
+  "real_editor_journey": {
+    "status": "passed",
+    "journey": "partial_cache_edges",
+    "evidence": ".tiptoptyp/desktop-ui-tests/run-tmv_emyk",
+    "version": "tiptoptyp Dev 0.1.0 (8d3bcae78c39-dirty.1791908043)",
+    "binary_sha256": "5f6d823b38bd65ef115a9f5c3fa6394fb481ad0c7b92875f2f6d77435a0c917e",
+    "preflight": {
+      "accessibility": true,
+      "desktop": true,
+      "input": true,
+      "locked": false,
+      "screens": [
+        {
+          "height": 982,
+          "scale": 2,
+          "width": 1512
+        }
+      ]
+    },
+    "divider_checks": 12,
+    "focus_release_modes": [
+      "partial",
+      "full"
+    ],
+    "geometry_trace_sample": [
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,859.0) clip=(838.5,30.0)-(1400.0,859.0) egui=(842.5,30.0)-(1400.0,859.0) native=(842.5,30.0)-(1400.0,859.0) viewport=(0.0,0.0)-(1400.0,883.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000",
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,859.0) clip=(838.5,30.0)-(1400.0,859.0) egui=(842.5,30.0)-(1400.0,859.0) native=(842.5,30.0)-(1400.0,859.0) viewport=(0.0,0.0)-(1400.0,883.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000",
+      "ui.preview.bounds available=(838.5,30.0)-(1400.0,859.0) clip=(838.5,30.0)-(1400.0,859.0) egui=(842.5,30.0)-(1400.0,859.0) native=(842.5,30.0)-(1400.0,859.0) viewport=(0.0,0.0)-(1400.0,883.0) zoom=1.000 egui_ppp=2.000 native_ppp=2.000"
+    ]
+  },
+  "performance": "No new raster work, polling or idle repaints. Renderer registration stays bounded under10000 duplicate registrations. Rejection callback runs once per vector request; live width check reuses clientWidth. Failed/after native lanes preserve matching optimized profile, fixture, viewport and workload metadata; no CPU/GPU latency claim.",
+  "limitations": [
+    "Physical trackpad pinch and GPU presentation are not synthesized by the native/headless probes. Real editor native input and read-only focus/mask/queue state are recorded separately from those probes. No visual-composition claim is made for this behavior-only follow-up."
+  ]
+}

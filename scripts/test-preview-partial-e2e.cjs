@@ -208,7 +208,7 @@ async function verifyPalettes(page, mode, contract) {
   const directory = path.join(__dirname, '../.tiptoptyp/screenshots/agent-review/partial-optimize');
   for (const palette of states) {
     await page.evaluate(async ({bg,fg}) => {
-      window.tiptoptypSetPalette(bg,fg,'1px solid transparent','1px solid transparent');
+      window.tiptoptypSetPalette(bg,fg,'1px solid transparent','1px solid transparent',[79,140,255]);
       await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
     }, palette);
     const state = await page.evaluate(() => {
