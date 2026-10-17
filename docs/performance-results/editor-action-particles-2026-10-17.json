@@ -1,0 +1,186 @@
+{
+  "date": "2026-10-17",
+  "change": "Add bounded GPU particle feedback for successful editor commands, retaining existing styles and density controls.",
+  "measurement": {
+    "environment": {
+      "os": "macOS 14.6.1",
+      "architecture": "arm64",
+      "cpu": "Apple M2 Max",
+      "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "profile": "release",
+      "features": []
+    },
+    "scope": "100000 disabled input admissions; 100000 state updates at logical 120 Hz with seven typing particles every three frames. Same optimized workload before and after; no native journey or compilation during measured repeats.",
+    "sample_order": [
+      "disabled",
+      "active"
+    ],
+    "warmups": 1,
+    "measured_repeats": 5,
+    "reproduce_build": "cargo test --release --bin tiptoptyp particle_state_measurement -- --ignored --nocapture",
+    "reproduce_samples": "Run the resulting test binary directly with particle_state_measurement --ignored --nocapture once for warmup and five more times.",
+    "baseline": {
+      "warmup_ns_per_frame": [
+        2.9,
+        306.6
+      ],
+      "samples_ns_per_frame": [
+        [
+          1.2,
+          288.4
+        ],
+        [
+          1.2,
+          311.3
+        ],
+        [
+          1.3,
+          288.8
+        ],
+        [
+          1.2,
+          288.8
+        ],
+        [
+          1.2,
+          287.1
+        ]
+      ],
+      "median_ns_per_frame": {
+        "disabled": 1.2,
+        "active": 288.8
+      },
+      "revision": "9cd7702e35ff583c2bcff5f65374b49ebe11819e",
+      "module_sha256": "78713d0404b3df853d54f7a848b1686f5283ba36a6dd25c7b23decfe5ff43b3e",
+      "binary_sha256": "481bc7d3e9784de1bfc83be2ecda0decc97cef388f8792f6bfe53f400c58b36b"
+    },
+    "after": {
+      "warmup_ns_per_frame": [
+        1.6,
+        330.2
+      ],
+      "samples_ns_per_frame": [
+        [
+          1.3,
+          293.9
+        ],
+        [
+          1.7,
+          291.6
+        ],
+        [
+          1.4,
+          289.8
+        ],
+        [
+          1.3,
+          291.5
+        ],
+        [
+          1.4,
+          289.8
+        ]
+      ],
+      "median_ns_per_frame": {
+        "disabled": 1.4,
+        "active": 291.5
+      },
+      "revision": "9cd7702e35ff583c2bcff5f65374b49ebe11819e plus this working patch",
+      "module_sha256": "bf05a5ccd3eeeea0fb249c3cb3264396107a6062b0f770ac793f2788c8f84641",
+      "binary_sha256": "3403ed5c6234827b6e53b2cfab03102e2761d91e0c0008db2daf74087cf1b785",
+      "implementation_commit": "973965ae544350a802fde7d3bb035dfa1cada8ee"
+    },
+    "limitations": [
+      "This is a state-only warm workload, excluding layout, editor operations, document size, clipboard delivery, GPU execution and input-to-pixel latency.",
+      "New action paths did not exist in the baseline; bounded admission, pool size, expiry, immutable upload caching and quiet idle behavior are verified with deterministic tests.",
+      "The medians are effectively unchanged at about 0.29 microseconds per active state update; small differences are not a whole-app performance claim or a cross-platform guarantee."
+    ],
+    "fixture": {
+      "iterations": 100000,
+      "logical_hz": 120,
+      "emission": 7,
+      "emission_every_frames": 3,
+      "origin_points": [
+        400,
+        300
+      ],
+      "view": "Source",
+      "style": "Explosion",
+      "pool_limit": 256,
+      "lifetime_seconds": 0.64
+    }
+  },
+  "checks": {
+    "focused_rust": {
+      "passed": 22,
+      "ignored": 5
+    },
+    "full_rust": {
+      "passed": 2215,
+      "failed": 0,
+      "ignored": 61
+    },
+    "xtask": {
+      "passed": 28
+    },
+    "python_contracts": {
+      "passed": 109
+    },
+    "formatting": "passed",
+    "strict_clippy": [
+      "default all targets",
+      "desktop-ui-tests all targets"
+    ]
+  },
+  "native": {
+    "journey": "typing_particles",
+    "passed": true,
+    "evidence_directory": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f",
+    "binary_sha256": "7d5627418c682155e580a187a84a04d016a091254e6d65e7773fd5d0061db0df",
+    "build_profile": "debug",
+    "burst_count": 19,
+    "bursts_by_action": {
+      "Comment": 4,
+      "Copy": 2,
+      "Cut": 1,
+      "Delete": 1,
+      "Newline": 1,
+      "Paste": 1,
+      "Redo": 1,
+      "Typing": 7,
+      "Undo": 1
+    },
+    "styles": [
+      "Explosion",
+      "Flamethrower",
+      "Plasma",
+      "Railgun",
+      "Shotgun"
+    ],
+    "light_and_dark": [
+      false,
+      true
+    ],
+    "negative_checks": [
+      "navigation and popup dismissal",
+      "Settings typing and undo/redo",
+      "empty-history commands",
+      "document switch returns with reset history and no replay",
+      "disabled typing"
+    ],
+    "indentation": "Covered in semantic source and editable-diff widget tests, not this native journey.",
+    "visual_review": "Fresh root viewport framebuffers inspected for action origin, visible particles, clipping and preserved editor layout. These do not establish composed native preview geometry.",
+    "review_image": "docs/ui-snapshots/editor-action-particles-review.png",
+    "action_captures": {
+      "Comment": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261762855-0009-main.png",
+      "Copy": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261769505-0011-main.png",
+      "Paste": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261784197-0015-main.png",
+      "Cut": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261789152-0016-main.png",
+      "Undo": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261792122-0017-main.png",
+      "Redo": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261795047-0018-main.png",
+      "Newline": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261798583-0019-main.png",
+      "Delete": ".tiptoptyp/desktop-ui-tests/run-rk_y4c4f/1792261801533-0020-main.png"
+    },
+    "initial_particle_preferences_and_appearance_restored": true
+  }
+}
