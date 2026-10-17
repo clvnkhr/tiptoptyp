@@ -430,12 +430,11 @@ pub(super) fn tex(source: &str) -> Vec<Range<usize>> {
                 let end = control_end(source, i, expl);
                 let name = &source[start + 1..end];
                 i = end;
-                if matches!(name, "verb" | "lstinline") {
-                    i = inline_literal_end(source, i, name == "lstinline");
-                    continue;
-                }
-                if name == "mintinline" {
-                    i = mintinline_end(source, i);
+                if matches!(name, "verb" | "lstinline" | "mintinline")
+                    && let Some(end) =
+                        crate::editor_math_guides::tex_inline_literal_end(source, start)
+                {
+                    i = end;
                     continue;
                 }
                 if name == "ExplSyntaxOn" {
@@ -635,77 +634,6 @@ fn declaration_target(
     }
     Some((&source[at..end], at..end, after))
 }
-fn optional_argument_end(source: &str, at: usize) -> Option<usize> {
-    if !source[at..].starts_with('[') {
-        return Some(at);
-    }
-    let end = source[at + 1..].find([']', '\n', '\r'])? + at + 1;
-    (source.as_bytes()[end] == b']').then_some(end + 1)
-}
-fn inline_literal_end(source: &str, mut at: usize, options: bool) -> usize {
-    if source[at..].starts_with('*') {
-        at += 1;
-    }
-    // Incomplete options consume the line instead of repeatedly searching EOF.
-    if options {
-        let Some(after) = optional_argument_end(source, at) else {
-            return comment_end(source, at);
-        };
-        at = after;
-    }
-    delimited_literal_end(source, at)
-}
-fn delimited_literal_end(source: &str, mut at: usize) -> usize {
-    let Some(delimiter) = source[at..].chars().next() else {
-        return at;
-    };
-    if matches!(delimiter, '\n' | '\r') {
-        return at;
-    }
-    at += delimiter.len_utf8();
-    at += source[at..]
-        .find([delimiter, '\n', '\r'])
-        .unwrap_or(source.len() - at);
-    if source[at..].starts_with(delimiter) {
-        at += delimiter.len_utf8();
-    }
-    at
-}
-fn mintinline_end(source: &str, at: usize) -> usize {
-    let at = skip_space(source, at);
-    let Some(after) = optional_argument_end(source, at) else {
-        return comment_end(source, at);
-    };
-    let Some((_, _, after)) = environment_target(source, after) else {
-        return after;
-    };
-    let mut at = skip_space(source, after);
-    if !source[at..].starts_with('{') {
-        return delimited_literal_end(source, at);
-    }
-    let mut depth = 1;
-    at += 1;
-    while at < source.len() && depth > 0 {
-        match source.as_bytes()[at] {
-            b'{' => {
-                depth += 1;
-                at += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                at += 1;
-            }
-            b'\\' => {
-                at = control_end(source, at, false);
-            }
-            _ => {
-                at += source[at..].chars().next().unwrap().len_utf8();
-            }
-        }
-    }
-    at
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -884,6 +812,11 @@ mod tests {
         assert_eq!(bindings.globals.len(), 10_000);
     }
     #[test]
+    fn tex_minted_headers_accept_spacing_and_comments() {
+        let source = "\\def\\foo{x}\\mintinline% header\n{tex}|\\foo| \\foo";
+        assert_eq!(tex_names(source), ["\\foo"]);
+    }
+    #[test]
     fn tex_minted_inline_payload_is_literal_in_both_delimiter_forms() {
         let source = "\\def\\foo{x}\\mintinline[bgcolor=white]{tex}|\\foo|\\mintinline{tex}{\\foo {\\foo}}\\foo";
         assert_eq!(tex_names(source), ["\\foo"]);
@@ -901,6 +834,11 @@ mod tests {
         let first = source.find("[ \\foo").unwrap() + 2;
         let second = source.rfind("[ \\foo").unwrap() + 2;
         assert_eq!(ranges, [first..first + 4, second..second + 4]);
+    }
+    #[test]
+    fn tex_lstinline_star_is_a_payload_delimiter_not_a_verb_modifier() {
+        let source = "\\def\\foo{x}\\lstinline*\\foo* \\foo";
+        assert_eq!(tex_names(source), ["\\foo"]);
     }
     #[test]
     fn tex_mintinline_star_is_a_payload_delimiter_not_a_verb_modifier() {

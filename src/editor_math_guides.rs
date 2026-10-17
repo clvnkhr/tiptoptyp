@@ -74,6 +74,104 @@ pub(crate) fn math_environment(name: &str) -> bool {
     )
 }
 
+/// End of a literal TeX code command, retaining its original byte offsets.
+/// Unterminated delimiter forms stop at the line break, never at a later match.
+pub(crate) fn tex_inline_literal_end(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(start) != Some(&b'\\') {
+        return None;
+    }
+    let mut at = start + 1;
+    while bytes.get(at).is_some_and(u8::is_ascii_alphabetic) {
+        at += 1;
+    }
+    let name = source.get(start + 1..at)?;
+    if !matches!(name, "verb" | "lstinline" | "mintinline") {
+        return None;
+    }
+    fn header_space(source: &str, mut at: usize) -> usize {
+        loop {
+            while let Some(ch) = source[at..].chars().next().filter(|ch| ch.is_whitespace()) {
+                at += ch.len_utf8();
+            }
+            if source[at..].starts_with('%') {
+                at += source[at..].find(['\n', '\r']).unwrap_or(source.len() - at);
+            } else {
+                return at;
+            }
+        }
+    }
+    fn group_end(source: &str, mut at: usize, open: u8, close: u8) -> (usize, bool) {
+        at += 1;
+        let mut depth = 1_usize;
+        let mut braces = 0_usize;
+        while at < source.len() {
+            let byte = source.as_bytes()[at];
+            if matches!(byte, b'\n' | b'\r') && open == b'[' {
+                return (at, false);
+            }
+            if byte == b'\\' {
+                at += 1;
+                at += source[at..].chars().next().map_or(0, char::len_utf8);
+                continue;
+            }
+            if open == b'[' && byte == b'{' {
+                braces += 1;
+            } else if open == b'[' && byte == b'}' {
+                braces = braces.saturating_sub(1);
+            } else if braces == 0 && byte == open {
+                depth += 1;
+            } else if braces == 0 && byte == close {
+                depth -= 1;
+                if depth == 0 {
+                    return (at + 1, true);
+                }
+            }
+            at += source[at..].chars().next().unwrap().len_utf8();
+        }
+        (at, false)
+    }
+    if name == "verb" {
+        if bytes.get(at) == Some(&b'*') {
+            at += 1;
+        }
+    } else {
+        at = header_space(source, at);
+        if bytes.get(at) == Some(&b'[') {
+            let (end, closed) = group_end(source, at, b'[', b']');
+            if !closed {
+                return Some(end);
+            }
+            at = header_space(source, end);
+        }
+        if name == "mintinline" {
+            if bytes.get(at) != Some(&b'{') {
+                return Some(at);
+            }
+            let (end, closed) = group_end(source, at, b'{', b'}');
+            if !closed {
+                return Some(end);
+            }
+            at = header_space(source, end);
+        }
+        if bytes.get(at) == Some(&b'{') {
+            return Some(group_end(source, at, b'{', b'}').0);
+        }
+    }
+    if let Some(delimiter) = source[at..].chars().next()
+        && !matches!(delimiter, '\n' | '\r')
+    {
+        at += delimiter.len_utf8();
+        at += source[at..]
+            .find([delimiter, '\n', '\r'])
+            .unwrap_or(source.len() - at);
+        if source[at..].starts_with(delimiter) {
+            at += delimiter.len_utf8();
+        }
+    }
+    Some(at)
+}
+
 // Tolerant structural reader: no macro expansion; comments, escaped symbols
 // and verbatim payloads cannot create math blocks or alignment points.
 fn tex_blocks(source: &str) -> Vec<MathBlock> {
@@ -118,27 +216,8 @@ fn tex_blocks(source: &str) -> Vec<MathBlock> {
             } else {
                 (1, None, None)
             }
-        } else if rest.starts_with("\\verb")
-            && !rest[5..].starts_with(|c: char| c.is_ascii_alphabetic())
-        {
-            i += 5;
-            if source[i..].starts_with('*') {
-                i += 1;
-            }
-            if let Some(delimiter) = source[i..].chars().next() {
-                // An incomplete \verb ends at the source line break. Treating
-                // that break as its delimiter hides real math on the next line.
-                if matches!(delimiter, '\n' | '\r') {
-                    continue;
-                }
-                i += delimiter.len_utf8();
-                i += source[i..]
-                    .find([delimiter, '\n'])
-                    .unwrap_or(source.len() - i);
-                if source[i..].starts_with(delimiter) {
-                    i += delimiter.len_utf8();
-                }
-            }
+        } else if let Some(end) = tex_inline_literal_end(source, i) {
+            i = end;
             continue;
         } else if rest.starts_with("\\[") || rest.starts_with("\\(") {
             (2, Some(rest[..2].into()), None)
@@ -210,6 +289,30 @@ mod tests {
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].markers.len(), 2);
     }
+    #[test]
+    fn inline_tex_code_cannot_create_math_blocks_or_alignment_markers() {
+        for code in [
+            r"\verb|$ & \[fake\]|",
+            r"\lstinline|$ & \[fake\]|",
+            r"\lstinline*$ & \[fake\]*",
+            r"\lstinline[language={[LaTeX]TeX}]{$ & \text{fake}}",
+            r"\lstinline[language=TeX]!$ & \[fake\]!",
+            r"\lstinline§$ & \[fake\]§",
+            r"\mintinline{tex}|$ & \[fake\]|",
+            "\\mintinline% header\n{tex}|$ & \\[fake\\]|",
+            r"\mintinline[breaklines]{tex}{$ & \text{fake}}",
+            "\\lstinline|$ &\n",
+            "\\mintinline{tex}|$ &\r\n",
+        ] {
+            let real = r"\[ x & y \]";
+            let source = format!("é {code}\n{real}\nActual prose.");
+            let regions = blocks(&source, DocumentKind::Tex);
+            assert_eq!(regions.len(), 1, "{source:?}: {regions:?}");
+            assert_eq!(&source[regions[0].range.clone()], real, "{source:?}");
+            assert_eq!(regions[0].markers.len(), 1, "{source:?}");
+        }
+    }
+
     #[test]
     fn incomplete_verb_cannot_hide_math_on_the_next_line() {
         for newline in ["\n", "\r\n"] {

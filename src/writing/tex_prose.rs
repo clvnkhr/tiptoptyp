@@ -235,7 +235,7 @@ fn prose_mask(original: &[char]) -> (harper_core::Mask, Vec<MathPunctuation>) {
     }
     // Literal payloads must remain opaque even when they contain math delimiters
     // or a text command inside an equation's prose annotation.
-    for range in literal_ranges(original) {
+    for range in literal_ranges(original, &source, &offsets) {
         allowed[range].fill(false);
     }
     let mut mask = harper_core::Mask::new_blank();
@@ -303,7 +303,11 @@ fn argument(source: &[char], mut cursor: usize) -> Option<(usize, usize)> {
     (source.get(cursor) == Some(&'{')).then(|| (cursor, group_end(source, cursor, '{', '}')))
 }
 
-fn literal_ranges(source: &[char]) -> Vec<std::ops::Range<usize>> {
+fn literal_ranges(
+    source: &[char],
+    text: &str,
+    byte_offsets: &[usize],
+) -> Vec<std::ops::Range<usize>> {
     let mut result = Vec::new();
     let mut cursor = 0;
     while cursor < source.len() {
@@ -311,30 +315,16 @@ fn literal_ranges(source: &[char]) -> Vec<std::ops::Range<usize>> {
             skip_comment(source, &mut cursor);
         } else if source[cursor] == '\\' {
             let start = cursor;
+            if let Some(end) =
+                crate::editor_math_guides::tex_inline_literal_end(text, byte_offsets[start])
+            {
+                cursor = byte_offsets.partition_point(|&byte| byte < end);
+                result.push(start..cursor);
+                continue;
+            }
             let (name, end) = command(source, cursor);
             cursor = end;
-            if name == ['v', 'e', 'r', 'b'] {
-                if source.get(cursor) == Some(&'*') {
-                    cursor += 1;
-                }
-                if let Some(&delimiter) = source.get(cursor) {
-                    if matches!(delimiter, '\n' | '\r') {
-                        result.push(start..cursor);
-                        continue;
-                    }
-                    cursor += 1;
-                    while cursor < source.len()
-                        && source[cursor] != delimiter
-                        && source[cursor] != '\n'
-                    {
-                        cursor += 1;
-                    }
-                    if source.get(cursor) == Some(&delimiter) {
-                        cursor += 1;
-                    }
-                    result.push(start..cursor);
-                }
-            } else if name == ['b', 'e', 'g', 'i', 'n']
+            if name == ['b', 'e', 'g', 'i', 'n']
                 && let Some((open, end)) = argument(source, cursor)
             {
                 let environment: String = source[open + 1..end.saturating_sub(1)].iter().collect();
@@ -899,6 +889,40 @@ mod tests {
                         && token.span.get_content(&chars).iter().collect::<String>() == "nonwordxyz"
                 }),
                 "literal code must remain excluded: {source:?}: {tokens:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_code_commands_hide_payloads_without_swallowing_following_prose() {
+        for code in [
+            r"\lstinline|nonwordxyz|",
+            r"\lstinline[language=TeX]!nonwordxyz!",
+            r"\lstinline{nonwordxyz}",
+            r"\lstinline*nonwordxyz*",
+            r"\lstinline§nonwordxyz§",
+            r"\lstinline[language={[LaTeX]TeX}]|nonwordxyz|",
+            r"\mintinline{tex}|nonwordxyz|",
+            "\\mintinline% header\n{tex}|nonwordxyz|",
+            r"\mintinline[breaklines]{tex}{nonwordxyz}",
+            r"\mintinline{tex}!nonwordxyz $ \text{nonwordxyz}!",
+            "\\lstinline|nonwordxyz\n",
+            "\\mintinline{tex}|nonwordxyz\n",
+        ] {
+            let source = format!("é Before {code} misspelld after.");
+            let chars: Vec<_> = source.chars().collect();
+            let words: Vec<String> = parsed(&source)
+                .iter()
+                .filter(|token| token.kind.is_word())
+                .map(|token| token.span.get_content(&chars).iter().collect())
+                .collect();
+            assert!(
+                !words.iter().any(|word| word == "nonwordxyz"),
+                "{source:?}: {words:?}"
+            );
+            assert!(
+                words.iter().any(|word| word == "misspelld"),
+                "{source:?}: {words:?}"
             );
         }
     }
