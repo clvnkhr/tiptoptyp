@@ -7,6 +7,14 @@ Escape or Close returns to the regular editor without moving the pane divider.
 Temporary menus and the Find popup leave the comparison open; its button tips
 use the same native tooltip host as the regular editor, above the preview.
 
+The code pane’s right edge overlays a narrow, click-through overview of all
+Git changes: green additions, blue modifications and red deletions. It marks
+off-screen changes without reserving width or changing text wrapping.
+
+Double-click a text file in the Git subpanel to open this full-document editor.
+An already-open tab keeps its unsaved buffer and undo history. Removed, binary
+and special files retain the read-only Git comparison.
+
 The left column shows the baseline before the document's changes; the right
 column edits the current document directly. There is no separate draft, Apply
 button or diff/edit switch. All lines remain visible. Edits, Undo and Redo

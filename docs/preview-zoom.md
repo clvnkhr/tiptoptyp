@@ -208,7 +208,7 @@ encoding, base64 transfer, browser image decoding or CPU resampling is involved
 in the production cache.
 
 Core Animation image layers sit above the native WebKit content, clipped
-inside the preview's focus outline. Both Tinymist SVG modes use page slices sharing
+to the entire preview viewport. A separate layer above the image draws its focus/hover outline. Both Tinymist SVG modes use page slices sharing
 one immutable CGImage; each visible slice submits only its viewport intersection
 and matching texture rectangle. Offscreen
 slices are hidden, and only pages inside the captured buffer create layers. An opaque sRGB backdrop covers the entire
@@ -529,3 +529,149 @@ One earlier attempt failed to reopen the preview controls after scrolling.
 The same build passed that interaction on retry; the unexplained single-click
 failure is preserved separately in the receipt for follow-up. No automatic
 click retry was added. Physical trackpad pinch remains a manual check.
+
+
+### Scroll ordering and page boundaries (13 October 2026)
+
+An idle wheel event is not proof that the document moved. At a scroll boundary,
+retiring the native image immediately left the browser believing its old cache
+was still usable, so the next zoom took the cold path. Actual browser scroll
+movement now invalidates idle pixels; navigation during an active vector flight
+still interrupts that flight's image feedback.
+
+WebKit can report a resize-induced scroll before its resize event. That event
+keeps the native image and source anchor, and asks its existing native owner to
+finish the resize. Browser frame observations cannot update the native owner's
+last handled dimensions while a cache exists. Captures with missing geometry,
+rubber-band origins or a mismatched viewport are rejected rather than admitted
+as freely transformed images without document limits.
+
+The inert SVG copy retains its parent's gutter color and clips overflow. An
+additional viewport-clipped solid layer preserves that background between page
+slices, including their fixed 10 CSS pixel gaps. Raster slices exclude chrome
+outside the SVG. The raster pixel budget and one-flight rendering queue are
+unchanged; gesture input still performs no image decoding or CPU resizing.
+
+`partial_cache_edges` is the focused composed-app journey. The native probe's
+`--transition-regression --scroll-race --dark` path additionally forces
+scroll-before-resize delivery, verifies actual browser top/bottom scroll limits,
+checks cached-to-sharp positions and dark right-gutter pixels, and fails on
+frontend exceptions. Its layer PNGs show isolated native overlay pixels, not the
+composed editor. Use `scripts/fixtures/tinymist-zoom-boundaries.typ` for a quick
+full-renderer lane; keep the same fixture within each before/after pair.
+
+A two-pixel inset formerly exposed old SVG glyph fragments along the right edge
+while the cached image moved. The opaque mask now covers every viewport pixel;
+a separate native border preserves the current hover/focus stroke. That stroke
+is sent only when it changes or the native cache is reconfigured. Neither zoom
+nor resize queries browser styles or allocates another raster.
+
+Trackpad magnification uses the window's current cursor position, rather than
+the gesture event's potentially fixed center. Coordinates convert through the
+actual WebView bounds and flipped coordinate system. Events outside that view
+or without its owning window do not capture preview input. Keyboard/button zoom
+continues to use the viewport center. The native regression compares opposite
+off-center anchors in both renderers; physical trackpad feel remains a manual
+check.
+
+Full SVG rounds its CSS box before fitting its viewBox. The cache now uses that
+same ink scale and rounded document extent, rather than scaling a previously
+rounded capture height. This prevents a one-pixel last-page overshoot from being
+amplified by the next gesture.
+
+The headless edge reference now records page-aware full-mode geometry and the
+rounded-box metadata. Its older full-mode entries still expected page gaps to
+scale, although the committed viewer already kept them fixed. All 24 cases are
+replayed by the native geometry unit test; the browser runner preserves its
+observations before comparing them so a stale reference has useful failure
+evidence.
+
+### Page pixels and host coordinates (13 October 2026)
+
+The composed editor recording showed cached pages in reverse order while the
+sharp viewer restored First, Second, Third on release. The WebKit backing layer
+already uses AppKit's flipped coordinates; flipping the standalone cache
+container again reversed its page slices. The cache now retains ordinary child
+layer geometry and the snapshot's top-origin texture crop.
+
+The earlier detached single-marker test was misleading: its raw bitmap context
+and the host window used different vertical coordinates, and one full-viewport
+layer concealed reversed page order. The test framebuffer now applies the host's
+top-down coordinate conversion to its CGContext without changing live layer
+frames or texture crops.
+
+The owned native `--pixel-anchors` regression captures three distinct colored
+pages while idle, checks their order, then measures both visible markers after
+a top-anchored divider resize and an off-center zoom on the second page. Expected
+positions come from the source markers, input and fixed 10-pixel page gaps,
+independently of native transform reports. Restoring only the duplicate container
+flip fails by 184–221 CSS pixels during resize/zoom; the corrected page pixels
+match within 0.4 CSS pixels. These offscreen pixels still require a separate
+composed-window observation and do not establish physical trackpad behavior.
+
+```sh
+TIPTOPTYP_NATIVE_ZOOM_TEST=1 \
+TIPTOPTYP_NATIVE_ZOOM_PNG="$PWD/.tiptoptyp/screenshots/agent-review/pixel-anchors.png" \
+TIPTOPTYP_NATIVE_ZOOM_RECEIPT="$PWD/.tiptoptyp/profiles/pixel-anchors.json" \
+/path/to/optimized/native_preview_zoom --background --pixel-anchors
+```
+
+The composed-app journey also preserves the original live-document source point
+at the top of the viewport during divider drags. Positioned native Ctrl-wheel
+input verifies the original source point remains under an off-center cursor and
+that cached feedback was used. It does not synthesize physical trackpad pinch.
+
+
+The idle buffer and native viewport mask use Tinymist's actual backdrop, including
+beneath the final paper. Transparent ancestor colors are composed over the
+interface palette in a bounded, idle-only walk. The native pixel regression also
+fits all three papers inside the viewport and checks the area below them against
+the live gray backdrop. A fresh headless full/partial comparison confirms those
+pixels; it does not establish composed editor presentation.
+
+A sharp render is released across two animation-frame boundaries, providing one
+paint opportunity before hiding cached pixels. The cached fitted width must match the current live container, and geometry
+must remain unchanged between those boundaries. An older dispatched width must
+not block serial completion: native keeps the mask for its queued replacement.
+New input cancels any older release callback. These checks prevent an older
+scale/width from appearing during a quick divider reversal; they keep one pending
+handoff chain, with no idle repaint loop. The partial renderer also uses top-left
+SVG alignment so CSS height rounding cannot add a fractional top letterbox;
+full rendering retains its existing alignment and rounded-axis scale model.
+
+The final `partial_cache_edges` native journey passed for both modes, with six
+narrow/widen drags per mode and positioned cursor zoom. The latest 48-page native
+frontend probes passed both modes, including unequal page sizes, source anchors,
+edge clamps and scroll/resize ordering. Matched optimized handoff probes kept
+cached input submissions within 59–72 microseconds in these local runs; ready
+acknowledgements increased by about 8–10 ms for the extra paint opportunity.
+Those measurements use an owned SVG and fixed renderer stall, not GPU frame
+presentation or a cross-platform latency guarantee. Details and limitations are
+retained in `docs/performance-results/tinymist-zoom-page-order-2026-10-13.json`.
+
+
+Preview liveness has explicit request ownership. A resize notification alone
+cannot open an active flight. Accepted input carries its revision and renderer
+identity through application and both paint boundaries; reset, disposal,
+replacement, or a refused WebKit evaluation terminates only that request.
+Cancelled input cannot replay an old source anchor. Native rejection resets JS
+locally, avoiding an unversioned cancellation that could erase newer work.
+
+Pinned Tinymist reconnects can register the same renderer repeatedly. The adapter
+keeps one entry per implementation and accepts one unique live renderer;
+separate implementations remain ambiguous. The maintained reconnect test closes
+the actual owned WebSocket twice in both modes, updates source to 49 then 50 pages,
+and checks navigation, zoom and request acceptance. Its before/after evidence,
+plus the optimized queued-resize reproduction and composed native-input journey,
+is retained in `docs/performance-results/tinymist-preview-recovery-2026-10-13.json`.
+
+```sh
+TIPTOPTYP_TEST_TINYMIST="$PWD/toolchain/bin/tinymist-aarch64-apple-darwin" \
+TIPTOPTYP_TEST_CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+TIPTOPTYP_PREVIEW_RECONNECT_RECEIPT="$PWD/.tiptoptyp/profiles/preview-reconnect.json" \
+node scripts/test-preview-reconnect.cjs
+```
+
+Set `TIPTOPTYP_PLAYWRIGHT` to the installed Playwright module when it is outside
+Node's search path. The test owns and cleans its browser, server and fixture;
+its optional adapter override selects a preserved failing baseline.

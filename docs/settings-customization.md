@@ -4,12 +4,17 @@ Settings uses compact categories: Appearance, Editor, Writing, Preview, Tools,
 Shortcuts, Snippets and Templates. Wide windows show the categories beside the
 form; narrow windows use a selector next to search. Search spans every category.
 Choose a result to switch to its category and briefly highlight its control.
-Switching categories retains the query, scroll positions and unfinished drafts.
+Switching categories retains the query, scroll positions and unfinished drafts. The Snippets category gives its saved library the available height, with per-row enable, Edit and Delete controls; Edit opens that entry in the separate source editor.
 It does not resize the window or apply unsaved JSON/tool configuration.
 
 Appearance keeps color adjustments collapsed until opened or reached by search.
 Its page sample uses the same theme, page mode and independent comfy background
-and text choices as the actual preview; it does not compile a document.
+and text choices as the actual preview; it does not compile a document. The
+sample figure also follows **Apply dark page appearance to images**.
+
+**Compact layout controls** groups Code, Split, Preview, Explorer and Panel in
+one Layout menu. Turn it off to restore their separate title-bar buttons.
+The same choice is available as `compact_layout_controls` in JSON.
 
 The **{}** button at the top-right of the Settings title bar toggles between
 the form and JSON. Settings can be maximized and restored normally.
@@ -99,21 +104,39 @@ Providers must reject obsolete responses before publication, and must not treat
 “work pending” or an infrastructure failure as a successful empty result. This
 contract applies to new adapters as well as Harper, Tinymist and TeX services.
 
-## Custom snippets and linked fields
+## Snippets and linked fields
 
-Settings → Snippets opens the snippet source form. Search Settings for **snippets** or **completion** to open it directly. Choose **Add Typst snippet** or **Add TeX snippet**, edit the prefix and description, and write ordinary source in the highlighted editor with line numbers and rainbow brackets. Pick Typst, TeX or Both, then **Save snippets**. Invalid drafts cannot be saved and do not change live completions; **Revert changes** restores the saved list. Each language starts with an editable example.
+Settings → Snippets lists every bundled suggestion and your own entries, using the available category height. Enable, Edit and Delete act on individual rows. **Edit** opens that entry in the separate source window; **Edit snippets…** opens the full editor for adding or restoring entries. Search and filter by language, origin and enabled state. The source editor retains highlighting, line numbers and rainbow brackets. Cmd/Ctrl+F searches the editor, Cmd/Ctrl+S saves valid changes, and Cmd/Ctrl+W closes only that window. Unsaved drafts survive closing and reopening.
 
-Backslashes, dollar math, quotes and line breaks are literal: do not JSON-escape them. Optional editable fields use `${1:name}`; repeat `${1}` to mirror the same field, and use `${0}` for the final cursor. Bare `$1`, `$0` and `$x$` are ordinary source. For example, a TeX snippet with prefix `env`:
+Write ordinary Typst or TeX and use the same placeholder syntax in either language:
+
+- `{{1:x}}` creates field 1 with initial text `x`.
+- `{{1}}` repeats field 1; linked copies update together.
+- `{{2:y}}` creates the next field.
+- `{{0}}` is the final cursor position.
+
+Numbers determine Tab order. Dollar signs, backslashes and document commands are ordinary source. For example:
 
 ```tex
-\begin{${1:enumerate}}
-  ${0}
-\end{${1}}
+\begin{{{1:equation}}}
+  {{2:x = y}}
+\end{{{1}}}
+{{0}}
 ```
 
-Type the prefix and accept its completion. Tab/Shift+Tab navigate fields, Escape ends linked editing, and undo/redo apply to mirrored copies together. Editing outside the selected field or switching documents ends the session. Numbered defaults and nested fields are supported; transformations and variables are not interpreted in custom source. Server-provided snippets continue to use standard LSP syntax.
+```typ
+#let {{1:name}}({{2:x}}) = {{2}}{{0}}
+```
 
-Autocomplete uses a link for a language server, a document for a custom snippet and code brackets for a built-in command. Font suggestions show only their name, rendered in that font. Completion rows have no explanatory tooltips. Filtering and rebasing preserve each candidate's provider.
+Each snippet has **Opening delimiter** and **Closing delimiter**, defaulting to `{{` and `}}`. Choose another pair, such as `<<` and `>>`, when those characters clash with the source. **Rewrite markers** converts existing placeholders; **Keep source** changes the reserved delimiters without rewriting the body. Save stays disabled until this choice is made and the resulting definition is valid. The same syntax works for shared snippets; document language only determines where they are offered and how their source is highlighted.
+
+The JSON fields are `placeholder_open` and `placeholder_close`. Bundled suggestions live in `snippet_presets`, custom entries in `snippets`. **Enabled** temporarily pauses an entry; **Duplicate** copies it; **Save snippets** applies the editor draft; **Revert changes** restores saved definitions. **Restore suggestions** resets the bundled list while keeping your own entries. An enabled, eligible custom entry overrides a suggestion with the same prefix. Invalid definitions cannot be saved even when disabled.
+
+`scope` is `anywhere`, `text`, `math` or `code` (Typst code); `line_start` allows indentation. Comments and raw/verbatim text are excluded. Fractions and sums appear inside equations; `mk` starts inline math from text. Auto-miTeX dollar regions use TeX snippets. `fn` inserts a markup declaration beginning with `#let`; `fncode` inserts bare `let` inside a code block.
+
+Type the prefix, open completions (Ctrl+Space by default), choose the snippet and press Enter. Tab/Shift+Tab navigate fields; Escape ends linked editing. Undo/redo applies to mirrored copies together. Multiline expansions retain indentation; recognized TeX package imports are inserted atomically. Editing outside the active field or switching documents ends linked editing. Keep editable fields flat rather than nesting them. Templates do not execute code, transformations or choice menus.
+
+Completion symbols distinguish language-server, snippet and built-in entries. Fonts show only their name rendered in that font. A walkthrough and examples live in **Settings Help → Snippets**.
 
 ## TeX tools in auto-miTeX documents
 
@@ -130,6 +153,20 @@ calligraphic letters (`\mathcal{A}` / Typst `cal(A)`). Script letters (`\mathscr
 symbols also work in Typst. Unverified mappings are labelled as such and disabled
 only for Typst insertion. See [recognition coverage](../assets/handwriting/README.md).
 
+
+## Window background
+
+On macOS, Appearance controls blur and transparency independently. Choose a
+direction, then set Start and End for Blur radius and Background opacity.
+The chosen edge uses End; the opposite edge uses Start. Increasing, decreasing,
+and equal endpoints all work. Uniform uses Start everywhere. Opacity 100% is
+opaque and 0% is fully transparent. Fullscreen disables both effects while
+retaining the saved values; PDF page colours remain independent.
+
+JSON uses `window_background.blur_radius` / `blur_end_radius` (0–50),
+`window_background.opacity_percent` / `opacity_end_percent` (0–100), and the
+independent `blur_fade` / `transparency_fade` directions: `none`, `left`, `right`,
+`up`, or `down`. The defaults are blur 8→0 and opacity 80→100, with Uniform selected.
 
 ## PDF and image appearance
 
@@ -158,7 +195,7 @@ closing cancels generation and removes its temporary snapshot. A confirmed save
 is completed even if its initiating window closes.
 
 LaTeXdiff is discovered in PATH or MacTeX's `/Library/TeX/texbin`; it is not
-bundled. **LaTeXdiff options**, also under Settings → TeX tools, provides its
+bundled. **LaTeXdiff options**, also under Settings → Tools → TeX tools, provides its
 executable, literal arguments, JSON environment and working directory. For
 example `--math-markup=1` marks whole equations. All options are available in
 settings JSON at `latexdiff`; invalid markup choices and malformed command

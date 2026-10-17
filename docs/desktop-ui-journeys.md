@@ -21,9 +21,13 @@ python3 scripts/test-desktop-ui.py --journey problems_focus
 python3 scripts/test-desktop-ui.py --journey preview_find
 python3 scripts/test-desktop-ui.py --journey tables
 python3 scripts/test-desktop-ui.py --journey terminal_find
+python3 scripts/test-desktop-ui.py --journey command_palette --capture-review
+python3 scripts/test-desktop-ui.py --journey preview_jump --capture-review
 python3 scripts/test-desktop-ui.py --journey terminal_load
 python3 scripts/test-desktop-ui.py --journey terminal_theme
 python3 scripts/test-desktop-ui.py --journey explorer_toggle --release --capture-review
+python3 scripts/test-desktop-ui.py --journey pdfium_resize --release --capture-review
+python3 scripts/test-desktop-ui.py --journey background_fades --capture-review
 python3 scripts/test-desktop-ui.py --journey images
 python3 scripts/test-desktop-ui.py --journey find
 python3 scripts/test-desktop-ui.py --journey empty
@@ -108,6 +112,8 @@ now exercised through the real app, and the lower-level coverage retained.
 | problems_focus | Both effective preview backends hand keyboard ownership to Problems; blank-area/header clicks retain it, typing/paste/undo/comment shortcuts cannot change the source or invert preview pages, Cmd+F opens neither source nor preview Find, and closing/switching panels releases focus so source typing resumes; preview → Terminal shortcut releases native preview ownership, a physical t does not invert pages, and shell typing writes a private receipt without clicking the terminal grid |
 | preview_find | Both effective backends: preview Cmd+F opens and focuses the query without another click, subsequent Cmd+F and typing stay in that field, the source and preview palette stay unchanged; header dragging follows the full pointer displacement and holds a stationary pointer for at least 0.4 seconds and eight fresh frames without drift; a popped-out viewer also opens its hidden controls with Cmd+F |
 | tables | Real Typst and named TeX workbenches: cell Cmd+A/typing changes only the draft, Cancel preserves source, Apply updates once with original column widths/rules or TeX placement/row height, and Undo/Redo restores exact source; computed Typst tables open in source mode, invalid drafts disable Apply, and an invalid TeX grid cell can be repaired in Source; optional fresh table framebuffer for separate visual inspection |
+| preview_jump | Right-click source → Reveal in Preview and preview → Reveal in Source in TeX/PDFium and both Tinymist modes, including a detached Tinymist preview; original clicked positions survive moving to the menu, right-click alone does not navigate, source focus returns after inverse navigation, a visible destination pulse is centered on the mapped page/caret and retires without reappearing, and source files stay unchanged |
+| command_palette | Cmd+Shift+P focuses palette search; an unmatched query cannot execute, mixed/lowercase queries return identical actions, Up/Down select exactly one enabled row, Enter and a row click each toggle wrapping once, and Escape/outside clicks preserve source and pending commands. A private real terminal retains keyboard ownership through cancellation and command execution, Comfy Preview toggles exactly once from that terminal, and palette Find targets its query instead of source Find. Native Settings ignores the document palette shortcut. The standalone journey also closes the final clean tab, creates exactly one empty document through palette New, then reopens the unchanged launch fixture; aggregate runs preserve existing tabs. Optional fresh popup framebuffer for separate visual inspection |
 | terminal_find | Focused terminal Cmd+F searches a real isolated shell, including three case-insensitive matches separated by hundreds of scrolled-off lines; Cmd+G/Shift+Cmd+G and Enter/Shift+Enter step exactly once and wrap, button navigation reveals the match; Cmd+A changes only the query; grid Escape leaves search open, grid Cmd+F refocuses it, focused Cmd+F/Escape and one close click hide it; queries and matches stay separate between two shell panes; source stays unchanged |
 | terminal_load | A bounded, isolated Python process redraws the real PTY at requested 30/60 Hz; native per-character typing must change only the focused scratch editor, with exact source/caret and worker output advancement; completed producer receipts record actual frames and terminal Off reaps the pane. This is interaction coverage, not a key-to-pixel latency measurement |
 | terminal_theme | First output from a private real PTY queries foreground/background, all 256 palette entries, and color scheme; Light→Dark and a different dark palette each report exactly once to the opted-in application; 30 fresh frames require no notification churn; Off reaps the child and source stays unchanged |
@@ -119,20 +125,24 @@ now exercised through the real app, and the lower-level coverage retained.
 | tex_intelligence | Real TexLab/Badness readiness and Badness lint output; Harper prose versus math/text boundaries, old Harper/Badness diagnostics retained until refreshed, Problems navigation, accepting a document-defined TexLab command with undo/redo |
 | tex_save | New untyped buffer saved as `.tex` through the native panel, exact disk contents, manual save, clean close and reopening the saved file |
 | harper_math_prose | Real Typst and TeX mathematical-prose fixtures; clean completed diagnostics across display punctuation and compounds, native typing of a typo and repeated word at exact source locations/original paths, stale results retained after correction until a fresh clean result arrives |
+| harper_settings | Real Harper checks after editing the personal dictionary in Settings and removing its entry; capitalized-name filtering switches on/off without suppressing lowercase spelling errors or repeated-word grammar, and the source remains unchanged |
 | editing | Typing and Unicode replacement, undo/redo caret and saved-state indicator, acknowledged multiline paste, upward mouse/keyboard newline selection, direction-preserving comment round trips including a zero-column or blank active endpoint |
 | search | Query focus, next/previous, case/regex toggles, replace one/all, undo and Escape |
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
-| layout | Code/preview/split shortcuts and every compact Layout picker row with a live Tinymist child behind the native popup; Explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close and picker hide/reopen preserve manual height and selected tab |
+| layout | Code/preview/split shortcuts and every compact Layout picker row with a live Tinymist child behind the native popup; Explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close and picker hide/reopen preserve manual height and selected tab; Appearance’s Compact layout controls toggle restores every separate toolbar action and retains panel state |
 | explorer_scroll | Native wheel input over long Files and Contents lists, then Files with Cmd+F's sticky search open; measured offsets advance and remain advanced across fresh frames |
-| git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, Escape preserves the pane width, independent/fixed-width divider settings are exercised by real drags, selected text survives right-click/Copy and direct math conversion in the docked editor, and a diff button tooltip opens in a native window with Tinymist active |
+| git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; a thin right-edge overview includes the offscreen last hunk, stays inside the code pane and retains its global positions during real wheel scrolling without changing pane width; double-clicking the Git file row opens the docked whole-document diff without changing source or pane width; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor and an offscreen hunk receives its finite reveal pulse after scrolling into view, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, Escape preserves the pane width, independent/fixed-width divider settings are exercised by real drags, selected text survives right-click/Copy and direct math conversion in the docked editor, and a diff button tooltip opens in a native window with Tinymist active |
 | folding | Repeated shortcut and gutter collapse/expand without losing headers or source |
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
 | controls | Both engines: stable outline popup size, app-switch hide/restore, outline/history/pages/zoom/fit/search, minimize/reopen, detach/return |
 | settings_search | Settings category switches retain the query and form edits; global search routes across Appearance, Editor, Writing, Preview and Tools without resizing the native window; JSON drafts survive form navigation, invalid/reload/save and JSON Find stay local; Cmd+N/Cmd+5 cannot change the document, repeated Cmd+F owns search, and Cmd+W closes only Settings |
 | partial_preview | A standalone fresh profile first proves buffered Typst is the actual default renderer; a real 48-page A4 document with fractional point sizes then exercises partial preview; native End, Outline and wheel navigation refill visible ink, repeated zoom buttons and keyboard events grow/shrink actual paper geometry, and fit preserves coverage, and full → partial switching preserves both choices and restores the original session |
+| partial_cache_edges | A fresh three-page document in each Tinymist backend; Home then a clamped upward wheel must retain the same warm image; three 220-point narrow/widen cycles must use cached feedback, preserve the original live-document point at the visible top, and hand off within 1.1 CSS pixels; positioned native Ctrl-wheel must preserve the original source point under an off-center cursor; after divider release, clicking the source editor must transfer keyboard ownership away from the preview |
 | partial_zoom_stress | The higher-resolution viewport cache is admitted, its setting disables/releases and reenables it, and real keyboard zoom records fresh cache hits/handoffs in both Tinymist viewers and advances the production native compositor counters; Home/End work after zoom/fit; opt-in dense 48-page matrix/nested-math fixture with unequal fractional widths; real-app partial zoom/refills on the dense fixture, full-viewer keyboard zoom and last-page tracking on the standard 48-page fixture, then return to the dense partial entry; actual paper-scale/ink assertions, cached native feedback through three narrow/widen cycles in each viewer, no stranded render flight after delayed duplicate resize notifications, and native/sharp scroll-anchor comparisons within 1.1 CSS pixels, and identity-based session cleanup |
-| background | Hidden Tinymist frontend loads before reveal; sibling blur stays below document/Settings renderers in Tinymist and PDFium; repeated off/on and theme transitions, native resize, Find typing and source preservation |
+| background_fades | Edit independent blur/transparency directions in Appearance through their actual dropdowns, require the requested and applied native directions on document and Settings windows, and reject uniform fallback for a requested directional effect. Transparency changes and repeated focus/Find typing preserve each controller and its application count; fullscreen removes both effects and restores the chosen directions afterward; both directions return to Uniform. No preview backend switching |
+| background | Hidden Tinymist frontend loads before reveal; WindowServer accepts separate document/Settings blur configurations in Tinymist and PDFium; Settings/Find focus, theme changes and native maximize/restore retain their accepted radius and controller identity without reapplying blur; repeated off/on, Find typing and source preservation. Accepted radius records a successful native call, not compositor readback or composed pixel verification |
 | focus | Two document windows; Settings opened/closed from alternating owners; native focus returns to each owner; minimize/restore, Finder app switch, close second window once |
+| pdfium_resize | Compile an isolated three-page tall TeX fixture through the normal pinned-preview controls into the effective PDFium viewer without changing the Typst backend preference, fit width, and repeatedly drag the actual editor/preview divider with native mouse down/move/up. Every held frame retains the resident batch, active scale and request/admission counters, including a stationary hold beyond the settle deadline; each release publishes exactly one sharp batch at the final physical scale. Source and original session ownership survive. Bounded snapshot latencies are observations, not a presentation-rate benchmark |
 | preview | Pin a real Typst fixture; switch PDFium → Tinymist through Settings; require the selected renderer to become ready; light/dark × comfy transitions; applied palette and live Tinymist DOM checks |
 | pdf_output | Tinymist live preview and engine refresh do not create an adjacent PDF; PDF button and Cmd+R commit actual PDF bytes, edits mark it stale without overwriting it, failed builds retain the old file and clear the queue, corrected builds recover, and PDFium cache refresh does not write the adjacent file |
 | context_menu | Right-click on math opens the editor menu with a direct Convert row (Typst offers the other form; TeX keeps the side submenu on hover); choosing it rewrites the source and undo restores it; a plain-text line offers the standard rows with no Convert row; selected text survives right-click for Copy |
@@ -170,7 +180,7 @@ The existing `scripts/test-native-windows.py` covers a separate native lifecycle
 fixture, not those complete editor journeys.
 
 Use `--capture-review` to retain the initial toolbar/root framebuffer and, with
-`settings_search`, `controls`, `preview_find`, `tables`, `problems_focus`, `terminal_find`, `images`, `explorer_toggle` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
+`settings_search`, `controls`, `preview_find`, `tables`, `problems_focus`, `terminal_find`, `command_palette`, `images`, `explorer_toggle` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
 pass by itself. Use `--trace-preview` to retain native bounds/property traces.
 `--review-failure` retains a failed fixture for up to three minutes and prints its
 exact app path; writing the printed resume file allows cleanup, without changing
@@ -245,8 +255,14 @@ resizes while Find retains keyboard focus. It does not edit Rectangle preference
 
 ### Linked snippets
 
-The `snippets` journey creates Typst and TeX snippets through the highlighted source form (no JSON), saves them, verifies language scoping and the provider symbol, and checks literal dollar math/backslashes plus linked-field edits and undo/redo. Run it with `scripts/test-desktop-ui.py --journey snippets`.
+The `snippets` journey first filters Settings’ full-height snippet list, saves a row’s enable/disable toggle, opens its exact source with Edit, deletes just that row and restores the library. It then opens the dedicated Snippets window from Settings, verifies that source typing and Cmd+F search stay in that window, and uses Cmd+W to close only Snippets while preserving Settings and the main document. It searches and filters the master/detail library, edits and disables a bundled fraction, confirms that disabling removes its live completion, re-enables and expands the edited template, duplicates it, removes both the copy and original, and restores the defaults. It creates custom Typst and TeX templates through the highlighted source editor, changes each opening/closing delimiter pair using the explicit Rewrite markers / Keep source choices, saves, disables/re-enables, reverts an unsaved source change, and removes them. Default-looking `{{1:literal}}` text remains literal when the Typst snippet chooses another delimiter pair with Keep source. Exact document checks cover literal dollar math, backslashes and old `${...}` text, linked-field edits, undo/redo, provider symbols, and language/context scoping. The defaults use `{{1:value}}` in both languages; custom delimiter pairs are exercised independently. Bundled fractions are excluded from prose and comments; auto-miTeX dollar regions require TeX insertion while ordinary Typst markup retains Typst snippets. Optional framebuffer capture records both language forms of the dedicated manager with the full library visible (`snippets` framebuffer target). Run it with `scripts/test-desktop-ui.py --journey snippets`.
 The native driver rejects a locked desktop before attempting input.
+
+### CJK input and native candidate anchors
+
+The `ime` journey reads the actual AppKit `NSTextInputClient.firstRectForCharacterRange` result at the top and at a scrolled line of a 200-line document, and requires that native hint to follow the visible caret. It temporarily selects the already-enabled Pinyin - Simplified source, types physical `n i h a o` keys, requires exact pending `nihao` text and checks the actual native anchor against a fresh IME caret inside the visible source viewport, then requires Space to convert it to exactly `你好` and checks the updated native hint. A collapsed preedit caret is valid; unconverted Latin text cannot pass the Chinese commit check. A Settings edit to 125% interface scale verifies the native coordinate conversion, then restores the original scale. A scoped driver restores the original input source on completion, failure or pipe closure; it never enables sources or changes input-method configuration. If Pinyin is unavailable, the check reports that limitation instead of skipping. The optional `--review-preview` pause leaves actual IME candidates visible for manual observation. Native hint geometry and committed input are interaction evidence, not a screenshot of the system candidate window.
+
+The journey separately checks native committed CJK punctuation with the app's conversion preference off and on, then restores that preference in the isolated test profile. This does not assume a particular punctuation preference in the user's input method. Run `scripts/test-desktop-ui.py --journey ime`.
 
 ### Drawing recognition
 
@@ -288,11 +304,12 @@ capturing, focuses that tooltip's native viewport before the screenshot shortcut
 
 ### Native TeX editing
 
-The three `tex_*` journeys and `harper_math_prose` run individually, together with `--journey tex`,
-or as part of `all`, against named TeX files. Settings are changed through the real JSON editor and restored after
-the journey. They do not inject diagnostics, completion responses or editor
+The three `tex_*` journeys, `harper_math_prose` and `harper_settings` run individually, together with `--journey tex`,
+or as part of `all`, against named files. Initial settings are changed through the real JSON editor and restored after
+the journey. `harper_settings` edits the dictionary and capitalized-name filter through their Writing form controls,
+reopens the dictionary before removing its entry, and requires a fresh real Harper result after every change. They do not inject diagnostics, completion responses or editor
 handlers. The intelligence journey requires working pinned TexLab and Badness;
-Harper runs normally in its background worker. Its completion fixture includes
+Harper runs normally in its background worker. Both math-prose fixtures include Barbato/Romito at the beginning of a sentence and repeated straight/curly possessives in ordinary prose; none may produce spelling diagnostics. Its completion fixture includes
 a full document and a locally defined command, so it does not require external
 package completion databases. Read-only observations include provider readiness,
 diagnostic counts/current revision and fingerprints, never diagnostic text.
@@ -311,3 +328,19 @@ compiler samples, attempts to alter locked macro cells, edits their literal
 neighbours and checks that package options survive Apply/undo. It also starts with a missing siunitx import, verifies that Cancel leaves the preamble unchanged, checks automatic import insertion on Apply, restores both changes with one Undo/Redo, and reapplies without adding duplicate imports.
 
 The completion journey also requests installed fonts in a real Typst `text(font:)` argument, waits for the private name atlas to finish, captures the list when requested, and accepts the selected family without modifying the quote boundaries. Font rows show only the family name in that font.
+
+### Directional window backgrounds
+
+`window_background.blur_fade` and `window_background.transparency_fade` are independent
+JSON options: `none`, `left`, `right`, `up`, or `down`. The Appearance dropdowns show
+`none` as **Uniform**. The chosen edge uses the configured End value; the opposite edge uses Start.
+`window_background.blur_radius` and `window_background.blur_end_radius` set blur
+endpoints from 0 to 50. `window_background.opacity_percent` and
+`window_background.opacity_end_percent` set opacity endpoints from 0 to 100;
+100 is opaque, and 0 is fully transparent. Start and End may increase, decrease,
+or match. Uniform uses Start everywhere. Defaults retain the original 8→0 blur
+and 80→100 opacity fades. Fullscreen uses an opaque background with both effects
+off, preserving the saved directions and endpoints.
+The `background_fades` journey checks native controller acceptance and UI routing;
+its optional fresh framebuffer captures still require inspection and do not
+establish the composed desktop blur appearance by themselves.

@@ -109,3 +109,6 @@ scene	activity-panel	main	main-activity-panel	targeted	-	-
 scene	preview-window	preview-window	preview-window	targeted	-	-
 scene	preview-native-window	preview-window	preview-window-preview-native-window	targeted	-	-
 scene	draw-symbol	main	main-draw-symbol	component	-	-
+scene	source-reveal	main	main-source-reveal	targeted	-	-
+scene	diff-reveal	main	main-diff-reveal	targeted	-	-
+scene	pdfium-reveal	main	main-pdfium-reveal	targeted	-	-

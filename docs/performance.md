@@ -815,3 +815,129 @@ was inspected for regular/bold/italic column spacing, Unicode/emoji visibility
 and clipping. This is viewport pixel evidence, not a native preview composition
 claim. The font-owner correction only moved test setup after the measurements;
 production rendering and the measured probe were unchanged.
+
+## Incremental Harper paragraphs (14 October 2026)
+
+The writing worker still parses the complete document to establish TeX/Typst
+syntax boundaries, then reuses Harper results for unchanged semantic paragraphs.
+A changed line can alter later math/code eligibility, so raw changed-line checks
+would be unsafe. Cache identity includes exact text, relative admitted tokens,
+file kind and dialect; diagnostics are rebased to current source coordinates and
+name evidence is evaluated against the current whole document. The cache retains
+at most 1,024 blocks within an 8 MiB content budget. It adds no idle work or file
+I/O and stays on the existing writing worker.
+
+An optimized component probe on an Apple M2 Max, macOS 14.6.1 arm64 and Rust
+1.98.1 compares the previous full-document pipeline with the cached checker in
+one executable. Both paths use the same adapters, dictionary, automatic language
+selection/effective British dialect and diagnostics filtering. The fixtures have
+160 unique prose paragraphs, display equations bridging sentences, one repeated
+word and a later misspelling: 50,650 bytes for Typst and 51,618 bytes for TeX.
+Every cold, unchanged and edited result is checked against the full reference.
+
+| Worker workload, median | Full reference | Paragraph cache |
+| --- | ---: | ---: |
+| Typst, novel single-paragraph edit | 479.64 ms | 26.36 ms |
+| TeX, novel single-paragraph edit | 472.26 ms | 17.18 ms |
+| Typst, unchanged document | 479.82 ms | 12.92 ms |
+| TeX, unchanged document | 472.45 ms | 4.33 ms |
+| Typst, initially empty paragraph cache | 479.82 ms | 531.88 ms |
+| TeX, initially empty paragraph cache | 472.45 ms | 518.76 ms |
+
+Novel edits are about 18×/27× faster in these fixtures; initially populating the
+cache costs roughly 10% more than the full reference. The comparison retains
+four fresh-process runs, with 28 samples per language for full/cold/unchanged
+work and eight novel-edit samples. Each novel edit has 160 block hits and one
+miss; edits also correct the repeated word and alternately insert a newline to
+verify diagnostic retirement and later line-number remapping.
+
+The measured executable's first harness alternated two edit states. Only the
+first two edit samples in each process are included as novel edits; later
+revisits correctly hit cached results and are excluded from that figure. The
+checked-in harness now generates unique edit states. The frozen measured source,
+executable hash, original logs, source hashes, complete timings and this sample
+selection are recorded in the
+[measurement receipt](performance-results/harper-incremental-2026-10-14.json).
+The first Typst reference check includes process-first dictionary/model setup;
+TeX runs afterward and shares warmed initialization. Those first checks are
+retained separately rather than mixed into the warm comparisons.
+
+Repeat with:
+
+```sh
+cargo test --release --bin tiptoptyp writing::perf::incremental_writing_measurement -- --ignored --nocapture --test-threads=1
+```
+
+The probe excludes the app's edit debounce, GUI rendering, native preview,
+filesystem-cold startup and key-to-pixel latency. No other builds or native
+journeys ran during the timed processes, although ordinary macOS desktop
+services remained active. These local results are not a cross-platform
+performance guarantee. The app's debounce is separately reduced from 600 to
+200 ms; that scheduling improvement is not included in the worker timings.
+
+## PDFium resize publication (16 October 2026)
+
+PDFium rasterization already used a worker, but each visible-page reply still
+cloned the full bitmap, recolored it and converted it into an egui image on the
+UI thread. That pixel preparation now runs on the same worker. During divider
+drags the preview scales its existing GPU textures; only the batch matching the
+current geometry is admitted after release. Other resize/zoom changes use a
+90 ms quiet deadline. New documents, palettes and missing visible pages bypass
+that delay. There is no additional screenshot cache, and the UI no longer
+retains separate raw RGBA pages for recoloring. Unchanged idle frames add no
+render work or repaint timer.
+
+A matched optimized component probe on macOS 14.6.1 arm64, Rust 1.98.1 measures
+`PdfiumView::accept()` and its texture queue. Both release binaries use the same
+1,400 × 900 point viewport, synthetic alternating-color page payloads, three
+warmup publications and 15 measured publications per case. Each publication
+changes scale to exercise image replacement.
+
+| CPU publication, median | Before | After |
+| --- | ---: | ---: |
+| 1,200 × 1,697 pixels, plain palette | 5.869 ms | 0.0017 ms |
+| 1,200 × 1,697 pixels, custom palette | 5.816 ms | 0.0017 ms |
+| 2,000 × 2,828 pixels, plain palette | 14.250 ms | 0.0019 ms |
+| 2,000 × 2,828 pixels, custom palette | 14.378 ms | 0.0016 ms |
+
+The after timings measure only queuing a prepared shared image. Pixel
+preparation moved to the worker, and GPU texture transfer is still required
+when the sharp image changes. These numbers exclude worker preparation,
+PDFium rasterization, compilation, GPU upload, presentation, startup and
+input-to-pixel latency; they do not measure a whole-app speedup. Runs were
+sequential on one Mac and do not establish a cross-platform guarantee.
+The [measurement receipt](performance-results/pdfium-resize-2026-10-16.json)
+retains all samples, percentiles, workload/compiler metadata and hashes of both
+binaries and their frozen source. Complete local logs and frozen artifacts are
+in `.tiptoptyp/profiles/pdfium-resize-2026-10-16/`.
+
+Repeat the publication probe with:
+
+```sh
+cargo test --release --bin tiptoptyp pdfium_publication_probe -- --ignored --nocapture --test-threads=1
+```
+
+Deterministic coverage checks 100 held divider widths without a texture upload,
+one final request after release, stale-result rejection, retained pending
+replies, immediate work for missing pages/new revisions/new palettes, exact
+readiness and unchanged palette/alpha output. These checks and the component
+probe are separate from native desktop interaction evidence.
+
+
+The separate real macOS `pdfium_resize` journey passed in debug build
+`tiptoptyp Dev 0.1.0 (ae1f7ae5ce77-dirty.1792170420)` (binary SHA-256
+`449fa6292c4b8fd743822687640dc7e15914379123efc8aa890471b668fb61c8`).
+Accessibility/input checks passed on an unlocked 1,512 × 982 point display at
+2× scale. The journey compiled a three-page TeX fixture with `geometry` page dimensions
+`400pt` × `1600pt` and verified the effective PDFium viewer, preserving the Typst backend
+preference. Four native divider drags kept the resident batch and counters
+unchanged while held, including a 150 ms stationary hold. Request/admission
+counts advanced from 2/1 to 6/5: exactly one final batch per release.
+
+Evidence is retained in `.tiptoptyp/desktop-ui-tests/run-f7iip6r0/` and summarized
+separately in the receipt. Fresh held-drag `1792171207833-0002-main.png` and
+settled `1792171215880-0003-main.png` root framebuffers were inspected: content
+remained visible within aligned/clipped panel boundaries. Those PNGs are not
+whole-desktop compositor evidence. The debug native interaction pass and driver
+roundtrip observations do not establish optimized CPU latency, presentation
+rate or end-to-end resize latency.

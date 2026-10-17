@@ -111,6 +111,15 @@ The accepted scenes and their framebuffer targets are:
 | `preview-window` | `preview-window` | Detached PDF preview with shared window chrome |
 | `preview-native-window` | `preview-window` | Detached Tinymist native view: use bounds tracing; its pixels are outside the framebuffer |
 | `pdfium-preview` | `main` | Actual bundled PDFium pixels and native egui controls; requires `fetch-pdfium` |
+| `source-reveal` | `main` | Caret reveal feedback in the normal code editor, frozen at 300 ms so both rings can be inspected |
+| `diff-reveal` | `main` | The same fixed reveal phase over the editable current column of a whole-document diff |
+| `pdfium-reveal` | `main` | The same fixed reveal phase over actual PDFium page pixels; requires `fetch-pdfium` |
+
+The three reveal scenes use the production painter at a fixed 300 ms phase.
+They do not rearm a running timer or request animation frames. Returning to another
+scene clears their frozen state. Tinymist's CSS feedback is outside the egui
+framebuffer; the real preview-jump journey observes its live page, visible center,
+and finite lifetime separately from these PNGs.
 
 A capture batch retains its initial document separately from scene-specific
 buffers. Returning from a scene that replaces the document restores that fixture
