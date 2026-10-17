@@ -55,7 +55,8 @@ void main() {
             alpha = (core + exp(-radius * radius * 3.) * .3) * life;
             color = mix(color, vec3(1.), core * .5 * u_dark);
         } else if (v_kind < 1.5) {
-            alpha = exp(-pow((radius - .65) * 12., 2.)) * pow(clamp(1. - v_age / .24, 0., 1.), 1.5);
+            float ring = (radius - .65) * 12.;
+            alpha = exp(-ring * ring) * pow(clamp(1. - v_age / .24, 0., 1.), 1.5);
         }
     }
     alpha = clamp(alpha, 0., 1.);
