@@ -1,0 +1,998 @@
+{
+  "date": "2026-10-17",
+  "change": "Focused code audit: correctness and bounded-work fixes",
+  "baseline_commit": "cf99ad3cd762eaeddc74a6e336eeb8bd7502c9b9",
+  "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc",
+  "evidence_directory": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj",
+  "environment": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu": "Apple M2 Max",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+    "rustc_path": "/Users/calvinkhor/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/rustc",
+    "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+    "cargo_path": "/Users/calvinkhor/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo",
+    "node": "v26.9.0",
+    "build_metadata_note": "Final runtime source was frozen at 0a9e7a3. Its binary identity includes -dirty because this evidence-only JSON was untracked during the build; there were no additional runtime source edits. The committed source file hashes are recorded."
+  },
+  "compiler_metadata_note": "Initial environment capture queried rustup stable rather than the repository-pinned compiler. It does not describe the compiler used for the checked builds. Canonical compiler metadata now comes from rustup which rustc in the repository.",
+  "build_profile": {
+    "component_measurements": "release",
+    "lto": "thin",
+    "codegen_units": 1,
+    "strip": true,
+    "measurement_status": "completed"
+  },
+  "source_metadata": {
+    "metadata": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/metadata.json",
+    "patch": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/source.patch",
+    "patch_sha256": "cf07a404a3357f151a089a27e39544d22739c76a3bc8bd217671475ef30e7345",
+    "file_sha256": {
+      "README.md": "30d08c9001152973706d3d184ac1d0e6050a3696b56ae4006a02447b068c147e",
+      "THIRD_PARTY_NOTICES": "4e7b91414f5e1fb6f51636408fb27c76954171669b3a82bfde6630f5bc82d05a",
+      "docs/pdfium-preview.md": "639942345ed2bf6a801255abc9d14a055e31adf7fd03ac1147159fab659fe4c2",
+      "scripts/desktop_ui_journeys.py": "b90e1a99e9a54868e23b37a0495da000e08ab65b0bd7d1ef7f870af4f86cd361",
+      "scripts/test-preview-navigation.mjs": "9d6c0d857266efd5803f0ccb28ea0ef3c285c1c00fea036f209e2dee26a07908",
+      "src/app.rs": "294605e94ed06eb7b1f12dd071df32641564c6e6d2cf84fa36f28883ed5d0f86",
+      "src/app/editor_particles.rs": "5c04093216cd802a1f8ed9254b75538d2e985e861ba5b4c2c82542e25d920e88",
+      "src/app/editor_particles/gpu.rs": "127993f959a4e4a918f0bc554aaae255950acc1f35e1f34975e5ae0a54bc3580",
+      "src/app/pdfium_resize_tests.rs": "bd9ec8e81ee632cf56d0b93d2b3327ac32f6d04ac26d3184d8b753624b4ecf08",
+      "src/app/pdfium_view.rs": "c690986e243bdb2383475a7a42bd18f8b59c6c6f7cc18331fa727fc75e5d08b1",
+      "src/app/pdfium_view_perf.rs": "d5d01b1a56399e63f5e89d38a6f8dcb46271ba294181b364e2884c1c8889d1d9",
+      "src/app/reveal.rs": "1aa8506a21ad96e58d2675f293559f9d94efdb4b32b24282bf79a21f6f6a06f7",
+      "src/app/tabs_tests.rs": "942452653a4dd6b0abe8fd32769909c7222d4fe279b9eaec6c7a9ca9e3d1c036",
+      "src/bundled_payload.rs": "16d2e14a80cbb0e25a68860b4cfc27247b5ca2475960a0895052f34deee916b1",
+      "src/editor_decoration/local_uses.rs": "0e97fa4ad24eed660fcb1a35c1f82bd291393c505c7f27e2488cba0e510daad9",
+      "src/editor_math_guides.rs": "18f57dbabd0190b4393f260725d49f10f30e871fdc6622802fb01eded993826a",
+      "src/main.rs": "b4f578913aca230762ce5140264a542b6123039b51882b0c4ead8156948719fd",
+      "src/pdfium.rs": "361850b3ff87708dff5be14aaea4de185962252dab0a962c208a1e47aabb90ac",
+      "src/preview_navigation.js": "44e20af3067053ab82b1390996f25a0ff69bb64b7ece3d00766c8d849ef8da67",
+      "src/snippets.rs": "cadaf3ed473d000db5293a6174e53c37a32dd982ae3bead48d18b29124beb81e",
+      "src/writing/tex_prose.rs": "83e7da618794b1755dcfbdc21d6a42c39c9e2560b4fee1b350a8b7581fd2a36d",
+      "tests/package_resources.rs": "ef0f4fc710d2ecdde2c9d829eebda1a8f026e9248142b139ac038f67c0652bf7",
+      "xtask/src/main.rs": "b931da8bb89e3e3d61d3bfffb812cd3363ecfaf682e52009ad759696d5db4b89",
+      "xtask/src/payloads.rs": "6b7d39ce8d579ce640c162f2ecd6f4f139322fd80f01f78e135464caf1f02a3c",
+      "xtask/src/pdfium.rs": "f5a2e994ff607acd53b96807f36700173797652aea6a00796b43096ae4acf22c"
+    },
+    "initial_candidate": {
+      "commit": "49196e938b7baed65c5a033b404fb42337af83e3",
+      "metadata": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/metadata-49196e9.json",
+      "patch": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/source-49196e9.patch"
+    }
+  },
+  "fixes": [
+    {
+      "id": "snippet-linked-edit-boundaries",
+      "commits": [
+        "b9338aa"
+      ],
+      "problem": "Valid linked placeholder edits were rejected when adjacent text contained the same characters.",
+      "result": "Only edits inside the active field update linked fields; edits outside retire the session.",
+      "failing_reproduction": {
+        "case": "${1:aa}${1}${0} expands to aaaa; replacing the first field with a returned None instead of Some(1).",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests."
+      },
+      "focused_verification": {
+        "command": "cargo test snippets:: -- --nocapture",
+        "passed": 47,
+        "scope": "ASCII/Unicode growth, shrink, linked mirror offsets, and edits outside the active field.",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests."
+      }
+    },
+    {
+      "id": "unavailable-particle-renderer",
+      "commits": [
+        "d4187fc"
+      ],
+      "problem": "An unavailable GPU effect could retain invisible particles and animation repaints.",
+      "result": "Editing remains available; unavailable effects neither emit particles nor schedule animation work.",
+      "failing_reproduction": {
+        "case": "Typing emitted 48 particles and one burst despite cached renderer-unavailable state; expected zero particles and bursts.",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests.",
+        "exec_session": 23057
+      },
+      "focused_verification": {
+        "passed": 9,
+        "ignored": 3,
+        "scope": "Real source/diff TextEdit insertion, IME, no particle callback/pool/repaint cause when unavailable.",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests.",
+        "exec_session": 14877
+      },
+      "test_limit": "The cached unavailable status was simulated through a test-only setter; this did not intentionally cause a real driver or shader compile failure."
+    },
+    {
+      "id": "source-reveal-geometry-cache",
+      "commits": [
+        "f8ddf75"
+      ],
+      "problem": "Animation frames repeatedly traversed source rows to locate an unchanged reveal target.",
+      "result": "Local cursor geometry is reused for the same galley and character; changed layout or target invalidates it without retaining the galley.",
+      "failing_reproduction": {
+        "case": "Sixty unchanged animation frames mapped the galley cursor 60 times; expected one.",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests.",
+        "exec_session": 59044
+      },
+      "focused_verification": {
+        "passed": 9,
+        "ignored": 1,
+        "scope": "Cache reuse, cursor/layout invalidation, current scroll translation, and no strong galley retention.",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests.",
+        "exec_session": 90618
+      }
+    },
+    {
+      "id": "inline-tex-literal-boundaries",
+      "commits": [
+        "1fc29fc",
+        "8016bfc"
+      ],
+      "problem": "Inline TeX code was inconsistently treated as prose, definitions or math; minted percent payload delimiters could be swallowed as header comments.",
+      "result": "Inline literals have shared boundaries across affected language features, including percent-delimited minted payloads.",
+      "failing_reproductions": [
+        {
+          "case": "Harper admitted nonwordxyz inside \\lstinline|nonwordxyz|, and the guide scanner found three fake math blocks rather than one real block.",
+          "storage": "Codex tool transcript only",
+          "log": null,
+          "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests."
+        },
+        {
+          "case": "For \\lstinline*\\foo* \\foo, local-use highlighting returned no actual uses rather than the following \\foo.",
+          "storage": "Codex tool transcript only",
+          "log": null,
+          "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests."
+        },
+        {
+          "case": "For \\mintinline{tex}%nonwordxyz% misspelld, the inline literal ended at Some(38) rather than Some(28).",
+          "artifact_limit": "The standalone helper source was retained only after correction, so it is not a preserved pre-fix source artifact.",
+          "storage": "Codex tool transcript only",
+          "log": null,
+          "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests."
+        }
+      ],
+      "focused_verification": [
+        {
+          "filter": "inline_",
+          "passed": 13,
+          "ignored": 1
+        },
+        {
+          "filter": "writing::",
+          "passed": 89,
+          "ignored": 4
+        },
+        {
+          "filter": "tex_",
+          "passed": 135,
+          "ignored": 8
+        },
+        {
+          "filter": "editor_math_guides::",
+          "passed": 4,
+          "ignored": 0
+        },
+        {
+          "filter": "final inline and minted-percent cases across three consumers",
+          "passed": 16,
+          "ignored": 1
+        }
+      ],
+      "focused_output_storage": {
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests."
+      }
+    },
+    {
+      "id": "pdf-search-match-cache",
+      "commits": [
+        "ebee1ba"
+      ],
+      "problem": "Unchanged resident-page PDF Find repaints rescanned the page text (1,000 scans where one was expected).",
+      "result": "Search ranges are reused until the query or resident page text changes; pages share the query allocation.",
+      "failing_reproduction": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdf-search-before.log",
+      "focused_verification": {
+        "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdf-search-after.log",
+        "passed": 28,
+        "ignored": 3
+      }
+    },
+    {
+      "id": "architecture-specific-development-pdfium",
+      "commits": [
+        "949e33d"
+      ],
+      "problem": "Fetching PDFium for another CPU could overwrite the single renderer used by source builds.",
+      "result": "Fetch, source resolution, staging and notices use the same per-target directories; universal packaging avoids a duplicate host fetch.",
+      "failing_reproductions": [
+        ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-architecture-main-red.log",
+        ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-architecture-xtask-red.log"
+      ],
+      "focused_verification": [
+        {
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-architecture-main-green.log",
+          "passed": 6,
+          "ignored": 3
+        },
+        {
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-architecture-xtask-green.log",
+          "passed": 28,
+          "ignored": 0
+        }
+      ],
+      "notices": "Regeneration changed only 17 PDFium directory labels; license and copyright text was byte-identical after that path substitution."
+    },
+    {
+      "id": "lazy-pdfium-startup",
+      "commits": [
+        "dfb1ca3"
+      ],
+      "problem": "Normal startup extracted and bound PDFium before showing the editor, even for Tinymist-only use.",
+      "result": "Normal startup checks manifest/resource metadata; first PDF use prepares and binds on the existing worker. Explicit --check-runtime remains a full load.",
+      "failing_reproduction": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-startup-red.log",
+      "focused_verification": [
+        {
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-startup-green.log",
+          "passed": 1,
+          "ignored": 0
+        },
+        {
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-startup-probe-green.log",
+          "passed": 1,
+          "ignored": 0
+        },
+        {
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-startup-payload-green.log",
+          "passed": 10,
+          "ignored": 1
+        },
+        {
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/audit-pdfium-startup-worker-green.log",
+          "passed": 9,
+          "ignored": 0
+        }
+      ],
+      "native_library_scope": "The nine PDFium tests include actual native thumbnail and worker rendering. They are not desktop interaction or screenshot evidence."
+    },
+    {
+      "id": "first-unsaved-source-preview",
+      "commits": [
+        "ab0486f"
+      ],
+      "problem": "A non-buildable launch file could retain preview ownership when creating the first unsaved source.",
+      "result": "The new source adopts preview ownership; existing buildable source previews remain preserved.",
+      "failing_reproduction": {
+        "case": "Opening a text launch file, then creating a source, returned a missing .tiptoptyp/documents/untitled.typ error instead of the in-memory empty buffer.",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests.",
+        "exec_session": 51238
+      },
+      "focused_verification": {
+        "passed": 47,
+        "ignored": 2,
+        "scope": "Text/PDF/Image launch tabs, first unsaved source preview ownership, and preservation of existing pinned source previews.",
+        "storage": "Codex tool transcript only",
+        "log": null,
+        "limitation": "Focused output was not redirected to a persistent log. Final saved full-suite logs cover the resulting regression tests.",
+        "exec_session": 90583
+      }
+    },
+    {
+      "id": "tinymist-source-jump-anchor-restore",
+      "commits": [
+        "0a9e7a3"
+      ],
+      "problem": "An unchanged full-Tinymist cursor repaint restored the viewport anchor during smooth source navigation, canceling the jump after roughly one pixel.",
+      "result": "The adapter restores an anchor only when paper layout changes and clears an obsolete resize anchor before delegating navigation.",
+      "native_failing_reproduction": ".tiptoptyp/desktop-ui-tests/run-16oklcgr/result.json",
+      "deterministic_failing_reproduction": {
+        "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/code-audit-preview-smooth-red.log",
+        "passed": 2,
+        "failed": 1,
+        "case": "At 1px smooth-scroll advancement, unchanged cursor repaint canceled the pending source navigation."
+      },
+      "focused_verification": {
+        "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/focused/code-audit-preview-navigation-green.log",
+        "command": "node --test scripts/test-preview-navigation.mjs",
+        "passed": 149,
+        "failed": 0
+      },
+      "native_status": "passed rebuilt real-app preview_jump journey",
+      "native_verification": ".tiptoptyp/desktop-ui-tests/run-kc7ci25i/result.json",
+      "final_javascript_verification": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-preview-navigation-final.log"
+    }
+  ],
+  "verification": {
+    "source_cleanup_commit": "49196e9",
+    "required_checks": {
+      "status": "passed",
+      "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc",
+      "chain_exit": 0,
+      "commands": [
+        {
+          "command": "cargo fmt --all -- --check",
+          "status": "passed",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-fmt-final.log"
+        },
+        {
+          "command": "cargo fmt --manifest-path xtask/Cargo.toml -- --check",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-xtask-fmt.log",
+          "status": "passed",
+          "note": "Earlier candidate check retained: the final Tinymist-only commit changes no xtask source."
+        },
+        {
+          "command": "cargo clippy --all-targets -- -D warnings",
+          "status": "passed",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-clippy-final.log"
+        },
+        {
+          "command": "cargo test --no-fail-fast",
+          "status": "passed",
+          "passed": 2190,
+          "failed": 0,
+          "ignored": 59,
+          "test_batches": 18,
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-tests-final.log"
+        },
+        {
+          "command": "cargo test --manifest-path xtask/Cargo.toml",
+          "status": "passed",
+          "passed": 28,
+          "failed": 0,
+          "ignored": 0,
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-xtask-final.log"
+        }
+      ]
+    },
+    "native_interaction": {
+      "status": "passed; the initially failing preview jump was fixed and passed on rerun",
+      "attempts": [
+        {
+          "journey": "typing_particles",
+          "passed": true,
+          "result": ".tiptoptyp/desktop-ui-tests/run-b3dwlnnz/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-typing_particles.log",
+          "version": "tiptoptyp Dev 0.1.0 (49196e938b7b.1792248451)",
+          "binary_sha256": "8bcf1f5d322398170517897657736a0802f93f72fc2fa9f1ef1fd8824458ea51",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification"
+        },
+        {
+          "journey": "preview_find",
+          "passed": true,
+          "result": ".tiptoptyp/desktop-ui-tests/run-3f_y_quz/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-preview_find.log",
+          "version": "tiptoptyp Dev 0.1.0 (49196e938b7b.1792248451)",
+          "binary_sha256": "8bcf1f5d322398170517897657736a0802f93f72fc2fa9f1ef1fd8824458ea51",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification"
+        },
+        {
+          "journey": "preview_jump",
+          "passed": false,
+          "result": ".tiptoptyp/desktop-ui-tests/run-16oklcgr/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-preview_jump.log",
+          "version": "tiptoptyp Dev 0.1.0 (49196e938b7b.1792248451)",
+          "binary_sha256": "8bcf1f5d322398170517897657736a0802f93f72fc2fa9f1ef1fd8824458ea51",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification",
+          "failure": "timed out: source context action reveals the last paper; full Tinymist ready with 3 pages but current page remained 0"
+        },
+        {
+          "journey": "tex_intelligence",
+          "passed": true,
+          "result": ".tiptoptyp/desktop-ui-tests/run-k21ovh1g/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-tex_intelligence.log",
+          "version": "tiptoptyp Dev 0.1.0 (49196e938b7b.1792248451)",
+          "binary_sha256": "8bcf1f5d322398170517897657736a0802f93f72fc2fa9f1ef1fd8824458ea51",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification"
+        },
+        {
+          "journey": "snippets",
+          "passed": true,
+          "result": ".tiptoptyp/desktop-ui-tests/run-1zw3ygw9/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-snippets.log",
+          "version": "tiptoptyp Dev 0.1.0 (49196e938b7b.1792248451)",
+          "binary_sha256": "8bcf1f5d322398170517897657736a0802f93f72fc2fa9f1ef1fd8824458ea51",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification"
+        },
+        {
+          "journey": "preview_jump",
+          "stage": "rebuilt final candidate",
+          "passed": true,
+          "result": ".tiptoptyp/desktop-ui-tests/run-kc7ci25i/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-preview_jump-final.log",
+          "version": "tiptoptyp Dev 0.1.0 (0a9e7a3c8590-dirty.1792249162)",
+          "binary_sha256": "79dc9006101d2fe18ba9781d5fb5de7a7512e939cd5bc11301294ca226ac5af9",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification",
+          "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc"
+        },
+        {
+          "journey": "partial_cache_edges",
+          "stage": "rebuilt final candidate",
+          "passed": true,
+          "result": ".tiptoptyp/desktop-ui-tests/run-qsvvczpr/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-partial_cache_edges-final.log",
+          "version": "tiptoptyp Dev 0.1.0 (0a9e7a3c8590-dirty.1792249162)",
+          "binary_sha256": "79dc9006101d2fe18ba9781d5fb5de7a7512e939cd5bc11301294ca226ac5af9",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification",
+          "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc",
+          "ready_effective_backends_observed": [
+            "Tinymist",
+            "Tinymist partial"
+          ]
+        },
+        {
+          "journey": "preview_find",
+          "stage": "rebuilt final candidate",
+          "passed": true,
+          "result": ".tiptoptyp/desktop-ui-tests/run-5nb0kdsp/result.json",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-preview_find-final.log",
+          "version": "tiptoptyp Dev 0.1.0 (0a9e7a3c8590-dirty.1792249162)",
+          "binary_sha256": "79dc9006101d2fe18ba9781d5fb5de7a7512e939cd5bc11301294ca226ac5af9",
+          "build_profile": "debug",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          },
+          "evidence": "native input and read-only state; no visual composition verification",
+          "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc",
+          "ready_effective_backends_observed": [
+            "PDFium",
+            "Tinymist",
+            "Tinymist partial"
+          ]
+        }
+      ],
+      "scope_limit": "Native input plus read-only state observations. These runs do not establish visually composed native-view geometry.",
+      "failure_diagnosis": "The initial full Tinymist source jump was canceled by an unnecessary viewport anchor restore. The scoped adapter fix passed its deterministic regression and the rebuilt real-app preview_jump journey.",
+      "passed_journeys": [
+        "partial_cache_edges",
+        "preview_find",
+        "preview_jump",
+        "snippets",
+        "tex_intelligence",
+        "typing_particles"
+      ],
+      "passed_unique_journey_count": 6,
+      "candidate_note": "Typing particles, TeX intelligence and snippets passed on the initial 49196e9 candidate. The later Tinymist-only fix changed none of their relevant Rust paths. Preview jump, partial cache edges and preview find passed on rebuilt 0a9e7a3; initial failed and superseded attempts are retained."
+    },
+    "visual_evidence": {
+      "status": "reviewed fresh offscreen GPU captures",
+      "reviewer": "root agent",
+      "images": [
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/light-1x-active.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 3675,
+          "sha256": "a12c38d8c5751f7ce55e73c8d7e0b5f1b7cf7e43ea9c13e761a33b1d1aff7bd6"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/light-1x-later.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 3670,
+          "sha256": "2251ae4c40d7e92d66c3220c7ad0109bdbe5858575d8c82b2bdb3a290388704b"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/light-2x-active.png",
+          "pixels": [
+            720,
+            480
+          ],
+          "bytes": 11770,
+          "sha256": "6ec796496f920c0e26d9a75583d0142bc0b76519bcb0cf4ce80da87861b4d444"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/light-2x-later.png",
+          "pixels": [
+            720,
+            480
+          ],
+          "bytes": 11595,
+          "sha256": "d5f4c82006ad3d0a946b4698136f91a46e96cd39b151d719273bfa2de71f4fd8"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/dark-1x-active.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 3943,
+          "sha256": "f39b2213997b64e1facbb3298bb9be863cef05d0d120c652e569ed6f9e229034"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/dark-1x-later.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 3700,
+          "sha256": "410e3f6b63b09572a148490193659b1d188b05828257cf88a71e444efef39377"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/dark-2x-active.png",
+          "pixels": [
+            720,
+            480
+          ],
+          "bytes": 12733,
+          "sha256": "95d636db325b52cc2a2697c4ae609a6364df77933822a97828586d07300347ac"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/dark-2x-later.png",
+          "pixels": [
+            720,
+            480
+          ],
+          "bytes": 11478,
+          "sha256": "20f0368ba48e7c840647a234c339730724c63e145e02751797a46f7f72d7a03a"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/light-alpha0-active.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 2429,
+          "sha256": "114ab8bda80b1db2c3c4e136e995cef6daa45b5aef2e920fc43e0bdc1e792f94"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/light-alpha96-active.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 3006,
+          "sha256": "3069f9c730ea729140c68f15060ca2d96328a77aabeef2ad9c4c909ad6e07bbb"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/dark-alpha0-active.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 3497,
+          "sha256": "123a53d996bf6ff6c8313fcf8cf1f632d9cd6780534dbc87febd0361ce918620"
+        },
+        {
+          "path": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/screenshots/typing-particles/dark-alpha96-active.png",
+          "pixels": [
+            360,
+            240
+          ],
+          "bytes": 3459,
+          "sha256": "a6cea5bc0eb7516157dd503c0875b243ebb137a4817fab7403068f5fd23c752f"
+        }
+      ],
+      "review": "Root inspected all 12 fresh PNGs: light/dark, 1x/2x, active/later, and alpha 0/96. Clipping, edges, theme colors and fade appearance were correct.",
+      "scope_limit": "Offscreen Glow framebuffer evidence only; these images do not show native child-view composition. Uncomposited alpha may display black in an image viewer; premultiplied-pixel tests, rather than that display color, verify transparent output.",
+      "source_commit": "49196e938b7baed65c5a033b404fb42337af83e3",
+      "relevant_source_unchanged_in_final_commit": true
+    },
+    "explicit_gpu_tests": {
+      "status": "passed",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-gpu.log",
+      "scope": "Actual offscreen Glow drawing at 1x/2x in light/dark themes, clipping and idle work; alpha 0/96 premultiplied pixel checks. Desktop composition is separate.",
+      "source_commit": "49196e938b7baed65c5a033b404fb42337af83e3",
+      "relevant_source_unchanged_in_final_commit": true
+    },
+    "explicit_runtime_probe": {
+      "status": "passed",
+      "command": ".tiptoptyp/desktop-ui-tests/code-audit-binary --check-runtime",
+      "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-runtime.log",
+      "output": "PDF runtime initialized successfully",
+      "scope": "Actual shared-asset preparation and native PDFium load without opening the editor.",
+      "source_commit": "49196e938b7baed65c5a033b404fb42337af83e3",
+      "relevant_source_unchanged_in_final_commit": true
+    },
+    "native_build": {
+      "status": "built",
+      "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc",
+      "build_profile": "debug",
+      "features": [
+        "desktop-ui-tests"
+      ],
+      "executable": ".tiptoptyp/desktop-ui-tests/code-audit-binary-0a9e7a3",
+      "binary_sha256": "79dc9006101d2fe18ba9781d5fb5de7a7512e939cd5bc11301294ca226ac5af9",
+      "binary_bytes": 283657864,
+      "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-build-final.log",
+      "version": "tiptoptyp Dev 0.1.0 (0a9e7a3c8590-dirty.1792249162)"
+    },
+    "prior_candidate_checks": {
+      "source_commit": "49196e938b7baed65c5a033b404fb42337af83e3",
+      "status": "passed",
+      "commands": [
+        {
+          "command": "cargo fmt --all -- --check",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-fmt.log",
+          "status": "passed"
+        },
+        {
+          "command": "cargo fmt --manifest-path xtask/Cargo.toml -- --check",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-xtask-fmt.log",
+          "status": "passed"
+        },
+        {
+          "command": "cargo clippy --all-targets -- -D warnings",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-clippy.log",
+          "status": "passed"
+        },
+        {
+          "command": "cargo test --no-fail-fast",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-tests.log",
+          "status": "passed",
+          "passed": 2190,
+          "failed": 0,
+          "ignored": 59,
+          "test_batches": 18
+        },
+        {
+          "command": "cargo test --manifest-path xtask/Cargo.toml",
+          "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-xtask.log",
+          "status": "passed",
+          "passed": 28,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    "prior_native_build": {
+      "status": "built",
+      "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-native-build.log",
+      "executable": ".tiptoptyp/desktop-ui-tests/code-audit-binary",
+      "source_commit": "49196e938b7baed65c5a033b404fb42337af83e3"
+    },
+    "javascript_adapter": {
+      "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc",
+      "command": "node --test scripts/test-preview-navigation.mjs",
+      "status": "passed",
+      "passed": 149,
+      "failed": 0,
+      "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/verification/code-audit-preview-navigation-final.log"
+    }
+  },
+  "component_performance": {
+    "status": "passed; all three exact optimized component probes completed",
+    "source_commit": "0a9e7a3c85905d16ccfa0f9455eaef3cd1b716bc",
+    "runner_metadata": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/component-measurement-run.json",
+    "binary": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/cache-measurements-binary",
+    "binary_sha256": "2b7dac5e35df7fd0c29a4b83bdfaf06ec80974ec7a4419ecb5029a327205a692",
+    "binary_profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": false,
+      "test": true
+    },
+    "features": [],
+    "build_log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/code-audit-release-build.log",
+    "build_artifact_log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/code-audit-release-build.jsonl",
+    "started_utc": "2026-10-17T15:09:17.103176+00:00",
+    "finished_utc": "2026-10-17T15:09:18.611350+00:00",
+    "execution": "The already-built preserved test binary ran each exact ignored test sequentially with --test-threads=1. No Cargo/rustc build or native journey was active during the timed runs.",
+    "build_processes_before": [],
+    "build_processes_after": [],
+    "comparison_method": "Paired reference and cached/presence paths in the same optimized binary, with the same fixture and warmup. These compare the earlier operation with its replacement, not unlike whole-app builds.",
+    "timing_kind": "elapsed monotonic component timing; not sampled CPU time",
+    "commands": [
+      {
+        "name": "app::pdfium_view::perf::pdf_search_cache_measurement",
+        "command": [
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/cache-measurements-binary",
+          "app::pdfium_view::perf::pdf_search_cache_measurement",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/code-audit-pdf-search-measurement.log",
+        "log_sha256": "8b5d804571272be746259e9ac1a71927e9382e08af1402688e0c11abc922fe22"
+      },
+      {
+        "name": "app::reveal::tests::source_reveal_cache_measurement",
+        "command": [
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/cache-measurements-binary",
+          "app::reveal::tests::source_reveal_cache_measurement",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/code-audit-source-reveal-measurement.log",
+        "log_sha256": "225747e2476955635a2627c1f8311dc579dab046732b764019975478db97aebd"
+      },
+      {
+        "name": "bundled_payload::tests::payload_presence_cache_measurement",
+        "command": [
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/cache-measurements-binary",
+          "bundled_payload::tests::payload_presence_cache_measurement",
+          "--exact",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "log": ".tiptoptyp/profiles/code-audit-2026-10-17-l53p7_qj/code-audit-payload-presence-measurement.log",
+        "log_sha256": "603229e3dcaff90dcadf47ee152fc34052185451d7d6e33cd56a52865b9aacd4"
+      }
+    ],
+    "summary": {
+      "pdf_search": {
+        "reference_median_ns_per_matching_call": 401527.0833333333,
+        "cache_hit_median_ns_per_matching_call": 1.3833333333333333,
+        "interpretation": "The change removes about 0.40 ms of repeated matching work per unchanged resident page in this fixture. The deterministic invariant is one rebuild for unchanged page/query. The extremely small hit-loop timing is near timer granularity and compiler/harness overhead; no speedup ratio is claimed.",
+        "avoided_repeated_scan_median_ms_per_unchanged_page": 0.4015270833333333
+      },
+      "source_reveal": {
+        "reference_median_ns_per_lookup": 12739.417,
+        "cached_median_ns_per_lookup": 10.5,
+        "interpretation": "Unchanged local cursor geometry avoids traversing the 20,000-row galley; live scroll translation and invalidation remain tested separately.",
+        "reference_median_us_per_lookup": 12.739417
+      },
+      "payload_presence": {
+        "reference_fresh_application_cache_median_us": 37430.584,
+        "reference_existing_cache_first_use_median_us": 17010.959,
+        "reference_memo_hit_median_us": 60.333,
+        "presence_only_median_us": 17.75,
+        "interpretation": "Presence avoids decoding/hash/publication and existing-file verification on normal launch. The source archive is warmed; this is not a whole-process cold startup test.",
+        "reference_fresh_application_cache_median_ms": 37.430584
+      }
+    },
+    "raw_results": {
+      "pdf_search": {
+        "cached_median_ns": 1.3833333333333333,
+        "cached_ns_per_frame": [
+          1.3833333333333333,
+          2.0833333333333335,
+          1.4,
+          1.3833333333333333,
+          1.3833333333333333,
+          1.3833333333333333,
+          1.4,
+          1.3833333333333333,
+          1.3833333333333333,
+          1.4,
+          2.7666666666666666,
+          1.3833333333333333,
+          2.0833333333333335,
+          1.3833333333333333,
+          0.7
+        ],
+        "fixture_bytes": 100352,
+        "fixture_characters": 96256,
+        "frames_per_sample": 60,
+        "match_ranges": 2048,
+        "profile": "release",
+        "query": "PREVIEW",
+        "reference_median_ns": 401527.0833333333,
+        "reference_ns_per_frame": [
+          389204.86666666664,
+          383126.38333333336,
+          394170.8333333333,
+          386540.26666666666,
+          387899.3,
+          401527.0833333333,
+          414512.5,
+          422410.4166666667,
+          407077.7833333333,
+          408934.73333333334,
+          398663.88333333336,
+          401894.45,
+          413398.61666666664,
+          412188.18333333335,
+          394709.7166666667
+        ],
+        "samples": 15,
+        "scope": "unchanged resident-page search matching only; excludes highlight painting, layout, PDFium, GPU, and input latency",
+        "warmup_samples": 3
+      },
+      "source_reveal": {
+        "arch": "aarch64",
+        "build": "tiptoptyp Dev 0.1.0 (0a9e7a3c8590-dirty.1792249332)",
+        "cached_ns_per_lookup": [
+          10.5,
+          10.125,
+          10.708,
+          17.708,
+          10.167
+        ],
+        "fixture_characters": 300000,
+        "fixture_rows": 20000,
+        "font": "egui default monospace 12px",
+        "iterations_per_sample": 1000,
+        "layout": "no wrap; font layout excluded from timings",
+        "measurement": "source_reveal_local_geometry",
+        "optimized": true,
+        "os": "macos",
+        "reference_ns_per_lookup": [
+          12739.417,
+          12616.125,
+          12520.208,
+          15436.958,
+          27059.917
+        ],
+        "warmup_lookups": 20
+      },
+      "payload_presence": {
+        "compressed_bytes": 3072308,
+        "compressed_sha256": "7fa65ee4b4da1e85875cb711399c01b57f09de0d4461aa6413864f0aabe34047",
+        "fixture": "toolchain/payloads/aarch64-apple-darwin/libpdfium.dylib.gz",
+        "presence_only_us": [
+          17.75,
+          17.458000000000002,
+          16.583000000000002,
+          20.459,
+          19.375
+        ],
+        "profile": "release",
+        "reference_existing_cache_first_use_us": [
+          16937.125,
+          16703.25,
+          17133.708000000002,
+          17330.041,
+          17010.959
+        ],
+        "reference_fresh_application_cache_us": [
+          36633.583,
+          36025.542,
+          37430.584,
+          37644.292,
+          37942.083
+        ],
+        "reference_memo_hit_us": [
+          60.333,
+          52.083000000000006,
+          75.958,
+          54.583000000000006,
+          61.042
+        ],
+        "samples": 5,
+        "scope": "manifest/resource presence versus prepare (decode/hash/atomic publication or cache verification), warmed source archive; excludes native library binding, fonts, process startup, GUI and whole-app launch",
+        "target": "aarch64-apple-darwin",
+        "uncompressed_bytes": 5992752,
+        "uncompressed_sha256": "11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b",
+        "warmup_extractions": 1
+      }
+    },
+    "scope_limits": [
+      "No GUI input latency, rendering-frame, GPU, whole-app startup or cross-platform speedup is measured or claimed.",
+      "PDF Find timings exclude layout, highlight painting, PDFium work and GPU presentation; very small cache-hit numbers must not be used to claim a precise ratio.",
+      "Source reveal timings exclude galley/font layout, painting and editor event handling. They measure a stationary cursor lookup near the end of an artificial 20,000-row no-wrap galley.",
+      "PDFium fresh application-cache extraction, first verification of an existing file, memo reuse and manifest-only presence are separate scenarios. Native library binding, fonts, process startup and GUI work are excluded; archive I/O is warmed.",
+      "System background activity may remain. Runner process snapshots document the absence of overlapping build and native-journey work rather than establishing a globally idle machine."
+    ]
+  },
+  "remaining_limits": [
+    "All runtime execution in this audit was on an Apple Silicon macOS host; Intel, Windows and Linux execution were not rerun.",
+    "Native interaction evidence is state/input based. Reviewed GPU framebuffers are separate offscreen evidence and do not establish composed native child-view geometry.",
+    "Performance results are bounded same-binary component comparisons, with no whole-app, cold-process startup, input-latency or GPU speedup claim.",
+    "Some initial focused red/green outputs are available only in the Codex tool transcript; saved final full-suite logs cover the resulting tests."
+  ]
+}
