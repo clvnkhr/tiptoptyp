@@ -1137,21 +1137,18 @@ impl Session {
     pub(crate) fn update(&mut self, source: &mut String, caret: usize) -> Option<usize> {
         let old: Vec<char> = self.before.chars().collect();
         let new: Vec<char> = source.chars().collect();
-        let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
-        let suffix = old[prefix..]
-            .iter()
-            .rev()
-            .zip(new[prefix..].iter().rev())
-            .take_while(|(a, b)| a == b)
-            .count();
         let primary = self.selection();
-        let end = old.len() - suffix;
-        if prefix < primary.start || end > primary.end || caret < primary.start {
-            return None;
-        }
         let delta = new.len() as isize - old.len() as isize;
         let new_end = primary.end.checked_add_signed(delta)?;
-        let value: Vec<char> = new[primary.start..new_end].to_vec();
+        // The active field supplies the edit boundary. A document-wide common
+        // prefix can run into an identical adjacent mirror or literal suffix.
+        if new.get(..primary.start)? != old.get(..primary.start)?
+            || new.get(new_end..)? != old.get(primary.end..)?
+            || !(primary.start..=new_end).contains(&caret)
+        {
+            return None;
+        }
+        let value = new.get(primary.start..new_end)?.to_vec();
         let mut edits: Vec<_> = self
             .fields
             .iter()
@@ -1229,6 +1226,40 @@ mod linked_tests {
         assert!(session.advance(false).is_some());
         assert!(session.finished());
     }
+    #[test]
+    fn linked_edits_with_matching_adjacent_text_keep_the_active_field_boundaries() {
+        for (body, replacement) in [
+            ("${1:aa}${1}${0}", "a"),
+            ("${1:aa}${1}${0}", "aaa"),
+            ("${1:αα}${1}${0}", "α"),
+            ("${1:αα}${1}${0}", "ααα"),
+        ] {
+            let expansion = crate::completion_edit::expand_lsp_snippet(body).unwrap();
+            let mut source = expansion.text;
+            let mut session = Session::new(
+                tiptoptyp_core::document::DocumentKey::new(
+                    tiptoptyp_core::document::WindowSessionId::new(1),
+                    1,
+                    1,
+                ),
+                &source,
+                expansion.fields,
+            )
+            .unwrap();
+            let length = replacement.chars().count();
+            let end = source.char_indices().nth(2).unwrap().0;
+            source.replace_range(..end, replacement);
+            assert_eq!(session.update(&mut source, length), Some(length), "{body}");
+            assert_eq!(source, replacement.repeat(2), "{body}");
+            assert_eq!(session.selection(), 0..length, "{body}");
+            assert_eq!(
+                session.advance(false),
+                Some(2 * length..2 * length),
+                "{body}"
+            );
+        }
+    }
+
     #[test]
     fn edits_outside_field_end_the_session_without_overwriting_text() {
         let mut source = "a name name".to_string();
