@@ -32,3 +32,7 @@ the theorem then follows.
 
 The semigroup satisfies $x = y$, which is useful.
 The Leray theorem applies to this semigroup.
+
+Barbato and Romito prove this result.
+Tao's argument agrees with Tao's conclusion.
+Tao’s proof agrees with Romito’s result.

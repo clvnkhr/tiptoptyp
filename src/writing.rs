@@ -1,5 +1,42 @@
 //! Offline writing checks. Locations are Unicode scalar offsets, like Harper.
+mod cache;
+#[cfg(test)]
+mod perf;
 mod spelling;
+pub(crate) use cache::Checker;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Options<'a> {
+    pub(crate) dictionary: &'a str,
+    pub(crate) ignore_capitalized_names: bool,
+}
+
+/// Validate the editable dictionary before publishing it to background checks.
+pub(crate) fn validate_dictionary(text: &str) -> Result<(), String> {
+    if text.len() > 64 * 1024 {
+        return Err("The Harper dictionary must be 64 KiB or smaller.".into());
+    }
+    for (index, line) in text.lines().enumerate() {
+        let word = line.trim();
+        if word.is_empty() {
+            continue;
+        }
+        if word.chars().count() > 128 {
+            return Err(format!(
+                "Harper dictionary line {} exceeds 128 characters.",
+                index + 1
+            ));
+        }
+        if word.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+            return Err(format!(
+                "Harper dictionary line {} must contain one word, without spaces or control characters.",
+                index + 1
+            ));
+        }
+    }
+    Ok(())
+}
+
 mod tex_prose;
 mod typst_prose;
 use crate::{
@@ -7,7 +44,7 @@ use crate::{
     document::DocumentKind,
 };
 use harper_core::{
-    Dialect, Document, TokenStringExt,
+    Dialect, Document,
     linting::{LintGroup, Linter},
     spell::{FstDictionary, MergedDictionary},
 };
@@ -41,6 +78,7 @@ static WRITING_DICTIONARY: LazyLock<Arc<MergedDictionary>> = LazyLock::new(|| {
     Arc::new(dictionary)
 });
 
+#[cfg(test)]
 pub(crate) fn check(
     source: &str,
     kind: DocumentKind,
@@ -49,48 +87,72 @@ pub(crate) fn check(
     unicode: bool,
     language: crate::settings::WritingLanguage,
 ) -> Vec<Diagnostic> {
-    let mut issues: Vec<(usize, String, &'static str)> = Vec::new();
+    check_uncached(source, kind, path, grammar, unicode, language)
+}
+
+/// Full-document reference path for equivalence tests and matched measurements.
+#[cfg(test)]
+fn check_uncached(
+    source: &str,
+    kind: DocumentKind,
+    path: &Path,
+    grammar: bool,
+    unicode: bool,
+    language: crate::settings::WritingLanguage,
+) -> Vec<Diagnostic> {
+    use harper_core::parsers::Parser;
+    let characters: Vec<char> = source.chars().collect();
+    let mut tokens = Vec::new();
+    let mut lints = Vec::new();
     if grammar
         && matches!(kind, DocumentKind::Typst | DocumentKind::Tex)
         && let Some(dialect) = writing_dialect(source, kind, language)
     {
-        let dictionary = Arc::clone(&WRITING_DICTIONARY);
-        let document = Document::new(source, &Prose(kind), dictionary.as_ref());
-        let mut linter = LintGroup::new_curated(dictionary, dialect);
-        let characters: Vec<char> = source.chars().collect();
-        let indentation = indentation_ranges(&characters);
-        let sentence_starts: Vec<_> = document
-            .iter_sentences()
-            .filter_map(|sentence| {
-                sentence
-                    .first_non_whitespace()
-                    .map(|token| token.span.start)
-            })
-            .collect();
-        issues.extend(
-            linter
-                .lint(&document)
-                .into_iter()
-                .filter(|lint| {
-                    let next = indentation.partition_point(|range| range.end <= lint.span.start);
-                    !indentation.get(next).is_some_and(|range| {
-                        range.start <= lint.span.start && lint.span.end <= range.end
-                    })
-                })
-                .filter(|lint| {
-                    lint.lint_kind != harper_core::linting::LintKind::Spelling
-                        || !likely_name(
-                            &characters,
-                            &sentence_starts,
+        tokens = Prose(kind).parse(&characters);
+        let document = Document::new_from_chars(
+            characters.clone().into(),
+            &cache::Replay(&tokens),
+            WRITING_DICTIONARY.as_ref(),
+        );
+        let mut linter = LintGroup::new_curated(Arc::clone(&WRITING_DICTIONARY), dialect);
+        lints = linter.lint(&document);
+    }
+    diagnostics(&characters, &tokens, lints, path, unicode, false)
+}
+
+fn diagnostics(
+    characters: &[char],
+    tokens: &[harper_core::Token],
+    lints: Vec<harper_core::linting::Lint>,
+    path: &Path,
+    unicode: bool,
+    ignore_capitalized_names: bool,
+) -> Vec<Diagnostic> {
+    let indentation = indentation_ranges(characters);
+    // Name evidence belongs to the current whole document, not to a cached block.
+    let names = spelling::Names::new(characters, tokens);
+    let mut issues: Vec<(usize, String, &'static str)> = lints
+        .into_iter()
+        .filter(|lint| {
+            let next = indentation.partition_point(|range| range.end <= lint.span.start);
+            !indentation
+                .get(next)
+                .is_some_and(|range| range.start <= lint.span.start && lint.span.end <= range.end)
+        })
+        .filter(|lint| {
+            lint.lint_kind != harper_core::linting::LintKind::Spelling
+                || !(names.contains(lint.span.start, lint.span.end)
+                    || (ignore_capitalized_names
+                        && spelling::capitalized_name_span(
+                            characters,
                             lint.span.start,
                             lint.span.end,
-                        )
-                })
-                .map(|lint| (lint.span.start, lint.message, "Harper")),
-        );
-    }
+                        )))
+        })
+        .map(|lint| (lint.span.start, lint.message, "Harper"))
+        .collect();
     if unicode {
-        for (index, ch) in source.chars().enumerate() {
+        for (index, &ch) in characters.iter().enumerate() {
             let description = match ch {
                 '\u{200b}' => Some("zero-width space"),
                 '\u{200c}' => Some("zero-width non-joiner"),
@@ -115,12 +177,10 @@ pub(crate) fn check(
                 ));
             }
         }
-        // Only flag visually Latin letters inside an otherwise ASCII word;
-        // ordinary Greek, Cyrillic, and CJK prose is not suspicious by itself.
         let mut start = 0;
-        for word in source.split_inclusive(|c: char| !c.is_alphanumeric() && c != '_') {
-            if word.chars().any(|c| c.is_ascii_alphabetic()) {
-                for (offset, ch) in word.chars().enumerate() {
+        for word in characters.split_inclusive(|c| !c.is_alphanumeric() && *c != '_') {
+            if word.iter().any(char::is_ascii_alphabetic) {
+                for (offset, &ch) in word.iter().enumerate() {
                     if "аесорхуАВСЕНКМОРТХіјѕΙΟΡΧορχ".contains(ch) {
                         issues.push((
                             start + offset,
@@ -133,29 +193,25 @@ pub(crate) fn check(
                     }
                 }
             }
-            start += word.chars().count();
+            start += word.len();
         }
     }
     issues.sort_by_key(|issue| issue.0);
-    let mut locations = source
-        .chars()
-        .scan((1, 1), |position, ch| {
-            let current = *position;
-            if ch == '\n' {
-                position.0 += 1;
-                position.1 = 1;
-            } else {
-                position.1 += 1;
-            }
-            Some(current)
-        })
-        .collect::<Vec<_>>();
-    locations.push((source.lines().count().max(1), 1));
+    // Walk only as far as the last issue; no per-character location allocation.
+    let (mut scalar, mut line, mut column) = (0, 1, 1);
     issues
         .into_iter()
         .take(1000)
         .map(|(offset, message, provider)| {
-            let (line, column) = locations.get(offset).copied().unwrap_or((1, 1));
+            while scalar < offset.min(characters.len()) {
+                if characters[scalar] == '\n' {
+                    line += 1;
+                    column = 1;
+                } else {
+                    column += 1;
+                }
+                scalar += 1;
+            }
             Diagnostic {
                 provider: Some(provider.into()),
                 severity: DiagnosticSeverity::Help,
@@ -187,6 +243,7 @@ fn indentation_ranges(characters: &[char]) -> Vec<std::ops::Range<usize>> {
 }
 
 /// Reads syntax rather than matching comments, examples, nested functions or strings.
+#[cfg(test)]
 fn writing_dialect(
     source: &str,
     kind: DocumentKind,
@@ -225,16 +282,34 @@ fn writing_dialect(
             }
         }
     }
-    match lang.as_deref() {
+    resolve_dialect(language, lang.as_deref(), region.as_deref())
+}
+
+fn resolve_dialect(
+    language: crate::settings::WritingLanguage,
+    lang: Option<&str>,
+    region: Option<&str>,
+) -> Option<Dialect> {
+    match language {
+        crate::settings::WritingLanguage::British => return Some(Dialect::British),
+        crate::settings::WritingLanguage::American => return Some(Dialect::American),
+        crate::settings::WritingLanguage::Auto => {}
+    }
+    match lang {
         Some("en-us") => Some(Dialect::American),
         Some("en-gb" | "en-uk") => Some(Dialect::British),
-        Some("en") | None => Some(if region.as_deref() == Some("us") {
+        Some("en") | None => Some(if region == Some("us") {
             Dialect::American
         } else {
             Dialect::British
         }),
-        _ => None, // Harper checks English; `uk` is Ukrainian, not British English.
+        _ => None,
     }
+}
+
+fn normalize_tokens(source: &[char], tokens: &mut Vec<harper_core::Token>) {
+    spelling::merge_apostrophes(source, tokens);
+    spelling::merge_reviewed_compounds(source, tokens);
 }
 
 /// One parser boundary keeps language-specific prose admission and compound
@@ -247,36 +322,40 @@ impl harper_core::parsers::Parser for Prose {
             DocumentKind::Typst => typst_prose::TypstProse.parse(source),
             _ => Vec::new(),
         };
-        spelling::merge_reviewed_compounds(source, &mut tokens);
+        normalize_tokens(source, &mut tokens);
         tokens
     }
-}
-
-// A capitalized word in the middle of a sentence is usually a person's or
-// place's name. Do not exempt sentence-initial spelling mistakes or lowercase
-// prose, and retain every non-spelling rule for names.
-fn likely_name(source: &[char], sentence_starts: &[usize], start: usize, end: usize) -> bool {
-    // Equation punctuation is semantic even when closing source delimiters
-    // separate it from the next word. Do not hide that sentence's first typo.
-    if sentence_starts.binary_search(&start).is_ok() {
-        return false;
-    }
-    let Some(word) = source.get(start..end) else {
-        return false;
-    };
-    if word.len() < 2 || !word[0].is_uppercase() || !word[1..].iter().all(|ch| ch.is_lowercase()) {
-        return false;
-    }
-    source[..start]
-        .iter()
-        .rev()
-        .find(|ch| **ch == '\n' || !ch.is_whitespace())
-        .is_some_and(|ch| !matches!(ch, '.' | '!' | '?' | ':' | '\n'))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn personal_dictionary_validation_is_bounded_and_reports_the_bad_line() {
+        assert!(validate_dictionary("\n Leray \nMacDonald\nwell-posedness\nTao’s\n").is_ok());
+        assert!(validate_dictionary(&"é".repeat(128)).is_ok());
+        assert!(
+            validate_dictionary(&"é".repeat(129))
+                .unwrap_err()
+                .contains("line 1")
+        );
+        assert!(
+            validate_dictionary("one\ntwo words")
+                .unwrap_err()
+                .contains("line 2")
+        );
+        assert!(
+            validate_dictionary("one\ncontrol\u{0}word")
+                .unwrap_err()
+                .contains("line 2")
+        );
+        assert!(
+            validate_dictionary(&"a\n".repeat(32 * 1024 + 1))
+                .unwrap_err()
+                .contains("64 KiB")
+        );
+    }
 
     #[test]
     fn native_harper_math_fixtures_only_report_intentionally_added_errors() {

@@ -1,5 +1,11 @@
 use super::*;
-type WritingIdentity = (DocumentKey, bool, bool, crate::settings::WritingLanguage);
+type WritingIdentity = (
+    DocumentKey,
+    bool,
+    bool,
+    crate::settings::WritingLanguage,
+    u64,
+);
 #[derive(Default)]
 pub(super) struct WritingState {
     observed: Option<WritingIdentity>,
@@ -7,10 +13,28 @@ pub(super) struct WritingState {
     skipped: Option<&'static str>,
     deadline: Option<Instant>,
     job: LatestJob<(WritingIdentity, Vec<Diagnostic>)>,
+    checker: Arc<std::sync::Mutex<crate::writing::Checker>>,
+    dictionary: Arc<str>,
+    ignore_capitalized_names: bool,
+    configuration_revision: u64,
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) markers: Vec<usize>,
 }
 impl WritingState {
+    /// Called when Settings are applied, so dictionary contents are not scanned
+    /// or copied by the per-frame scheduler. Jobs carry this revision to reject
+    /// old results while the previous diagnostics remain visible.
+    pub(super) fn configure(&mut self, dictionary: &str, ignore_capitalized_names: bool) {
+        if self.dictionary.as_ref() != dictionary
+            || self.ignore_capitalized_names != ignore_capitalized_names
+        {
+            if self.dictionary.as_ref() != dictionary {
+                self.dictionary = Arc::from(dictionary);
+            }
+            self.ignore_capitalized_names = ignore_capitalized_names;
+            self.configuration_revision = self.configuration_revision.wrapping_add(1);
+        }
+    }
     #[cfg(any(test, feature = "desktop-ui-tests"))]
     pub(super) fn current(
         &self,
@@ -19,7 +43,7 @@ impl WritingState {
         unicode: bool,
         language: crate::settings::WritingLanguage,
     ) -> bool {
-        self.completed == Some((key, grammar, unicode, language))
+        self.completed == Some((key, grammar, unicode, language, self.configuration_revision))
     }
 
     pub(super) fn activity(&self) -> crate::activity::Activity {
@@ -44,7 +68,12 @@ impl WritingState {
 impl EditorApp {
     pub(super) fn update_writing_checks(&mut self, context: &egui::Context) {
         if self.tabs.is_empty() {
-            self.writing.job.supersede();
+            // Superseding only drops result acceptance; it cannot stop a worker
+            // that still owns the checker. Keep that receiver until completion
+            // so reopening cannot queue more workers behind the same mutex.
+            if !matches!(self.writing.job.poll(), LatestJobPoll::Pending) {
+                self.writing.job.supersede();
+            }
             self.writing.deadline = None;
             self.writing.observed = None;
             self.writing.completed = None;
@@ -56,12 +85,22 @@ impl EditorApp {
             }
             return;
         }
+        if self.writing.observed.is_none()
+            || self.writing.ignore_capitalized_names
+                != self.settings.harper_ignore_capitalized_names
+        {
+            self.writing.configure(
+                &self.settings.harper_dictionary,
+                self.settings.harper_ignore_capitalized_names,
+            );
+        }
         let key = self.document().key();
         let identity = (
             key,
             self.settings.english_grammar,
             self.settings.unicode_warnings,
             self.settings.writing_language,
+            self.writing.configuration_revision,
         );
         if self.writing.observed != Some(identity) {
             let retain = self
@@ -70,7 +109,7 @@ impl EditorApp {
                 .is_some_and(|previous| crate::diagnostics::same_document(previous.0, key));
             self.writing.observed = Some(identity);
             self.writing.skipped = None;
-            self.writing.deadline = Some(Instant::now() + Duration::from_millis(600));
+            self.writing.deadline = Some(Instant::now() + Duration::from_millis(200));
             let previous_count = self.writing.diagnostics.len();
             self.writing.diagnostics.retain(|diagnostic| {
                 retain
@@ -133,25 +172,43 @@ impl EditorApp {
             return;
         }
         self.writing.deadline = None;
-        let source = self.document().snapshot().source().to_owned();
+        let snapshot = self.document().snapshot();
         let kind = self.document().kind();
         let path = self
             .document()
             .path()
             .clone()
             .unwrap_or_else(|| self.tinymist_document_path());
-        if source.len() > 2_000_000 {
+        if snapshot.source().len() > 2_000_000 {
             self.writing.skipped = Some("Document exceeds writing-check size limit");
             return;
         }
+        let checker = Arc::clone(&self.writing.checker);
+        let dictionary = Arc::clone(&self.writing.dictionary);
+        let ignore_capitalized_names = self.writing.ignore_capitalized_names;
         if let Err(error) =
             self.writing
                 .job
                 .start_and_repaint("writing-checks", context, move || {
+                    let mut checker_guard = checker.lock().unwrap_or_else(|poisoned| {
+                        let mut guard = poisoned.into_inner();
+                        *guard = crate::writing::Checker::default();
+                        checker.clear_poison();
+                        guard
+                    });
                     Ok((
                         identity,
-                        crate::writing::check(
-                            &source, kind, &path, identity.1, identity.2, identity.3,
+                        checker_guard.check_with_options(
+                            snapshot.source(),
+                            kind,
+                            &path,
+                            identity.1,
+                            identity.2,
+                            identity.3,
+                            crate::writing::Options {
+                                dictionary: &dictionary,
+                                ignore_capitalized_names,
+                            },
                         ),
                     ))
                 })
@@ -164,6 +221,91 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dictionary_and_name_settings_supersede_old_jobs_without_clearing_stale_lints() {
+        // Test the asynchronous acceptance boundary with controlled replies;
+        // actual dictionary additions/removals are covered by Checker tests.
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.settings.english_grammar = true;
+        app.settings.unicode_warnings = false;
+        app.settings.harper_dictionary.clear();
+        app.settings.harper_ignore_capitalized_names = false;
+        app.document_mut()
+            .replace_unprojected_untitled("Zulverton uses zorbaflume.");
+        app.update_writing_checks(&context);
+        let old = app.writing.observed.unwrap();
+        let stale = vec![Diagnostic {
+            provider: Some("Harper".into()),
+            severity: DiagnosticSeverity::Help,
+            source: DiagnosticSource::Main,
+            location: Some(crate::diagnostics::DiagnosticLocation { line: 1, column: 1 }),
+            message: "old spelling result".into(),
+            details: Vec::new(),
+        }];
+        app.writing.diagnostics = stale.clone();
+        app.writing.completed = Some(old);
+        let mut settings = app.settings_snapshot();
+        settings.harper_dictionary = "zorbaflume".into();
+        settings.harper_ignore_capitalized_names = true;
+        app.apply_shared_settings(settings, &context);
+        assert!(!app.writing.current(old.0, old.1, old.2, old.3));
+        app.update_writing_checks(&context);
+        let changed = app.writing.observed.unwrap();
+        assert_ne!(changed, old);
+        assert_eq!(app.writing.dictionary.as_ref(), "zorbaflume");
+        assert!(app.writing.ignore_capitalized_names);
+        assert_eq!(app.writing.diagnostics, stale);
+        app.writing.deadline = None;
+        app.writing
+            .job
+            .start_and_repaint("old-dictionary-test", &context, move || {
+                Ok((old, Vec::new()))
+            })
+            .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(30);
+        while app.writing.job.is_running() && Instant::now() < timeout {
+            app.update_writing_checks(&context);
+            std::thread::yield_now();
+        }
+        assert!(!app.writing.job.is_running());
+        assert_eq!(app.writing.completed, Some(old));
+        assert_eq!(
+            app.writing.diagnostics, stale,
+            "obsolete settings cannot clear stale diagnostics"
+        );
+        app.writing
+            .job
+            .start_and_repaint("new-dictionary-test", &context, move || {
+                Ok((changed, Vec::new()))
+            })
+            .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(30);
+        while app.writing.job.is_running() && Instant::now() < timeout {
+            app.update_writing_checks(&context);
+            std::thread::yield_now();
+        }
+        assert_eq!(app.writing.completed, Some(changed));
+        assert!(app.writing.diagnostics.is_empty());
+        let mut settings = app.settings_snapshot();
+        settings.harper_dictionary.clear();
+        settings.harper_ignore_capitalized_names = false;
+        app.apply_shared_settings(settings, &context);
+        app.update_writing_checks(&context);
+        assert_ne!(app.writing.observed, Some(changed));
+        assert!(
+            !app.writing
+                .current(changed.0, changed.1, changed.2, changed.3)
+        );
+        assert!(app.writing.dictionary.is_empty());
+        assert!(!app.writing.ignore_capitalized_names);
+        assert!(
+            app.writing.deadline.is_some(),
+            "removal schedules an authoritative replacement"
+        );
+    }
+
     #[test]
     fn edits_keep_writing_diagnostics_until_replacement_but_document_changes_retire_them() {
         let root = tempfile::tempdir().unwrap();
@@ -220,13 +362,140 @@ mod tests {
     }
 
     #[test]
+    fn closing_and_reopening_waits_for_the_previous_writing_worker() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.settings.english_grammar = true;
+        app.settings.unicode_warnings = false;
+        app.settings.mitex_auto_enable = false;
+        app.document_mut()
+            .replace_unprojected_untitled("This is the old result.");
+        app.update_writing_checks(&context);
+        let previous = app.writing.observed.unwrap();
+        app.writing.deadline = None;
+        let obsolete = Diagnostic {
+            provider: Some("Harper".into()),
+            severity: DiagnosticSeverity::Help,
+            source: DiagnosticSource::Main,
+            location: None,
+            message: "obsolete writing result".into(),
+            details: Vec::new(),
+        };
+        app.writing.diagnostics = vec![obsolete.clone()];
+        let checker = Arc::clone(&app.writing.checker);
+        let (started, started_rx) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        app.writing
+            .job
+            .start_and_repaint("blocked-writing-test", &context, move || {
+                let _guard = checker.lock().unwrap();
+                started.send(()).map_err(|error| error.to_string())?;
+                release_rx.recv().map_err(|error| error.to_string())?;
+                Ok((previous, vec![obsolete]))
+            })
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        for _ in 0..3 {
+            app.finish_close_tab(&context);
+            app.update_writing_checks(&context);
+            assert!(app.tabs.is_empty());
+            assert!(
+                app.writing.job.is_running(),
+                "closing tabs cannot forget a worker that still owns the checker"
+            );
+            assert!(app.writing.diagnostics.is_empty());
+            assert!(app.writing.completed.is_none());
+            assert!(matches!(
+                app.writing.activity(),
+                crate::activity::Activity::Inactive(_)
+            ));
+
+            app.new_tab(&context);
+            app.document_mut()
+                .replace_unprojected_untitled("This is the the fresh result.");
+            app.update_writing_checks(&context);
+            assert_ne!(app.writing.observed, Some(previous));
+            app.writing.deadline = Some(Instant::now());
+            app.update_writing_checks(&context);
+            assert!(app.writing.job.is_running());
+            assert!(
+                app.writing.deadline.is_some(),
+                "the reopened revision must wait rather than queue another worker"
+            );
+            assert!(app.writing.completed.is_none());
+            assert!(app.writing.diagnostics.is_empty());
+        }
+
+        release.send(()).unwrap();
+        let timeout = Instant::now() + Duration::from_secs(5);
+        while app.writing.completed != app.writing.observed && Instant::now() < timeout {
+            app.update_writing_checks(&context);
+            assert!(
+                app.writing
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.message != "obsolete writing result"),
+                "the retired worker's result must never reach the reopened document"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(app.writing.completed, app.writing.observed);
+        assert!(
+            app.writing
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("repeat")),
+            "the latest revision must complete a real fresh grammar check"
+        );
+    }
+
+    #[test]
+    fn writing_worker_recovers_after_a_checker_panics() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.settings.english_grammar = true;
+        app.settings.unicode_warnings = false;
+        let source = "This is is a result.";
+        app.document_mut().replace_unprojected_untitled(source);
+        let checker = Arc::clone(&app.writing.checker);
+        let panicked = std::thread::spawn(move || {
+            let _guard = checker.lock().unwrap();
+            panic!("simulate an interrupted writing check");
+        });
+        assert!(panicked.join().is_err());
+        assert!(app.writing.checker.is_poisoned());
+
+        app.update_writing_checks(&context);
+        app.writing.deadline = Some(Instant::now());
+        app.update_writing_checks(&context);
+        let timeout = Instant::now() + Duration::from_secs(5);
+        while app.writing.completed != app.writing.observed && Instant::now() < timeout {
+            std::thread::sleep(Duration::from_millis(1));
+            app.update_writing_checks(&context);
+        }
+        assert_eq!(app.writing.completed, app.writing.observed);
+        assert!(!app.writing.checker.is_poisoned());
+        assert!(
+            app.writing.diagnostics.iter().any(|diagnostic| {
+                diagnostic.provider.as_deref() == Some("Harper")
+                    && diagnostic.message.contains("repeat")
+            }),
+            "the recovered worker must publish real grammar diagnostics"
+        );
+        assert_eq!(app.document().source(), source);
+    }
+
+    #[test]
     fn current_writing_requires_a_completed_revision_and_the_same_settings() {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
         let old = app.document().key();
         let language = crate::settings::WritingLanguage::British;
-        app.writing.observed = Some((old, true, false, language));
+        app.writing.observed = Some((old, true, false, language, 0));
         assert!(!app.writing.current(old, true, false, language));
         app.writing.completed = app.writing.observed;
         assert!(app.writing.current(old, true, false, language));
@@ -239,7 +508,7 @@ mod tests {
         app.document_mut()
             .edit(CCursorRange::default(), |source| source.push('!'));
         let new = app.document().key();
-        app.writing.observed = Some((new, true, false, language));
+        app.writing.observed = Some((new, true, false, language, 0));
         assert!(
             !app.writing.current(new, true, false, language),
             "scheduling a new request does not make stale diagnostics current"
@@ -264,6 +533,7 @@ mod tests {
             true,
             true,
             crate::settings::WritingLanguage::Auto,
+            0,
         ));
         app.writing.deadline = Some(Instant::now() - Duration::from_secs(1));
         app.update_writing_checks(&context);

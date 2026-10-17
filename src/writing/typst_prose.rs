@@ -1,8 +1,22 @@
 //! Keep Typst equations opaque while retaining their grammatical punctuation.
 use harper_core::{Punctuation, Span, Token, TokenKind, parsers::Parser};
-use typst_syntax::{LinkedNode, SyntaxKind, ast::Named};
+use typst_syntax::{
+    LinkedNode, SyntaxKind,
+    ast::{Arg, Expr, Named, SetRule},
+};
 
 pub(super) struct TypstProse;
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct TextLanguage {
+    pub lang: Option<String>,
+    pub region: Option<String>,
+}
+
+pub(super) struct Parsed {
+    pub tokens: Vec<Token>,
+    pub language: TextLanguage,
+}
 
 struct Region {
     span: Span<char>,
@@ -10,8 +24,10 @@ struct Region {
     opaque_end: usize,
 }
 
-impl Parser for TypstProse {
-    fn parse(&self, source: &[char]) -> Vec<Token> {
+impl TypstProse {
+    /// Share our syntax tree between prose masking and language detection.
+    /// Harper's underlying Typst parser still owns its separate parse.
+    pub(super) fn parse_with_language(source: &[char]) -> Parsed {
         let text: String = source.iter().collect();
         let syntax = typst_syntax::Source::detached(text.as_str());
         let mut offsets = vec![0; text.len() + 1];
@@ -21,9 +37,47 @@ impl Parser for TypstProse {
         }
         let mut regions = Vec::new();
         collect_regions(LinkedNode::new(syntax.root()), &offsets, &mut regions);
+        let language = text_language(syntax.root());
         let tokens = harper_typst::Typst.parse(source);
-        replace_regions(tokens, regions)
+        Parsed {
+            tokens: replace_regions(tokens, regions),
+            language,
+        }
     }
+}
+
+impl Parser for TypstProse {
+    fn parse(&self, source: &[char]) -> Vec<Token> {
+        Self::parse_with_language(source).tokens
+    }
+}
+
+fn text_language(root: &typst_syntax::SyntaxNode) -> TextLanguage {
+    let mut language = TextLanguage::default();
+    // Only unconditional document-level set rules determine the writing
+    // language. Nested examples, strings and comments cannot change it.
+    for node in root.children() {
+        let Some(rule) = node.cast::<SetRule>() else {
+            continue;
+        };
+        if !matches!(rule.target(), Expr::Ident(name) if name.as_str() == "text")
+            || rule.condition().is_some()
+        {
+            continue;
+        }
+        for arg in rule.args().items() {
+            if let Arg::Named(named) = arg
+                && let Expr::Str(value) = named.expr()
+            {
+                match named.name().as_str() {
+                    "lang" => language.lang = Some(value.get().as_str().to_ascii_lowercase()),
+                    "region" => language.region = Some(value.get().as_str().to_ascii_lowercase()),
+                    _ => {}
+                }
+            }
+        }
+    }
+    language
 }
 
 fn collect_regions(node: LinkedNode<'_>, offsets: &[usize], regions: &mut Vec<Region>) {
@@ -201,6 +255,58 @@ mod tests {
 
     fn parsed(source: &str) -> Vec<Token> {
         TypstProse.parse(&source.chars().collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn language_metadata_and_prose_mask_share_the_document_syntax() {
+        let source = concat!(
+            "#set text(lang: \"EN\", region: \"US\")\n",
+            "Before $ x = 1. $ After.\n",
+            "#figure([Visible body], caption: [Visible caption])",
+        );
+        let chars: Vec<_> = source.chars().collect();
+        let parsed = TypstProse::parse_with_language(&chars);
+        assert_eq!(
+            parsed.language,
+            TextLanguage {
+                lang: Some("en".into()),
+                region: Some("us".into()),
+            }
+        );
+        let words: Vec<_> = parsed
+            .tokens
+            .iter()
+            .filter(|token| token.kind.is_word())
+            .map(|token| token.get_str(&chars))
+            .collect();
+        assert_eq!(
+            words,
+            ["Before", "After", "Visible", "body", "Visible", "caption"]
+        );
+        let period = chars.iter().position(|&ch| ch == '.').unwrap();
+        assert!(parsed.tokens.iter().any(|token| {
+            token.kind.is_period() && token.span == Span::new(period, period + 1)
+        }));
+    }
+
+    #[test]
+    fn language_rules_ignore_examples_and_conditions_and_keep_last_literals() {
+        let source = concat!(
+            "#set text(lang: \"en\", region: \"us\")\n",
+            "// #set text(lang: \"fr\")\n",
+            "#let example() = { set text(lang: \"de\") }\n",
+            "#set text(lang: \"uk\") if true\n",
+            "#set text(region: \"GB\")\n",
+            "#set text(region: dynamically_chosen)\n",
+        );
+        let parsed = TypstProse::parse_with_language(&source.chars().collect::<Vec<_>>());
+        assert_eq!(
+            parsed.language,
+            TextLanguage {
+                lang: Some("en".into()),
+                region: Some("gb".into()),
+            }
+        );
     }
 
     #[test]

@@ -1,0 +1,507 @@
+{
+  "schema": 1,
+  "date": "2026-10-14",
+  "platform": {
+    "cpu": "Apple M2 Max",
+    "memory_bytes": 34359738368,
+    "os": "macOS 14.6.1 (23G93)",
+    "architecture": "aarch64",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8"
+  },
+  "head": "8d3bcae78c3938c562b0ffa3a161896cb6a70b5d",
+  "working_tree": "dirty; measured writing-source fingerprints retained below",
+  "profile": "release: opt-level 3, thin LTO, 1 codegen unit, strip true",
+  "measurement": "background writing worker component; no GUI, debounce, filesystem-cold startup, or renderer",
+  "command": "cargo test --release --bin tiptoptyp writing::perf::incremental_writing_measurement -- --ignored --nocapture --test-threads=1",
+  "execution": "built once with cargo test --release --no-run, then ran that exact optimized test executable directly four times with --ignored --nocapture --test-threads=1",
+  "binary_sha256": "c91941213abcfa574419beee9ed6bf82bf57891fd45f9e779e48278ed952fc0c",
+  "source_sha256": {
+    "src/writing.rs": "735d9d0c5ca4fd6af0ff40ef748e92593a0669109f2103256c86e2dd9fff4ebf",
+    "src/writing/cache.rs": "8be91f5127ef1484e5cf6d6c46c5566d243597f54c72e0d96ae75f54ea30cc0b",
+    "src/writing/perf.rs": "0c06bdb9fd20c98de300ad36926facb6e15ef314c2de0e1a02cc031d1bf4c17e",
+    "src/writing/spelling.rs": "abab259eeaed1684da5810156e21d64c393cbcdfc354c10b89adce13e636abe0",
+    "src/writing/tex_prose.rs": "f17c12b34e24a183f3a8c2f449f632195a7475f208c050c1ec46882f7cef3b93",
+    "src/writing/typst_prose.rs": "780fba553faab16e9b3097ecbc8bb7f64efb31be4291ee8b90bb8d68981b5b89",
+    "src/app/writing.rs": "2795b5e5625d7fe69451a375dd63bc4cc5706237cb8b0428215170999c1a9fb6",
+    "Cargo.toml": "f5d0fe5d4c9d242eb04f61fc431baeae440d3a4c7da6cc5f053be764100f5c6d",
+    "Cargo.lock": "53fae45bc8be062a686ad6589e6b68346febdece26101064c08dbb9ac8486e7c"
+  },
+  "future_harness_sha256": "30390d1cb2817e6eaa163d723512a38adbf4ffc7c5baefc3b0a7190ceb49c501",
+  "reference": "Full single Harper Document and new curated LintGroup per request, with the same prose adapters, dictionary and name filter as the cached path. This is a matched component comparison, not two historical app binaries.",
+  "harness_receipt": "Measured executable has the frozen original harness, with two alternating edit states. Aggregate novel-edit figures use only the first two samples of each fresh-process run, and verify one cache miss each. The checked-in harness now gives every edit a unique step, preventing revisited-state hits in future runs.",
+  "sample_selection": {
+    "fresh_processes": 4,
+    "full_and_cold_and_repeat_samples_per_language": 28,
+    "novel_edit_samples_per_language": 8,
+    "included_edit_indices_zero_based": [
+      0,
+      1
+    ],
+    "excluded_edit_indices_zero_based": [
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "reason": "Later samples revisit previously cached edit states; only first-time edits with exactly one miss count as novel edits."
+  },
+  "correctness": "Every cached cold/repeat/edit result was compared with the full-document reference; the edited paragraph removes one repeated-word error and alternately inserts a newline, while a later misspelling remains correctly located.",
+  "concurrency": "No other builds or native journeys; ordinary macOS Spotlight/WindowServer/CloudKit/WebKit desktop services remained active.",
+  "first_check_note": "First-reference numbers for Typst include process-first dictionary/model initialization; TeX runs after Typst in each process and shares warmed initialization. Neither is a filesystem-cold app-start measurement.",
+  "artifacts": ".tiptoptyp/profiles/harper-incremental-2026-10-14: frozen sources, metadata, build logs, measurement-01..04.log, constructor probe and process observations",
+  "workloads": [
+    {
+      "language": "typst",
+      "fixture_bytes": 50650,
+      "fixture_scalars": 50650,
+      "fixture_fingerprint": "fnv1a64:32879e05ea22b30c",
+      "prose_paragraphs": 160,
+      "semantic_blocks": 161,
+      "diagnostics_before": 2,
+      "diagnostics_after_novel_edit": 1,
+      "language_selection": "auto",
+      "effective_dialect": "british",
+      "grammar": true,
+      "unicode_warnings": false,
+      "warmup_calls": 2,
+      "samples": {
+        "reference_full_ms": [
+          476.89166700000004,
+          473.432084,
+          468.256208,
+          474.855,
+          465.969292,
+          485.30962500000004,
+          553.566458,
+          488.650875,
+          477.821083,
+          571.768583,
+          475.268667,
+          475.852917,
+          535.998709,
+          584.493416,
+          476.766125,
+          592.168417,
+          484.43845899999997,
+          473.820792,
+          475.265875,
+          481.12212500000004,
+          484.76225,
+          477.628334,
+          481.20833400000004,
+          479.25316699999996,
+          480.390333,
+          481.232167,
+          476.36337499999996,
+          562.3974579999999
+        ],
+        "cold_paragraph_cache_ms": [
+          521.7497079999999,
+          522.9085839999999,
+          511.46295799999996,
+          522.816625,
+          513.843666,
+          532.171792,
+          554.256458,
+          676.5975,
+          594.0952090000001,
+          636.071542,
+          535.075583,
+          530.8942079999999,
+          529.14125,
+          627.646042,
+          540.450583,
+          528.2977500000001,
+          534.26175,
+          531.592292,
+          522.736542,
+          524.413958,
+          534.50675,
+          533.495916,
+          532.7831669999999,
+          530.5765839999999,
+          529.443667,
+          536.17075,
+          532.311333,
+          519.2665
+        ],
+        "unchanged_document_hit_ms": [
+          12.994083,
+          12.84625,
+          12.666875,
+          12.562916,
+          12.852709,
+          13.286916,
+          13.029334,
+          12.725125,
+          12.830833,
+          14.559459,
+          13.030375000000001,
+          13.550625,
+          13.106,
+          12.858834,
+          13.436708000000001,
+          12.744541,
+          12.927042,
+          13.432041,
+          12.692458,
+          13.339167000000002,
+          13.265708,
+          12.796833000000001,
+          13.286249999999999,
+          12.916333999999999,
+          12.748125,
+          13.390583,
+          12.865959,
+          12.885
+        ],
+        "reference_novel_paragraph_edit_ms": [
+          470.93095800000003,
+          468.413625,
+          476.249541,
+          632.543542,
+          486.587417,
+          487.022,
+          483.038042,
+          473.099333
+        ],
+        "novel_paragraph_edit_ms": [
+          26.104,
+          25.570666,
+          26.47775,
+          27.508417,
+          27.677958,
+          26.337,
+          26.170375,
+          26.385417
+        ],
+        "novel_edit_cache_hits_misses": [
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ]
+        ],
+        "first_reference_check_per_run_ms": [
+          1115.413708,
+          1158.1220839999999,
+          1123.2251660000002,
+          1123.925042
+        ],
+        "new_curated_construction_ms": [
+          5.5902080000000005,
+          5.610792,
+          5.619375000000001,
+          5.202832999999999,
+          5.287584,
+          5.405584,
+          5.53075,
+          5.832292,
+          5.396084,
+          5.569709,
+          5.445458,
+          5.443625,
+          5.42325,
+          5.589792,
+          5.688124999999999,
+          5.495417,
+          5.504709,
+          5.454166,
+          5.070375,
+          5.5472079999999995,
+          5.1710840000000005,
+          5.617249999999999,
+          5.176792000000001,
+          5.261540999999999,
+          5.055916,
+          5.091042,
+          5.188792,
+          5.267291999999999
+        ]
+      },
+      "median_ms": {
+        "reference_full_ms": 479.82174999999995,
+        "cold_paragraph_cache_ms": 531.882042,
+        "unchanged_document_hit_ms": 12.921688,
+        "reference_novel_paragraph_edit_ms": 479.6437915,
+        "novel_paragraph_edit_ms": 26.3612085,
+        "first_reference_check_per_run_ms": 1123.575104,
+        "new_curated_construction_ms": 5.4445415
+      },
+      "novel_edit_speedup": 18.195060803073577,
+      "unchanged_hit_speedup": 37.13305490737742,
+      "cold_cache_change_percent": 10.849923330903621
+    },
+    {
+      "language": "tex",
+      "fixture_bytes": 51618,
+      "fixture_scalars": 51618,
+      "fixture_fingerprint": "fnv1a64:35399465ccc19cdc",
+      "prose_paragraphs": 160,
+      "semantic_blocks": 161,
+      "diagnostics_before": 2,
+      "diagnostics_after_novel_edit": 1,
+      "language_selection": "auto",
+      "effective_dialect": "british",
+      "grammar": true,
+      "unicode_warnings": false,
+      "warmup_calls": 2,
+      "samples": {
+        "reference_full_ms": [
+          472.44025,
+          472.4535,
+          467.974,
+          473.769584,
+          465.58941599999997,
+          470.170542,
+          471.466875,
+          474.14595799999995,
+          483.442416,
+          477.886667,
+          477.660459,
+          523.14775,
+          470.628416,
+          463.902584,
+          469.354667,
+          473.781875,
+          464.008708,
+          465.107792,
+          475.691333,
+          568.3425,
+          479.71112500000004,
+          460.47116700000004,
+          470.292916,
+          469.925125,
+          478.580291,
+          479.808542,
+          470.44725,
+          550.45025
+        ],
+        "cold_paragraph_cache_ms": [
+          517.544333,
+          518.368292,
+          515.33875,
+          516.625833,
+          507.81874999999997,
+          516.238625,
+          520.0042080000001,
+          530.851791,
+          532.1985,
+          529.823625,
+          528.1152500000001,
+          525.984916,
+          511.7845,
+          514.426209,
+          514.720958,
+          519.14275,
+          509.806917,
+          516.2265,
+          523.712958,
+          530.290083,
+          524.3971670000001,
+          512.759,
+          521.012208,
+          515.642583,
+          517.216667,
+          524.47775,
+          521.426792,
+          524.41125
+        ],
+        "unchanged_document_hit_ms": [
+          5.111125,
+          4.376333,
+          4.26825,
+          4.465667000000001,
+          4.263833,
+          4.115792,
+          4.276000000000001,
+          4.646666,
+          4.3212909999999995,
+          4.474292,
+          4.28975,
+          4.473625,
+          4.239,
+          4.229,
+          4.467792,
+          4.34325,
+          4.248667,
+          4.688625,
+          4.373917,
+          4.1649579999999995,
+          4.6865,
+          4.228041,
+          4.374208,
+          4.251791000000001,
+          4.427375,
+          4.305292,
+          4.242166,
+          4.494916
+        ],
+        "reference_novel_paragraph_edit_ms": [
+          473.30224999999996,
+          469.616417,
+          481.22625000000005,
+          476.361292,
+          469.967333,
+          471.22075,
+          468.76583300000004,
+          480.668167
+        ],
+        "novel_paragraph_edit_ms": [
+          17.659375,
+          17.01625,
+          18.221583,
+          17.281375,
+          17.180125,
+          16.959458,
+          16.447542,
+          17.17225
+        ],
+        "novel_edit_cache_hits_misses": [
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ],
+          [
+            160,
+            1
+          ]
+        ],
+        "first_reference_check_per_run_ms": [
+          465.46304100000003,
+          472.739166,
+          476.865625,
+          471.546333
+        ],
+        "new_curated_construction_ms": [
+          5.338334,
+          5.056166,
+          5.539959,
+          5.735084,
+          5.070084,
+          5.073333,
+          5.356667,
+          5.364584000000001,
+          5.392290999999999,
+          5.239458,
+          5.128917,
+          5.16725,
+          5.1545000000000005,
+          5.243582999999999,
+          5.627792,
+          5.241125,
+          5.257792,
+          5.1517919999999995,
+          5.303375,
+          5.797667000000001,
+          5.322375,
+          5.3778749999999995,
+          5.451208,
+          5.66875,
+          5.302458000000001,
+          5.553,
+          5.314584,
+          5.181083
+        ]
+      },
+      "median_ms": {
+        "reference_full_ms": 472.446875,
+        "cold_paragraph_cache_ms": 518.755521,
+        "unchanged_document_hit_ms": 4.3322705,
+        "reference_novel_paragraph_edit_ms": 472.26149999999996,
+        "novel_paragraph_edit_ms": 17.176187499999997,
+        "first_reference_check_per_run_ms": 472.14274950000004,
+        "new_curated_construction_ms": 5.3089794999999995
+      },
+      "novel_edit_speedup": 27.49512952161241,
+      "unchanged_hit_speedup": 109.05294925605406,
+      "cold_cache_change_percent": 9.801873702731134
+    }
+  ],
+  "limitations": [
+    "Local Apple M2 Max measurements are not cross-platform guarantees or key-to-pixel timings.",
+    "Novel edits are faster; an initially empty paragraph cache is approximately 10% slower than the full-document reference on these fixtures.",
+    "The checked-in future harness uses unique edit states. The reported binary uses the frozen earlier harness; excluded revisits and exact provenance are explicit."
+  ],
+  "worker_followup_sha256": "4f289d9d83c184f2eeb23b460a046f5e143241bb6e3068bc4f0a1d6c12e9ede8",
+  "worker_followup_scope": "Worker poison recovery and close/reopen queue fixes were added after benchmark compile began. Worker orchestration is excluded from this direct checker benchmark and verified separately by app tests.",
+  "verification": {
+    "format": "cargo fmt --all -- --check: passed",
+    "clippy": "cargo clippy --all-targets -- -D warnings: passed",
+    "tests": {
+      "command": "cargo test --no-fail-fast",
+      "passed": 1933,
+      "failed": 0,
+      "ignored": 52
+    },
+    "xtask_tests": {
+      "command": "cargo test --manifest-path xtask/Cargo.toml",
+      "passed": 17,
+      "failed": 0
+    },
+    "native": {
+      "journey": "harper_math_prose",
+      "passed": true,
+      "languages": [
+        "typst",
+        "tex"
+      ],
+      "evidence": ".tiptoptyp/desktop-ui-tests/run-m9bjia9t/result.json",
+      "binary_sha256": "a171cb9a65d31377b94074928fc6b4c1d15d713dd3dc1385ac74d0358421520a",
+      "build_command": "cargo build --release --features desktop-ui-tests --bin tiptoptyp",
+      "scope": "Native typing, names and possessives, intentional typos, stale diagnostics and replacement; not a GUI performance measurement or visual composition check"
+    }
+  }
+}
