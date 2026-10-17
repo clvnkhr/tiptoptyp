@@ -2,7 +2,10 @@
 use super::EditorAttention;
 use crate::settings::{RevealAnimation, RevealStyle};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Ui, Vec2};
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Weak},
+    time::{Duration, Instant},
+};
 
 #[cfg(test)]
 pub(super) const DURATION: Duration = Duration::from_millis(900);
@@ -255,11 +258,45 @@ pub(super) fn editor_observation(context: &egui::Context) -> Option<EditorObserv
         .filter(|observation| observation.frame.saturating_add(1) >= frame)
 }
 
-/// The galley's cursor mapping clamps stale offsets without scanning the source.
+#[derive(Clone)]
+struct CachedLocalTarget {
+    galley: Weak<egui::Galley>,
+    char_index: usize,
+    rect: Rect,
+}
+
+fn cached_local_target(
+    context: &egui::Context,
+    id: egui::Id,
+    galley: &Arc<egui::Galley>,
+    char_index: usize,
+    locate: impl FnOnce() -> Rect,
+) -> Rect {
+    if let Some(cached) = context.data(|data| data.get_temp::<CachedLocalTarget>(id))
+        && cached.char_index == char_index
+        && std::ptr::eq(cached.galley.as_ptr(), Arc::as_ptr(galley))
+    {
+        return cached.rect;
+    }
+    let rect = locate();
+    context.data_mut(|data| {
+        data.insert_temp(
+            id,
+            CachedLocalTarget {
+                galley: Arc::downgrade(galley),
+                char_index,
+                rect,
+            },
+        );
+    });
+    rect
+}
+
+/// Reuse local cursor geometry while applying the current scroll translation.
 pub(super) fn paint_editor(
     ui: &Ui,
     viewport: Rect,
-    galley: &egui::Galley,
+    galley: &Arc<egui::Galley>,
     galley_pos: Pos2,
     attention: &mut Option<EditorAttention>,
     animation: RevealAnimation,
@@ -272,9 +309,14 @@ pub(super) fn paint_editor(
             .data_mut(|data| data.remove::<EditorObservation>(observation_id));
         return;
     };
-    let target = galley
-        .pos_from_cursor(egui::text::CCursor::new(state.char_index))
-        .translate(galley_pos.to_vec2());
+    let target = cached_local_target(
+        ui.ctx(),
+        super::source_editor_id(ui.ctx()).with("reveal-local-target"),
+        galley,
+        state.char_index,
+        || galley.pos_from_cursor(egui::text::CCursor::new(state.char_index)),
+    )
+    .translate(galley_pos.to_vec2());
     let active = state.paint(ui, viewport, target, animation);
     #[cfg(any(test, feature = "desktop-ui-tests"))]
     {
@@ -318,6 +360,136 @@ pub(super) fn paint_editor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_galley(context: &egui::Context, text: &str) -> Arc<egui::Galley> {
+        let mut galley = None;
+        context
+            .run_ui(Default::default(), |ui| {
+                galley = Some(ui.painter().layout_no_wrap(
+                    text.to_owned(),
+                    egui::FontId::monospace(12.0),
+                    Color32::BLACK,
+                ));
+            })
+            .drop_without_applying_deltas();
+        galley.unwrap()
+    }
+
+    #[test]
+    fn unchanged_source_reveal_maps_its_cursor_once_and_invalidates_on_cursor_or_layout_change() {
+        let context = egui::Context::default();
+        let galley = source_galley(&context, "first line\nsecond line");
+        let key = egui::Id::new("source-reveal-cache-regression");
+        let calls = std::cell::Cell::new(0);
+        let locate = |galley: &egui::Galley, at| {
+            calls.set(calls.get() + 1);
+            galley.pos_from_cursor(egui::text::CCursor::new(at))
+        };
+        let expected = galley.pos_from_cursor(egui::text::CCursor::new(13));
+        for frame in 0..60 {
+            let local = cached_local_target(&context, key, &galley, 13, || locate(&galley, 13));
+            let translation = egui::vec2(frame as f32, -frame as f32);
+            assert_eq!(
+                local.translate(translation),
+                expected.translate(translation)
+            );
+        }
+        assert_eq!(
+            calls.get(),
+            1,
+            "animation-only frames must not traverse source rows"
+        );
+        let moved = cached_local_target(&context, key, &galley, 15, || locate(&galley, 15));
+        assert_eq!(moved, galley.pos_from_cursor(egui::text::CCursor::new(15)));
+        assert_eq!(calls.get(), 2);
+        let replacement = source_galley(&context, "new layout\nwith different row widths");
+        let expected = replacement.pos_from_cursor(egui::text::CCursor::new(15));
+        assert_eq!(
+            cached_local_target(&context, key, &replacement, 15, || locate(&replacement, 15)),
+            expected
+        );
+        assert_eq!(
+            calls.get(),
+            3,
+            "a new galley must invalidate source geometry"
+        );
+        // Make this Arc independent of the font engine's own layout cache.
+        let owned = Arc::new((*replacement).clone());
+        let weak = Arc::downgrade(&owned);
+        cached_local_target(&context, key, &owned, 15, || locate(&owned, 15));
+        assert_eq!(Arc::strong_count(&owned), 1);
+        drop(owned);
+        assert!(
+            weak.upgrade().is_none(),
+            "reveal geometry must not retain document layouts"
+        );
+    }
+
+    #[test]
+    #[ignore = "opt-in paired optimized source reveal geometry cache measurement"]
+    fn source_reveal_cache_measurement() {
+        use std::hint::black_box;
+        assert!(
+            !cfg!(debug_assertions),
+            "use the optimized release test profile"
+        );
+        const ROWS: usize = 20_000;
+        const ITERATIONS: usize = 1_000;
+        let context = egui::Context::default();
+        let source = "#let value = 1\n".repeat(ROWS);
+        let char_index = source.chars().count() - 3;
+        let galley = source_galley(&context, &source);
+        let id = egui::Id::new("source-reveal-cache-measurement");
+        let cursor = egui::text::CCursor::new(char_index);
+        for _ in 0..20 {
+            black_box(galley.pos_from_cursor(black_box(cursor)));
+            black_box(cached_local_target(
+                &context,
+                id,
+                &galley,
+                char_index,
+                || galley.pos_from_cursor(cursor),
+            ));
+        }
+        let mut reference = Vec::new();
+        let mut cached = Vec::new();
+        for _ in 0..5 {
+            let start = Instant::now();
+            for _ in 0..ITERATIONS {
+                black_box(black_box(&galley).pos_from_cursor(black_box(cursor)));
+            }
+            reference.push(start.elapsed().as_nanos() as f64 / ITERATIONS as f64);
+            let start = Instant::now();
+            for _ in 0..ITERATIONS {
+                black_box(cached_local_target(
+                    &context,
+                    id,
+                    black_box(&galley),
+                    black_box(char_index),
+                    || galley.pos_from_cursor(cursor),
+                ));
+            }
+            cached.push(start.elapsed().as_nanos() as f64 / ITERATIONS as f64);
+        }
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "measurement":"source_reveal_local_geometry",
+                "build":crate::build_info::VERSION,
+                "os":std::env::consts::OS,
+                "arch":std::env::consts::ARCH,
+                "optimized":!cfg!(debug_assertions),
+                "fixture_rows":ROWS,
+                "fixture_characters":source.chars().count(),
+                "font":"egui default monospace 12px",
+                "layout":"no wrap; font layout excluded from timings",
+                "iterations_per_sample":ITERATIONS,
+                "warmup_lookups":20,
+                "reference_ns_per_lookup":reference,
+                "cached_ns_per_lookup":cached,
+            })
+        );
+    }
 
     #[test]
     fn reveal_painter_follows_live_theme_accent() {
