@@ -14,6 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum ShortcutAction {
     Settings,
+    CommandPalette,
     New,
     NewWindow,
     NewFromTemplate,
@@ -99,8 +100,9 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 83] = [
+    pub(crate) const ALL: [Self; 84] = [
         Self::Settings,
+        Self::CommandPalette,
         Self::New,
         Self::NewWindow,
         Self::NewFromTemplate,
@@ -188,6 +190,7 @@ impl ShortcutAction {
     pub(crate) const fn id(self) -> &'static str {
         match self {
             Self::Settings => "application.settings",
+            Self::CommandPalette => "application.command_palette",
             Self::New => "file.new",
             Self::NewWindow => "file.new_window",
             Self::NewFromTemplate => "file.new_from_template",
@@ -280,6 +283,7 @@ impl ShortcutAction {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Settings => "Settings",
+            Self::CommandPalette => "Command palette",
             Self::New => "New document",
             Self::NewWindow => "New window",
             Self::NewFromTemplate => "New from template",
@@ -367,7 +371,7 @@ impl ShortcutAction {
 
     pub(crate) const fn group(self) -> &'static str {
         match self {
-            Self::Settings => "Application",
+            Self::Settings | Self::CommandPalette => "Application",
             Self::CloseTab | Self::NextTab | Self::PreviousTab => "Tabs",
             Self::StageHunk
             | Self::UnstageHunk
@@ -1179,6 +1183,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
 
     Some(match action {
         Action::Settings => ShortcutChord::primary(Key::Comma),
+        Action::CommandPalette => ShortcutChord::primary(Key::P).shift(),
         Action::New => ShortcutChord::primary(Key::N),
         Action::NewWindow => ShortcutChord::primary(Key::N).shift(),
         Action::Open => ShortcutChord::primary(Key::O),
@@ -1332,6 +1337,52 @@ mod tests {
                 .as_deref(),
             Some("Ctrl+H")
         );
+    }
+
+    #[test]
+    fn command_palette_default_is_unambiguous_and_configurable_on_each_platform() {
+        let action = ShortcutAction::CommandPalette;
+        assert_eq!(action.id(), "application.command_palette");
+        assert_eq!(action.label(), "Command palette");
+        assert_eq!(action.group(), "Application");
+        let expected = ShortcutChord::parse("Primary+Shift+P").unwrap();
+        for platform in [ShortcutPlatform::MacOs, ShortcutPlatform::Other] {
+            let defaults = ShortcutBindings::defaults(platform);
+            assert_eq!(defaults.binding(action), Some(expected));
+            assert_eq!(
+                defaults.action_for_key_event(egui::Key::P, expected.egui().modifiers),
+                Some(action)
+            );
+            assert!(defaults.conflicts().is_empty());
+            for (candidate, chord) in defaults.iter() {
+                if candidate != action {
+                    assert_ne!(
+                        chord.map(|chord| chord.collision_key(platform)),
+                        Some(expected.collision_key(platform)),
+                        "{candidate:?} conflicts with the command palette"
+                    );
+                }
+            }
+            let mut overrides = ShortcutOverrides::default();
+            let custom = ShortcutChord::parse("Primary+Shift+K").unwrap();
+            overrides.assign(action, custom, platform);
+            let restored: ShortcutOverrides =
+                serde_json::from_str(&serde_json::to_string(&overrides).unwrap()).unwrap();
+            assert_eq!(
+                ShortcutBindings::from_overrides(platform, &restored).binding(action),
+                Some(custom)
+            );
+            overrides.set(action, None);
+            assert_eq!(
+                ShortcutBindings::from_overrides(platform, &overrides).binding(action),
+                None
+            );
+            overrides.reset(action);
+            assert_eq!(
+                ShortcutBindings::from_overrides(platform, &overrides).binding(action),
+                Some(expected)
+            );
+        }
     }
 
     #[test]

@@ -87,6 +87,7 @@ commands! {
     NewTable => ("New Table…", Edit, 4, NewTable, 211),
     EditTable => ("Edit Table…", Edit, 4, EditTable, 212),
     LatexDiff => ("LaTeXdiff…", Edit, 5, Always, 213),
+    CommandPalette => ("Command Palette…", View, 0, Always, 309),
     Panel => ("Panel", View, 0, Always, 300),
     MaximizePanel => ("Maximize/Restore Panel", View, 0, Always, 308),
     Terminal => ("Terminal", View, 0, Always, 307),
@@ -664,6 +665,35 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_catalog_and_effective_shortcut_share_one_identity() {
+        let spec = command_spec(AppCommand::CommandPalette);
+        assert_eq!(spec.title, "Command Palette…");
+        assert_eq!(spec.menu, CommandMenu::View);
+        assert_eq!(spec.requirement, CommandRequirement::Always);
+        assert_eq!(spec.shortcut_action, ShortcutAction::CommandPalette);
+        assert_eq!(spec.native_id, 309);
+        assert_eq!(
+            COMMAND_SPECS
+                .iter()
+                .filter(|other| other.native_id == spec.native_id)
+                .count(),
+            1
+        );
+        for platform in [ShortcutPlatform::MacOs, ShortcutPlatform::Other] {
+            let bindings = ShortcutBindings::defaults(platform);
+            let chord = bindings.egui(spec.shortcut_action).unwrap();
+            assert_eq!(
+                run_shortcut(chord, &bindings),
+                Some(AppCommand::CommandPalette)
+            );
+        }
+        assert_eq!(
+            native_menu_request_from_tag(spec.native_id),
+            Some(NativeMenuRequest::Command(AppCommand::CommandPalette))
+        );
+    }
+
+    #[test]
     fn receiver_and_window_queue_preserve_command_order() {
         let (sender, receiver) = channel();
         sender
@@ -751,6 +781,7 @@ mod tests {
         assert_eq!(
             shortcuts,
             [
+                (AppCommand::CommandPalette, egui::Key::P),
                 (AppCommand::Panel, egui::Key::Num5),
                 (AppCommand::MaximizePanel, egui::Key::Num5),
                 (AppCommand::Terminal, egui::Key::Backtick),
