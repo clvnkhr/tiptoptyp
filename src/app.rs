@@ -50,6 +50,7 @@ use popup_layout::{
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
 mod editor_particles;
+pub(crate) use editor_particles::Renderer as ParticleRenderer;
 mod editor_scroll;
 mod editor_surface;
 mod editor_view;

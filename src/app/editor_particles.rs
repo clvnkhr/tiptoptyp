@@ -4,12 +4,18 @@ use crate::{
     settings::{EditorParticleSettings, ParticleDensity},
     theme,
 };
-use eframe::egui::{self, Color32, Id, Pos2, Rect, Ui, Vec2, text_edit::TextEditOutput};
+use eframe::egui::{self, Id, Pos2, Rect, Ui, Vec2, text_edit::TextEditOutput};
 use std::sync::{Arc, Mutex};
 
-const LIMIT: usize = 128;
+#[allow(unsafe_code)]
+mod gpu;
+pub(crate) use gpu::Renderer;
+#[cfg(test)]
+mod gpu_tests;
+
+const LIMIT: usize = 256;
 const MAX_INPUT_EVENTS: usize = 64;
-const LIFETIME: f64 = 0.48;
+const LIFETIME: f64 = 0.64;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct TypingIntent {
@@ -81,10 +87,15 @@ struct Particle {
     origin: Pos2,
     velocity: Vec2,
     radius: f32,
+    color_seed: f32,
+    flash: bool,
     born: f64,
     frame: u64,
 }
+#[cfg(test)]
 impl Particle {
+    // Keep the original state-only measurement workload comparable. Runtime
+    // motion, drag, trails and glow are calculated only by the GPU shaders.
     fn position(self, now: f64) -> Pos2 {
         let age = (now - self.born).max(0.0) as f32;
         self.origin + self.velocity * age + egui::vec2(0.0, 75.0 * age * age)
@@ -100,6 +111,8 @@ struct State {
     emitted_frame: Option<u64>,
     bursts: u64,
     seed: u32,
+    base_time: f64,
+    gpu_instances: Option<Arc<[gpu::Instance]>>,
 }
 impl State {
     fn random(&mut self) -> f32 {
@@ -120,6 +133,7 @@ impl State {
     ) {
         if !now.is_finite() {
             self.particles.clear();
+            self.gpu_instances = None;
             return;
         }
         if self.identity != Some(identity)
@@ -129,13 +143,18 @@ impl State {
             || now < self.last_time
         {
             self.particles.clear();
+            self.gpu_instances = None;
             self.emitted_frame = None;
         }
         self.identity = Some(identity);
         self.last_frame = Some(frame);
         self.last_time = now;
+        let previous_count = self.particles.len();
         self.particles
             .retain(|particle| now - particle.born < LIFETIME);
+        if previous_count != self.particles.len() {
+            self.gpu_instances = None;
+        }
         // A discarded layout pass must neither emit twice nor leave its new
         // particles at the first pass's old caret coordinates.
         if self.emitted_frame == Some(frame) {
@@ -145,7 +164,10 @@ impl State {
                     .iter_mut()
                     .filter(|particle| particle.frame == frame)
                 {
-                    particle.origin = caret;
+                    if particle.origin != caret {
+                        particle.origin = caret;
+                        self.gpu_instances = None;
+                    }
                 }
             }
             return;
@@ -153,26 +175,70 @@ impl State {
         let Some(origin) = caret.filter(|_| emission > 0) else {
             return;
         };
+        if self.particles.is_empty() {
+            self.base_time = now;
+        }
         let count = emission.min(LIMIT);
         let excess = (self.particles.len() + count).saturating_sub(LIMIT);
         self.particles.drain(..excess);
         if self.particles.capacity() == 0 {
             self.particles.reserve_exact(LIMIT);
         }
-        for _ in 0..count {
-            let angle = -std::f32::consts::PI + self.random() * std::f32::consts::PI;
-            let speed = 32.0 + self.random() * 70.0;
-            let radius = 0.7 + self.random() * 1.1;
+        for index in 0..count {
+            // Uneven full-circle velocities give the burst the ballistic,
+            // chaotic character of small game explosions, without a rosette.
+            let angle = self.random() * std::f32::consts::TAU;
+            let speed = 65.0 + self.random().powi(2) * 255.0;
+            let radius = 0.7 + self.random() * 1.0;
+            let color_seed = self.random();
             self.particles.push(Particle {
                 origin,
-                velocity: Vec2::angled(angle) * speed,
-                radius,
+                velocity: if index == 0 {
+                    Vec2::ZERO
+                } else {
+                    Vec2::angled(angle) * speed
+                },
+                radius: if index == 0 { 18.0 } else { radius },
+                color_seed,
+                flash: index == 0,
                 born: now,
                 frame,
             });
         }
+        self.gpu_instances = None;
         self.emitted_frame = Some(frame);
         self.bursts = self.bursts.wrapping_add(1);
+    }
+
+    fn instances(&mut self) -> Arc<[gpu::Instance]> {
+        self.gpu_instances
+            .get_or_insert_with(|| {
+                self.particles
+                    .iter()
+                    .map(|particle| {
+                        [
+                            particle.origin.x,
+                            particle.origin.y,
+                            particle.velocity.x,
+                            particle.velocity.y,
+                            particle.radius,
+                            (particle.born - self.base_time) as f32,
+                            particle.color_seed,
+                            if particle.flash {
+                                1.0
+                            } else if particle.color_seed > 0.9 {
+                                3.0
+                            } else if particle.color_seed > 0.68 {
+                                2.0
+                            } else {
+                                0.0
+                            },
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                    .into()
+            })
+            .clone()
     }
 }
 
@@ -182,9 +248,9 @@ fn state_id(editor: Id) -> Id {
 }
 fn density_count(density: ParticleDensity) -> usize {
     match density {
-        ParticleDensity::Low => 3,
-        ParticleDensity::Medium => 7,
-        ParticleDensity::High => 12,
+        ParticleDensity::Low => 24,
+        ParticleDensity::Medium => 48,
+        ParticleDensity::High => 80,
     }
 }
 
@@ -221,6 +287,7 @@ pub(super) fn paint(
         && intent.events > 0
         && (document_changed || (intent.ime_commit && surface.edit.response.changed()));
     if existing.is_none() && !accepted {
+        Renderer::for_context(context).warm(ui, surface.viewport.intersect(ui.clip_rect()));
         return;
     }
     let state = existing.unwrap_or_else(|| {
@@ -275,25 +342,17 @@ pub(super) fn paint(
         context.data_mut(|data| data.remove::<SharedState>(id));
         return;
     }
-    let accent = theme::palette(context).accent;
-    let painter = ui.painter().with_clip_rect(viewport);
-    for particle in &state.particles {
-        let point = particle.position(now);
-        let remaining = (1.0 - (now - particle.born) / LIFETIME).clamp(0.0, 1.0) as f32;
-        let radius = particle.radius * (0.4 + remaining * 0.6);
-        if viewport.intersects(Rect::from_center_size(point, Vec2::splat(radius * 2.0))) {
-            painter.circle_filled(
-                point,
-                radius,
-                Color32::from_rgba_unmultiplied(
-                    accent.r(),
-                    accent.g(),
-                    accent.b(),
-                    (240.0 * remaining * remaining) as u8,
-                ),
-            );
-        }
-    }
+    let instances = state.instances();
+    let time = (now - state.base_time) as f32;
+    drop(state);
+    Renderer::for_context(context).submit(
+        ui,
+        viewport,
+        instances,
+        time,
+        theme::palette(context).accent,
+        ui.visuals().dark_mode,
+    );
     context.request_repaint_after(theme::METRICS.motion.animation_frame);
 }
 
@@ -376,6 +435,7 @@ pub(super) fn inspected(
             .count()
     });
     serde_json::json!({
+        "gpu": Renderer::for_context(context).inspected(),
         "active_count": active_count,
         "burst_count": trace.as_ref().map_or(0, |trace| trace.burst_count),
         "emitted_count": trace.as_ref().map_or(0, |trace| trace.emitted_count),
@@ -458,8 +518,51 @@ mod tests {
                 .filter(|p| p.frame == 99)
                 .all(|p| p.origin == egui::pos2(91.0, 95.0))
         );
-        state.update(identity(1, 100, View::Source), 100, 0.6, None, 0);
+        state.update(identity(1, 100, View::Source), 100, 0.8, None, 0);
         assert!(state.particles.is_empty());
+    }
+
+    #[test]
+    fn explosion_covers_all_quadrants_and_instance_snapshots_only_change_with_particles() {
+        let mut state = State::default();
+        let key = identity(1, 0, View::Source);
+        state.update(
+            key,
+            0,
+            500_000.0,
+            Some(egui::pos2(80.0, 90.0)),
+            density_count(ParticleDensity::Medium),
+        );
+        let first = state.instances();
+        assert_eq!(first.len(), 48);
+        assert_eq!(first.iter().filter(|p| p[7] == 1.0).count(), 1);
+        assert!(first.iter().flatten().all(|value| value.is_finite()));
+        assert!(
+            first.iter().all(|p| p[5] == 0.0),
+            "birth times stay relative even after a long-running session"
+        );
+        let mut quadrants = [false; 4];
+        for particle in state.particles.iter().filter(|particle| !particle.flash) {
+            let x = usize::from(particle.velocity.x >= 0.0);
+            let y = usize::from(particle.velocity.y >= 0.0);
+            quadrants[x + y * 2] = true;
+        }
+        assert!(quadrants.into_iter().all(|present| present));
+        state.update(key, 1, 500_000.1, None, 0);
+        assert!(
+            Arc::ptr_eq(&first, &state.instances()),
+            "animation advances only the GPU time uniform"
+        );
+        state.update(key, 1, 500_000.1, Some(egui::pos2(82.0, 92.0)), 12);
+        let second = state.instances();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(second.len(), 60);
+        state.update(key, 2, 500_000.65, None, 0);
+        let pruned = state.instances();
+        assert!(!Arc::ptr_eq(&second, &pruned));
+        assert_eq!(pruned.len(), 12);
+        state.update(key, 3, 500_001.0, None, 0);
+        assert!(state.instances().is_empty());
     }
 
     #[test]
@@ -585,30 +688,23 @@ mod tests {
                 .push(egui::Event::Text("α".into()));
             harness.step();
             assert_eq!(harness.state().document().source(), "prefix α");
-            assert_eq!(counts(&harness), (7, 1));
-            let accent = theme::palette(&harness.ctx).accent;
-            let expected_color =
-                Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 240);
-            let circles = harness
+            assert_eq!(
+                counts(&harness),
+                (density_count(ParticleDensity::Medium), 1)
+            );
+            let callbacks = harness
                 .output()
                 .shapes
                 .iter()
                 .filter_map(|shape| {
-                    let egui::Shape::Circle(circle) = &shape.shape else {
-                        return None;
-                    };
-                    (circle.fill == expected_color).then_some((shape.clip_rect, circle.center))
+                    matches!(shape.shape, egui::Shape::Callback(_)).then_some(shape.clip_rect)
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                circles.len(),
-                7,
-                "each admitted spark uses the current theme accent"
-            );
-            assert!(circles.iter().all(|(clip, center)| clip.contains(*center)));
+            assert_eq!(callbacks.len(), 1, "one GPU batch for the whole explosion");
+            assert!(callbacks.iter().all(|clip| clip.is_positive()));
             if diff {
                 assert!(
-                    circles.iter().all(|(clip, _)| clip.left() > 400.0),
+                    callbacks.iter().all(|clip| clip.left() > 400.0),
                     "diff particles must be clipped to the editable right column"
                 );
             }
@@ -650,7 +746,10 @@ mod tests {
                 .push(egui::Event::Ime(egui::ImeEvent::Commit("日本".into())));
             harness.step();
             assert_eq!(harness.state().document().source(), "prefix 日本");
-            assert_eq!(counts(&harness), (7, 1));
+            assert_eq!(
+                counts(&harness),
+                (density_count(ParticleDensity::Medium), 1)
+            );
             harness
                 .input_mut()
                 .events
@@ -658,7 +757,7 @@ mod tests {
             harness.step();
             assert_eq!(harness.state().document().source(), "prefix 日本 paste");
             assert_eq!(counts(&harness).1, 1);
-            harness.run_steps(35);
+            harness.run_steps(45);
             assert_eq!(counts(&harness), (0, 0));
         }
     }

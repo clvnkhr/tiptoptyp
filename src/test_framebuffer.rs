@@ -108,6 +108,14 @@ impl Framebuffer {
             }
         }
     }
+    pub(crate) fn gl(&self) -> Arc<glow::Context> {
+        Arc::clone(&self.gl)
+    }
+
+    pub(crate) fn read_rgba(&self) -> egui::ColorImage {
+        self.painter.read_screen_rgba(self.size)
+    }
+
     pub(crate) fn render(
         &mut self,
         context: &egui::Context,

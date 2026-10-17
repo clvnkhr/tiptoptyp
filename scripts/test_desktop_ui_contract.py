@@ -40,8 +40,11 @@ class TypingParticleContract(unittest.TestCase):
     def test_missing_unbounded_disabled_or_expired_particles_cannot_pass(self):
         from desktop_ui_journeys import typing_particle_state
         cases = [{}, {"active_count": 129}, {"max_live": 129},
-                 {"lifetime_ms": 600}, {"active_count": True},
-                 {"last_emission_age_ms": 481}, {"origin": [900, 100]},
+                 {"pool_limit": 257}, {"lifetime_ms": 1001}, {"active_count": True},
+                 {"last_emission_age_ms": 481}, {"last_emission_age_ms": True},
+                 {"emitted_count": 6}, {"max_live": 6}, {"burst_count": 8},
+                 {"origin": [900, 100]}, {"origin": [True, 100]},
+                 {"clip": [200, 100, 200, 100]},
                  {"origin": [float("nan"), 100]}]
         for change in cases:
             document = self.document()
@@ -53,6 +56,34 @@ class TypingParticleContract(unittest.TestCase):
         document["editor_particles"]["enabled"] = False
         with self.assertRaises(AssertionError):
             typing_particle_state(document)
+
+
+    def gpu_document(self):
+        document = self.document()
+        document["typing_particles"].update(pool_limit=256, lifetime_ms=640, gpu={
+            "backend": "instanced-glow", "ready": True, "draws": 3, "uploads": 1,
+            "uploaded_instances": 7, "last_draw_instances": 7, "error": None})
+        return document
+
+    def test_gpu_callback_evidence_accepts_bounded_draws_and_preparation_is_distinct(self):
+        from desktop_ui_journeys import typing_particle_gpu_state
+        document = self.gpu_document()
+        self.assertEqual(typing_particle_gpu_state(document)["draws"], 3)
+        document["typing_particles"].update(active_count=0)
+        document["typing_particles"]["gpu"].update(
+            ready=False, draws=0, uploads=0, uploaded_instances=0, last_draw_instances=0)
+        self.assertFalse(typing_particle_gpu_state(document)["ready"])
+
+    def test_missing_cpu_only_broken_or_unbounded_gpu_evidence_is_rejected(self):
+        from desktop_ui_journeys import typing_particle_gpu_state
+        for gpu in (None, {}, {"backend": "cpu"}, {"ready": "yes"},
+                    {"draws": True}, {"uploads": -1}, {"error": "shader compile failed"},
+                    {"uploaded_instances": 257}, {"last_draw_instances": 257}):
+            document = self.gpu_document()
+            original = document["typing_particles"]["gpu"]
+            document["typing_particles"]["gpu"] = ({**original, **gpu} if gpu else gpu)
+            with self.subTest(gpu=gpu), self.assertRaises(AssertionError):
+                typing_particle_gpu_state(document)
 
 
 class PartialFixtureCleanupContract(unittest.TestCase):

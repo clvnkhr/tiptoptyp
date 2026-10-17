@@ -43,17 +43,20 @@ def typing_particle_state(document):
     for field in ("active_count", "burst_count", "emitted_count", "max_live", "pool_limit", "lifetime_ms"):
         if type(state.get(field)) is not int or state[field] < 0:
             raise AssertionError("invalid particle counter: " + field)
-    if not 0 < state["pool_limit"] <= 128 or not 0 < state["lifetime_ms"] < 600 \
-            or state["active_count"] > state["pool_limit"] \
-            or state["max_live"] > state["pool_limit"]:
-        raise AssertionError("particle work/lifetime is not bounded")
+    if not 0 < state["pool_limit"] <= 256 or not 0 < state["lifetime_ms"] <= 1000 \
+            or state["active_count"] > state["max_live"] \
+            or state["max_live"] > state["pool_limit"] \
+            or state["max_live"] > state["emitted_count"] \
+            or state["burst_count"] > state["emitted_count"]:
+        raise AssertionError("particle work/lifetime is not bounded or counters are inconsistent")
     if state["burst_count"]:
         origin, clip, age = state.get("origin"), state.get("clip"), state.get("last_emission_age_ms")
         if not isinstance(origin, list) or len(origin) != 2 \
                 or not isinstance(clip, list) or len(clip) != 4 \
-                or not all(isinstance(value, (int, float)) and math.isfinite(value)
+                or not all(type(value) in (int, float) and math.isfinite(value)
                            for value in origin + clip) \
-                or not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0 \
+                or type(age) not in (int, float) or not math.isfinite(age) or age < 0 \
+                or not clip[0] < clip[2] or not clip[1] < clip[3] \
                 or not clip[0] <= origin[0] <= clip[2] \
                 or not clip[1] <= origin[1] <= clip[3]:
             raise AssertionError("particle emission was not located inside its editor clip")
@@ -61,6 +64,24 @@ def typing_particle_state(document):
                                   or state["last_emission_age_ms"] >= state["lifetime_ms"]):
         raise AssertionError("inactive/expired particles were reported as active")
     return state
+
+
+def typing_particle_gpu_state(document):
+    """Require actual native GPU callback evidence, not just CPU particle state."""
+    state = typing_particle_state(document)
+    gpu = state.get("gpu")
+    if not isinstance(gpu, dict) or gpu.get("backend") != "instanced-glow" \
+            or type(gpu.get("ready")) is not bool:
+        raise AssertionError("native instanced particle GPU evidence is unavailable")
+    for field in ("draws", "uploads", "uploaded_instances", "last_draw_instances"):
+        if type(gpu.get(field)) is not int or gpu[field] < 0:
+            raise AssertionError("invalid particle GPU counter: " + field)
+    if gpu.get("error") is not None:
+        raise AssertionError("particle GPU callback failed: " + str(gpu["error"]))
+    if gpu["uploaded_instances"] > state["pool_limit"] \
+            or gpu["last_draw_instances"] > state["pool_limit"]:
+        raise AssertionError("particle GPU instance count exceeds the bounded pool")
+    return gpu
 
 
 def settings_category_target_visible(state, category):
@@ -1871,11 +1892,36 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             self.capture_viewport("main")
         self.close_scratch(count)
 
+    def typing_particle_burst(self, text, expected, capture=False):
+        before = self.snapshot()["document"]
+        prior = typing_particle_state(before)
+        prior_gpu = typing_particle_gpu_state(before)
+        self.native("text", text)
+        def rendered(document):
+            state = typing_particle_state(document)
+            gpu = typing_particle_gpu_state(document)
+            return (state["active_count"] > 0 and state["burst_count"] > prior["burst_count"]
+                    and gpu["ready"] and gpu["draws"] > prior_gpu["draws"]
+                    and gpu["uploads"] > prior_gpu["uploads"]
+                    and gpu["uploaded_instances"] > 0 and gpu["last_draw_instances"] > 0
+                    and document["source_fingerprint"] == fingerprint(expected))
+        active = self.wait("real typing renders a bounded native GPU explosion", rendered)
+        self.record("typing_particles.active", dark=active["document"]["dark"],
+                    observation=active["document"]["typing_particles"])
+        if capture:
+            self.capture_viewport("main")
+        self.source_is(expected)
+        self.wait("typing particles expire without further input", lambda d:
+                  typing_particle_state(d)["active_count"] == 0, timeout=3)
+
     def typing_particles(self):
         initial = "\n" * 8 + "particle "
         count = self.scratch(initial)
         document = self.snapshot()["document"]
+        appearance = document["interface_theme"]
+        initial_dark = document["dark"]
         state = typing_particle_state(document)
+        typing_particle_gpu_state(document)
         if document["editor_particles"] != {"enabled": False, "density": "Medium"} \
                 or state["active_count"] or state["burst_count"]:
             raise AssertionError("typing particles must default off at medium density")
@@ -1888,31 +1934,41 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.key(125)  # Cmd+Down reaches EOF even if the click landed on a blank line.
         self.wait("source owns particle input at EOF", lambda d:
                   d["editor_keyboard_focused"] and d["cursor"] == [len(initial), len(initial)])
-        before = typing_particle_state(self.snapshot()["document"])["burst_count"]
-        self.native("text", "x")
-        active = self.wait("real typing emits bounded transient sparks", lambda d:
-                           typing_particle_state(d)["active_count"] > 0
-                           and d["typing_particles"]["burst_count"] > before
-                           and d["source_fingerprint"] == fingerprint(initial + "x"))
-        self.record("typing_particles.active", observation=active["document"]["typing_particles"])
-        self.wait("typing sparks expire without further input", lambda d:
-                  typing_particle_state(d)["active_count"] == 0, timeout=3)
         expected = initial + "x"
-        if self.capture_review:
-            self.native("text", "y")
-            # Capture while the real effect is still young, before any polling.
-            self.capture_viewport("main")
-            expected += "y"
-            self.source_is(expected)
-            self.wait("captured particles expire", lambda d: typing_particle_state(d)["active_count"] == 0)
-        before = typing_particle_state(self.snapshot()["document"])["burst_count"]
+        self.typing_particle_burst("x", expected)
+        try:
+            for theme, dark, text in (("Light", False, "l"), ("Dark", True, "d")):
+                self.settings()
+                self.setting_section("appearance", "Appearance")
+                self.click("settings.theme." + theme)
+                self.wait("GPU particle appearance applies: " + theme, lambda d:
+                          d["interface_theme"] == theme and d["dark"] is dark)
+                self.close_settings()
+                self.click("editor.source")
+                self.key(125)
+                expected += text
+                self.typing_particle_burst(text, expected, capture=self.capture_review)
+        finally:
+            self.settings()
+            self.setting_section("appearance", "Appearance")
+            self.click("settings.theme." + ("Follow system" if appearance == "System" else appearance))
+            self.wait("particle journey restores the exact initial appearance", lambda d:
+                      d["interface_theme"] == appearance and d["dark"] is initial_dark)
+            self.close_settings()
+            self.click("editor.source")
+        quiet_document = self.snapshot()["document"]
+        before = typing_particle_state(quiet_document)["burst_count"]
+        idle_draws = typing_particle_gpu_state(quiet_document)["draws"]
+        def remains_quiet(document):
+            state = typing_particle_state(document)
+            gpu = typing_particle_gpu_state(document)
+            return (state["burst_count"] == before and state["active_count"] == 0
+                    and gpu["draws"] == idle_draws)
         self.key(123, "none")  # Moving a caret must not emit another burst.
-        self.stable_state(lambda d: typing_particle_state(d)["burst_count"] == before
-                          and d["typing_particles"]["active_count"] == 0, frames=3)
+        self.stable_state(remains_quiet, frames=3)
         self.key(0)
         self.paste_source("clipboard paste")
-        self.stable_state(lambda d: typing_particle_state(d)["burst_count"] == before
-                          and d["typing_particles"]["active_count"] == 0, frames=3)
+        self.stable_state(remains_quiet, frames=3)
         self.settings()
         self.setting_section("typing particles", "Typing particles")
         self.click("settings.editor.particles.enabled")
@@ -1922,9 +1978,9 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.key(124)
         self.native("text", "z")
         self.source_is("clipboard pastez")
-        self.stable_state(lambda d: typing_particle_state(d)["burst_count"] == before
-                          and d["typing_particles"]["active_count"] == 0, frames=3)
-        self.record("typing_particles.negative", burst_count=before)
+        self.stable_state(remains_quiet, frames=3)
+        self.record("typing_particles.negative", burst_count=before, idle_gpu_draws=idle_draws,
+                    restored_appearance=appearance)
         self.close_scratch(count)
 
     def settings_category(self, category, query, source, size):

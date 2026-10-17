@@ -121,6 +121,8 @@ impl EditorApp {
             .map(ShortcutAction::id)
             .collect::<Vec<_>>()
             .into();
+        observation["interface_theme"] =
+            serde_json::to_value(self.settings.interface_theme).unwrap();
         observation["editor_particles"] =
             serde_json::to_value(self.settings.editor_particles).unwrap();
         observation["typing_particles"] =

@@ -66,6 +66,7 @@ fn root_capture_needs_warmup(previous: UiSnapshotScene, next: UiSnapshotScene) -
 /// document viewports in the same process and on the same event loop.
 pub(crate) struct AppShell {
     primary: DocumentHost,
+    particle_renderer: crate::app::ParticleRenderer,
     closing: tiptoptyp_core::closing::CloseCoordinator,
     secondary: Vec<SecondaryWindow>,
     active: ActiveSession,
@@ -125,6 +126,7 @@ impl AppShell {
         };
         open_requests.set_repaint_context(context.egui_ctx.clone());
         Self {
+            particle_renderer: crate::app::ParticleRenderer::for_context(&context.egui_ctx),
             primary: DocumentHost::new(primary),
             closing: Default::default(),
             secondary: Vec::new(),
@@ -744,6 +746,12 @@ impl AppShell {
 }
 
 impl eframe::App for AppShell {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let Some(gl) = gl {
+            self.particle_renderer.destroy(gl);
+        }
+    }
+
     fn logic(&mut self, context: &egui::Context, frame: &mut eframe::Frame) {
         crate::window_host::ensure(context, egui::ViewportId::ROOT, egui::ViewportId::ROOT);
         // eframe skips ui entirely when the root and all children are hidden.
@@ -1048,6 +1056,7 @@ mod tests {
         let (_, open_requests) = crate::open_requests::channel();
         let (sender, native_menu_commands) = crate::native_menu::channel();
         let mut shell = AppShell {
+            particle_renderer: crate::app::ParticleRenderer::for_context(&context),
             primary: DocumentHost::new(primary),
             shared_settings,
             open_requests,
@@ -1177,6 +1186,7 @@ mod tests {
         let (_, open_requests) = crate::open_requests::channel();
         let (menu_sender, native_menu_commands) = crate::native_menu::channel();
         let mut shell = AppShell {
+            particle_renderer: crate::app::ParticleRenderer::for_context(&context),
             primary: DocumentHost::new(primary),
             shared_settings,
             open_requests,
@@ -1281,6 +1291,7 @@ mod tests {
         let (_open_sender, open_requests) = crate::open_requests::channel();
         let (menu_sender, native_menu_commands) = crate::native_menu::channel();
         let mut shell = AppShell {
+            particle_renderer: crate::app::ParticleRenderer::for_context(&context),
             primary: DocumentHost::new(primary),
             shared_settings,
             open_requests,
@@ -1411,6 +1422,7 @@ mod tests {
         let (_, open_requests) = crate::open_requests::channel();
         let (_, native_menu_commands) = crate::native_menu::channel();
         let shell = AppShell {
+            particle_renderer: crate::app::ParticleRenderer::for_context(&context),
             primary: DocumentHost::new(primary),
             shared_settings,
             open_requests,
