@@ -24,6 +24,8 @@ pub(crate) enum Action {
 pub(crate) struct Output {
     pub(crate) edit: egui::text_edit::TextEditOutput,
     pub(crate) action: Option<Action>,
+    pub(crate) viewport: Rect,
+    pub(crate) line_count: usize,
 }
 #[derive(Clone)]
 struct Layout {
@@ -379,7 +381,7 @@ pub(crate) fn show(
     });
     let extension = path.extension().and_then(|x| x.to_str()).unwrap_or("txt");
     let available = ui.available_size();
-    let edit = ScrollArea::both()
+    let scroll = ScrollArea::both()
         .id_salt("full-document-diff")
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -550,9 +552,9 @@ pub(crate) fn show(
                     .translate(origin.to_vec2());
                 ui.scroll_to_rect(rect, Some(Align::Center));
             }
-            output
-        })
-        .inner;
+            (output, current_layout.new_rows.len())
+        });
+    let (edit, line_count) = scroll.inner;
     if edit.response.changed() {
         ui.ctx().request_repaint();
     }
@@ -563,7 +565,12 @@ pub(crate) fn show(
         crate::desktop_test::observe("git.hunk.editor", &edit.response);
         crate::desktop_test::observe("editor.source", &edit.response);
     }
-    Output { edit, action }
+    Output {
+        edit,
+        action,
+        viewport: scroll.inner_rect,
+        line_count,
+    }
 }
 
 #[cfg(test)]

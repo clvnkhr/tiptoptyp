@@ -28,6 +28,7 @@ impl EditorApp {
             .take(line)
             .map(|s| s.chars().count())
             .sum();
+        self.editor_attention = Some(EditorAttention::arm(at));
         self.pending_editor_selection = Some(EditorSelection::Focus(at..at));
         Ok(())
     }
@@ -49,6 +50,7 @@ impl EditorApp {
                     .take(line)
                     .map(|s| s.chars().count())
                     .sum();
+                self.editor_attention = Some(EditorAttention::arm(at));
                 self.pending_editor_selection = Some(EditorSelection::Focus(at..at));
                 self.store_editor_cursor(context, CCursorRange::one(CCursor::new(at)));
                 let id = source_editor_id(context);
@@ -182,6 +184,20 @@ impl EditorApp {
             );
             self.open_app_popup(popup);
         }
+        let attention_viewport = Rect::from_min_max(
+            Pos2::new(
+                output.edit.response.rect.left().max(output.viewport.left()),
+                output.viewport.top(),
+            ),
+            output.viewport.right_bottom(),
+        );
+        reveal::paint_editor(
+            ui,
+            attention_viewport,
+            &output.edit.galley,
+            output.edit.galley_pos,
+            &mut self.editor_attention,
+        );
         match output.action {
             Some(full_view::Action::Close) => {
                 self.close_document_diff();
@@ -227,6 +243,14 @@ impl EditorApp {
                 }
             }
             None => {}
+        }
+        if let Some(diff) = self.document_diff.as_ref() {
+            crate::git::editor::overview::paint(
+                ui,
+                output.viewport,
+                output.line_count,
+                &diff.hunks,
+            );
         }
         self.show_find_overlay(ui, editor_bounds);
     }

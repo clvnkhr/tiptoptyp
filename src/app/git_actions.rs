@@ -20,6 +20,74 @@ pub(super) struct PendingHunkPopup {
 }
 
 impl EditorApp {
+    pub(super) fn request_git_file_diff(&mut self, context: &egui::Context, path: PathBuf) {
+        self.pending_git_file_diff = None;
+        self.pending_git_file_origin = Some(self.document().key());
+        self.git.request_file_diff(context, path);
+    }
+
+    pub(super) fn tick_git_file_diff(&mut self, context: &egui::Context) {
+        // A worker completion must not compete with a newer input owner.
+        let relinquished_focus = self.settings_visible
+            || self.settings_open_requested
+            || context.input(|input| input.viewport().focused == Some(false))
+            || self.terminal_focused(context, context.viewport_id())
+            || self.pdfium_preview.has_focus(context)
+            || self.pdfium_asset.has_focus(context)
+            || self.focused_preview_target(context).is_some();
+        if self.document_flow_busy() || self.process_close_pending || relinquished_focus {
+            self.git.take_file_diff();
+            self.pending_git_file_diff = None;
+            self.pending_git_file_origin = None;
+            return;
+        }
+        if let Some(path) = self.git.take_file_diff() {
+            self.pending_git_file_diff = None;
+            // The user may edit or select another tab while Git is reading.
+            // A completed row action must not steal that newer document away.
+            if self.pending_git_file_origin.take() != Some(self.document().key()) {
+                return;
+            }
+            if self.open_git_file_diff_path(path, context) && self.document().kind().is_editable() {
+                self.pending_git_file_diff = Some(self.document().key());
+                self.git_editor.request_refresh();
+                context.request_repaint();
+            }
+        }
+        let Some(key) = self.pending_git_file_diff else {
+            return;
+        };
+        if key != self.document().key() {
+            self.pending_git_file_diff = None;
+            return;
+        }
+        let Some(path) = self.document().path().clone() else {
+            return;
+        };
+        let Some(hunks) = self.git_editor.current_hunks(key, &path) else {
+            return;
+        };
+        self.pending_git_file_diff = None;
+        let Some(hunk) = hunks.first().cloned() else {
+            return;
+        };
+        let chunk = ChunkDiff {
+            path: path.clone(),
+            hunk,
+        };
+        match self.prepare_document_diff(&chunk) {
+            Ok(()) => {
+                self.git.file_diff_opened(&path);
+                if self.view_mode == ViewMode::Preview {
+                    self.view_mode = ViewMode::Split;
+                }
+                self.focus_source_editor(context);
+            }
+            Err(error) => self.show_file_error(error),
+        }
+        context.request_repaint();
+    }
+
     pub(super) fn handle_hunk_shortcuts(
         &mut self,
         context: &egui::Context,
@@ -233,3 +301,7 @@ impl EditorApp {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "git_file_diff_tests.rs"]
+mod file_diff_tests;

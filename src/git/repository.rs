@@ -102,6 +102,7 @@ pub(super) struct DiffSelection {
 pub(super) struct DiffResult {
     pub(super) selection: DiffSelection,
     pub(super) content: Result<String, String>,
+    pub(super) editable: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -599,6 +600,16 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
             command.push(path.as_os_str().to_owned());
             // --no-index uses exit code 1 for a successful comparison with changes.
             let bytes = run_command(root, &command, untracked)?;
+            // Deleted Git objects must stay read-only even if an unrelated
+            // file now exists at that path (for example behind a directory
+            // symlink). Revalidate bounded source bytes again at tab admission.
+            let deleted = before
+                .entries
+                .iter()
+                .any(|entry| entry.path == path && (entry.index == 'D' || entry.worktree == 'D'));
+            let editable = !deleted
+                && !private_artifact(&path)
+                && diff::read_editable_source(&root.join(&path)).is_some();
             return Ok(ResultData {
                 workspace: workspace.to_path_buf(),
                 snapshot: before,
@@ -608,6 +619,7 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
                 diff: Some(DiffResult {
                     selection: DiffSelection { path, kind },
                     content: Ok(String::from_utf8_lossy(&bytes).into_owned()),
+                    editable,
                 }),
             });
         }

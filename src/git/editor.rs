@@ -21,6 +21,7 @@ use std::{
 mod actions;
 pub(crate) mod document_diff;
 pub(crate) mod full_view;
+pub(crate) mod overview;
 pub(crate) mod view;
 
 const EDIT_DEBOUNCE: Duration = Duration::from_millis(180);
@@ -359,6 +360,15 @@ impl GitEditorState {
                 hunk: hunk.clone(),
             });
         }
+    }
+
+    pub(crate) fn current_hunks(&self, key: DocumentKey, path: &Path) -> Option<&[Hunk]> {
+        (!self.refresh_requested
+            && !self.job.is_running()
+            && self.current.as_ref().is_some_and(|current| {
+                current.document == key && current.path.as_deref() == Some(path)
+            }))
+        .then_some(self.hunks.as_slice())
     }
 
     pub(crate) fn selection_is_current(&self, key: DocumentKey, chunk: &ChunkDiff) -> bool {

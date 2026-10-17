@@ -100,6 +100,8 @@ pub(crate) struct GitPanel {
     diff: Option<DiffView>,
     refresh_requested: bool,
     pending_operation: Option<Operation>,
+    pending_file_diff: Option<DiffSelection>,
+    ready_file_diff: Option<PathBuf>,
     revert_request: Option<RevertRequest>,
     background_refresh: bool,
     status_changed: bool,
@@ -124,6 +126,8 @@ impl Default for GitPanel {
             diff: None,
             refresh_requested: false,
             pending_operation: None,
+            pending_file_diff: None,
+            ready_file_diff: None,
             revert_request: None,
             background_refresh: false,
             status_changed: false,
@@ -172,6 +176,8 @@ impl GitPanel {
             self.message.clear();
             self.diff = None;
             self.pending_operation = None;
+            self.pending_file_diff = None;
+            self.ready_file_diff = None;
             self.revert_request = None;
             if !self.job.is_running() {
                 self.start_operation(context, Operation::Refresh, true);
@@ -219,12 +225,14 @@ impl GitPanel {
             }),
             _ => None,
         };
-        self.diff = selection.clone().map(|selection| DiffView {
-            selection,
-            content: None,
-            reveal: true,
-        });
         self.background_refresh = quiet && matches!(&operation, Operation::Refresh);
+        if !self.background_refresh {
+            self.diff = selection.clone().map(|selection| DiffView {
+                selection,
+                content: None,
+                reveal: true,
+            });
+        }
         let workspace = self.workspace.clone();
         self.job_workspace = Some(workspace.clone());
         self.failed = false;
@@ -249,6 +257,7 @@ impl GitPanel {
                     diff: selection.map(|selection| DiffResult {
                         selection,
                         content: Err(error),
+                        editable: false,
                     }),
                 },
             })
@@ -282,6 +291,13 @@ impl GitPanel {
                     && let Some(view) = &mut self.diff
                     && view.selection == result.selection
                 {
+                    if self.pending_file_diff.as_ref() == Some(&result.selection) {
+                        self.pending_file_diff = None;
+                        if result.editable && result.content.is_ok() {
+                            self.ready_file_diff =
+                                Some(self.snapshot.root.join(&result.selection.path));
+                        }
+                    }
                     view.content = Some(result.content.map(DiffContent::from));
                     // The completed diff can be taller than the loading card.
                     view.reveal = true;
@@ -369,6 +385,8 @@ impl GitPanel {
             diff.reveal = false;
         }
         if let Some(operation) = output.operation {
+            self.pending_file_diff = None;
+            self.ready_file_diff = None;
             if let Operation::Revert(paths) = operation {
                 self.revert_request = Some(RevertRequest {
                     workspace: self.workspace.clone(),
@@ -378,6 +396,57 @@ impl GitPanel {
                 self.start(context, operation);
             }
             context.request_repaint();
+        }
+        if let Some(path) = output.open_file_diff {
+            self.request_file_diff(context, path);
+        }
+    }
+
+    pub(crate) fn request_file_diff(&mut self, context: &egui::Context, path: PathBuf) {
+        if self.job.is_running() && !self.background_refresh {
+            return;
+        }
+        let Some(entry) = self
+            .snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+        else {
+            return;
+        };
+        let selection = DiffSelection {
+            path,
+            kind: if entry.staged() {
+                DiffKind::Staged
+            } else {
+                DiffKind::WorkingTree
+            },
+        };
+        self.pending_file_diff = Some(selection.clone());
+        self.ready_file_diff = None;
+        // A double-click opens; it must not toggle an already selected card off.
+        if self
+            .diff
+            .as_ref()
+            .is_some_and(|diff| diff.selection == selection)
+        {
+            self.diff = None;
+        }
+        self.start(context, Operation::Diff(selection.path, selection.kind));
+        context.request_repaint();
+    }
+
+    pub(crate) fn take_file_diff(&mut self) -> Option<PathBuf> {
+        self.ready_file_diff.take()
+    }
+
+    pub(crate) fn file_diff_opened(&mut self, path: &Path) {
+        if self
+            .diff
+            .as_ref()
+            .is_some_and(|diff| self.snapshot.root.join(&diff.selection.path) == path)
+        {
+            self.diff = None;
         }
     }
 
@@ -1490,7 +1559,11 @@ mod tests {
                         output: "Comparison ready".into(),
                         committed: false,
                         failed: false,
-                        diff: Some(DiffResult { selection, content }),
+                        diff: Some(DiffResult {
+                            selection,
+                            content,
+                            editable: false,
+                        }),
                     })
                 },
             )

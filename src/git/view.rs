@@ -29,6 +29,7 @@ pub(crate) struct Output {
     pub(super) operation: Option<Operation>,
     pub(super) commit_message: Option<String>,
     pub(super) revealed: Option<DiffSelection>,
+    pub(crate) open_file_diff: Option<PathBuf>,
     #[cfg(test)]
     pub(super) rendered_change_rows: usize,
 }
@@ -803,15 +804,24 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                                                                 ),
                                                             )
                                                             .on_hover_text("Git status: staging area / working file. A added, M modified, D deleted, ? untracked.");
-                                                            ui.add(
-                                                                egui::Label::new(
-                                                                    entry.path.to_string_lossy(),
-                                                                )
-                                                                .truncate(),
-                                                            )
-                                                            .on_hover_text(
-                                                                entry.path.display().to_string(),
+                                                            let file = ui.add(
+                                                                egui::Label::new(entry.path.to_string_lossy())
+                                                                    .truncate()
+                                                                    .sense(egui::Sense::click()),
                                                             );
+                                                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                                            if ui.is_rect_visible(file.interact_rect) {
+                                                                crate::desktop_test::observe(
+                                                                    &format!("git.file.{}", entry.path.display()),
+                                                                    &file,
+                                                                );
+                                                            }
+                                                            if file.double_clicked() {
+                                                                // The row owns this asynchronous action, not
+                                                                // a previously focused editor or terminal.
+                                                                file.request_focus();
+                                                                output.open_file_diff = Some(entry.path.clone());
+                                                            }
                                                         },
                                                     );
                                                 });
@@ -1101,6 +1111,90 @@ fn action_button(
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn file_rows_open_the_diff_only_on_double_click_even_with_unsaved_buffers() {
+        for (index, worktree) in [
+            (' ', 'M'),
+            ('M', ' '),
+            ('A', ' '),
+            ('?', '?'),
+            (' ', 'D'),
+            ('U', 'U'),
+        ] {
+            let snapshot = Snapshot {
+                initialized: true,
+                entries: vec![Entry {
+                    path: "chapter.typ".into(),
+                    index,
+                    worktree,
+                }]
+                .into(),
+                ..Default::default()
+            };
+            let mut harness = Harness::builder()
+                .with_step_dt(1.0 / 60.0)
+                .with_max_steps(30)
+                .with_size(egui::vec2(560.0, 800.0))
+                .build_ui_state(
+                    move |ui, state: &mut (Cache, Option<PathBuf>)| {
+                        let output = show_panel(
+                            ui,
+                            Input {
+                                toolbar_style: crate::settings::ToolbarStyle::Icons,
+                                snapshot: &snapshot,
+                                message: "Ready",
+                                commit_message: "",
+                                failed: false,
+                                diff: None,
+                                diff_style: GitDiffStyle::Unified,
+                                busy: false,
+                                dirty: true,
+                            },
+                            &mut state.0,
+                        );
+                        if output.open_file_diff.is_some() {
+                            state.1 = output.open_file_diff;
+                        }
+                    },
+                    (Cache::default(), None),
+                );
+            harness.run();
+            let previous_focus = egui::Id::new("previous-terminal-focus");
+            harness
+                .ctx
+                .memory_mut(|memory| memory.request_focus(previous_focus));
+            let point = harness.get_by_label("chapter.typ").rect().center();
+            harness.event(egui::Event::PointerMoved(point));
+            harness.run();
+            for click in 0..2 {
+                for pressed in [true, false] {
+                    harness.event(egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    harness.step();
+                }
+                assert_eq!(
+                    state_path(&harness),
+                    if click == 0 {
+                        None
+                    } else {
+                        Some(PathBuf::from("chapter.typ"))
+                    }
+                );
+                if click == 1 {
+                    assert!(harness.get_by_label("chapter.typ").is_focused());
+                }
+            }
+        }
+
+        fn state_path(harness: &Harness<'_, (Cache, Option<PathBuf>)>) -> Option<PathBuf> {
+            harness.state().1.clone()
+        }
+    }
 
     #[test]
     fn commit_action_uses_unstaged_fallback_but_respects_staged_dirty_busy_and_empty_states() {

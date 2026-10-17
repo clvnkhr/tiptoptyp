@@ -1,6 +1,45 @@
 //! UI-independent unified-diff models and codecs.
 use super::{Snapshot, args, diff_args, private_artifact, run, run_command};
-use std::{ffi::OsString, io::Write, ops::Range, path::Path};
+use std::{
+    ffi::OsString,
+    io::{Read, Write},
+    ops::Range,
+    path::Path,
+};
+
+/// Read a regular Git text path without following a renamed symlink target.
+/// Both the worker and tab admission use this bounded classifier; admission
+/// applies these exact bytes rather than reopening a potentially changed file.
+pub(crate) fn read_editable_source(path: &Path) -> Option<(String, crate::document::DocumentKind)> {
+    if !std::fs::symlink_metadata(path).ok()?.is_file() {
+        return None;
+    }
+    // Canonical path spelling differs for ordinary drive/UNC paths on Windows.
+    // Inspect parents directly instead, including directory symlinks/junctions.
+    for parent in path.ancestors().skip(1).filter(|p| p.file_name().is_some()) {
+        if std::fs::symlink_metadata(parent)
+            .ok()?
+            .file_type()
+            .is_symlink()
+        {
+            return None;
+        }
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(4 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > 4 * 1024 * 1024 || bytes.contains(&0) {
+        return None;
+    }
+    let kind = crate::document::detect_document(path, &bytes).ok()?;
+    kind.is_editable()
+        .then(|| String::from_utf8(bytes).ok().map(|source| (source, kind)))
+        .flatten()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChangeKind {
     Added,
@@ -192,4 +231,37 @@ pub(in crate::git) fn buffer_hunks(
         Err(error) => return Err(error),
     };
     compare_buffer(&snapshot.root, &before, buffer)
+}
+
+#[cfg(test)]
+mod source_read_tests {
+    use super::read_editable_source;
+
+    #[test]
+    fn regular_source_paths_do_not_require_canonical_spelling() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let path = root.join("chapter.typ");
+        std::fs::write(&path, "= Regular source\n").unwrap();
+        assert_eq!(read_editable_source(&path).unwrap().0, "= Regular source\n");
+        #[cfg(windows)]
+        assert_eq!(
+            read_editable_source(&directory.path().join("chapter.typ"))
+                .unwrap()
+                .0,
+            "= Regular source\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_regular_leaf_behind_a_directory_symlink_is_not_a_git_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("real")).unwrap();
+        std::fs::write(root.join("real/chapter.typ"), "= Other source\n").unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("alias")).unwrap();
+        assert!(read_editable_source(&root.join("alias/chapter.typ")).is_none());
+        assert!(read_editable_source(&root.join("real/chapter.typ")).is_some());
+    }
 }
