@@ -2099,7 +2099,7 @@ mod tests {
     }
 
     #[test]
-    fn image_appearance_is_opt_in_and_keeps_pdf_and_comfy_choices() {
+    fn image_appearance_toggle_keeps_pdf_and_comfy_choices() {
         let mut harness = Harness::builder().build_ui_state(
             |ui, settings: &mut AppSettings| image_appearance_preference(ui, settings),
             AppSettings::default(),
@@ -2109,12 +2109,18 @@ mod tests {
             .get_by_label("Apply dark page appearance to images")
             .click();
         harness.run();
-        assert!(harness.state().dark_images);
+        assert!(!harness.state().dark_images);
         assert_eq!(
             harness.state().document_theme,
             DocumentTheme::FollowInterface
         );
-        assert!(!harness.state().comfy_background && !harness.state().comfy_text);
+        assert!(harness.state().comfy_background);
+        assert!(!harness.state().comfy_text);
+        harness
+            .get_by_label("Apply dark page appearance to images")
+            .click();
+        harness.run();
+        assert!(harness.state().dark_images);
     }
 
     #[test]

@@ -470,10 +470,10 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) theme_colors: crate::theme_transform::ThemeColorAdjustments,
     pub(crate) document_theme: DocumentTheme,
-    /// Opt in to applying the selected dark page appearance to opened images.
-    #[serde(default)]
+    /// Apply the selected dark page appearance to opened images.
+    #[serde(default = "default_true")]
     pub(crate) dark_images: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub(crate) comfy_background: bool,
     #[serde(default)]
     pub(crate) comfy_text: bool,
@@ -604,10 +604,10 @@ impl Default for AppSettings {
             theme_invert: false,
             theme_hue_shift_degrees: 0,
             theme_colors: Default::default(),
-            comfy_background: false,
+            comfy_background: true,
             comfy_text: false,
             document_theme: DocumentTheme::FollowInterface,
-            dark_images: false,
+            dark_images: true,
             preview_preference: PreviewPreference::default(),
             preview_zoom_snapshot: true,
             git_diff_style: GitDiffStyle::Unified,
@@ -651,7 +651,7 @@ impl Default for AppSettings {
             code_font_family: None,
             code_font_face_index: 0,
             code_font_weight: DEFAULT_UI_FONT_WEIGHT,
-            titlebar_menus: true,
+            titlebar_menus: false,
             toolbar_style: ToolbarStyle::default(),
             compact_layout_controls: true,
             fixed_tab_width: false,
@@ -1080,7 +1080,21 @@ mod tests {
         assert!(!settings.theme_invert);
         assert_eq!(settings.theme_hue_shift_degrees, 0);
         assert_eq!(settings.document_theme, DocumentTheme::FollowInterface);
-        assert!(!settings.dark_images);
+        assert!(settings.dark_images);
+        assert!(settings.comfy_background);
+        assert!(!settings.comfy_text);
+        assert!(!settings.titlebar_menus);
+        let mut stored = serde_json::to_value(&settings).unwrap();
+        stored.as_object_mut().unwrap().remove("dark_images");
+        stored.as_object_mut().unwrap().remove("comfy_background");
+        let omitted: AppSettings = serde_json::from_value(stored.clone()).unwrap();
+        assert!(omitted.dark_images && omitted.comfy_background);
+        stored["dark_images"] = false.into();
+        stored["comfy_background"] = false.into();
+        stored["titlebar_menus"] = true.into();
+        let explicit: AppSettings = serde_json::from_value(stored).unwrap();
+        assert!(!explicit.dark_images && !explicit.comfy_background);
+        assert!(explicit.titlebar_menus);
         assert_eq!(
             settings.preview_preference,
             PreviewPreference::InteractivePartial

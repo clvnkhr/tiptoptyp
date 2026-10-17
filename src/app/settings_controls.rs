@@ -1090,6 +1090,7 @@ mod layout_tests {
                     |ui, settings: &mut AppSettings| show_page_appearance_sample(ui, settings),
                     AppSettings {
                         document_theme: page,
+                        dark_images: false,
                         ..AppSettings::default()
                     },
                 );

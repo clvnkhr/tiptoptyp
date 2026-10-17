@@ -72,9 +72,14 @@ class ImageJourneys:
         self.ensure_typesetting_tab()
         original_document = self.snapshot()["document"]
         self.image_page_choice("Dark")
-        # Defaults preserve original image colors even when PDFs use dark pages.
+        # Exercise original colors explicitly, independent of the factory default.
         if self.snapshot()["document"]["dark_images"]:
-            raise AssertionError("image dark mode must start disabled")
+            self.settings()
+            self.setting_section("dark images", "Apply dark page appearance to images")
+            self.click("settings.dark_images")
+            self.wait("image appearance test starts with original colors",
+                      lambda d: not d["dark_images"])
+            self.close_settings()
         path = self.directory / "image-appearance.png"
         encoded = image_fixture()
         path.write_bytes(encoded)
@@ -131,8 +136,8 @@ class ImageJourneys:
         self.image_page_choice("Dark")
         verify(True, "dark pages restore inversion")
         self.click("image.dark")
-        self.wait("restore image opt-in default", lambda d: not d["dark_images"])
-        verify(False, "restored default")
+        self.wait("restore original-color choice", lambda d: not d["dark_images"])
+        verify(False, "restored original colors")
         self.image_page_choice("FollowInterface")
         verify(False, "follow interface with images opted out")
         # With a source preview pinned, opening an image uses an asset split.
@@ -162,3 +167,9 @@ class ImageJourneys:
                   lambda d: d["tabs"] == original_document["tabs"]
                   and d["path"] == original_document["path"]
                   and d["source_fingerprint"] == original_document["source_fingerprint"])
+        if original_document["dark_images"]:
+            self.settings()
+            self.setting_section("dark images", "Apply dark page appearance to images")
+            self.click("settings.dark_images")
+            self.wait("restore initial image appearance preference", lambda d: d["dark_images"])
+            self.close_settings()

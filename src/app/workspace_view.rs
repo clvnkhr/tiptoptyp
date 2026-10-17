@@ -254,6 +254,7 @@ mod tests {
             None,
         );
         app.settings.document_theme = crate::settings::DocumentTheme::Dark;
+        app.settings.dark_images = false;
         app.sync_runtime_settings(&context);
         let old_token = app.asset_token;
         app.accept_asset_result(
