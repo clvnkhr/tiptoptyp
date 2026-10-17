@@ -1813,6 +1813,33 @@ fn render_immediate_viewport(
     event_loop_context::with_current_event_loop(|event_loop| {
         glutin.handle_viewport_output(event_loop, egui_ctx, &viewport_output);
     });
+
+    // Immediate children do not pass through the root/deferred action drain.
+    // Deliver clipboard input on their next pass, including requests just
+    // produced by handle_viewport_output, without repainting an idle child.
+    if let Some(viewport) = glutin.viewports.get_mut(&viewport_id)
+        && let Some(state) = &mut viewport.egui_winit
+    {
+        let mut delivered = false;
+        viewport.actions_requested.retain(|action| {
+            let command = match action {
+                ActionRequested::Cut => egui::ViewportCommand::RequestCut,
+                ActionRequested::Copy => egui::ViewportCommand::RequestCopy,
+                ActionRequested::Paste => egui::ViewportCommand::RequestPaste,
+                ActionRequested::Screenshot(_) => return true,
+            };
+            if let Some(event) =
+                crate::window_host::clipboard_request_event(&command, || state.clipboard_text())
+            {
+                state.egui_input_mut().events.push(event);
+                delivered = true;
+            }
+            false
+        });
+        if delivered {
+            egui_ctx.request_repaint_of(viewport_id);
+        }
+    }
 }
 
 #[cfg(feature = "__screenshot")]

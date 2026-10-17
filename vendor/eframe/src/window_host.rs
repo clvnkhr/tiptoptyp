@@ -90,6 +90,24 @@ pub fn native_platform_output(mut output: egui::PlatformOutput) -> egui::Platfor
     output
 }
 
+/// Translate clipboard requests without reading the clipboard for other commands.
+/// Kept public for the application's native input regression tests.
+#[doc(hidden)]
+pub fn clipboard_request_event(
+    command: &egui::ViewportCommand,
+    clipboard_text: impl FnOnce() -> Option<String>,
+) -> Option<egui::Event> {
+    match command {
+        egui::ViewportCommand::RequestCut => Some(egui::Event::Cut),
+        egui::ViewportCommand::RequestCopy => Some(egui::Event::Copy),
+        egui::ViewportCommand::RequestPaste => clipboard_text()
+            .map(|text| text.replace("\r\n", "\n"))
+            .filter(|text| !text.is_empty())
+            .map(egui::Event::Paste),
+        _ => None,
+    }
+}
+
 /// A close request needs its owning callback even for minimized/occluded
 /// windows. Otherwise deferred windows have neither UI nor a logic callback
 /// in which to answer the close transaction. This does not force presentation.
