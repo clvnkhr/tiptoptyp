@@ -102,7 +102,7 @@ impl SettingsPanel<'_> {
         {
             *draft = crate::settings_json::Draft::new(self.settings);
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let save = ui.add_enabled(
                 draft.validation.is_ok() && !draft.saved,
                 egui::Button::new("Save JSON settings"),
@@ -123,50 +123,69 @@ impl SettingsPanel<'_> {
             if reload.clicked() {
                 *draft = crate::settings_json::Draft::new(self.settings);
             }
-        });
-        match &draft.validation {
-            Ok(_) => {
-                ui.label(if draft.saved {
+            if draft.validation.is_ok() {
+                ui.weak(if draft.saved {
                     "Settings saved"
                 } else {
                     "Valid settings"
                 });
             }
-            Err(error) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
+        });
+        if let Err(error) = &draft.validation {
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        ui.weak("Changes are checked as you type and applied only when saved. Tool-specific configuration keys are validated by the tool itself.");
         let mut find = false;
         let mut focus_match = false;
         if self.state.focus_search {
             self.state.json_search = true;
         }
         if self.state.json_search {
-            ui.horizontal(|ui| {
-                ui.label("Find in JSON");
-                let query = ui.text_edit_singleline(&mut self.state.json_query);
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("settings.json.find", &query);
-                if self.state.focus_search {
-                    query.request_focus();
-                    self.state.focus_search = false;
-                }
-                focus_match = (query.has_focus() || query.lost_focus())
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                find = query.changed() || focus_match;
-                if query.changed() {
-                    self.state.json_match = None;
-                }
-                focus_match |= ui.button("Next match").clicked();
-                find |= focus_match;
-                if ui.small_button("Close search").clicked() {
-                    self.state.json_search = false;
-                }
-            });
+            let row_height = ui
+                .text_style_height(&egui::TextStyle::Body)
+                .max(ui.text_style_height(&egui::TextStyle::Button))
+                + ui.spacing().button_padding.y * 2.0;
+            ui.allocate_ui_with_layout(
+                Vec2::new(
+                    ui.available_width(),
+                    row_height.max(ui.spacing().interact_size.y),
+                ),
+                Layout::right_to_left(Align::Center),
+                |ui| {
+                    if ui.small_button("Close search").clicked() {
+                        self.state.json_search = false;
+                    }
+                    focus_match |= ui.button("Next match").clicked();
+                    let query = ui.add(
+                        egui::TextEdit::singleline(&mut self.state.json_query)
+                            .id_salt("settings-json-find")
+                            .hint_text("Find in JSON")
+                            .horizontal_align(Align::Min)
+                            .desired_width(ui.available_width().max(1.0)),
+                    );
+                    query.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Find in JSON")
+                    });
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.json.find", &query);
+                    if self.state.focus_search {
+                        query.request_focus();
+                        self.state.focus_search = false;
+                    }
+                    focus_match |= (query.has_focus() || query.lost_focus())
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    find = query.changed() || focus_match;
+                    if query.changed() {
+                        self.state.json_match = None;
+                    }
+                },
+            );
         }
+        ui.separator();
         egui::ScrollArea::vertical()
             .id_salt("settings-json-scroll")
+            .auto_shrink([false, false])
+            .min_scrolled_height(0.0)
+            .max_height(ui.available_height().max(1.0))
             .show(ui, |ui| {
                 let response = super::code_editor::editor(
                     ui,

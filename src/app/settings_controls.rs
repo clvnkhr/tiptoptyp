@@ -394,130 +394,127 @@ pub(super) fn show_typst_override_editor(
     syntect_theme: &syntect::highlighting::Theme,
     weight_support: &theme::FontWeightSupport,
 ) {
-    for group in ["Markup", "Math", "Code", "Diagnostics"] {
-        ui.label(RichText::new(group).strong());
-        egui::Grid::new(("typst-override-grid", group))
-            .num_columns(9)
-            .striped(true)
-            .spacing(egui::vec2(theme::SPACE.control, theme::SPACE.tight))
-            .show(ui, |ui| {
+    egui::Grid::new("typst-override-grid")
+        .num_columns(9)
+        .striped(true)
+        .spacing(egui::vec2(theme::SPACE.control, theme::SPACE.tight))
+        .show(ui, |ui| {
+            ui.add_sized(
+                [
+                    METRICS.settings.override_role_width,
+                    METRICS.settings.override_row_height,
+                ],
+                egui::Label::new(RichText::new("Syntax").size(theme::TYPE.supporting).weak()),
+            );
+            for (label, width) in [
+                ("Foreground", METRICS.settings.override_color_width),
+                ("Background", METRICS.settings.override_color_width),
+                ("Weight", METRICS.settings.override_weight_width),
+                ("Italic", METRICS.settings.override_decoration_width),
+                ("Underline", METRICS.settings.override_decoration_width),
+                ("Strike", METRICS.settings.override_decoration_width),
+            ] {
+                ui.add_sized(
+                    [width, METRICS.settings.override_row_height],
+                    egui::Label::new(RichText::new(label).size(theme::TYPE.supporting).weak())
+                        .truncate(),
+                );
+            }
+            ui.add_sized(
+                [
+                    METRICS.settings.override_sample_width,
+                    METRICS.settings.override_row_height,
+                ],
+                egui::Label::new(
+                    RichText::new("Live sample")
+                        .size(theme::TYPE.supporting)
+                        .weak(),
+                ),
+            );
+            ui.add_sized(
+                [
+                    METRICS.settings.override_reset_width,
+                    METRICS.settings.override_row_height,
+                ],
+                egui::Label::new(""),
+            );
+            ui.end_row();
+
+            let mut previous_group = "";
+            for role in ["Markup", "Math", "Code", "Diagnostics"]
+                .into_iter()
+                .flat_map(|group| {
+                    TypstSyntaxRole::ALL
+                        .into_iter()
+                        .filter(move |role| role.group() == group)
+                })
+            {
+                if role.group() != previous_group {
+                    ui.label(RichText::new(role.group()).strong());
+                    ui.end_row();
+                }
+                previous_group = role.group();
+                let inherited =
+                    ResolvedTypstStyles::resolve_style(role, palette, Some(syntect_theme), None);
+                let mut style_override = overrides.get(role).cloned().unwrap_or_default();
                 ui.add_sized(
                     [
                         METRICS.settings.override_role_width,
                         METRICS.settings.override_row_height,
                     ],
-                    egui::Label::new(RichText::new("Syntax").size(theme::TYPE.supporting).weak()),
+                    egui::Label::new(role.label()).truncate(),
                 );
-                for (label, width) in [
-                    ("Foreground", METRICS.settings.override_color_width),
-                    ("Background", METRICS.settings.override_color_width),
-                    ("Weight", METRICS.settings.override_weight_width),
-                    ("Italic", METRICS.settings.override_decoration_width),
-                    ("Underline", METRICS.settings.override_decoration_width),
-                    ("Strike", METRICS.settings.override_decoration_width),
-                ] {
-                    ui.add_sized(
-                        [width, METRICS.settings.override_row_height],
-                        egui::Label::new(RichText::new(label).size(theme::TYPE.supporting).weak())
-                            .truncate(),
-                    );
-                }
+                optional_color_override(
+                    ui,
+                    (role, "foreground"),
+                    &mut style_override.foreground,
+                    inherited.foreground,
+                );
+                optional_color_override(
+                    ui,
+                    (role, "background"),
+                    &mut style_override.background,
+                    inherited.background,
+                );
+                optional_weight_override(
+                    ui,
+                    (role, "weight"),
+                    &mut style_override.weight,
+                    inherited.weight,
+                    weight_support,
+                );
+                optional_bool_override(ui, (role, "italic"), "I", &mut style_override.italic);
+                optional_bool_override(ui, (role, "underline"), "U", &mut style_override.underline);
+                optional_bool_override(
+                    ui,
+                    (role, "strike"),
+                    "S",
+                    &mut style_override.strikethrough,
+                );
+
+                let resolved = ResolvedTypstStyles::resolve_style(
+                    role,
+                    palette,
+                    Some(syntect_theme),
+                    Some(&style_override),
+                );
+                let mut sample = egui::text::LayoutJob::default();
+                sample.append(role.sample(), 0.0, resolved.text_format());
                 ui.add_sized(
                     [
                         METRICS.settings.override_sample_width,
                         METRICS.settings.override_row_height,
                     ],
-                    egui::Label::new(
-                        RichText::new("Live sample")
-                            .size(theme::TYPE.supporting)
-                            .weak(),
-                    ),
+                    egui::Label::new(sample).truncate(),
                 );
-                ui.add_sized(
-                    [
-                        METRICS.settings.override_reset_width,
-                        METRICS.settings.override_row_height,
-                    ],
-                    egui::Label::new(""),
-                );
-                ui.end_row();
 
-                for role in TypstSyntaxRole::ALL
-                    .into_iter()
-                    .filter(|role| role.group() == group)
-                {
-                    let inherited = ResolvedTypstStyles::resolve_style(
-                        role,
-                        palette,
-                        Some(syntect_theme),
-                        None,
-                    );
-                    let mut style_override = overrides.get(role).cloned().unwrap_or_default();
-                    ui.add_sized(
-                        [
-                            METRICS.settings.override_role_width,
-                            METRICS.settings.override_row_height,
-                        ],
-                        egui::Label::new(role.label()).truncate(),
-                    );
-                    optional_color_override(
-                        ui,
-                        (role, "foreground"),
-                        &mut style_override.foreground,
-                        inherited.foreground,
-                    );
-                    optional_color_override(
-                        ui,
-                        (role, "background"),
-                        &mut style_override.background,
-                        inherited.background,
-                    );
-                    optional_weight_override(
-                        ui,
-                        (role, "weight"),
-                        &mut style_override.weight,
-                        inherited.weight,
-                        weight_support,
-                    );
-                    optional_bool_override(ui, (role, "italic"), "I", &mut style_override.italic);
-                    optional_bool_override(
-                        ui,
-                        (role, "underline"),
-                        "U",
-                        &mut style_override.underline,
-                    );
-                    optional_bool_override(
-                        ui,
-                        (role, "strike"),
-                        "S",
-                        &mut style_override.strikethrough,
-                    );
-
-                    let resolved = ResolvedTypstStyles::resolve_style(
-                        role,
-                        palette,
-                        Some(syntect_theme),
-                        Some(&style_override),
-                    );
-                    let mut sample = egui::text::LayoutJob::default();
-                    sample.append(role.sample(), 0.0, resolved.text_format());
-                    ui.add_sized(
-                        [
-                            METRICS.settings.override_sample_width,
-                            METRICS.settings.override_row_height,
-                        ],
-                        egui::Label::new(sample).truncate(),
-                    );
-
-                    if crate::app::icons::action_button(ui, "Reset").clicked() {
-                        style_override = TypstStyleOverride::default();
-                    }
-                    overrides.set(role, style_override);
-                    ui.end_row();
+                if crate::app::icons::action_button(ui, "Reset").clicked() {
+                    style_override = TypstStyleOverride::default();
                 }
-            });
-        ui.add_space(theme::SPACE.small);
-    }
+                overrides.set(role, style_override);
+                ui.end_row();
+            }
+        });
 }
 
 fn optional_color_override(
@@ -900,7 +897,7 @@ pub(super) fn show_text_highlight_editor(
                         "Sample",
                         "",
                     ] {
-                        ui.label(label);
+                        ui.label(RichText::new(label).weak());
                     }
                     ui.end_row();
                     for (index, rule) in rules.iter_mut().enumerate() {
@@ -973,7 +970,7 @@ pub(super) fn show_text_highlight_editor(
     if let Some(index) = remove {
         rules.remove(index);
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(rules.len() < 100, egui::Button::new("Add highlight"))
             .clicked()
@@ -996,6 +993,62 @@ pub(super) fn show_text_highlight_editor(
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn compact_typst_override_grid_uses_one_header_and_one_heading_per_group() {
+        use egui_kittest::{
+            Harness,
+            kittest::{Queryable as _, by},
+        };
+        let mut fonts_ready = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(1100.0, 1400.0))
+            .build_ui_state(
+                move |ui, overrides: &mut TypstStyleOverrides| {
+                    if !fonts_ready {
+                        theme::configure_test_fonts(ui.ctx());
+                        fonts_ready = true;
+                        return;
+                    }
+                    theme::apply_compact_tool_spacing(ui);
+                    show_typst_override_editor(
+                        ui,
+                        overrides,
+                        theme::default_syntax_palette(true),
+                        &syntect::highlighting::Theme::default(),
+                        &theme::FontWeightSupport::Discrete {
+                            values: vec![400, 700],
+                            default: 400,
+                        },
+                    );
+                },
+                TypstStyleOverrides::default(),
+            );
+        theme::configure_test_fonts(&harness.ctx);
+        harness.run();
+        for label in [
+            "Syntax",
+            "Foreground",
+            "Background",
+            "Weight",
+            "Live sample",
+            "Markup",
+            "Math",
+            "Code",
+            "Diagnostics",
+        ] {
+            assert_eq!(harness.query_all(by().label(label)).count(), 1, "{label}");
+        }
+        let first = harness.get_by_label(TypstSyntaxRole::Plain.label()).rect();
+        for role in TypstSyntaxRole::ALL {
+            let bounds = harness.get_by_label(role.label()).rect();
+            assert!(
+                (bounds.left() - first.left()).abs() < 0.5,
+                "{}: {bounds:?}",
+                role.label()
+            );
+        }
+    }
 
     #[test]
     fn settings_row_labels_and_controls_have_stable_columns_and_vertical_centers() {

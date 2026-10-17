@@ -404,11 +404,50 @@ fn filters(ui: &mut egui::Ui, filter: &mut Filter, namespace: &str) {
             search.scroll_to_me(Some(egui::Align::Min));
         }
     });
+    filter_selectors(ui, filter, namespace, false);
+}
+
+fn filter_selector(
+    ui: &mut egui::Ui,
+    id: &'static str,
+    width: f32,
+    selected: &str,
+    contents: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, ui.spacing().interact_size.y),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            egui::ComboBox::from_id_salt(id)
+                .selected_text(selected)
+                .width(width)
+                .truncate()
+                .show_ui(ui, contents)
+                .response
+        },
+    )
+    .inner
+}
+
+fn filter_selectors(ui: &mut egui::Ui, filter: &mut Filter, namespace: &str, compact: bool) {
+    let available = ui
+        .available_width()
+        .min((ui.clip_rect().right() - ui.next_widget_position().x).max(0.0));
+    let columns = if available >= 285.0 { 3.0 } else { 2.0 };
+    let width = (available - ui.spacing().item_spacing.x * (columns - 1.0)) / columns;
     ui.horizontal_wrapped(|ui| {
-        let language = egui::ComboBox::from_id_salt("snippet-language-filter")
-            .selected_text(filter.language.map_or("All languages", language_label))
-            .width(110.0)
-            .show_ui(ui, |ui| {
+        let language_label = filter.language.map_or("All languages", language_label);
+        let display = if compact && filter.language.is_none() {
+            "Language"
+        } else {
+            language_label
+        };
+        let language = filter_selector(
+            ui,
+            "snippet-language-filter",
+            if compact { width } else { 110.0 },
+            display,
+            |ui| {
                 for (value, label, target) in [
                     (None, "All languages", "all"),
                     (Some(Language::Typst), "Typst", "typst"),
@@ -418,16 +457,28 @@ fn filters(ui: &mut egui::Ui, filter: &mut Filter, namespace: &str) {
                     let row = ui.selectable_value(&mut filter.language, value, label);
                     observe(&format!("{namespace}.filter.language.{target}"), &row);
                 }
-            });
-        observe(&format!("{namespace}.filter.language"), &language.response);
-        let origin = egui::ComboBox::from_id_salt("snippet-origin-filter")
-            .selected_text(match filter.origin {
-                Origin::All => "All origins",
-                Origin::Preset => "Suggested",
-                Origin::Custom => "Your snippets",
-            })
-            .width(110.0)
-            .show_ui(ui, |ui| {
+            },
+        );
+        language.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, language_label)
+        });
+        observe(&format!("{namespace}.filter.language"), &language);
+        let origin_label = match filter.origin {
+            Origin::All => "All origins",
+            Origin::Preset => "Suggested",
+            Origin::Custom => "Your snippets",
+        };
+        let display = match (compact, filter.origin) {
+            (true, Origin::All) => "Origin",
+            (true, Origin::Custom) => "Custom",
+            _ => origin_label,
+        };
+        let origin = filter_selector(
+            ui,
+            "snippet-origin-filter",
+            if compact { width } else { 110.0 },
+            display,
+            |ui| {
                 for (value, label, target) in [
                     (Origin::All, "All origins", "all"),
                     (Origin::Preset, "Suggested", "preset"),
@@ -436,16 +487,28 @@ fn filters(ui: &mut egui::Ui, filter: &mut Filter, namespace: &str) {
                     let row = ui.selectable_value(&mut filter.origin, value, label);
                     observe(&format!("{namespace}.filter.origin.{target}"), &row);
                 }
-            });
-        observe(&format!("{namespace}.filter.origin"), &origin.response);
-        let status = egui::ComboBox::from_id_salt("snippet-status-filter")
-            .selected_text(match filter.status {
-                Status::All => "All states",
-                Status::Enabled => "Enabled",
-                Status::Disabled => "Disabled",
-            })
-            .width(100.0)
-            .show_ui(ui, |ui| {
+            },
+        );
+        origin.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, origin_label)
+        });
+        observe(&format!("{namespace}.filter.origin"), &origin);
+        let status_label = match filter.status {
+            Status::All => "All states",
+            Status::Enabled => "Enabled",
+            Status::Disabled => "Disabled",
+        };
+        let display = if compact && filter.status == Status::All {
+            "State"
+        } else {
+            status_label
+        };
+        let status = filter_selector(
+            ui,
+            "snippet-status-filter",
+            if compact { width } else { 100.0 },
+            display,
+            |ui| {
                 for (value, label, target) in [
                     (Status::All, "All states", "all"),
                     (Status::Enabled, "Enabled", "enabled"),
@@ -454,8 +517,12 @@ fn filters(ui: &mut egui::Ui, filter: &mut Filter, namespace: &str) {
                     let row = ui.selectable_value(&mut filter.status, value, label);
                     observe(&format!("{namespace}.filter.status.{target}"), &row);
                 }
-            });
-        observe(&format!("{namespace}.filter.status"), &status.response);
+            },
+        );
+        status.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, status_label)
+        });
+        observe(&format!("{namespace}.filter.status"), &status);
     });
 }
 
@@ -472,12 +539,6 @@ fn saved_selections(entries: &[Snippet], presets: &[Snippet]) -> Vec<Option<Sele
             })
         })
         .collect()
-}
-
-fn editor_list_height(available: f32, row_height: f32) -> f32 {
-    // Grow with the window rather than keeping a fixed five-row viewport.
-    // Small windows retain room for source controls in the enclosing scroll area.
-    (available * 0.32).clamp(row_height * 7.0, row_height * 20.0)
 }
 
 fn library_row_rects(row: egui::Rect, button: f32, gap: f32) -> [egui::Rect; 4] {
@@ -643,67 +704,207 @@ pub(super) fn library(
     edit
 }
 
+#[derive(Clone, Copy, Debug)]
+struct EditorRegions {
+    library: egui::Rect,
+    editor: egui::Rect,
+    footer: egui::Rect,
+    side_by_side: bool,
+}
+
+fn editor_regions(bounds: egui::Rect, row: f32, gap: f32) -> EditorRegions {
+    let footer_height = (row + gap).min(bounds.height());
+    let footer = egui::Rect::from_min_max(
+        egui::pos2(bounds.left(), bounds.bottom() - footer_height),
+        bounds.max,
+    );
+    let body = egui::Rect::from_min_max(
+        bounds.min,
+        egui::pos2(bounds.right(), (footer.top() - gap).max(bounds.top())),
+    );
+    let side_by_side = bounds.width() >= 720.0;
+    let (library, editor) = if side_by_side {
+        let width = (body.width() * 0.3).clamp(220.0, 300.0);
+        (
+            egui::Rect::from_min_max(body.min, egui::pos2(body.left() + width, body.bottom())),
+            egui::Rect::from_min_max(egui::pos2(body.left() + width + gap, body.top()), body.max),
+        )
+    } else {
+        let height = (body.height() * 0.3)
+            .clamp(row * 5.0, row * 8.0)
+            .min(body.height() * 0.45);
+        (
+            egui::Rect::from_min_max(body.min, egui::pos2(body.right(), body.top() + height)),
+            egui::Rect::from_min_max(egui::pos2(body.left(), body.top() + height + gap), body.max),
+        )
+    };
+    EditorRegions {
+        library,
+        editor,
+        footer,
+        side_by_side,
+    }
+}
+
+fn editor_source_height(viewport: f32, metadata: f32, row: f32, line: f32) -> f32 {
+    (viewport - metadata - row * 3.0).max(line * 5.0)
+}
+
+fn visible_source_rect(field: egui::Rect, viewport: egui::Rect, clip: egui::Rect) -> egui::Rect {
+    field.intersect(viewport).intersect(clip)
+}
+
+#[cfg(test)]
+pub(super) fn source_viewport(context: &egui::Context) -> Option<egui::Rect> {
+    let id = egui::Id::new(("snippet-source-viewport", context.viewport_id()));
+    context.data(|data| data.get_temp(id))
+}
+
+fn editor_filters(ui: &mut egui::Ui, filter: &mut Filter) {
+    let search = ui.add(
+        egui::TextEdit::singleline(&mut filter.query)
+            .hint_text("Search snippets")
+            .desired_width(f32::INFINITY),
+    );
+    search.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Search snippets")
+    });
+    observe("settings.snippets.search", &search);
+    if std::mem::take(&mut filter.focus_requested) {
+        search.request_focus();
+    }
+    // Reuse the existing filter selectors without a second search field.
+    filter_selectors(ui, filter, "settings.snippets", true);
+}
+
 pub(super) fn show(
     ui: &mut egui::Ui,
     state: &mut Option<Draft>,
     settings: &mut AppSettings,
     appearance: &AppSettings,
-    viewport_height: f32,
+    _viewport_height: f32,
 ) {
     let draft =
         state.get_or_insert_with(|| Draft::new(&settings.snippets, &settings.snippet_presets));
     draft.refresh_saved(settings);
     let conflict = draft.conflicts(&settings.snippets, &settings.snippet_presets);
-    if conflict {
-        ui.colored_label(
-            ui.visuals().error_fg_color,
-            "Snippets were saved elsewhere. Your draft has been kept; Revert changes loads the saved collection.",
-        );
-    }
+    let bounds = ui.available_rect_before_wrap();
+    let gap = ui.spacing().item_spacing.y.max(4.0);
+    let regions = editor_regions(bounds, ui.spacing().interact_size.y, gap);
+    ui.allocate_rect(bounds, egui::Sense::hover());
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    ui.painter().line_segment(
+        [regions.footer.left_top(), regions.footer.right_top()],
+        stroke,
+    );
+    let separator = if regions.side_by_side {
+        let x = regions.library.right() + gap * 0.5;
+        [
+            egui::pos2(x, regions.library.top()),
+            egui::pos2(x, regions.library.bottom()),
+        ]
+    } else {
+        let y = regions.library.bottom() + gap * 0.5;
+        [
+            egui::pos2(regions.library.left(), y),
+            egui::pos2(regions.library.right(), y),
+        ]
+    };
+    ui.painter().line_segment(separator, stroke);
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("snippet-library-pane")
+            .max_rect(regions.library),
+        |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(regions.library));
+            editor_library(ui, draft);
+        },
+    );
+    ui.scope_builder(egui::UiBuilder::new().id_salt("snippet-editor-pane").max_rect(regions.editor), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(regions.editor));
+        egui::ScrollArea::vertical().id_salt("snippet-editor-properties").auto_shrink([false, false]).show(ui, |ui| {
+            if conflict {
+                ui.colored_label(ui.visuals().error_fg_color,
+                    "Snippets were saved elsewhere. Your draft has been kept; Revert changes loads the saved collection.");
+            }
+            editor_detail(ui, draft, appearance, regions.editor.height());
+        });
+    });
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("snippet-footer")
+            .max_rect(regions.footer),
+        |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(regions.footer));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let enabled = draft.changed() && draft.validation.is_ok() && !conflict;
+                let save = ui.add_enabled(
+                    enabled,
+                    egui::Button::new("Save snippets").fill(ui.visuals().selection.bg_fill),
+                );
+                observe("settings.snippets.save", &save);
+                if save.clicked() {
+                    draft.save(settings);
+                }
+                let revert = ui.add_enabled(draft.changed(), egui::Button::new("Revert changes"));
+                observe("settings.snippets.revert", &revert);
+                if revert.clicked() {
+                    *draft = Draft::new(&settings.snippets, &settings.snippet_presets);
+                }
+                let status = if conflict {
+                    "Saved elsewhere"
+                } else if draft.validation.is_err() {
+                    "Invalid snippet"
+                } else if draft.changed() {
+                    "Unsaved changes"
+                } else {
+                    "Saved"
+                };
+                ui.add(
+                    egui::Label::new(egui::RichText::new(status).weak())
+                        .truncate()
+                        .show_tooltip_when_elided(false),
+                );
+            });
+        },
+    );
+}
+
+fn editor_library(ui: &mut egui::Ui, draft: &mut Draft) {
     ui.horizontal_wrapped(|ui| {
-        for (language, label, target) in [
-            (Language::Typst, "Add Typst snippet", "typst"),
-            (Language::Tex, "Add TeX snippet", "tex"),
+        for (language, text, label, target) in [
+            (Language::Typst, "+ Typst", "Add Typst snippet", "typst"),
+            (Language::Tex, "+ TeX", "Add TeX snippet", "tex"),
         ] {
-            let add = ui.button(label);
+            let add = ui.button(text);
+            add.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
             observe(&format!("settings.snippets.add.{target}"), &add);
             if add.clicked() {
                 draft.add(language);
             }
         }
-        let restore = ui.button("Restore suggestions");
+        let restore = ui.button("Restore");
+        restore.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Restore suggestions")
+        });
         observe("settings.snippets.restore", &restore);
         if restore.clicked() {
             draft.restore();
         }
-        let save = ui.add_enabled(
-            draft.changed() && draft.validation.is_ok() && !conflict,
-            egui::Button::new("Save snippets"),
-        );
-        observe("settings.snippets.save", &save);
-        if save.clicked() {
-            draft.save(settings);
-        }
-        let revert = ui.add_enabled(draft.changed(), egui::Button::new("Revert changes"));
-        observe("settings.snippets.revert", &revert);
-        if revert.clicked() {
-            *draft = Draft::new(&settings.snippets, &settings.snippet_presets);
-        }
     });
-    filters(ui, &mut draft.filter, "settings.snippets");
+    editor_filters(ui, &mut draft.filter);
     let visible = draft.visible();
     let enabled = draft.all().filter(|snippet| snippet.enabled).count();
     ui.weak(format!(
-        "{} of {} snippets · {enabled} enabled · {} disabled",
+        "{} / {} snippets · {enabled} enabled",
         visible.len(),
-        draft.len(),
-        draft.len() - enabled
+        draft.len()
     ));
     let row_height = ui.spacing().interact_size.y;
     let mut list = egui::ScrollArea::vertical()
         .id_salt("snippet-list")
-        .max_height(editor_list_height(viewport_height, row_height))
-        .auto_shrink([false, true]);
+        .max_height(ui.available_height().max(row_height))
+        .auto_shrink([false, false]);
     if std::mem::take(&mut draft.reveal_selected)
         && let Some(row) = visible.iter().position(|index| *index == draft.selected)
     {
@@ -721,51 +922,94 @@ pub(super) fn show(
             let mut row_changed = false;
             let mut select = false;
             ui.push_id(index, |ui| {
-                ui.horizontal(|ui| {
-                    let enabled = ui.checkbox(&mut snippet.enabled, "");
-                    enabled.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::WidgetType::Checkbox,
-                            true,
-                            snippet.enabled,
-                            format!(
-                                "Enable {} snippet {} ({})",
-                                language_label(snippet.language),
-                                snippet.prefix,
-                                if preset { "suggested" } else { "custom" }
-                            ),
-                        )
-                    });
-                    observe(&format!("settings.snippets.enabled.{id}"), &enabled);
-                    row_changed = enabled.changed();
-                    let label = format!(
-                        "{} · {} · {}{}",
+                let width = ui
+                    .available_width()
+                    .min((ui.clip_rect().right() - ui.next_widget_position().x).max(0.0));
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::hover());
+                let gap = ui.spacing().item_spacing.x;
+                let checkbox =
+                    egui::Rect::from_min_size(rect.min, egui::vec2(row_height, row_height));
+                let text = egui::Rect::from_min_max(
+                    egui::pos2((checkbox.right() + gap).min(rect.right()), rect.top()),
+                    rect.max,
+                );
+                let mut enabled_ui = library_cell(ui, "enabled", checkbox);
+                let enabled = enabled_ui.checkbox(&mut snippet.enabled, "");
+                enabled.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::Checkbox,
+                        true,
+                        snippet.enabled,
+                        format!(
+                            "Enable {} snippet {} ({})",
+                            language_label(snippet.language),
+                            snippet.prefix,
+                            if preset { "suggested" } else { "custom" }
+                        ),
+                    )
+                });
+                observe(&format!("settings.snippets.enabled.{id}"), &enabled);
+                row_changed = enabled.changed();
+                // Exact hit geometry must stay inside the pane. Button's atomic
+                // label layout can keep a long description's intrinsic width.
+                let row = ui.interact(text, ui.id().with("select"), egui::Sense::click());
+                let visuals = ui.style().interact_selectable(&row, selected);
+                let painter = ui.painter().with_clip_rect(text.intersect(ui.clip_rect()));
+                if selected || row.hovered() || row.has_focus() {
+                    painter.rect_filled(text, visuals.corner_radius, visuals.bg_fill);
+                }
+                if row.has_focus() {
+                    painter.rect_stroke(
+                        text,
+                        visuals.corner_radius,
+                        ui.visuals().selection.stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                let padding = ui.spacing().button_padding.x;
+                let mut job = egui::text::LayoutJob::simple(
+                    format!(
+                        "{} · {}  {}",
                         snippet.prefix,
                         language_label(snippet.language),
-                        if preset {
-                            "Suggested · "
-                        } else {
-                            "Your snippet · "
-                        },
                         snippet.description
-                    );
-                    let row = ui.add_sized(
-                        [ui.available_width(), row_height],
-                        egui::Button::selectable(selected, "")
-                            .left_text(label.clone())
-                            .truncate(),
-                    );
-                    row.widget_info(|| {
-                        egui::WidgetInfo::selected(
-                            egui::WidgetType::SelectableLabel,
-                            ui.is_enabled(),
-                            selected,
-                            &label,
-                        )
-                    });
-                    observe(&format!("settings.snippets.select.{id}"), &row);
-                    select = row.clicked();
-                })
+                    ),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    visuals.text_color(),
+                    (text.width() - padding * 2.0).max(0.0),
+                );
+                job.wrap.max_rows = 1;
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                painter.galley(
+                    egui::pos2(
+                        text.left() + padding,
+                        text.center().y - galley.size().y * 0.5,
+                    ),
+                    galley,
+                    visuals.text_color(),
+                );
+                let label = format!(
+                    "{} · {} · {}{}",
+                    snippet.prefix,
+                    language_label(snippet.language),
+                    if preset {
+                        "Suggested · "
+                    } else {
+                        "Your snippet · "
+                    },
+                    snippet.description
+                );
+                row.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::SelectableLabel,
+                        ui.is_enabled(),
+                        selected,
+                        &label,
+                    )
+                });
+                observe(&format!("settings.snippets.select.{id}"), &row);
+                select = row.clicked();
             });
             if select {
                 draft.selected = index;
@@ -775,12 +1019,20 @@ pub(super) fn show(
             }
         }
     });
+}
+
+fn editor_detail(
+    ui: &mut egui::Ui,
+    draft: &mut Draft,
+    appearance: &AppSettings,
+    viewport_height: f32,
+) {
+    let content_top = ui.next_widget_position().y;
     if draft.len() == 0 {
         ui.weak("Add a snippet or restore the suggestions.");
         return;
     }
     draft.selected = draft.selected.min(draft.len() - 1);
-    ui.separator();
     ui.horizontal_wrapped(|ui| {
         let entry = draft.get(draft.selected).unwrap();
         ui.strong(format!(
@@ -792,15 +1044,24 @@ pub(super) fn show(
                 "Your snippet"
             }
         ));
-        if !visible.contains(&draft.selected) {
+        if !draft
+            .filter
+            .accepts(entry, draft.selected < draft.presets.len())
+        {
             ui.weak("Selected snippet is outside these filters");
         }
-        let duplicate = ui.button("Duplicate snippet");
+        let duplicate = ui.button("Duplicate");
+        duplicate.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Duplicate snippet")
+        });
         observe("settings.snippets.duplicate", &duplicate);
         if duplicate.clicked() {
             draft.duplicate();
         }
-        let remove = ui.button("Remove snippet");
+        let remove = ui.button("Delete");
+        remove.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Remove snippet")
+        });
         observe("settings.snippets.remove", &remove);
         if remove.clicked() {
             draft.remove();
@@ -824,7 +1085,11 @@ pub(super) fn show(
                 changed |= enabled.changed();
                 let label = ui.label("Prefix");
                 let prefix = ui
-                    .add(egui::TextEdit::singleline(&mut snippet.prefix).desired_width(100.0))
+                    .add(
+                        egui::TextEdit::singleline(&mut snippet.prefix)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(100.0),
+                    )
                     .labelled_by(label.id);
                 observe("settings.snippets.prefix", &prefix);
                 changed |= prefix.changed();
@@ -908,24 +1173,61 @@ pub(super) fn show(
                     keep_source = keep.clicked();
                 });
             }
-            let response = super::code_editor::editor(
-                ui,
-                "snippet-body",
-                &mut snippet.body,
-                if snippet.language == Language::Tex {
-                    "tex"
-                } else if snippet.scope == Scope::Code {
-                    "typ-code"
-                } else {
-                    "typ"
-                },
-                appearance,
-                5,
+            let line = ui.fonts_mut(|fonts| fonts.row_height(&crate::theme::editor_font()));
+            let source_height = editor_source_height(
+                viewport_height,
+                ui.next_widget_position().y - content_top,
+                ui.spacing().interact_size.y,
+                line,
             );
+            let rows = (source_height / line).floor().max(5.0) as usize;
+            let output = egui::ScrollArea::both()
+                .id_salt("snippet-source-scroll")
+                .max_height(source_height)
+                .min_scrolled_height(0.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    super::code_editor::editor(
+                        ui,
+                        "snippet-body",
+                        &mut snippet.body,
+                        if snippet.language == Language::Tex {
+                            "tex"
+                        } else if snippet.scope == Scope::Code {
+                            "typ-code"
+                        } else {
+                            "typ"
+                        },
+                        appearance,
+                        rows,
+                    )
+                });
+            let mut response = output.inner;
+            let viewport = output.inner_rect.intersect(ui.clip_rect());
+            response.interact_rect =
+                visible_source_rect(response.interact_rect, viewport, ui.clip_rect());
+            #[cfg(test)]
+            {
+                let id = egui::Id::new(("snippet-source-viewport", ui.ctx().viewport_id()));
+                ui.ctx().data_mut(|data| data.insert_temp(id, viewport));
+            }
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            if viewport.is_positive() {
+                crate::desktop_test::observe_scroll(
+                    "snippets.source",
+                    ui.ctx(),
+                    viewport,
+                    output.content_size.y,
+                    output.state.offset.y,
+                    false,
+                );
+            }
             response.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Snippet source")
             });
-            observe("settings.snippets.source", &response);
+            if response.interact_rect.is_positive() {
+                observe("settings.snippets.source", &response);
+            }
             changed |= response.changed();
         });
     }
@@ -938,8 +1240,6 @@ pub(super) fn show(
     }
     if let Err(error) = &draft.validation {
         ui.colored_label(ui.visuals().error_fg_color, error);
-    } else if draft.changed() {
-        ui.weak("Unsaved snippet changes");
     }
     if let Some(snippet) = draft.get(draft.selected) {
         egui::CollapsingHeader::new("Expanded source").show(ui, |ui| {
@@ -1169,10 +1469,55 @@ mod tests {
     }
 
     #[test]
-    fn editor_list_grows_with_window_and_stays_bounded() {
-        assert_eq!(editor_list_height(200.0, 24.0), 168.0);
-        assert_eq!(editor_list_height(800.0, 24.0), 256.0);
-        assert_eq!(editor_list_height(10_000.0, 24.0), 480.0);
+    fn editor_regions_keep_panes_separate_and_save_footer_inside_every_window() {
+        for size in [
+            egui::vec2(420.0, 360.0),
+            egui::vec2(700.0, 600.0),
+            egui::vec2(820.0, 700.0),
+            egui::vec2(1400.0, 900.0),
+        ] {
+            let bounds = egui::Rect::from_min_size(egui::pos2(8.0, 32.0), size);
+            let regions = editor_regions(bounds, 24.0, 6.0);
+            for pane in [regions.library, regions.editor, regions.footer] {
+                assert!(
+                    pane.is_finite() && pane.is_positive() && bounds.contains_rect(pane),
+                    "{regions:?}"
+                );
+            }
+            assert!(!regions.library.intersects(regions.editor), "{regions:?}");
+            assert!(!regions.library.intersects(regions.footer), "{regions:?}");
+            assert!(!regions.editor.intersects(regions.footer), "{regions:?}");
+            assert_eq!(regions.footer.bottom(), bounds.bottom());
+            if regions.side_by_side {
+                assert!(regions.library.right() < regions.editor.left());
+                assert_eq!(regions.library.height(), regions.editor.height());
+                assert!(regions.editor.width() >= 490.0);
+            } else {
+                assert!(regions.library.bottom() < regions.editor.top());
+                assert_eq!(regions.library.width(), regions.editor.width());
+            }
+        }
+    }
+
+    #[test]
+    fn long_source_hit_geometry_uses_only_its_visible_viewport_above_the_footer() {
+        let field = egui::Rect::from_min_max(egui::pos2(300.0, 160.0), egui::pos2(810.0, 5000.0));
+        let viewport = egui::Rect::from_min_max(egui::pos2(280.0, 160.0), egui::pos2(820.0, 480.0));
+        let clip = egui::Rect::from_min_max(egui::pos2(280.0, 30.0), egui::pos2(820.0, 520.0));
+        let visible = visible_source_rect(field, viewport, clip);
+        assert_eq!(visible.bottom(), 480.0);
+        assert!(viewport.contains_rect(visible));
+        assert!(visible.center().y < 480.0);
+    }
+
+    #[test]
+    fn source_height_uses_finite_viewport_space_and_reserves_controls() {
+        assert_eq!(editor_source_height(600.0, 180.0, 24.0, 16.0), 348.0);
+        assert_eq!(editor_source_height(220.0, 180.0, 24.0, 16.0), 80.0);
+        assert!(
+            editor_source_height(900.0, 180.0, 24.0, 16.0)
+                > editor_source_height(600.0, 180.0, 24.0, 16.0)
+        );
     }
 
     fn form(settings: AppSettings) -> Harness<'static, (AppSettings, Option<Draft>)> {

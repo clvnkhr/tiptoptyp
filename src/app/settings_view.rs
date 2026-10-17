@@ -426,6 +426,7 @@ impl EditorApp {
             |ui, _class| {
                 captures.begin_viewport(ui.ctx(), "typst-overrides");
                 ui.set_style(style.clone());
+                theme::apply_compact_tool_spacing(ui);
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
                 let overrides_tooltip_id = typst_overrides_hover_tooltip_id(ui.ctx());
@@ -487,16 +488,11 @@ impl EditorApp {
                             {
                                 edited.typst_overrides.for_dark_mut(rendered_dark).clear();
                             }
-                            ui.label(
-                                RichText::new("Unset fields inherit the selected theme")
-                                    .size(theme::TYPE.supporting)
-                                    .weak(),
-                            );
                         });
                         if let Some(reason) = &fallback {
                             fallback_notice(ui, "Theme fallback", reason);
                         }
-                        ui.add_space(theme::SPACE.small);
+                        ui.separator();
                         let scroll_area = egui::ScrollArea::both()
                             .id_salt("typst-overrides-scroll")
                             .auto_shrink([false, false]);

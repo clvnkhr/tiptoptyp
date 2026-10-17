@@ -6,9 +6,8 @@
 //! keeps the frequently-painted native child view from cloning `AppSettings`
 //! or reaching into application workflow state.
 
-use super::METRICS;
 use crate::{settings::AppSettings, shortcuts::ShortcutAction};
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, Align, Layout, RichText, Vec2};
 
 #[derive(Debug, Default)]
 pub(super) struct ShortcutEditorState {
@@ -35,20 +34,34 @@ pub(super) fn show(
     state: &mut ShortcutEditorState,
     input: ShortcutEditorInput<'_>,
 ) -> Option<ShortcutEditorAction> {
+    crate::theme::apply_compact_tool_spacing(ui);
     let current = input.pending_settings.unwrap_or(input.settings);
     let bindings = current.effective_shortcuts();
     let mut selected_action = None;
+    let controls_width = action_controls_width(ui);
 
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut state.query)
-                .hint_text("Search actions or groups")
-                .desired_width(f32::INFINITY),
-        );
-        if crate::app::icons::action_button(ui, "Reset all").clicked() {
-            selected_action = Some(ShortcutEditorAction::ResetAll);
-        }
-    });
+    let row_height = ui
+        .text_style_height(&egui::TextStyle::Body)
+        .max(ui.text_style_height(&egui::TextStyle::Button))
+        + ui.spacing().button_padding.y * 2.0;
+    ui.allocate_ui_with_layout(
+        Vec2::new(
+            ui.available_width(),
+            row_height.max(ui.spacing().interact_size.y),
+        ),
+        Layout::right_to_left(Align::Center),
+        |ui| {
+            if crate::app::icons::action_button(ui, "Reset all").clicked() {
+                selected_action = Some(ShortcutEditorAction::ResetAll);
+            }
+            ui.add(
+                egui::TextEdit::singleline(&mut state.query)
+                    .hint_text("Search actions or groups")
+                    .horizontal_align(Align::Min)
+                    .desired_width(ui.available_width().max(1.0)),
+            );
+        },
+    );
     if let Some(capture) = state.capture {
         ui.colored_label(
             ui.visuals().selection.stroke.color,
@@ -106,45 +119,19 @@ pub(super) fn show(
                     group = Some(shortcut_action.group());
                 }
                 shown += 1;
-                ui.horizontal(|ui| {
-                    let controls_width = 290.0;
-                    let label_width = (ui.available_width() - controls_width).max(100.0);
-                    ui.add_sized(
-                        [label_width, METRICS.menu.row_height],
-                        egui::Label::new(shortcut_action.label()),
-                    );
-                    ui.add_sized(
-                        [100.0, METRICS.menu.row_height],
-                        egui::Label::new(
-                            RichText::new(
-                                bindings
-                                    .display(shortcut_action)
-                                    .unwrap_or_else(|| "Unassigned".to_owned()),
-                            )
-                            .monospace(),
-                        ),
-                    );
-                    if ui
-                        .selectable_label(state.capture == Some(shortcut_action), "Change")
-                        .clicked()
-                    {
-                        selected_action
-                            .get_or_insert(ShortcutEditorAction::BeginCapture(shortcut_action));
-                    }
-                    if crate::app::icons::action_button(ui, "Disable").clicked() {
-                        selected_action
-                            .get_or_insert(ShortcutEditorAction::Disable(shortcut_action));
-                    }
-                    if crate::app::icons::action_button_enabled(
-                        ui,
-                        current.shortcut_overrides.get(shortcut_action).is_some(),
-                        "Reset",
-                    )
-                    .clicked()
-                    {
-                        selected_action.get_or_insert(ShortcutEditorAction::Reset(shortcut_action));
-                    }
-                });
+                let binding = bindings
+                    .display(shortcut_action)
+                    .unwrap_or_else(|| "Unassigned".to_owned());
+                if let Some(action) = action_row(
+                    ui,
+                    state.capture,
+                    shortcut_action,
+                    &binding,
+                    current.shortcut_overrides.get(shortcut_action).is_some(),
+                    controls_width,
+                ) {
+                    selected_action.get_or_insert(action);
+                }
             }
             if shown == 0 {
                 ui.label(RichText::new("No shortcut actions found").weak());
@@ -152,6 +139,95 @@ pub(super) fn show(
         });
 
     selected_action
+}
+
+fn action_controls_width(ui: &egui::Ui) -> f32 {
+    let style = ui.style().button_style(
+        &egui::widget_style::Classes::default(),
+        egui::widget_style::WidgetState::Inactive,
+    );
+    let font = style.text_style.font_id;
+    let gap = ui.spacing().item_spacing.x;
+    ["Change", "Disable", "Reset"]
+        .into_iter()
+        .map(|label| {
+            ui.fonts_mut(|fonts| {
+                fonts.layout_no_wrap(label.into(), font.clone(), egui::Color32::WHITE)
+            })
+            .size()
+            .x + style.frame.inner_margin.sum().x
+        })
+        .sum::<f32>()
+        + gap * 2.0
+        + 4.0
+}
+
+fn action_row(
+    ui: &mut egui::Ui,
+    capture: Option<ShortcutAction>,
+    action: ShortcutAction,
+    binding: &str,
+    reset_enabled: bool,
+    controls_width: f32,
+) -> Option<ShortcutEditorAction> {
+    ui.push_id(action, |ui| {
+        let gap = ui.spacing().item_spacing.x;
+        let available = ui.available_width();
+        let row_height = ui
+            .spacing()
+            .interact_size
+            .y
+            .max(ui.text_style_height(&egui::TextStyle::Body));
+        let mut selected = None;
+        let mut controls = |ui: &mut egui::Ui| {
+            if ui
+                .selectable_label(capture == Some(action), "Change")
+                .clicked()
+            {
+                selected = Some(ShortcutEditorAction::BeginCapture(action));
+            }
+            if crate::app::icons::action_button(ui, "Disable").clicked() {
+                selected.get_or_insert(ShortcutEditorAction::Disable(action));
+            }
+            if crate::app::icons::action_button_enabled(ui, reset_enabled, "Reset").clicked() {
+                selected.get_or_insert(ShortcutEditorAction::Reset(action));
+            }
+        };
+        if available < controls_width + 120.0 + gap * 2.0 {
+            ui.horizontal(|ui| {
+                let binding_width = (available * 0.3).clamp(50.0, 112.0);
+                ui.add_sized(
+                    [(available - binding_width - gap).max(1.0), row_height],
+                    egui::Label::new(action.label()).wrap(),
+                );
+                ui.add_sized(
+                    [binding_width, row_height],
+                    egui::Label::new(RichText::new(binding).monospace()).wrap(),
+                );
+            });
+            ui.horizontal_wrapped(&mut controls);
+        } else {
+            let flexible = available - controls_width - gap * 2.0;
+            let binding_width = (flexible * 0.4).clamp(50.0, 112.0);
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [(flexible - binding_width).max(1.0), row_height],
+                    egui::Label::new(action.label()).wrap(),
+                );
+                ui.add_sized(
+                    [binding_width, row_height],
+                    egui::Label::new(RichText::new(binding).monospace()).wrap(),
+                );
+                ui.allocate_ui_with_layout(
+                    Vec2::new(controls_width, row_height),
+                    Layout::left_to_right(Align::Center),
+                    controls,
+                );
+            });
+        }
+        selected
+    })
+    .inner
 }
 
 #[cfg(test)]
@@ -169,6 +245,128 @@ mod tests {
             ShortcutEditorAction::Reset(ShortcutAction::Find)
         );
         assert!(ShortcutEditorState::default().query.is_empty());
+    }
+
+    #[test]
+    fn full_shortcut_window_keeps_search_at_top_and_first_action_visible() {
+        use egui_kittest::{
+            Harness,
+            kittest::{Queryable as _, by},
+        };
+        let settings = AppSettings::default();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(620.0, 540.0))
+            .build_ui_state(
+                |ui, state: &mut ShortcutEditorState| {
+                    show(
+                        ui,
+                        state,
+                        ShortcutEditorInput {
+                            settings: &settings,
+                            pending_settings: None,
+                        },
+                    );
+                },
+                ShortcutEditorState::default(),
+            );
+        harness.run();
+        let search = harness
+            .get(by().role(egui::accesskit::Role::TextInput).value(""))
+            .rect();
+        let first = harness.get_by_label("Settings").rect();
+        assert!(
+            search.top() <= 16.0,
+            "search row uses remaining window height: {search:?}"
+        );
+        assert!(
+            first.top() > search.bottom() && first.top() < 100.0,
+            "first action: {first:?}"
+        );
+        assert!(
+            first.bottom() < 540.0,
+            "first action is outside viewport: {first:?}"
+        );
+    }
+
+    #[test]
+    fn compact_shortcut_search_and_row_actions_fit_minimum_and_large_windows() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for width in [360.0, 440.0, 620.0, 1000.0] {
+            let settings = AppSettings::default();
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 400.0))
+                .build_ui_state(
+                    |ui, state: &mut ShortcutEditorState| {
+                        show(
+                            ui,
+                            state,
+                            ShortcutEditorInput {
+                                settings: &settings,
+                                pending_settings: None,
+                            },
+                        );
+                    },
+                    ShortcutEditorState {
+                        query: "application.settings".into(),
+                        ..Default::default()
+                    },
+                );
+            harness.run();
+            for label in ["Reset all", "Settings", "Change", "Disable", "Reset"] {
+                let bounds = harness.get_by_label(label).rect();
+                assert!(
+                    bounds.left() >= 0.0 && bounds.right() <= width,
+                    "{width}px {label}: {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_shortcut_actions_stay_typed_and_reachable_at_large_fonts() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(440.0, 300.0))
+            .build_ui_state(
+                |ui, selected: &mut Option<ShortcutEditorAction>| {
+                    crate::theme::apply_compact_tool_spacing(ui);
+                    let width = action_controls_width(ui);
+                    if let Some(action) =
+                        action_row(ui, None, ShortcutAction::Find, "⌘⇧F", true, width)
+                    {
+                        *selected = Some(action);
+                    }
+                },
+                None,
+            );
+        harness.ctx.style_mut_of(harness.ctx.theme(), |style| {
+            for kind in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                style
+                    .text_styles
+                    .insert(kind, egui::FontId::proportional(28.0));
+            }
+        });
+        harness.run();
+        for (label, action) in [
+            (
+                "Change",
+                ShortcutEditorAction::BeginCapture(ShortcutAction::Find),
+            ),
+            (
+                "Disable",
+                ShortcutEditorAction::Disable(ShortcutAction::Find),
+            ),
+            ("Reset", ShortcutEditorAction::Reset(ShortcutAction::Find)),
+        ] {
+            let bounds = harness.get_by_label(label).rect();
+            assert!(
+                bounds.right() <= 440.0 && bounds.bottom() <= 300.0,
+                "{label}: {bounds:?}"
+            );
+            harness.get_by_label(label).click();
+            harness.run();
+            assert_eq!(*harness.state(), Some(action));
+        }
     }
 
     #[test]

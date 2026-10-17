@@ -479,6 +479,68 @@ mod tests {
     }
 
     #[test]
+    fn compact_json_toolbar_and_find_keep_controls_inside_the_window_and_leave_editor_space() {
+        for width in [360.0, 730.0] {
+            let mut harness = settings_harness(SettingsWindow::default());
+            harness.state_mut().ui.json_mode = true;
+            harness.set_size(Vec2::new(width, 420.0));
+            harness.run();
+            let mut toolbar_bottom = 0.0_f32;
+            for label in [
+                "Save JSON settings",
+                "Reload current settings",
+                "Valid settings",
+            ] {
+                let bounds = harness.get_by_label(label).rect();
+                assert!(
+                    bounds.left() >= 0.0 && bounds.right() <= width,
+                    "{label}: {bounds:?}"
+                );
+                toolbar_bottom = toolbar_bottom.max(bounds.bottom());
+            }
+            let editor = harness
+                .get(by().role(egui::accesskit::Role::MultilineTextInput))
+                .rect();
+            assert!(
+                editor.top() <= toolbar_bottom + 16.0,
+                "toolbar wastes editor space: {editor:?}"
+            );
+            assert!(editor.top() < 115.0, "{width}px: {editor:?}");
+            if width > 600.0 {
+                let save = harness.get_by_label("Save JSON settings").rect();
+                let status = harness.get_by_label("Valid settings").rect();
+                assert!((save.center().y - status.center().y).abs() < 1.0);
+            }
+            harness.state_mut().ui.json_search = true;
+            harness.state_mut().ui.focus_search = true;
+            harness.run();
+            for label in ["Find in JSON", "Next match", "Close search"] {
+                let bounds = harness.get_by_label(label).rect();
+                assert!(
+                    bounds.left() >= 0.0 && bounds.right() <= width,
+                    "{label}: {bounds:?}"
+                );
+            }
+            let query = harness.get_by_label("Find in JSON");
+            assert!(query.is_focused());
+            assert!(query.rect().width() >= 80.0, "query squeezed at {width}px");
+            assert!(
+                query.rect().top() < 125.0,
+                "find row uses remaining window height: {:?}",
+                query.rect()
+            );
+            let editor = harness
+                .get(by().role(egui::accesskit::Role::MultilineTextInput))
+                .rect();
+            assert!(
+                editor.top() <= query.rect().bottom() + 16.0 && editor.top() < 160.0,
+                "find hides JSON editor: {editor:?}"
+            );
+            assert!(harness.state().ui.json_mode);
+        }
+    }
+
+    #[test]
     fn settings_keyboard_shortcuts_command_opens_its_local_editor() {
         let mut harness = settings_harness(SettingsWindow::default());
         let shortcut = harness
@@ -637,8 +699,13 @@ mod tests {
     fn short_wide_settings_keeps_every_category_reachable_without_widening_the_sidebar() {
         let mut harness = settings_harness(SettingsWindow::default());
         harness.set_size(Vec2::new(730.0, 260.0));
-        // Search results reduce the rail's available height at the supported
-        // native minimum, so the final categories must remain reachable.
+        harness.ctx.style_mut_of(harness.ctx.theme(), |style| {
+            for kind in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                style.text_styles.get_mut(&kind).unwrap().size = 22.0;
+            }
+        });
+        // Search results and an accessible larger font reduce the rail's
+        // available height, so the final categories must remain reachable.
         harness.state_mut().ui.query = "font".into();
         harness.run();
         let query = by().role(egui::accesskit::Role::Button).label("Templates");
@@ -1435,6 +1502,7 @@ impl SettingsWindow {
         captures: &CaptureController,
         close: &mut bool,
     ) -> Vec<SettingsAction> {
+        theme::apply_compact_tool_spacing(ui);
         let settings_tooltip_id = settings_hover_tooltip_id(ui.ctx());
         ui.ctx()
             .data_mut(|data| data.remove::<HoverTooltipOverlay>(settings_tooltip_id));
@@ -1477,9 +1545,7 @@ impl SettingsWindow {
                                 ));
                             }
                         }
-                        let help = ui
-                            .add(egui::Button::new("?").selected(self.ui.help_mode))
-                            .on_hover_text("Help & tips");
+                        let help = ui.add(egui::Button::new("?").selected(self.ui.help_mode));
                         help.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Help & tips")
                         });
@@ -1511,7 +1577,6 @@ impl SettingsWindow {
                             self.ui.json_mode = !self.ui.json_mode;
                             self.ui.help_mode = false;
                         }
-                        json.on_hover_text(label);
                     });
                 });
             });

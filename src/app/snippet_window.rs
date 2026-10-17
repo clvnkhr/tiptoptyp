@@ -210,7 +210,7 @@ impl SnippetWindow {
         let spec = ChildViewSpec::persistent(
             SALT,
             "tiptoptyp Snippets",
-            [820.0, 760.0],
+            [960.0, 680.0],
             [420.0, 420.0],
             "snippets",
         )
@@ -535,24 +535,17 @@ impl SnippetWindow {
         egui::CentralPanel::default()
             .frame(theme::settings_content_frame(ui.style()))
             .show(ui, |ui| {
-                // The scrolling content has an unbounded max rect. Size its
-                // list from the actual finite window before entering it.
+                if let Some(error) = self.selection_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
                 let viewport_height = ui.available_height();
-                egui::ScrollArea::vertical()
-                    .id_salt("snippet-window-content")
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if let Some(error) = self.selection_error {
-                            ui.colored_label(ui.visuals().error_fg_color, error);
-                        }
-                        super::settings_snippets::show(
-                            ui,
-                            &mut self.draft,
-                            &mut edited,
-                            &original,
-                            viewport_height,
-                        );
-                    });
+                super::settings_snippets::show(
+                    ui,
+                    &mut self.draft,
+                    &mut edited,
+                    &original,
+                    viewport_height,
+                );
             });
         self.accept_edit(original, edited)
     }
@@ -627,33 +620,82 @@ mod tests {
         harness.run();
     }
     #[test]
-    fn real_window_list_grows_between_small_and_large_viewports_and_source_remains_reachable() {
+    fn split_window_gives_code_and_library_independent_space_with_a_pinned_save_footer() {
         let mut small = harness_size(egui::vec2(840.0, 560.0));
         let large = harness_size(egui::vec2(840.0, 1050.0));
         let first_label = "mk · TeX · Suggested · Inline math with an editable expression";
         let small_first = small.get_by_label(first_label).rect();
         let large_first = large.get_by_label(first_label).rect();
-        let small_source = small.get_by_label("Snippet source").rect();
-        let large_source = large.get_by_label("Snippet source").rect();
+        let small_source = super::super::settings_snippets::source_viewport(&small.ctx).unwrap();
+        let large_source = super::super::settings_snippets::source_viewport(&large.ctx).unwrap();
         assert!(
-            large_source.top() - large_first.top() > small_source.top() - small_first.top() + 70.0,
-            "the real scrolling window must not clamp both lists to twenty rows: small {small_source:?}, large {large_source:?}"
+            small_first.right() < small_source.left(),
+            "{small_first:?} {small_source:?}"
         );
-        assert!(large_source.bottom() <= 1050.0, "{large_source:?}");
+        assert!(
+            large_first.right() < large_source.left(),
+            "{large_first:?} {large_source:?}"
+        );
+        assert!(large_source.height() > small_source.height() + 100.0);
+        for (window, height) in [(&small, 560.0), (&large, 1050.0)] {
+            let save = window.get_by_label("Save snippets").rect();
+            let source = super::super::settings_snippets::source_viewport(&window.ctx).unwrap();
+            assert!(save.top() >= 0.0 && save.bottom() <= height);
+            assert!(
+                source.top() >= 0.0 && source.bottom() < save.top(),
+                "source viewport {source:?}, footer action {save:?}"
+            );
+        }
+        let search = small.get_by_label("Search snippets").rect();
         let save = small.get_by_label("Save snippets").rect();
-        assert!(save.top() >= 0.0 && save.bottom() <= 560.0);
-        small.get_by_label("Snippet source").scroll_to_me();
+        small.get_by_label("How snippets work").scroll_to_me();
         small.run_steps(4);
-        let source = small.get_by_label("Snippet source").rect();
-        assert!(
-            source.top() >= 0.0 && source.bottom() <= 560.0,
-            "{source:?}"
-        );
+        assert_eq!(small.get_by_label("Search snippets").rect(), search);
+        assert_eq!(small.get_by_label("Save snippets").rect(), save);
         small.key_press_modifiers(Modifiers::COMMAND, egui::Key::F);
         small.run_steps(3);
         assert!(small.get_by_label("Search snippets").is_focused());
-        let search = small.get_by_label("Search snippets").rect();
-        assert!(search.top() >= 0.0 && search.bottom() <= 560.0);
+    }
+
+    #[test]
+    fn all_library_filters_stay_inside_their_pane_at_normal_and_minimum_widths() {
+        for size in [
+            egui::vec2(840.0, 560.0),
+            egui::vec2(960.0, 680.0),
+            egui::vec2(420.0, 420.0),
+        ] {
+            let window = harness_size(size);
+            let search = window.get_by_label("Search snippets").rect();
+            for label in ["All languages", "All origins", "All states"] {
+                let filter = window
+                    .get_by_role_and_label(egui::accesskit::Role::ComboBox, label)
+                    .rect();
+                assert!(
+                    filter.left() >= search.left() && filter.right() <= search.right() + 0.5,
+                    "{size:?}, {label}: {filter:?}, pane search: {search:?}"
+                );
+                assert!(
+                    filter.top() >= search.bottom() && filter.bottom() < size.y,
+                    "{size:?}, {label}: {filter:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn minimum_window_stacks_the_library_but_keeps_save_and_find_visible() {
+        let mut window = harness_size(egui::vec2(420.0, 420.0));
+        let save = window.get_by_label("Save snippets").rect();
+        let search = window.get_by_label("Search snippets").rect();
+        assert!(save.left() >= 0.0 && save.right() <= 420.0 && save.bottom() <= 420.0);
+        assert!(search.top() >= 0.0 && search.bottom() < save.top());
+        window.get_by_label("Snippet source").scroll_to_me();
+        window.run_steps(4);
+        assert_eq!(window.get_by_label("Save snippets").rect(), save);
+        window.key_press_modifiers(Modifiers::COMMAND, egui::Key::F);
+        window.run_steps(3);
+        assert!(window.get_by_label("Search snippets").is_focused());
+        assert_eq!(window.get_by_label("Search snippets").rect(), search);
     }
 
     #[test]
@@ -747,12 +789,13 @@ mod tests {
         replace(&mut harness, "Snippet source", &"x\n".repeat(100));
         harness.get_by_label("How snippets work").scroll_to_me();
         harness.run();
-        assert!(harness.get_by_label("Search snippets").rect().top() < 0.0);
+        let search_before = harness.get_by_label("Search snippets").rect();
+        assert!(search_before.top() >= 0.0);
         harness.key_press_modifiers(Modifiers::COMMAND, egui::Key::F);
         harness.run_steps(3);
         let search = harness.get_by_label("Search snippets");
         assert!(search.is_focused());
-        assert!(search.rect().top() >= 0.0 && search.rect().bottom() <= 1050.0);
+        assert_eq!(search.rect(), search_before);
     }
     #[test]
     fn save_shortcut_publishes_snippets_only_and_preserves_unrelated_new_preferences() {
