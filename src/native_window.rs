@@ -1,21 +1,50 @@
 //! Native ownership comes from the renderer's viewport binding, never focus.
 
+#[path = "window_fade.rs"]
+mod fade;
+pub(crate) use fade::FadeDirection;
+
+#[cfg(target_os = "macos")]
+#[path = "native_blur_gradient.rs"]
+mod gradient;
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BlurConfig {
+    pub(crate) radius: u8,
+    pub(crate) end_radius: u8,
+    pub(crate) fade: FadeDirection,
+}
+
+#[cfg(target_os = "macos")]
+impl BlurConfig {
+    fn maximum_radius(self) -> u8 {
+        if self.fade == FadeDirection::None {
+            self.radius
+        } else {
+            self.radius.max(self.end_radius)
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::{cell::Cell, ffi::c_void, ptr::NonNull, sync::Arc};
+    use std::{
+        cell::{Cell, RefCell},
+        ffi::{c_char, c_int, c_void},
+        ptr::NonNull,
+        sync::{Arc, OnceLock},
+    };
 
+    use super::{BlurConfig, FadeDirection, gradient::GradientBlur};
     use dispatch2::MainThreadBound;
+    #[cfg(feature = "desktop-ui-tests")]
+    use objc2::msg_send;
     use objc2::{
-        DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
-        runtime::AnyObject,
+        MainThreadMarker,
+        rc::{Retained, Weak},
     };
-    use objc2_app_kit::{
-        NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-        NSAutoresizingMaskOptions, NSColor, NSView, NSVisualEffectBlendingMode,
-        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
-        NSWindowOrderingMode,
-    };
-    use objc2_foundation::{NSArray, NSNumber, NSString};
+    use objc2_app_kit::{NSColor, NSView, NSWindow};
 
     use raw_window_handle::{
         AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle,
@@ -67,8 +96,53 @@ mod platform {
             Some(eframe::egui::pos2(x as f32 / zoom, y as f32 / zoom))
         }
 
+        /// Read the actual rectangle AppKit asks winit's text-input client for.
+        /// This observes the native hint after backend forwarding; it does not
+        /// reconstruct that hint from egui's cursor or cached platform output.
+        #[cfg(feature = "desktop-ui-tests")]
+        pub(crate) fn ime_cursor_area(&self) -> Option<([f64; 4], bool)> {
+            use objc2::sel;
+            use objc2_foundation::{NSRange, NSRect};
+            let _marker = MainThreadMarker::new()?;
+            let window = self.view.window()?;
+            // SAFETY: the retained raw-window view is alive on AppKit's main
+            // thread. Only ask for NSTextInputClient geometry if implemented.
+            let supported: bool = unsafe {
+                msg_send![&*self.view, respondsToSelector: sel!(firstRectForCharacterRange:actualRange:)]
+            };
+            if !supported {
+                return None;
+            }
+            // SAFETY: selector support is established above. winit implements
+            // this read-only query and accepts a null actualRange pointer.
+            let screen: NSRect = unsafe {
+                msg_send![&*self.view,
+                    firstRectForCharacterRange: NSRange::new(0, 0),
+                    actualRange: std::ptr::null_mut::<NSRange>()]
+            };
+            let local = self
+                .view
+                .convertRect_fromView(window.convertRectFromScreen(screen), None);
+            let rect = [
+                local.origin.x,
+                local.origin.y,
+                local.size.width,
+                local.size.height,
+            ];
+            if !rect.iter().all(|value| value.is_finite()) {
+                return None;
+            }
+            let focused = window.firstResponder().is_some_and(|responder| {
+                std::ptr::eq(
+                    std::ptr::from_ref(&*responder).cast::<c_void>(),
+                    (&*self.view as *const NSView).cast::<c_void>(),
+                )
+            });
+            Some((rect, focused))
+        }
+
         /// Retain alpha capability without changing renderer or input ownership.
-        /// Native blur must be a sibling below this view, never a child covering CGL.
+        /// Compositor blur never changes the renderer's view/layer hierarchy.
         pub(crate) fn set_translucent_background(&self) -> bool {
             let Some(_marker) = MainThreadMarker::new() else {
                 return false;
@@ -81,31 +155,23 @@ mod platform {
             true
         }
 
-        pub(crate) fn blur_background(&self, dark: bool, radius: u8) -> Option<NativeBlur> {
+        pub(crate) fn blur_background(&self, config: BlurConfig) -> Option<NativeBlur> {
             let marker = MainThreadMarker::new()?;
-            let host = superview(&self.view)?;
-            let effect = RadiusVisualEffectView::alloc(marker).set_ivars(Cell::new(radius));
-            // SAFETY: initialize the NSVisualEffectView superclass on AppKit's
-            // main thread; only the decorative view is subclassed.
-            let effect: Retained<RadiusVisualEffectView> =
-                unsafe { msg_send![super(effect), initWithFrame: self.view.frame()] };
-            effect.setMaterial(NSVisualEffectMaterial::UnderWindowBackground);
-            effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-            effect.setState(NSVisualEffectState::FollowsWindowActiveState);
-            effect.setAutoresizingMask(
-                NSAutoresizingMaskOptions::ViewWidthSizable
-                    | NSAutoresizingMaskOptions::ViewHeightSizable,
-            );
-            set_blur_appearance(&effect, dark);
-            host.addSubview_positioned_relativeTo(
-                &effect,
-                NSWindowOrderingMode::Below,
-                Some(&self.view),
-            );
-            Some(NativeBlur(Arc::new(MainThreadBound::new(
-                BlurView { effect },
+            let window = self.view.window()?;
+            let api = WindowBlurApi::load()?;
+            let effect = NativeBlur(Arc::new(MainThreadBound::new(
+                WindowBlur {
+                    window: Weak::new(&window),
+                    api,
+                    config: Cell::new(config),
+                    gradient: RefCell::new(None),
+                    gradient_attempt: Cell::new((0, false)),
+                    applied: Cell::new(false),
+                    applications: Cell::new(0),
+                },
                 marker,
-            ))))
+            )));
+            effect.synchronize(self, None).then_some(effect)
         }
 
         pub(crate) fn suppress_titlebar_drag(&self) -> Option<TitlebarDragGuard> {
@@ -122,198 +188,232 @@ mod platform {
         }
     }
 
-    /// egui's viewport cache owns the underlay. It retains no renderer/window;
-    /// dropping or replacing the cache removes only this decoration on AppKit's
-    /// main thread, including when a context is released on another thread.
-    #[derive(Clone)]
-    pub(crate) struct NativeBlur(Arc<MainThreadBound<BlurView>>);
+    // AppKit materials tint in addition to blurring, deactivate with child-window
+    // focus, and can replace their backdrop with desktop tint on native zoom.
+    // Use WindowServer's window-wide blur instead. It neither changes the CGL/
+    // WebKit hierarchy nor adds an extra color/opacity layer. The private API is
+    // resolved once (also used by Ghostty); unsupported systems keep transparency.
+    type BlurConnection = unsafe extern "C" fn() -> *mut c_void;
+    type SetWindowBlur = unsafe extern "C" fn(*mut c_void, usize, c_int) -> i32;
 
-    struct BlurView {
-        effect: Retained<RadiusVisualEffectView>,
+    struct WindowBlurApi {
+        connection: BlurConnection,
+        set_radius: SetWindowBlur,
     }
-    // AppKit has no public radius property. Restrict the private filter access
-    // to its existing gaussianBlur filter; do not build or replace its layers.
-    // updateLayer reapplies after AppKit regenerates active/theme materials.
-    define_class!(
-        #[unsafe(super = NSVisualEffectView)]
-        #[name = "TiptoptypWindowBlur"]
-        #[thread_kind = MainThreadOnly]
-        #[ivars = Cell<u8>]
-        struct RadiusVisualEffectView;
 
-        impl RadiusVisualEffectView {
-            #[unsafe(method(updateLayer))]
-            fn update_layer(&self) {
-                // SAFETY: invoke AppKit's normal material update before changing
-                // the existing filter, on the same main-thread view.
-                unsafe { let _: () = msg_send![super(self), updateLayer]; }
-                self.apply_radius();
-            }
+    impl WindowBlurApi {
+        fn load() -> Option<&'static Self> {
+            static API: OnceLock<Option<WindowBlurApi>> = OnceLock::new();
+            API.get_or_init(|| {
+                unsafe extern "C" {
+                    fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+                }
+                // SAFETY: RTLD_DEFAULT is Darwin's documented -2 pseudo-handle.
+                // Look up the known C ABI without creating a hard dependency on
+                // private exports at launch. Both symbols must exist before use.
+                unsafe {
+                    let default = (-2_isize) as *mut c_void;
+                    let connection = dlsym(default, c"CGSDefaultConnectionForThread".as_ptr());
+                    let set_radius = dlsym(default, c"CGSSetWindowBackgroundBlurRadius".as_ptr());
+                    if connection.is_null() || set_radius.is_null() {
+                        return None;
+                    }
+                    Some(Self {
+                        connection: std::mem::transmute::<*mut c_void, BlurConnection>(connection),
+                        set_radius: std::mem::transmute::<*mut c_void, SetWindowBlur>(set_radius),
+                    })
+                }
+            })
+            .as_ref()
         }
-    );
-    impl RadiusVisualEffectView {
-        fn set_radius(&self, radius: u8) {
-            if self.ivars().replace(radius) != radius {
-                self.apply_radius();
-                self.setNeedsDisplay(true);
+
+        fn apply(&self, window: &NSWindow, radius: u8) -> bool {
+            if MainThreadMarker::new().is_none() {
+                return false;
             }
-        }
-        fn apply_radius(&self) {
-            let Some((layer, name)) = gaussian_blur_layer(self) else {
-                return;
+            let Ok(number) = usize::try_from(window.windowNumber()) else {
+                return false;
             };
-            let value = NSNumber::new_f64(f64::from(self.ivars().get()));
-            // SAFETY: the layer is Apple's CALayer and has a named gaussianBlur
-            // CAFilter. Its inputRadius accepts NSNumber. No KVC lookup is made
-            // on a missing/unknown filter; unsupported materials stay native.
+            if number == 0 {
+                return false;
+            }
+            // SAFETY: called on AppKit's main thread for this process's live
+            // NSWindow. The system compositor owns the effect and resize. A
+            // nonzero status is a failure, never cached as an applied radius.
             unsafe {
-                let _: () = msg_send![&*layer, setValue: &*value, forKeyPath: &*NSString::from_str(&format!("filters.{name}.inputRadius"))];
+                let connection = (self.connection)();
+                !connection.is_null()
+                    && (self.set_radius)(connection, number, c_int::from(radius)) == 0
             }
         }
     }
-    fn gaussian_blur_layer(
-        effect: &NSVisualEffectView,
-    ) -> Option<(Retained<AnyObject>, Retained<NSString>)> {
-        // SAFETY: NSView.layer returns a retained CALayer; traversal only sends
-        // CALayer selectors to its sublayers and CAFilter.name to its filters.
-        unsafe {
-            let layer: Option<Retained<AnyObject>> = msg_send![effect, layer];
-            find_gaussian_blur_layer(layer?, 0)
-        }
+
+    #[derive(Clone)]
+    pub(crate) struct NativeBlur(Arc<MainThreadBound<WindowBlur>>);
+
+    struct WindowBlur {
+        // A cached decoration must not extend the native window's lifetime.
+        window: Weak<NSWindow>,
+        api: &'static WindowBlurApi,
+        config: Cell<BlurConfig>,
+        gradient: RefCell<Option<GradientBlur>>,
+        gradient_attempt: Cell<(usize, bool)>,
+        applied: Cell<bool>,
+        applications: Cell<u64>,
     }
-    unsafe fn find_gaussian_blur_layer(
-        layer: Retained<AnyObject>,
-        depth: usize,
-    ) -> Option<(Retained<AnyObject>, Retained<NSString>)> {
-        if depth >= 8 {
-            return None;
-        }
-        // SAFETY: caller establishes CALayer identity for the complete bounded
-        // traversal. Private CAFilter.name is only read on CALayer's filters.
-        unsafe {
-            let filters: Option<Retained<NSArray<AnyObject>>> = msg_send![&*layer, filters];
-            if let Some(filters) = filters {
-                for filter in filters.iter().take(8) {
-                    let name: Option<Retained<NSString>> = msg_send![&*filter, name];
-                    if let Some(name) = name {
-                        // AppKit can uniquify names as "gaussianBlur 2" when
-                        // multiple windows/materials exist. Use its actual name
-                        // in the CALayer filter key path, not a fixed alias.
-                        if name.to_string().split_whitespace().next() == Some("gaussianBlur") {
-                            return Some((layer, name));
-                        }
+
+    impl WindowBlur {
+        fn apply(
+            &self,
+            parent: &NativeWindowHandle,
+            window: &NSWindow,
+            config: BlurConfig,
+        ) -> bool {
+            let directional = config.fade != FadeDirection::None && config.maximum_radius() > 0;
+            let mut gradient = self.gradient.borrow_mut();
+            if directional {
+                self.gradient_attempt
+                    .set(GradientBlur::attachment_key(&parent.view));
+                let reused = gradient.as_ref().is_some_and(|effect| {
+                    effect.synchronize(&parent.view, config.radius, config.end_radius, config.fade)
+                });
+                if !reused {
+                    // A host replacement needs a fresh attachment even when
+                    // the old controller still owns an obsolete layer.
+                    gradient.take();
+                    *gradient = GradientBlur::new(
+                        &parent.view,
+                        config.radius,
+                        config.end_radius,
+                        config.fade,
+                    );
+                }
+                let configured = gradient.is_some();
+                if configured {
+                    // Uniform pre-blur would prevent the sharp edge from ever
+                    // becoming sharp. The gradient alone owns native sampling.
+                    if !self.api.apply(window, 0) {
+                        gradient.take();
+                        return false;
+                    }
+                } else {
+                    // Optional private layer/filter support may be absent on a
+                    // future macOS. Keep the established blur; report its actual
+                    // uniform direction rather than pretending the mask applied.
+                    gradient.take();
+                    if !self.api.apply(window, config.maximum_radius()) {
+                        return false;
                     }
                 }
-            }
-            let children: Option<Retained<NSArray<AnyObject>>> = msg_send![&*layer, sublayers];
-            for child in children?.iter().take(16) {
-                if let Some(found) = find_gaussian_blur_layer(child, depth + 1) {
-                    return Some(found);
+            } else {
+                gradient.take();
+                if !self.api.apply(window, config.maximum_radius()) {
+                    return false;
                 }
             }
-            None
+            self.config.set(config);
+            self.applied.set(true);
+            self.applications.set(self.applications.get() + 1);
+            true
         }
     }
-    impl Drop for BlurView {
+
+    impl Drop for WindowBlur {
         fn drop(&mut self) {
-            self.effect.removeFromSuperview();
-        }
-    }
-    fn superview(view: &NSView) -> Option<Retained<NSView>> {
-        let _marker = MainThreadMarker::new()?;
-        // SAFETY: all callers supply a retained AppKit view and this lookup is
-        // performed on the main thread while the view hierarchy is stable.
-        unsafe { view.superview() }
-    }
-    fn set_blur_appearance(effect: &NSVisualEffectView, dark: bool) {
-        // Match the app's explicit Light/Dark choice, not the OS's appearance.
-        let name = unsafe {
-            if dark {
-                NSAppearanceNameDarkAqua
-            } else {
-                NSAppearanceNameAqua
+            self.gradient.get_mut().take();
+            if self.applications.get() > 0
+                && let Some(window) = self.window.load()
+            {
+                self.api.apply(&window, 0);
             }
-        };
-        if let Some(appearance) = NSAppearance::appearanceNamed(name) {
-            effect.setAppearance(Some(&appearance));
         }
     }
+
     impl NativeBlur {
-        /// Native resizing is handled by AppKit. This bounded identity check also
-        /// repairs placement if AppKit moves the renderer to a different host
-        /// during a fullscreen transition; settled frames make no mutations.
+        /// Reuse the exact native owner. Uniform blur needs no resize/focus
+        /// calls; a directional layer only updates its bounded mask on resize.
         pub(crate) fn synchronize(
             &self,
             parent: &NativeWindowHandle,
-            appearance: Option<(bool, u8)>,
+            config: Option<BlurConfig>,
         ) -> bool {
             let Some(marker) = MainThreadMarker::new() else {
                 return false;
             };
-            let Some(host) = superview(&parent.view) else {
+            let state = self.0.get(marker);
+            let Some(window) = state.window.load() else {
                 return false;
             };
-            let effect = &self.0.get(marker).effect;
-            if superview(effect).as_deref() != Some(&*host) {
-                effect.removeFromSuperview();
-                effect.setFrame(parent.view.frame());
-                host.addSubview_positioned_relativeTo(
-                    effect,
-                    NSWindowOrderingMode::Below,
-                    Some(&parent.view),
-                );
+            if parent.view.window().as_deref() != Some(&*window) {
+                return false;
             }
-            if let Some((dark, radius)) = appearance {
-                set_blur_appearance(effect, dark);
-                effect.set_radius(radius);
+            let config = config.unwrap_or(state.config.get());
+            if !window.isVisible() {
+                if config != state.config.get() {
+                    state.config.set(config);
+                    state.applied.set(false);
+                }
+                return true;
+            }
+            if !state.applied.get() || config != state.config.get() {
+                return state.apply(parent, &window, config);
+            }
+            let geometry_valid = state.gradient.borrow().as_ref().is_none_or(|effect| {
+                effect.synchronize(&parent.view, config.radius, config.end_radius, config.fade)
+            });
+            let recovered_host = config.fade != FadeDirection::None
+                && config.maximum_radius() > 0
+                && state.gradient.borrow().is_none()
+                && GradientBlur::attachment_key(&parent.view) != state.gradient_attempt.get();
+            if !geometry_valid || recovered_host {
+                // Retry after a native host/size-eligibility transition, never
+                // on unchanged idle callbacks or ordinary size changes.
+                return state.apply(parent, &window, config);
             }
             true
         }
 
-        #[cfg(any(test, feature = "native-ui-tests", feature = "desktop-ui-tests"))]
-        #[allow(dead_code)]
-        pub(crate) fn effective_radius(&self) -> Option<f64> {
-            let marker = MainThreadMarker::new()?;
-            let (layer, name) = gaussian_blur_layer(&self.0.get(marker).effect)?;
-            // SAFETY: known native gaussianBlur inputRadius is NSNumber.
-            unsafe {
-                let value: Option<Retained<NSNumber>> = msg_send![&*layer, valueForKeyPath: &*NSString::from_str(&format!("filters.{name}.inputRadius"))];
-                value.map(|value| value.doubleValue())
+        pub(crate) fn applied_fade(&self) -> FadeDirection {
+            let Some(marker) = MainThreadMarker::new() else {
+                return FadeDirection::None;
+            };
+            let state = self.0.get(marker);
+            if state.applied.get() && state.gradient.borrow().is_some() {
+                state.config.get().fade
+            } else {
+                FadeDirection::None
             }
+        }
+
+        pub(crate) fn awaiting_visibility(&self) -> bool {
+            MainThreadMarker::new().is_some_and(|marker| !self.0.get(marker).applied.get())
         }
 
         #[cfg(any(test, feature = "native-ui-tests", feature = "desktop-ui-tests"))]
         #[allow(dead_code)]
-        pub(crate) fn inspection(
+        pub(crate) fn gradient_inspection(
             &self,
             parent: &NativeWindowHandle,
-        ) -> Option<([f64; 4], bool, usize)> {
+        ) -> Option<(usize, f64, [usize; 2], [f64; 4])> {
+            self.inspection(parent)?;
             let marker = MainThreadMarker::new()?;
-            let effect = &self.0.get(marker).effect;
-            let frame = effect.frame();
-            let host = superview(&parent.view)?;
-            let siblings = host.subviews();
-            let below = siblings
-                .iter()
-                .position(|v| {
-                    std::ptr::eq(
-                        Retained::as_ptr(&v),
-                        Retained::as_ptr(effect).cast::<NSView>(),
-                    )
-                })
-                .zip(siblings.iter().position(|v| {
-                    std::ptr::eq(Retained::as_ptr(&v), Retained::as_ptr(&parent.view))
-                }))
-                .is_some_and(|(effect, renderer)| effect < renderer);
+            self.0.get(marker).gradient.borrow().as_ref()?.inspection()
+        }
+
+        /// Successful native configuration, not a composed-pixel readback.
+        #[cfg(any(test, feature = "native-ui-tests", feature = "desktop-ui-tests"))]
+        #[allow(dead_code)]
+        pub(crate) fn inspection(&self, parent: &NativeWindowHandle) -> Option<(u8, usize, u64)> {
+            let marker = MainThreadMarker::new()?;
+            let state = self.0.get(marker);
+            let window = state.window.load()?;
+            if !state.applied.get() || parent.view.window().as_deref() != Some(&*window) {
+                return None;
+            }
             Some((
-                [
-                    frame.origin.x,
-                    frame.origin.y,
-                    frame.size.width,
-                    frame.size.height,
-                ],
-                superview(effect).as_deref() == Some(&*host) && below,
-                Retained::as_ptr(effect) as usize,
+                state.config.get().maximum_radius(),
+                Arc::as_ptr(&self.0) as usize,
+                state.applications.get(),
             ))
         }
     }
@@ -474,8 +574,32 @@ pub(crate) fn activate_application() {
     }
 }
 
+/// Native NSView coordinates are already scaled to macOS screen points;
+/// egui's desktop origin still needs the interface zoom applied once.
+#[cfg(any(test, feature = "desktop-ui-tests"))]
+pub(crate) fn ime_screen_rect(origin: eframe::egui::Pos2, local: [f64; 4], zoom: f32) -> [f64; 4] {
+    [
+        f64::from(origin.x * zoom) + local[0],
+        f64::from(origin.y * zoom) + local[1],
+        local[2],
+        local[3],
+    ]
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_ime_screen_coordinates_scale_only_the_egui_window_origin() {
+        assert_eq!(
+            super::ime_screen_rect(
+                eframe::egui::pos2(-100.0, 200.0),
+                [10.0, 20.0, 1.0, 30.0],
+                1.5,
+            ),
+            [-140.0, 320.0, 1.0, 30.0],
+        );
+    }
+
     #[test]
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn absent_viewport_never_falls_back_to_another_window() {

@@ -110,13 +110,22 @@ fn inspect(context: &egui::Context, id: egui::ViewportId, popup: bool, state: &m
                 "background configuration cannot replace the rendering view"
             );
             let blur = parent
-                .blur_background(false, 8)
-                .expect("native sibling blur");
-            assert!(blur.inspection(&parent).unwrap().1);
+                .blur_background(native_window::BlurConfig {
+                    radius: 8,
+                    end_radius: 0,
+                    fade: native_window::FadeDirection::None,
+                })
+                .expect("native compositor blur");
+            if view.window().unwrap().isVisible() {
+                assert!(blur.synchronize(&parent, None));
+                assert_eq!(blur.inspection(&parent).unwrap().0, 8);
+            } else {
+                assert!(blur.awaiting_visibility());
+            }
             assert_eq!(view.subviews(), children, "blur cannot be a renderer child");
             assert!(
                 window.has_shadow(),
-                "attaching blur preserves window shadow"
+                "compositor blur preserves window shadow"
             );
             state.blurs.insert(id, blur);
             assert_eq!(eframe::window_host::identity(context, id), Some(identity));
@@ -124,21 +133,9 @@ fn inspect(context: &egui::Context, id: egui::ViewportId, popup: bool, state: &m
         if let Some(blur) = state.blurs.get(&id) {
             let parent = native_window::NativeWindowHandle::from_owner(window.as_ref()).unwrap();
             assert!(blur.synchronize(&parent, None));
-            let (frame, below, _) = blur.inspection(&parent).unwrap();
-            assert!(
-                below,
-                "lifecycle transitions must keep blur below the renderer"
-            );
-            let renderer_frame = view.frame();
-            assert_eq!(
-                frame,
-                [
-                    renderer_frame.origin.x,
-                    renderer_frame.origin.y,
-                    renderer_frame.size.width,
-                    renderer_frame.size.height
-                ]
-            );
+            if view.window().unwrap().isVisible() {
+                assert_eq!(blur.inspection(&parent).unwrap().0, 8);
+            }
         }
     }
 }
@@ -417,6 +414,6 @@ fn main() {
     assert_eq!(state.canceled, 1);
     assert!(state.document_closed);
     println!(
-        "Native contract passed: distinct owners, stable identities, sibling blur, fullscreen, minimize/restore, focus handoff, minimized close/cancel/commit, Settings hide/reopen, native decorations/buttons/shadow"
+        "Native contract passed: distinct owners, stable identities, compositor blur, fullscreen, minimize/restore, focus handoff, minimized close/cancel/commit, Settings hide/reopen, native decorations/buttons/shadow"
     );
 }
