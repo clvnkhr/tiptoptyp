@@ -3,7 +3,8 @@
 use eframe::egui;
 use pdfium_render::prelude::*;
 use std::{
-    path::PathBuf,
+    ffi::OsStr,
+    path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
@@ -22,23 +23,39 @@ pub(crate) fn library_path() -> Result<PathBuf, String> {
                 .map_err(|error| format!("Could not prepare bundled PDFium: {error}"));
         }
     }
-    let mut candidates = Vec::new();
-    if !cfg!(feature = "production") {
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(dir) = exe.parent()
-        {
-            candidates.push(dir.join("../Resources/pdfium").join(&name));
-            candidates.push(dir.join("pdfium").join(&name));
-            candidates.push(dir.join("../lib/tiptoptyp/pdfium").join(&name));
-        }
-        candidates.push(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("toolchain/pdfium-bundle")
-                .join(name),
-        );
-    }
+    let candidates = if cfg!(feature = "production") {
+        Vec::new()
+    } else {
+        development_library_candidates(
+            std::env::current_exe().ok().as_deref(),
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            crate::toolchain::target_triple(),
+            &name,
+        )
+    };
     candidates.into_iter().find(|p| p.is_file()).ok_or_else(||
         "Bundled PDFium is missing. Source builds: run cargo run --manifest-path xtask/Cargo.toml -- fetch-pdfium. Packaged builds: reinstall the complete app.".into())
+}
+
+fn development_library_candidates(
+    executable: Option<&Path>,
+    repository: &Path,
+    target: &str,
+    name: &OsStr,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(directory) = executable.and_then(Path::parent) {
+        candidates.push(directory.join("../Resources/pdfium").join(name));
+        candidates.push(directory.join("pdfium").join(name));
+        candidates.push(directory.join("../lib/tiptoptyp/pdfium").join(name));
+    }
+    candidates.push(
+        repository
+            .join("toolchain/pdfium-targets")
+            .join(target)
+            .join(name),
+    );
+    candidates
 }
 
 pub(crate) fn validate() -> Result<(), String> {
@@ -485,6 +502,24 @@ pub(crate) fn safe_url(uri: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_pdfium_candidates_isolate_architectures_and_reuse_package_inputs() {
+        let root = Path::new("workspace");
+        let executable = root.join("target/debug/tiptoptyp");
+        let name = OsStr::new("libpdfium.dylib");
+        for target in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+            let candidates = development_library_candidates(Some(&executable), root, target, name);
+            assert_eq!(
+                candidates.last().unwrap(),
+                &root
+                    .join("toolchain/pdfium-targets")
+                    .join(target)
+                    .join(name),
+                "source and package builds must select the same architecture-specific library"
+            );
+        }
+    }
+
     #[test]
     fn prepared_pixels_match_the_previous_palette_conversion_including_alpha() {
         let rgba: Vec<_> = [0, 1, 31, 64, 127, 128, 254, 255]

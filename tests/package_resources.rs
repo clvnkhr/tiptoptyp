@@ -105,7 +105,6 @@ fn packages_ship_compressed_payload_trees_without_duplicate_raw_binaries_or_asse
         for source in resources.keys() {
             assert!(
                 !source.starts_with("toolchain/bin")
-                    && !source.starts_with("toolchain/pdfium-bundle")
                     && !source.starts_with("toolchain/pdfium-targets"),
                 "uncompressed native runtime duplicated in package resources: {source}"
             );

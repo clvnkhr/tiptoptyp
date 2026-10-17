@@ -3451,7 +3451,7 @@ For more information, please refer to <http://unlicense.org>
 
 
 
-===== toolchain/pdfium-bundle/LICENSE =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/LICENSE =====
 Copyright 2014-2025 Benoit Blanchon
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -3463,7 +3463,7 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 This package also includes third-party software. See the licenses/ directory for their respective licenses.
 
 
-===== toolchain/pdfium-bundle/PROVENANCE.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/PROVENANCE.txt =====
 PDFium chromium/7881
 Target: aarch64-apple-darwin
 Source: https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7881/pdfium-mac-arm64.tgz
@@ -3472,7 +3472,7 @@ Binding: pdfium-render 0.9.4, pdfium_7881
 Native and dependency licenses accompany this library.
 
 
-===== toolchain/pdfium-bundle/licenses/abseil.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/abseil.txt =====
 
                                  Apache License
                            Version 2.0, January 2004
@@ -3678,7 +3678,7 @@ Native and dependency licenses accompany this library.
 
 
 
-===== toolchain/pdfium-bundle/licenses/agg23.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/agg23.txt =====
 //----------------------------------------------------------------------------
 // Anti-Grain Geometry - Version 2.3
 // Copyright (C) 2002-2005 Maxim Shemanarev (http://www.antigrain.com)
@@ -3695,7 +3695,7 @@ Native and dependency licenses accompany this library.
 //----------------------------------------------------------------------------
 
 
-===== toolchain/pdfium-bundle/licenses/fast_float.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/fast_float.txt =====
 MIT License
 
 Copyright (c) 2021 The fast_float authors
@@ -3725,7 +3725,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 
-===== toolchain/pdfium-bundle/licenses/freetype.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/freetype.txt =====
                     The FreeType Project LICENSE
                     ----------------------------
 
@@ -3897,7 +3897,7 @@ Legal Terms
 --- end of FTL.TXT ---
 
 
-===== toolchain/pdfium-bundle/licenses/icu.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/icu.txt =====
 UNICODE LICENSE V3
 
 COPYRIGHT AND PERMISSION NOTICE
@@ -4468,7 +4468,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-===== toolchain/pdfium-bundle/licenses/lcms.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/lcms.txt =====
 //---------------------------------------------------------------------------------
 //
 //  Little Color Management System
@@ -4498,7 +4498,7 @@ SOFTWARE.
 //
 
 
-===== toolchain/pdfium-bundle/licenses/libjpeg_turbo.ijg =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/libjpeg_turbo.ijg =====
 libjpeg-turbo note:  This file has been modified by The libjpeg-turbo Project
 to include only information relevant to libjpeg-turbo, to wordsmith certain
 sections, and to remove impolitic language that existed in the libjpeg v8
@@ -4761,7 +4761,7 @@ TO DO
 Please send bug reports, offers of help, etc. to jpeg-info@jpegclub.org.
 
 
-===== toolchain/pdfium-bundle/licenses/libjpeg_turbo.md =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/libjpeg_turbo.md =====
 libjpeg-turbo Licenses
 ======================
 
@@ -4899,7 +4899,7 @@ desirable to choose a license that granted us the same protections for new code
 that were granted to the IJG for code derived from their software.
 
 
-===== toolchain/pdfium-bundle/licenses/libopenjpeg.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/libopenjpeg.txt =====
 /*
  * The copyright in this software is being made available under the 2-clauses
  * BSD License, included below. This software may be subject to other third
@@ -4934,7 +4934,7 @@ that were granted to the IJG for code derived from their software.
  */
 
 
-===== toolchain/pdfium-bundle/licenses/libpng.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/libpng.txt =====
 COPYRIGHT NOTICE, DISCLAIMER, and LICENSE
 =========================================
 
@@ -5071,7 +5071,7 @@ this source code in a product, acknowledgment is not required but would
 be appreciated.
 
 
-===== toolchain/pdfium-bundle/licenses/libtiff.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/libtiff.txt =====
 Copyright (c) 1988-1997 Sam Leffler
 Copyright (c) 1991-1997 Silicon Graphics, Inc.
 
@@ -5095,7 +5095,7 @@ LIABILITY, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
 OF THIS SOFTWARE.
 
 
-===== toolchain/pdfium-bundle/licenses/llvm-libc.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/llvm-libc.txt =====
 ==============================================================================
 The LLVM Project is under the Apache License v2.0 with LLVM Exceptions:
 ==============================================================================
@@ -5376,7 +5376,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS WITH THE
 SOFTWARE.
 
 
-===== toolchain/pdfium-bundle/licenses/pdfium.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/pdfium.txt =====
 // Copyright 2014 The PDFium Authors
 //
 // Redistribution and use in source and binary forms, with or without
@@ -5609,7 +5609,7 @@ SOFTWARE.
    limitations under the License.
 
 
-===== toolchain/pdfium-bundle/licenses/simdutf.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/simdutf.txt =====
 Copyright 2021 The simdutf authors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -5630,7 +5630,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-===== toolchain/pdfium-bundle/licenses/zlib.txt =====
+===== toolchain/pdfium-targets/aarch64-apple-darwin/licenses/zlib.txt =====
 /* zlib.h -- interface of the 'zlib' general purpose compression library
   version 1.3.2.1, February xxth, 2026
 

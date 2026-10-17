@@ -62,7 +62,11 @@ Source builds prepare the library with:
 cargo run --manifest-path xtask/Cargo.toml -- fetch-pdfium
 ```
 
-`package-build` does this automatically. The library is PDFium chromium/7881,
+The library is stored in `toolchain/pdfium-targets/<target>/`. Each architecture
+has its own directory, so fetching an Intel renderer cannot replace an Apple
+Silicon renderer used by a source build, or vice versa. `package-build` prepares
+these same target directories automatically and also prepares the host renderer
+when building only for another architecture. The library is PDFium chromium/7881,
 paired with `pdfium-render = 0.9.4` and its `pdfium_7881` ABI feature. The download
 has a per-target SHA-256 pin in `xtask/src/pdfium.rs`; extraction validates archive
 paths and entry types. The library, provenance and dependency licenses are included

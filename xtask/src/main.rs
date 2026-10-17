@@ -152,17 +152,17 @@ fn run() -> Result<(), String> {
         }
         "package-build" => {
             let target = package_target(target)?;
-            for slice in macos::targets(&target) {
+            let slices = macos::targets(&target);
+            for slice in &slices {
                 fetch_sidecars(slice)?;
-                pdfium::fetch_to(
-                    slice,
-                    &repository_root()
-                        .join("toolchain/pdfium-targets")
-                        .join(slice),
-                )?;
+                pdfium::fetch(slice)?;
             }
-            // Retain the native development renderer and its aggregate notices.
-            pdfium::fetch(&host_target()?)?;
+            // A cross-only package also prepares the host's development renderer
+            // and aggregate notices. Universal builds already fetched that slice.
+            let host = host_target()?;
+            if !slices.contains(&host.as_str()) {
+                pdfium::fetch(&host)?;
+            }
             generate_third_party_notices()?;
             payloads::stage(&target)?;
             if target.ends_with("apple-darwin") {
@@ -266,7 +266,7 @@ fn generate_third_party_notices() -> Result<(), String> {
             .map_err(|error| format!("could not read bundled notice {name}: {error}"))?;
         bundled_notices.push_str(&format!("\n===== {name} =====\n\n{text}\n"));
     }
-    let pdfium = root.join("toolchain/pdfium-bundle");
+    let pdfium = pdfium::bundle_directory(&root, &host_target()?);
     let mut pdfium_licenses = vec![pdfium.join("LICENSE"), pdfium.join("PROVENANCE.txt")];
     for entry in fs::read_dir(pdfium.join("licenses"))
         .map_err(|e| format!("Fetch PDFium before generating notices: {e}"))?

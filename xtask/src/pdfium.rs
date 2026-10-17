@@ -36,7 +36,11 @@ const TARGETS: &[(&str, &str, &str)] = &[
 ];
 
 pub(super) fn fetch(target: &str) -> Result<(), String> {
-    fetch_to(target, &repository_root().join("toolchain/pdfium-bundle"))
+    fetch_to(target, &bundle_directory(&repository_root(), target))
+}
+
+pub(super) fn bundle_directory(root: &Path, target: &str) -> PathBuf {
+    root.join("toolchain/pdfium-targets").join(target)
 }
 
 pub(super) fn fetch_to(target: &str, bundle: &Path) -> Result<(), String> {
@@ -93,6 +97,23 @@ pub(super) fn fetch_to(target: &str, bundle: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn fetches_for_distinct_architectures_have_distinct_development_directories() {
+        let root = Path::new("workspace");
+        let mut directories = std::collections::HashSet::new();
+        for (target, _, _) in TARGETS {
+            let directory = bundle_directory(root, target);
+            assert_eq!(
+                directory,
+                root.join("toolchain/pdfium-targets").join(target)
+            );
+            assert!(
+                directories.insert(directory),
+                "fetching another target must not replace the host library"
+            );
+        }
+    }
+
     #[test]
     fn pins_cover_supported_desktop_architectures() {
         assert_eq!(TARGETS.len(), 6);

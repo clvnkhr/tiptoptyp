@@ -47,7 +47,7 @@ pub(super) fn stage(target: &str) -> Result<(), String> {
                 target,
             )?);
         }
-        let pdfium = root.join("toolchain/pdfium-targets").join(target);
+        let pdfium = pdfium::bundle_directory(&root, target);
         let library = library_name(target);
         entries.push(stage_native(
             &pdfium.join(library),
