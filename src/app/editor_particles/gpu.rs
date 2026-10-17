@@ -46,6 +46,15 @@ impl Renderer {
         })
     }
 
+    pub(super) fn is_unavailable(&self) -> bool {
+        self.0.status.load(Ordering::Acquire) >= 2
+    }
+
+    #[cfg(test)]
+    pub(super) fn simulate_unavailable_for_tests(&self) {
+        self.0.status.store(2, Ordering::Release);
+    }
+
     // Compile while the option is being enabled, before the first keystroke.
     // A discarded layout pass may discard its callback too, so only the actual
     // render callback marks initialization complete. No idle repaint is requested.

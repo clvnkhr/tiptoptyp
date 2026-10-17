@@ -281,13 +281,18 @@ pub(super) fn paint(
         context.data_mut(|data| data.remove::<SharedState>(id));
         return;
     }
+    let renderer = Renderer::for_context(context);
+    if renderer.is_unavailable() {
+        context.data_mut(|data| data.remove::<SharedState>(id));
+        return;
+    }
     let existing = context.data(|data| data.get_temp::<SharedState>(id));
     let focused = surface.edit.response.has_focus();
     let accepted = focused
         && intent.events > 0
         && (document_changed || (intent.ime_commit && surface.edit.response.changed()));
     if existing.is_none() && !accepted {
-        Renderer::for_context(context).warm(ui, surface.viewport.intersect(ui.clip_rect()));
+        renderer.warm(ui, surface.viewport.intersect(ui.clip_rect()));
         return;
     }
     let state = existing.unwrap_or_else(|| {
@@ -345,7 +350,7 @@ pub(super) fn paint(
     let instances = state.instances();
     let time = (now - state.base_time) as f32;
     drop(state);
-    Renderer::for_context(context).submit(
+    renderer.submit(
         ui,
         viewport,
         instances,
@@ -724,6 +729,42 @@ mod tests {
             harness.state_mut().settings.editor_particles.enabled = false;
             harness.step();
             assert_eq!(counts(&harness), (0, 0));
+        }
+    }
+
+    #[test]
+    fn unavailable_gpu_keeps_editing_but_never_emits_or_repaints_particle_state() {
+        for diff in [false, true] {
+            let mut harness = editor(diff);
+            let renderer = Renderer::for_context(&harness.ctx);
+            renderer.simulate_unavailable_for_tests();
+            harness
+                .input_mut()
+                .events
+                .push(egui::Event::Text("x".into()));
+            harness.step();
+            assert_eq!(harness.state().document().source(), "prefix x");
+            assert_eq!(
+                counts(&harness),
+                (0, 0),
+                "an unavailable effect must not animate an invisible pool"
+            );
+            assert!(
+                harness
+                    .output()
+                    .shapes
+                    .iter()
+                    .all(|shape| !matches!(shape.shape, egui::Shape::Callback(_)))
+            );
+            harness.step();
+            assert!(
+                harness
+                    .ctx
+                    .repaint_causes()
+                    .iter()
+                    .all(|cause| cause.file != file!()),
+                "unavailable particles must not schedule animation repaints"
+            );
         }
     }
 
