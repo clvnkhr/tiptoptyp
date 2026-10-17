@@ -1,6 +1,6 @@
 """Native TeX journeys; fixtures are real files and tools are never mocked."""
 
-TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save", "harper_math_prose")
+TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save", "harper_math_prose", "harper_settings")
 TEX_SOURCE = "\\documentclass{article}\n\\begin{document}\nA sample with $\\alpha + \\alpha$.\n\\end{document}\n"
 
 
@@ -18,6 +18,13 @@ def harper_fresh(document, source, path, locations):
         and document["writing_locations"] == locations \
         and document["writing_lines"] == [location[0] for location in locations] \
         and document["writing_paths"] == [str(path)] * len(locations)
+
+
+def harper_settings_applied(document, dictionary, ignore_names):
+    """Observe applied preferences without exposing personal dictionary contents."""
+    from desktop_ui_journeys import fingerprint
+    return document.get("harper_dictionary_fingerprint") == fingerprint(dictionary) \
+        and document.get("harper_ignore_capitalized_names") is ignore_names
 
 
 def assert_harper_stale(document, previous):
@@ -144,6 +151,72 @@ class TexJourneys:
             if path.read_text() != source:
                 raise AssertionError("Harper journey wrote edits to disk despite disabled autosave")
             self.close_scratch(count)
+        self.tex_settings([('"english_grammar": true', '"english_grammar": false'),
+                           ('"auto_save": false', '"auto_save": true'),
+                           ('"build_enabled": false', '"build_enabled": true')])
+
+    def harper_settings(self):
+        """Form edits must refresh real Harper results without editing the source."""
+        from desktop_ui_journeys import fingerprint
+        count = self.snapshot()["document"]["tabs"]
+        self.tex_settings([('"english_grammar": false', '"english_grammar": true'),
+                           ('"auto_save": true', '"auto_save": false'),
+                           ('"build_enabled": true', '"build_enabled": false')])
+        source = ("We inspect qzorthal today.\n"
+                  "We inspect QzorNim today.\n"
+                  "This sentence contains a misspelld word.\n"
+                  "This is the the simple result.\n")
+        path = self.directory / "harper-settings.typ"
+        path.write_text(source)
+        self.open_harper_fixture(path)
+        locations = [[1, 12], [2, 12], [3, 26], [4, 9]]
+        self.wait("Harper reports the unknown word, name, typo and repetition",
+                  lambda d: harper_fresh(d, source, path, locations), timeout=30)
+
+        def dictionary_edit(value, ignore_names, expected):
+            self.settings()
+            self.setting_section("personal dictionary", "Personal dictionary")
+            self.click("settings.harper.dictionary")
+            self.wait_target("settings.harper.dictionary", focused=True)
+            self.key(0)
+            if value:
+                self.native("text", value)
+            else:
+                self.key(51, "none")
+            self.wait("personal dictionary form applies without editing source", lambda d:
+                      harper_settings_applied(d, value, ignore_names)
+                      and d["source_fingerprint"] == fingerprint(source))
+            if self.capture_review and value:
+                self.capture_viewport("settings")
+            self.close_settings()
+            self.wait("dictionary edit refreshes Harper at original source locations", lambda d:
+                      harper_fresh(d, source, path, expected), timeout=30)
+            self.stable_state(lambda d: harper_fresh(d, source, path, expected))
+
+        def toggle_names(value, dictionary, expected):
+            self.settings()
+            self.setting_section("capitalized names", "Ignore capitalized names")
+            self.click("settings.harper.ignore_names")
+            self.wait("capitalized name preference applies", lambda d:
+                      harper_settings_applied(d, dictionary, value)
+                      and d["source_fingerprint"] == fingerprint(source))
+            self.close_settings()
+            self.wait("name filtering preserves lowercase typos and repetition", lambda d:
+                      harper_fresh(d, source, path, expected), timeout=30)
+            self.stable_state(lambda d: harper_fresh(d, source, path, expected))
+
+        dictionary_edit("qzorthal", False, locations[1:])
+        toggle_names(True, "qzorthal", locations[2:])
+        # Reopen Settings: its applied dictionary must remain editable, and
+        # removing the entry must immediately restore that word's diagnostic.
+        dictionary_edit("", True, [locations[0], *locations[2:]])
+        toggle_names(False, "", locations)
+        if path.read_text() != source:
+            raise AssertionError("Harper settings altered the fixture on disk")
+        self.record("harper.settings", source_fingerprint=fingerprint(source),
+                    dictionary_restored=True, names_restored=True,
+                    original_paths=self.snapshot()["document"]["writing_paths"])
+        self.close_scratch(count)
         self.tex_settings([('"english_grammar": true', '"english_grammar": false'),
                            ('"auto_save": false', '"auto_save": true'),
                            ('"build_enabled": false', '"build_enabled": true')])

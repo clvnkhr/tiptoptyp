@@ -12,6 +12,7 @@ pub(super) struct QaSession {
     tabs_prepared: bool,
     terminal_icons_prepared: bool,
     preview_window_prepared: bool,
+    reveal_prepared: bool,
     asset_fixture: Option<tempfile::TempDir>,
 }
 
@@ -58,6 +59,20 @@ impl SceneDocument {
         true
     }
 }
+
+pub(super) const REVEAL_SNAPSHOT_SOURCE: &str = r##"#set page(paper: "a4", margin: 24pt)
+#set text(size: 11pt)
+
+= Reveal navigation
+#let energy(v) = v * v
+
+The updated destination is easy to find.
+
+$ integral_0^1 x^2 dif x = 1/3 $
+
+The surrounding code remains readable while the target is emphasized.
+"##;
+const REVEAL_SNAPSHOT_ELAPSED: Duration = Duration::from_millis(300);
 
 pub(super) const STICKY_CONTEXT_SNAPSHOT_SOURCE: &str = r##"#set page(paper: "a4", margin: 2.2cm)
 #set text(size: 11pt)
@@ -205,6 +220,7 @@ impl QaSession {
                 | UiSnapshotScene::ProblemsPanel
                 | UiSnapshotScene::TerminalPanel
                 | UiSnapshotScene::FindReplace
+                | UiSnapshotScene::PdfiumReveal
         ) && !app.pdfium_preview.ready_for(app.preview.content.pdf())
         {
             app.captures.defer_target("main");
@@ -271,6 +287,57 @@ impl QaSession {
                 {
                     app.captures.defer_target("main");
                 } else {
+                    app.preview.status = PreviewStatus::Ready(Duration::ZERO);
+                }
+            }
+            UiSnapshotScene::SourceReveal | UiSnapshotScene::DiffReveal => {
+                app.view_mode = ViewMode::Code;
+                app.notice = None;
+                app.bottom_panel = BottomPanel::default();
+                if !self.reveal_prepared {
+                    app.close_document_diff();
+                    let path = app
+                        .document()
+                        .path()
+                        .clone()
+                        .unwrap_or_else(|| app.workspace_root.join("reveal.typ"));
+                    app.document_mut()
+                        .replace_loaded(
+                            REVEAL_SNAPSHOT_SOURCE.into(),
+                            path,
+                            DocumentKind::Typst,
+                            None,
+                        )
+                        .expect("ordinary reveal QA fixture replacement");
+                    app.prepare_editor_source_data();
+                    let byte = REVEAL_SNAPSHOT_SOURCE.find("destination").unwrap();
+                    let at = REVEAL_SNAPSHOT_SOURCE[..byte].chars().count();
+                    if scene == UiSnapshotScene::DiffReveal {
+                        let before = REVEAL_SNAPSHOT_SOURCE.replace("updated", "previous");
+                        app.document_diff =
+                            Some(crate::git::editor::document_diff::DocumentDiff::new(
+                                before,
+                                REVEAL_SNAPSHOT_SOURCE,
+                            ));
+                    }
+                    app.pending_editor_selection = Some(EditorSelection::Focus(at..at));
+                    app.editor_attention =
+                        Some(EditorAttention::snapshot(at, REVEAL_SNAPSHOT_ELAPSED));
+                    self.reveal_prepared = true;
+                }
+            }
+            UiSnapshotScene::PdfiumReveal => {
+                app.settings.preview_preference = PreviewPreference::Pdfium;
+                app.preview.set_requested_backend(PreviewPreference::Pdfium);
+                app.view_mode = ViewMode::Split;
+                if !app.pdfium_preview.ready_for(app.preview.content.pdf())
+                    || !app.preview_status_snapshot().canonical_artifact_available
+                {
+                    app.captures.defer_target("main");
+                } else if !self.reveal_prepared {
+                    app.pdfium_preview
+                        .snapshot_reveal(0, 100.0, 100.0, REVEAL_SNAPSHOT_ELAPSED);
+                    self.reveal_prepared = true;
                     app.preview.status = PreviewStatus::Ready(Duration::ZERO);
                 }
             }
@@ -673,6 +740,10 @@ impl QaSession {
                 )
                 .map(|target| target.bind_document(app.document().key()));
                 app.app_popup = Some(AppPopup::Editor {
+                    source: Some(preview_jump::SourceLocation {
+                        key: app.document().key(),
+                        char_index: 2,
+                    }),
                     math,
                     anchor: Pos2::new(430.0, 250.0),
                     link: None,
@@ -891,6 +962,10 @@ impl QaSession {
         app.restore_preview_window(context);
         app.preview_controls = Default::default();
         self.preview_window_prepared = false;
+        self.reveal_prepared = false;
+        app.editor_attention = None;
+        app.pdfium_preview.clear_reveal();
+        app.close_document_diff();
         context.data_mut(|data| data.remove::<bool>(egui::Id::new("qa-explorer-drop")));
         self.git_fixture_prepared = false;
         app.git.visible = false;
@@ -974,6 +1049,7 @@ impl QaSession {
                 | UiSnapshotScene::ProblemsPanel
                 | UiSnapshotScene::TerminalPanel
                 | UiSnapshotScene::FindReplace
+                | UiSnapshotScene::PdfiumReveal
         ) && !app.pdfium_preview.ready_for(app.preview.content.pdf())
         {
             app.schedule_compile_now();
@@ -998,6 +1074,51 @@ fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPan
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn reveal_scenes_freeze_the_real_source_state_and_retire_between_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let original = app.document().source().clone();
+        let mut qa = QaSession::default();
+        for scene in [UiSnapshotScene::SourceReveal, UiSnapshotScene::DiffReveal] {
+            app.snapshot_scene = Some(scene);
+            qa.prepare(&mut app, &context);
+            let key = app.document().key();
+            assert_eq!(app.document().source(), REVEAL_SNAPSHOT_SOURCE);
+            assert_eq!(app.view_mode, ViewMode::Code);
+            assert_eq!(
+                app.document_diff.is_some(),
+                scene == UiSnapshotScene::DiffReveal
+            );
+            assert_eq!(
+                app.editor_attention.unwrap().fixed_elapsed,
+                Some(REVEAL_SNAPSHOT_ELAPSED)
+            );
+            qa.prepare(&mut app, &context);
+            assert_eq!(
+                app.document().key(),
+                key,
+                "fixed capture preparation replaced its source again"
+            );
+            qa.set_step(
+                &mut app,
+                &UiCaptureStep {
+                    theme: CaptureThemeProfile {
+                        name: "catppuccin-latte".into(),
+                        invert: false,
+                        hue_shift_degrees: 0,
+                    },
+                    scene: UiSnapshotScene::Main,
+                },
+                &context,
+            );
+            assert!(app.editor_attention.is_none());
+            assert!(app.document_diff.is_none());
+            assert_eq!(app.document().source(), &original);
+        }
+    }
 
     #[test]
     fn serial_capture_restores_a_live_document_tab_and_preserves_unchanged_identity() {

@@ -124,6 +124,9 @@ pub enum UiSnapshotScene {
     FindStickyContext,
     PreviewCompiling,
     PdfiumPreview,
+    SourceReveal,
+    DiffReveal,
+    PdfiumReveal,
     PreviewControls,
     PreviewWindow,
     PreviewNativeWindow,
@@ -131,7 +134,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 62] = [
+    pub const ALL: [Self; 65] = [
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::Main,
@@ -190,6 +193,9 @@ impl UiSnapshotScene {
         Self::FindStickyContext,
         Self::PreviewCompiling,
         Self::PdfiumPreview,
+        Self::SourceReveal,
+        Self::DiffReveal,
+        Self::PdfiumReveal,
         Self::PreviewControls,
         Self::PreviewWindow,
         Self::PreviewNativeWindow,
@@ -257,6 +263,9 @@ impl UiSnapshotScene {
             Self::FindStickyContext => "find-sticky-context",
             Self::PreviewCompiling => "preview-compiling",
             Self::PdfiumPreview => "pdfium-preview",
+            Self::SourceReveal => "source-reveal",
+            Self::DiffReveal => "diff-reveal",
+            Self::PdfiumReveal => "pdfium-reveal",
             Self::PreviewControls => "preview-controls",
             Self::PreviewWindow => "preview-window",
             Self::PreviewNativeWindow => "preview-native-window",
@@ -292,6 +301,9 @@ impl UiSnapshotScene {
             | Self::ExplorerMaximized
             | Self::PreviewCompiling
             | Self::PdfiumPreview
+            | Self::SourceReveal
+            | Self::DiffReveal
+            | Self::PdfiumReveal
             | Self::Icons => ROOT_VIEWPORT_NAME,
             Self::PreviewControls => "preview-controls",
             Self::PreviewWindow | Self::PreviewNativeWindow => "preview-window",
@@ -395,6 +407,9 @@ impl UiSnapshotScene {
             "find-sticky-context" => Self::FindStickyContext,
             "preview-compiling" => Self::PreviewCompiling,
             "pdfium-preview" => Self::PdfiumPreview,
+            "source-reveal" => Self::SourceReveal,
+            "diff-reveal" => Self::DiffReveal,
+            "pdfium-reveal" => Self::PdfiumReveal,
             "preview-controls" => Self::PreviewControls,
             "preview-window" => Self::PreviewWindow,
             "preview-native-window" => Self::PreviewNativeWindow,

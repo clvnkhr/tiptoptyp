@@ -1,6 +1,7 @@
 // Native input adapter. It has no access to editor command handlers or state.
 import AppKit
 import ApplicationServices
+import Carbon
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8)); exit(2)
@@ -9,6 +10,70 @@ func emit(_ value: Any) {
     let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
     print(String(data: data, encoding: .utf8)!)
 }
+// TIS queries inspect only already-enabled input sources. A scoped fixture
+// changes the current source temporarily; it never enables/disables sources or
+// writes the user's input-method configuration.
+func inputProperty<T>(_ source: TISInputSource, _ key: CFString, _: T.Type) -> T? {
+    guard let pointer = TISGetInputSourceProperty(source, key) else { return nil }
+    return Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue() as? T
+}
+func inputSourceID(_ source: TISInputSource) -> String {
+    inputProperty(source, kTISPropertyInputSourceID, String.self) ?? ""
+}
+func currentInputSourceID() -> String {
+    inputSourceID(TISCopyCurrentKeyboardInputSource().takeRetainedValue())
+}
+func enabledInputSources() -> [TISInputSource] {
+    TISCreateInputSourceList(nil, false).takeRetainedValue() as! [TISInputSource]
+}
+func inputSourceRows() -> [[String: Any]] {
+    let selected = currentInputSourceID()
+    return enabledInputSources().map { source in
+        let id = inputSourceID(source)
+        return ["id": id,
+                "name": inputProperty(source, kTISPropertyLocalizedName, String.self) ?? "",
+                "enabled": inputProperty(source, kTISPropertyInputSourceIsEnabled, Bool.self) ?? false,
+                "selectable": inputProperty(source, kTISPropertyInputSourceIsSelectCapable, Bool.self) ?? false,
+                "selected": id == selected]
+    }
+}
+func waitForInputSource(_ id: String) -> Bool {
+    let deadline = Date().addingTimeInterval(2)
+    while currentInputSourceID() != id && Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+    }
+    return currentInputSourceID() == id
+}
+func scopedInputSource(_ requested: String) throws {
+    let original = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+    let originalID = inputSourceID(original)
+    guard let source = enabledInputSources().first(where: {
+        inputSourceID($0) == requested
+            && inputProperty($0, kTISPropertyInputSourceIsEnabled, Bool.self) == true
+            && inputProperty($0, kTISPropertyInputSourceIsSelectCapable, Bool.self) == true
+    }) else {
+        throw NSError(domain: "DesktopInputSource", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "requested input source is not already enabled and selectable"])
+    }
+    defer {
+        let current = currentInputSourceID()
+        let external = current != requested && current != originalID
+        // Preserve any newer source selected by the human during the fixture.
+        let status = external ? OSStatus(paramErr) : TISSelectInputSource(original)
+        let restored = !external && status == noErr && waitForInputSource(originalID)
+        emit(["restored": restored, "original": originalID,
+              "current": currentInputSourceID(), "external_preserved": external])
+        fflush(stdout)
+    }
+    guard TISSelectInputSource(source) == noErr, waitForInputSource(requested) else {
+        throw NSError(domain: "DesktopInputSource", code: 2,
+                      userInfo: [NSLocalizedDescriptionKey: "input source did not become selected"])
+    }
+    emit(["selected": requested, "original": originalID]); fflush(stdout)
+    // EOF also restores: a failed/crashed Python journey closes this pipe.
+    _ = readLine()
+}
+
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else { fail("missing command") }
 if command == "preflight" {
@@ -23,6 +88,18 @@ if command == "preflight" {
 }
 guard args.count >= 2, let pid = Int32(args[1]),
       let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { fail("target process is not running") }
+if command == "input-sources" {
+    emit(["selected": currentInputSourceID(), "sources": inputSourceRows()]); exit(0)
+}
+if command == "input-source-scope" {
+    guard args.count == 3 else { fail("input-source-scope requires an enabled source ID") }
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+        fail("refusing input-source fixture: target app is not foreground")
+    }
+    do { try scopedInputSource(args[2]) }
+    catch { fail(error.localizedDescription) }
+    exit(0)
+}
 if command == "pointer-state" {
     let point = CGEvent(source: nil)?.location ?? .zero
     emit(["left": CGEventSource.buttonState(.combinedSessionState, button: .left),
@@ -49,6 +126,25 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
     return value
+}
+if command == "fullscreen" {
+    guard args.count == 4, ["true", "false"].contains(args[3]) else { fail("fullscreen requires exact title and true/false") }
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+        fail("refusing fullscreen request: target app is not foreground")
+    }
+    let matches = nativeWindows().filter { attribute($0, kAXTitleAttribute) as? String == args[2] }
+    guard matches.count == 1 else { fail("fullscreen window title is missing or ambiguous") }
+    let window = matches[0]
+    let name = "AXFullScreen" as CFString
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(window, name, &settable) == .success, settable.boolValue else {
+        fail("native window does not support setting AXFullScreen")
+    }
+    let desired = args[3] == "true"
+    let result = AXUIElementSetAttributeValue(window, name, desired ? kCFBooleanTrue : kCFBooleanFalse)
+    guard result == .success else { fail("native fullscreen request failed: \(result.rawValue)") }
+    // Acceptance is not completion; callers must wait for app/OS state.
+    emit(["fullscreen_requested": desired]); exit(0)
 }
 if command == "zoom-focused" {
     let application = AXUIElementCreateApplication(pid)
@@ -273,7 +369,7 @@ if command == "watch-copy" {
             Thread.sleep(forTimeInterval: interval / 2)
         }
     }
-} else if command == "wheel" {
+} else if command == "wheel" || command == "zoom-wheel" {
     guard args.count == 5,
           let x = Double(args[2]), let y = Double(args[3]),
           let lines = Int32(args[4]), x.isFinite, y.isFinite, lines != 0 else {
@@ -284,6 +380,7 @@ if command == "watch-copy" {
         fail("cannot create wheel event")
     }
     event.location = CGPoint(x: x, y: y)
+    if command == "zoom-wheel" { event.flags = .maskControl }
     event.post(tap: .cghidEventTap)
 } else if command == "click" || command == "double-click" || command == "move" {
     guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]), x.isFinite, y.isFinite else { fail("click requires finite screen coordinates") }

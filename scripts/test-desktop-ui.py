@@ -113,7 +113,7 @@ class Journey(EditorJourneys):
             self.log.flush()
 
     def native(self, command, *args):
-        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "key-burst", "move", "wheel", "text", "paste", "right-click"}:
+        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "key-burst", "move", "wheel", "text", "paste", "right-click", "fullscreen"}:
             foreground = subprocess.run(
                 [str(self.driver), "foreground", str(self.process.pid)],
                 capture_output=True,
@@ -869,7 +869,7 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "partial_preview", "partial_zoom_stress", "controls", "settings_search", "editor_preferences", "background", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=["all", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "partial_preview", "partial_zoom_stress", "partial_cache_edges", "controls", "settings_search", "editor_preferences", "background", "background_fades", "context_menu"], default="all")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--executable", type=Path, help="reuse a preserved build for paired benchmarks; record its version and binary hash")
     parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")
@@ -895,7 +895,7 @@ def main():
         if not args.prepare_only and not args.observe_only:
             import pwd
             shell = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell
-            if args.journey in ("all", "panels", "terminal_find", "terminal_load", "terminal_theme", "problems_focus") and Path(shell).resolve() != Path("/bin/zsh"):
+            if args.journey in ("all", "panels", "terminal_find", "terminal_load", "terminal_theme", "problems_focus", "command_palette") and Path(shell).resolve() != Path("/bin/zsh"):
                 raise RuntimeError("terminal journey currently requires /bin/zsh so startup files can be isolated with ZDOTDIR")
             preflight = subprocess.run([str(driver), "preflight"], capture_output=True, text=True, timeout=6)
             result["preflight"] = preflight.stdout.strip()
@@ -938,7 +938,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "preview", "pdf_output", "preview_keyboard", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "background") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
@@ -975,6 +975,9 @@ def main():
             # macOS default-shell startup and history belong to this fixture.
             environment["ZDOTDIR"] = str(directory)
             environment["HISTFILE"] = str(directory / "shell-history")
+            # /etc/zshrc can replace HISTFILE. Disable exit-time writes after
+            # system startup so a reaped shell cannot race fixture removal.
+            (directory / ".zshrc").write_text("unset HISTFILE\n")
             (directory / "empty-shell-rc").write_text("")
             environment["ENV"] = str(directory / "empty-shell-rc")
             environment["BASH_ENV"] = str(directory / "empty-shell-rc")
@@ -992,6 +995,7 @@ def main():
                     journey.review_preview = args.review_preview
                     journey.capture_review = args.capture_review
                     journey.explorer_scroll_checks_contents = args.journey == "explorer_scroll"
+                    journey.command_palette_check_empty = args.journey == "command_palette"
                     # The socket binds before the native UI is initialized. Initial startup
                     # readiness is distinct from retrying a failed journey.
                     # Handshake is bounded and only tolerates startup-not-ready replies.
@@ -1048,7 +1052,7 @@ def main():
                     if state["build"] != result["version"]:
                         raise AssertionError("running build differs from tested binary")
                     result["initial_state"] = state
-                    if args.journey in ("partial_preview", "partial_zoom_stress") and not args.observe_only:
+                    if args.journey in ("partial_preview", "partial_zoom_stress", "partial_cache_edges") and not args.observe_only:
                         journey.partial_preview_default()
                     if args.observe_only:
                         # A fresh reply must follow an actual UI pass, and the socket
@@ -1067,7 +1071,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_initial_review()
-                    for name in ([*NEWEST_JOURNEYS, "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "closing", "focus", "settings_search", "editor_preferences", "background", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in ([*NEWEST_JOURNEYS, "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

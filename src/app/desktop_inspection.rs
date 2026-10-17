@@ -49,7 +49,7 @@ impl EditorApp {
                 settings_window.ui.category.title(),
             )
         };
-        let snippets = self.settings.snippets.iter().map(|s| serde_json::json!({"prefix": s.prefix, "language": s.language, "body": crate::desktop_test::fingerprint(&s.body)})).collect::<Vec<_>>();
+        let snippets = self.settings.snippets.iter().map(|s| serde_json::json!({"prefix": s.prefix, "language": s.language, "scope": s.scope, "line_start": s.line_start, "enabled": s.enabled, "placeholder_open": s.placeholder_open, "placeholder_close": s.placeholder_close, "description": crate::desktop_test::fingerprint(&s.description), "body": crate::desktop_test::fingerprint(&s.body)})).collect::<Vec<_>>();
         let mut observation = serde_json::json!({
             "viewport": format!("{:?}", context.viewport_id()),
             "native_size": eframe::window_host::window(context, context.viewport_id()).map(|w| { let s = w.inner_size().to_logical::<f64>(w.scale_factor()); [s.width, s.height] }),
@@ -93,7 +93,40 @@ impl EditorApp {
             "settings_query_fingerprint": settings_query_fingerprint,
             "settings_text_input_focused": settings_text_input_focused,
         });
+        observation["synctex_available"] = self
+            .preview
+            .content
+            .pdf()
+            .is_some_and(|bytes| {
+                self.pdfium_source_jump_available(false, &self.preview_document_path(), bytes)
+            })
+            .into();
+        observation["palette_visible"] = self.command_palette_visible().into();
+        observation["palette_query_fingerprint"] =
+            crate::desktop_test::fingerprint(&self.command_palette.query).into();
+        observation["palette_selected"] = self
+            .command_palette
+            .selected_action()
+            .map(ShortcutAction::id)
+            .into();
+        observation["palette_results"] = self
+            .command_palette
+            .result_actions()
+            .map(ShortcutAction::id)
+            .collect::<Vec<_>>()
+            .into();
+        observation["palette_enabled"] = self
+            .command_palette
+            .enabled_actions()
+            .map(ShortcutAction::id)
+            .collect::<Vec<_>>()
+            .into();
         observation["settings_category"] = settings_category.into();
+        observation["compact_layout_controls"] = self.settings.compact_layout_controls.into();
+        observation["pdfium_render"] = self.pdfium_preview.inspected_render();
+        observation["fullscreen"] = context
+            .input(|input| input.viewport().fullscreen.unwrap_or(false))
+            .into();
         observation["window_background"] =
             serde_json::to_value(self.settings.window_background).unwrap();
         observation["native_background"] =
@@ -102,7 +135,34 @@ impl EditorApp {
             context,
             scoped_child_viewport_id(context, "tiptoptyp-settings"),
         );
+        observation["mitex_enabled"] = self.document().config().is_some().into();
+        observation["ascii_punctuation"] = self.settings.ascii_punctuation.into();
+        observation["native_ime_area"] = crate::native_window::for_viewport(
+            context,
+            context.viewport_id(),
+        )
+        .and_then(|view| view.ime_cursor_area())
+        .and_then(|(local, first_responder)| {
+            let origin = context.input(|input| input.viewport().inner_rect)?.min;
+            Some(serde_json::json!({
+                "rect": crate::native_window::ime_screen_rect(origin, local, context.zoom_factor()),
+                "local_rect": local,
+                "first_responder": first_responder,
+                "source": "NSTextInputClient.firstRectForCharacterRange",
+            }))
+        })
+        .into();
+        {
+            let snippets = self.snippet_window.lock().unwrap();
+            observation["snippet_editor_visible"] = self.snippets_visible.into();
+            observation["snippet_editor_query_fingerprint"] =
+                crate::desktop_test::fingerprint(snippets.search_query()).into();
+            observation["snippet_editor_fields"] = snippets.field_fingerprints();
+            observation["snippet_editor_focused"] = snippets.focused.into();
+            observation["snippet_editor_text_focused"] = snippets.text_input_focused.into();
+        }
         observation["snippets"] = snippets.into();
+        observation["snippet_presets"] = self.settings.snippet_presets.iter().map(|s| serde_json::json!({"prefix": s.prefix, "language": s.language, "scope": s.scope, "line_start": s.line_start, "enabled": s.enabled, "placeholder_open": s.placeholder_open, "placeholder_close": s.placeholder_close, "description": crate::desktop_test::fingerprint(&s.description), "body": crate::desktop_test::fingerprint(&s.body)})).collect::<Vec<_>>().into();
         let find_viewport = scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let controls_owner = if self.preview_controls_in_popout() {
             scoped_child_viewport_id(context, "preview-window")
@@ -166,6 +226,33 @@ impl EditorApp {
             .is_some_and(|(index, name)| crate::font_preview::name_is_ready(context, index, name))
             .into();
         interaction["editor_lsp_ready"] = self.editor_lsp_ready().into();
+        interaction["completion_current"] = self
+            .editor_completion
+            .as_ref()
+            .is_some_and(|completion| {
+                let (generation, uri) = self.editor_lsp_identity();
+                completion.key == self.document().key()
+                    && completion.version == revision_as_i32(self.document().revision())
+                    && completion.provenance.is_current(generation, uri)
+            })
+            .into();
+        interaction["completion_notice"] = self
+            .notice
+            .as_ref()
+            .map(|notice| notice.message.as_str())
+            .into();
+        interaction["completion_labels"] = self
+            .editor_completion
+            .as_ref()
+            .map(|completion| {
+                completion
+                    .items
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+            .into();
         interaction["completion_origins"] = serde_json::json!(
             self.editor_completion
                 .as_ref()
@@ -194,6 +281,11 @@ impl EditorApp {
             "preview_generation": format!("{:?}", self.tinymist_sync.generation),
             }).as_object().unwrap().clone(),
         );
+        interaction["harper_dictionary_fingerprint"] = serde_json::json!(
+            crate::desktop_test::fingerprint(&self.settings.harper_dictionary)
+        );
+        interaction["harper_ignore_capitalized_names"] =
+            serde_json::json!(self.settings.harper_ignore_capitalized_names);
         interaction["writing_current"] = serde_json::json!(
             !self.tabs.is_empty()
                 && self.writing.current(
@@ -262,6 +354,15 @@ impl EditorApp {
                 ])
             });
 
+        interaction["source_reveal"] = reveal::editor_observation(context)
+            .map(|state| serde_json::json!({
+                "active": state.active, "center": state.center, "target": state.target,
+                "viewport": state.viewport, "elapsed_ms": state.elapsed_ms, "char_index": state.char_index,
+            }))
+            .unwrap_or(serde_json::Value::Null);
+        interaction["preview_reveal"] = self.pdfium_preview.inspected_reveal();
+        interaction["git_overview"] =
+            crate::git::editor::overview::inspection(context).unwrap_or(serde_json::Value::Null);
         interaction["git_hunk_count"] = serde_json::json!(self.git_editor.hunks.len());
         interaction["git_hunk_popup_line"] = serde_json::json!(if let Some(diff) =
             &self.document_diff
@@ -308,6 +409,12 @@ impl EditorApp {
             }));
         interaction["editor_panel_width"] = serde_json::json!(
             egui::PanelState::load(context, editor_panel_id(context)).map(|p| p.size().x)
+        );
+        interaction["editor_panel_rect"] = serde_json::json!(
+            egui::PanelState::load(context, editor_panel_id(context)).map(|panel| {
+                let rect = panel.outer_rect;
+                [rect.left(), rect.top(), rect.right(), rect.bottom()]
+            })
         );
         interaction["explorer_focused"] = serde_json::json!(
             self.explorer

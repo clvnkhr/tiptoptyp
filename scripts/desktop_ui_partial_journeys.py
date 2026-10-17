@@ -48,6 +48,30 @@ def assert_zoom_geometry(renderer, baseline, expected):
     return value
 
 
+def source_point(value, x, y):
+    scale=value["paper_scale"]
+    paper=value["paper_bounds"]
+    pages=value["page_bounds"]
+    for index,bounds in enumerate(pages):
+        if not bounds:continue
+        if bounds[1]-1e-4 <= y <= bounds[1]+bounds[3]+1e-4:
+            return {"x":(x-paper[0])/scale,"page":index,"local":(y-bounds[1])/scale}
+        end=bounds[1]+bounds[3]
+        if index+1<len(pages) and pages[index+1] and end<y<pages[index+1][1]:
+            return {"x":(x-paper[0])/scale,"before":index,"after":index+1,"fraction":(y-end)/(pages[index+1][1]-end)}
+    raise AssertionError("anchor must lie inside populated page geometry")
+
+
+def project_source_point(value, point):
+    pages=value["page_bounds"]
+    if "page" in point:y=pages[point["page"]][1]+point["local"]*value["paper_scale"]
+    else:
+        before=pages[point["before"]]
+        end=before[1]+before[3]
+        y=end+point["fraction"]*(pages[point["after"]][1]-end)
+    return [value["paper_bounds"][0]+point["x"]*value["paper_scale"],y]
+
+
 class PartialPreviewJourneys:
     def partial_preview_default(self):
         # Called only for this journey's fresh isolated app profile. The `all`
@@ -66,6 +90,16 @@ class PartialPreviewJourneys:
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.05)
+
+    def partial_cache_edges(self):
+        self.partial_preview_default()
+        for mode in ["partial","full"]:
+            if mode == "full":
+                self.choose_backend("Interactive",save_pdf=False)
+                self.wait("full preview ready",lambda d:d["preview_backend"] == "Tinymist" and d["preview_native_ready"],timeout=30)
+            self.cached_edge_wheel(mode)
+            self.cached_divider_resize(mode)
+            self.cursor_wheel_zoom(mode)
 
     def partial_zoom_stress(self):
         self.partial_preview(stress=True)
@@ -124,13 +158,73 @@ class PartialPreviewJourneys:
         self.key(29, "cmd")
         self.wait("burst fit restores scale", lambda d: abs(d["preview_zoom"]-1) < .001)
 
+    def cached_edge_wheel(self, mode):
+        self.click("preview.page")
+        self.key(115)  # Home: the first document edge.
+        self.wait("preview reaches top edge", lambda d: d["preview_page"] == 0)
+        deadline = time.monotonic() + 15
+        while True:
+            before=self.snapshot()
+            native=before["document"]["preview_zoom_overlay"]
+            value=((before.get("renderer") or {}).get("value") or {})
+            if native.get("cached") and not native.get("active") and value.get("scroll",[0,1])[1] < 1:
+                break
+            if time.monotonic() > deadline:
+                raise AssertionError("top edge has no idle cached preview")
+            time.sleep(.05)
+        target=before["targets"]["preview.page"]
+        self.native("move",target["x"],target["y"])
+        self.native("wheel",target["x"],target["y"],8)
+        time.sleep(.12)
+        after=self.snapshot()
+        current=after["document"]["preview_zoom_overlay"]
+        if not current.get("cached") or current.get("token") != native.get("token"):
+            raise AssertionError("a clamped top-edge wheel discarded idle preview pixels")
+        self.record("partial.cached-edge-wheel",mode=mode,before=native,after=current)
+
+    def cursor_wheel_zoom(self, mode):
+        self.click("preview.page")
+        self.key(115)
+        self.wait("cursor zoom starts on page one",lambda d:d["preview_page"]==0)
+        deadline=time.monotonic()+15
+        while True:
+            before=self.snapshot();native=before["document"]["preview_zoom_overlay"]
+            value=((before.get("renderer") or {}).get("value") or {})
+            if native.get("cached") and not native.get("active") and value.get("ready"):break
+            if time.monotonic()>deadline:raise AssertionError("cursor zoom has no idle image")
+            time.sleep(.05)
+        width,height=native["view_size"]
+        target=before["targets"]["preview.page"]
+        # Actual positioned native wheel input, not a zoom-handler invocation.
+        client=[width*.3,height*.4]
+        screen=[target["x"]-width*.5+client[0],target["y"]-height*.5+client[1]]
+        point=source_point(value,*client)
+        self.native("move",*screen)
+        self.native("zoom-wheel",*screen,1)
+        deadline=time.monotonic()+15
+        while True:
+            after=self.snapshot();overlay=after["document"]["preview_zoom_overlay"]
+            sharp=((after.get("renderer") or {}).get("value") or {})
+            if overlay["inputs"]>native["inputs"] and not overlay.get("active") and overlay.get("pending") is None and overlay.get("in_flight") is None and sharp.get("ready"):break
+            if time.monotonic()>deadline:raise AssertionError("positioned wheel did not complete native zoom")
+            time.sleep(.05)
+        actual=project_source_point(sharp,point)
+        error=[a-b for a,b in zip(actual,client)]
+        if any(abs(e)>1.1 for e in error):raise AssertionError(f"zoom moved the original document point away from the cursor: {error}")
+        anchor=overlay.get("source_anchor")
+        if not anchor or abs(anchor["clientX"]-client[0])>1 or abs(anchor["clientY"]-client[1])>1:raise AssertionError("native wheel anchor used the center instead of the cursor")
+        if overlay["hits"]<=native["hits"]:raise AssertionError("positioned wheel did not use cached pixels")
+        self.record("partial.cursor-wheel",mode=mode,client=client,source_point=point,anchor_error_css_pixels=error,native_before=native,native_after=overlay)
+        self.key(29,"cmd")
+        self.wait("cursor zoom restores fit",lambda d:abs(d["preview_zoom"]-1)<.001)
+
     def cached_divider_resize(self, mode):
         # Real divider input and intermediate native observations. Kept separate
         # from timing: inspection itself must not become a performance workload.
         from concurrent.futures import ThreadPoolExecutor
         # Repeat without reloading: late duplicate DOM resize notifications must
         # neither cancel a sharp handoff nor leave an ownerless active gesture.
-        for delta in (60, -60) * 3:
+        for delta in (220, -220) * 3:
             self.wait_target("divider.editor")
             deadline = time.monotonic() + 15
             while True:
@@ -141,6 +235,11 @@ class PartialPreviewJourneys:
                 if time.monotonic() >= deadline:
                     raise AssertionError("divider resize has no settled native image")
                 time.sleep(.05)
+            original=((before.get("renderer") or {}).get("value") or {})
+            top=original["viewport_bounds"][1]
+            # Independent live-document source point at the visible top. This
+            # does not derive the desired anchor from the cached transform.
+            top_point=source_point(original,original["viewport_bounds"][0],top)
             border = before["targets"]["divider.editor"]
             source = before["document"]["source_fingerprint"]
             active_frames = 0
@@ -169,7 +268,13 @@ class PartialPreviewJourneys:
                 raise AssertionError("preview divider changed source")
             if abs(after["targets"]["divider.editor"]["x"]-border["x"]-delta)>2:
                 raise AssertionError("preview divider did not follow the drag")
+            mask=overlay.get("mask_bounds")
+            view=overlay.get("view_size")
+            if not mask or not view or mask[:2] != [0,0] or any(abs(a-b)>.01 for a,b in zip(mask[2:],view)):
+                raise AssertionError("cached preview left part of the native viewport unmasked")
             sharp = renderer.get("value") or {}
+            top_error=project_source_point(sharp,top_point)[1]-sharp["viewport_bounds"][1]
+            if abs(top_error)>1.1:raise AssertionError(f"divider moved the original top-of-view source point: {top_error}px")
             anchor = overlay.get("source_anchor")
             if anchor:
                 bounds = sharp.get("page_bounds") or []
@@ -195,8 +300,15 @@ class PartialPreviewJourneys:
             if any(abs(error)>1.1 for error in anchor_error):
                 raise AssertionError(f"divider sharp handoff moved away from cached content: {anchor_error}")
             self.record("partial.cached-divider",mode=mode,delta=delta,
-                        active_frames=active_frames,anchor_error_css_pixels=anchor_error,
+                        active_frames=active_frames,anchor_error_css_pixels=anchor_error,top_source_error_css_pixels=top_error,
                         native_before=native,native_after=overlay)
+
+        # Releasing the divider must leave keyboard ownership transferable.
+        # A stuck native mask/focus must not consume source typing shortcuts.
+        self.click("editor.source")
+        self.wait("editor owns keyboard after divider release",lambda d:
+                  d["editor_keyboard_focused"] and not d["preview_keyboard_focused"])
+        self.record("partial.divider-focus-release",mode=mode)
 
     def partial_preview(self, stress=False):
         self.focus_document_window()
@@ -313,6 +425,7 @@ class PartialPreviewJourneys:
         if stress:
             self.zoom_burst(baseline, "partial")
             covered("burst-fit", 1)
+            self.cached_edge_wheel("partial")
             self.cached_divider_resize("partial")
         self.click("preview.open")
         self.click("preview.Minimize controls")
@@ -379,6 +492,7 @@ class PartialPreviewJourneys:
         self.wait("full fit restores scale", lambda d: abs(d["preview_zoom"] - 1) < 0.001)
         if stress:
             self.zoom_burst(full_baseline, "full")
+            self.cached_edge_wheel("full")
             self.cached_divider_resize("full")
         # A divider drag makes the root native view the input owner. Reclaim
         # the preview before sending a viewer-only navigation shortcut.

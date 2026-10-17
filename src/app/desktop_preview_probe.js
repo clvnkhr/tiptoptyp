@@ -28,15 +28,30 @@
   return {
     loaded,
     zoom_snapshot: window.tiptoptypZoomSnapshot?.inspect() ?? null,
+    reveal: window.tiptoptypPreviewRevealState?.() ?? null,
     partial: doc?.partialRendering ?? false,
     zoom: doc?.currentScaleRatio ?? 1,
     scroll: doc?.hookedElem?.parentElement ? [doc.hookedElem.parentElement.scrollLeft, doc.hookedElem.parentElement.scrollTop] : null,
     paper_bounds: svg ? (() => { const r=svg.getBoundingClientRect(); return [r.left,r.top,r.width,r.height]; })() : null,
     paper_scale: groups[visible[0]?.index]?.getScreenCTM()?.a ?? null,
+    window_size: [window.innerWidth, window.innerHeight],
+    source_ink: visible.flatMap(({index}) => {
+      const group = groups[index];
+      for (const glyph of group.querySelectorAll('g.typst-text use')) {
+        const r = glyph.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && viewport &&
+            r.left >= viewport.left && r.right <= viewport.right &&
+            r.top >= viewport.top && r.bottom <= viewport.bottom) {
+          return [{page:index, bounds:[r.left,r.top,r.width,r.height]}];
+        }
+      }
+      return [];
+    }),
     pages: groups.length,
     populated: groups.filter(group => group.getAttribute('data-dummy') !== '1').length,
     canvases: svg?.querySelectorAll('canvas').length ?? 0,
     visible,
+    viewport_bounds: viewport ? [viewport.left,viewport.top,doc.hookedElem.parentElement.clientWidth,doc.hookedElem.parentElement.clientHeight] : null,
     page_bounds,
     ready: doc?.moduleInitialized === true && visible.length > 0 &&
       visible.every(page => !page.dummy && page.ink),

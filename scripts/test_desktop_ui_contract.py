@@ -59,6 +59,17 @@ class PartialFixtureCleanupContract(unittest.TestCase):
         self.assertEqual((session.active, session.preview, session.backend), (10, 20, "Interactive"))
 
 
+class PreviewAnchorContract(unittest.TestCase):
+    def test_original_source_point_detects_a_shared_center_anchor_error(self):
+        from desktop_ui_partial_journeys import source_point,project_source_point
+        before={"paper_scale":2,"paper_bounds":[0,-40,600,1200],"page_bounds":[[0,-40,600,1200]]}
+        point=source_point(before,100,200)
+        correct={"paper_scale":3,"paper_bounds":[-50,-160,900,1800],"page_bounds":[[-50,-160,900,1800]]}
+        centered={"paper_scale":3,"paper_bounds":[-50,-165,900,1800],"page_bounds":[[-50,-165,900,1800]]}
+        self.assertEqual(project_source_point(correct,point),[100,200])
+        self.assertEqual(project_source_point(centered,point),[100,195])
+
+
 class PartialPreviewCoverageContract(unittest.TestCase):
     def observation(self):
         return {"age_ms": 0, "value": {"ready": True, "partial": True,
@@ -146,6 +157,20 @@ class HarperMathProseContract(unittest.TestCase):
             self.assertIn("z = x;", source)
             self.assertNotIn("misspelld", source)
             self.assertNotIn("This is the the", source)
+
+    def test_harper_settings_journey_requires_applied_form_preferences(self):
+        from desktop_ui_journeys import fingerprint
+        from desktop_ui_tex_journeys import TEX_JOURNEYS, TexJourneys, harper_settings_applied
+        self.assertIn("harper_settings", TEX_JOURNEYS)
+        self.assertTrue(callable(TexJourneys.harper_settings))
+        document = {"harper_dictionary_fingerprint": fingerprint("qzorthal"),
+                    "harper_ignore_capitalized_names": True}
+        self.assertTrue(harper_settings_applied(document, "qzorthal", True))
+        self.assertFalse(harper_settings_applied(document, "", True))
+        self.assertFalse(harper_settings_applied(document, "qzorthal", False))
+        self.assertFalse(harper_settings_applied({}, "qzorthal", True))
+        self.assertFalse(harper_settings_applied(
+            {**document, "harper_ignore_capitalized_names": 1}, "qzorthal", True))
 
     def test_an_idle_old_writing_result_cannot_pass_freshness(self):
         from desktop_ui_tex_journeys import harper_fresh
@@ -296,6 +321,186 @@ class ExplorerFrameContract(unittest.TestCase):
         from desktop_ui_journeys import assert_explorer_frame
         with self.assertRaisesRegex(AssertionError, "missing fresh"):
             assert_explorer_frame(self.state(editor_frame=9), True, 700)
+
+
+class PdfiumResizeContract(unittest.TestCase):
+    def document(self):
+        return {"preview_backend": "PDFium", "preview_pdfium_ready": True,
+                "pdfium_render": {"requested_scale": 300, "desired_scale": 300,
+                    "active_scale": 300, "resident_count": 1, "requests": 5,
+                    "admissions": 5, "settling": False}}
+
+    def test_held_resize_keeps_the_sharp_batch_and_allows_only_desired_scale_to_change(self):
+        from desktop_ui_journeys import assert_pdfium_resize_held
+        baseline = self.document()["pdfium_render"]
+        document = self.document()
+        document["preview_pdfium_ready"] = False
+        document["pdfium_render"].update(desired_scale=280, settling=True)
+        self.assertEqual(assert_pdfium_resize_held(document, baseline)["desired_scale"], 280)
+        for field, wrong in (("requests", 6), ("admissions", 6), ("active_scale", 280),
+                             ("resident_count", 0), ("settling", False)):
+            changed = {**document, "pdfium_render": {**document["pdfium_render"], field: wrong}}
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                assert_pdfium_resize_held(changed, baseline)
+
+    def test_missing_wrong_backend_or_malformed_counters_cannot_pass(self):
+        from desktop_ui_journeys import pdfium_render_state
+        pdfium_render_state(self.document())
+        for document in ({}, {**self.document(), "preview_backend": "Tinymist"},
+                         {**self.document(), "pdfium_render": None}):
+            with self.subTest(document=document), self.assertRaises(AssertionError):
+                pdfium_render_state(document)
+        for field in self.document()["pdfium_render"]:
+            wrong = None if field == "settling" else True
+            document = self.document()
+            document["pdfium_render"][field] = wrong
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                pdfium_render_state(document)
+
+    def test_ready_flag_or_old_active_scale_cannot_pass_final_settling(self):
+        from desktop_ui_journeys import pdfium_resize_settled
+        self.assertTrue(pdfium_resize_settled(self.document()))
+        # TeX uses PDFium even when the saved Typst preference selects Tinymist.
+        self.assertTrue(pdfium_resize_settled({**self.document(),
+                                              "preview_requested_backend": "InteractivePartial"}))
+        for field, wrong in (("requested_scale", 280), ("desired_scale", 280),
+                             ("active_scale", 280), ("resident_count", 0),
+                             ("settling", True), ("desired_scale", True)):
+            document = self.document()
+            document["pdfium_render"][field] = wrong
+            with self.subTest(field=field):
+                self.assertFalse(pdfium_resize_settled(document))
+        for field, wrong in (("preview_backend", "Tinymist"), ("preview_pdfium_ready", False),
+                             ("pdfium_render", None)):
+            with self.subTest(field=field):
+                self.assertFalse(pdfium_resize_settled({**self.document(), field: wrong}))
+
+
+class BackgroundFadesContract(unittest.TestCase):
+    def document(self):
+        def background(identity):
+            return {"translucent": True, "blur_fade": "right", "blur_radius": 8, "blur_end_radius": 0,
+                    "blur": {"method": "variable-blur", "applied_fade": "right",
+                             "applied_radius": 8, "identity": identity, "applications": 3}}
+        return {"window_background": {"enabled": True, "blur": True, "opacity_percent": 80,
+                    "blur_radius": 8, "blur_end_radius": 0, "opacity_end_percent": 100,
+                    "blur_fade": "right", "transparency_fade": "down"},
+                "native_background": background(101), "settings_native_background": background(202)}
+
+    def test_independent_directions_need_actual_native_acceptance_on_both_owners(self):
+        from desktop_ui_journeys import background_fades_applied
+        self.assertTrue(background_fades_applied(self.document(), "right", "down"))
+        for key in ("native_background", "settings_native_background"):
+            for field, wrong in (("method", "window-server"), ("applied_fade", "none"),
+                                 ("applied_radius", 0), ("identity", True), ("applications", 0)):
+                document = self.document()
+                document[key]["blur"][field] = wrong
+                with self.subTest(key=key, field=field):
+                    self.assertFalse(background_fades_applied(document, "right", "down"))
+            document = self.document()
+            document[key] = None
+            self.assertFalse(background_fades_applied(document, "right", "down"))
+        document = self.document()
+        document["settings_native_background"]["blur"]["identity"] = 101
+        self.assertFalse(background_fades_applied(document, "right", "down"))
+
+    def test_wrong_preferences_or_fullscreen_opaque_surface_cannot_pass(self):
+        from desktop_ui_journeys import background_fades_applied
+        for field, wrong in (("blur_fade", "left"), ("transparency_fade", "right"),
+                             ("enabled", False), ("blur", False), ("opacity_percent", 100),
+                             ("opacity_percent", True), ("blur_radius", 0)):
+            document = self.document()
+            document["window_background"][field] = wrong
+            with self.subTest(field=field):
+                self.assertFalse(background_fades_applied(document, "right", "down"))
+        document = self.document()
+        document["native_background"]["translucent"] = False
+        document["native_background"]["blur"] = None
+        self.assertFalse(background_fades_applied(document, "right", "down"))
+
+    def test_inverted_endpoints_need_the_actual_native_maximum(self):
+        from desktop_ui_journeys import background_fades_applied
+        document = self.document()
+        document["window_background"].update(blur_radius=0, blur_end_radius=20,
+                                            opacity_percent=100, opacity_end_percent=40)
+        for key in ("native_background", "settings_native_background"):
+            document[key].update(blur_radius=0, blur_end_radius=20)
+            document[key]["blur"]["applied_radius"] = 20
+        self.assertTrue(background_fades_applied(document, "right", "down"))
+        document["native_background"]["blur_end_radius"] = 0
+        self.assertFalse(background_fades_applied(document, "right", "down"))
+
+    def test_focus_and_transparency_changes_cannot_reapply_or_replace_blur(self):
+        from desktop_ui_journeys import background_blur_unchanged
+        self.assertTrue(background_blur_unchanged(self.document(), self.document()))
+        document = self.document()
+        document["window_background"]["transparency_fade"] = "left"
+        self.assertTrue(background_blur_unchanged(document, self.document()))
+        for key in ("native_background", "settings_native_background"):
+            for field, wrong in (("identity", 303), ("applications", 4),
+                                 ("applied_fade", "up"), ("applied_radius", 20)):
+                document = self.document()
+                document[key]["blur"][field] = wrong
+                with self.subTest(key=key, field=field):
+                    self.assertFalse(background_blur_unchanged(document, self.document()))
+        self.assertFalse(background_blur_unchanged({}, {}))
+
+
+class BackendSelectionContract(unittest.TestCase):
+    def test_selected_preference_is_acknowledged_before_settings_closes_without_retrying(self):
+        from desktop_ui_journeys import EditorJourneys
+        class Session(EditorJourneys):
+            def __init__(self):
+                self.open = False
+                self.accepted = False
+                self.clicks = []
+                self.state = {"settings_json": {"visible": False}, "settings_visible": False,
+                    "preview_requested_backend": "InteractivePartial", "preview_backend": "Tinymist partial",
+                    "preview_pdfium_ready": False}
+            def settings(self):
+                self.open = True
+                self.state["settings_visible"] = True
+            def snapshot(self):
+                return {"document": self.state}
+            def setting_section(self, query, title):
+                pass
+            def wait_target(self, name):
+                pass
+            def click(self, name):
+                self.clicks.append(name)
+            def wait(self, description, predicate, timeout=6):
+                if "preference applies" in description:
+                    assert self.open
+                    assert not predicate(self.state)
+                    self.state["preview_requested_backend"] = "Pdfium"
+                    self.accepted = True
+                assert predicate(self.state)
+            def close_settings(self):
+                assert self.accepted, "closed Settings before its deferred preference was consumed"
+                self.open = False
+                self.state["settings_visible"] = False
+            def key(self, code):
+                assert not self.open
+                self.state.update(preview_backend="PDFium", preview_pdfium_ready=True)
+        session = Session()
+        session.choose_backend("Pdfium")
+        self.assertEqual(session.clicks, ["settings.backend.Pdfium"])
+
+
+class NativeSizeContract(unittest.TestCase):
+    def test_native_restore_accepts_one_point_rounding_in_either_dimension(self):
+        from desktop_ui_journeys import native_size_matches
+        for size in ([1200, 720], [1200.5, 719.5], [1199, 721]):
+            self.assertTrue(native_size_matches(size, [1200, 720]))
+        self.assertFalse(native_size_matches([1202, 720], [1200, 720]))
+        self.assertFalse(native_size_matches([1200, 718], [1200, 720]))
+
+    def test_native_restore_rejects_missing_or_nonfinite_geometry(self):
+        from desktop_ui_journeys import native_size_matches
+        for size in (None, [], [1200], [1200, math.nan], [math.inf, 720], [True, 720], [0, 720]):
+            with self.subTest(size=size):
+                self.assertFalse(native_size_matches(size, [1200, 720]))
+                self.assertFalse(native_size_matches([1200, 720], size))
 
 
 class HeightContract(unittest.TestCase):
@@ -1118,6 +1323,340 @@ class TableDraftContract(unittest.TestCase):
             target = journey.table_target("table.apply", enabled=False)
         self.assertEqual(target["frame"], 12)
         self.assertEqual(list(states), [])
+
+
+class SnippetManagerContract(unittest.TestCase):
+    def document(self):
+        from desktop_ui_journeys import fingerprint
+        entry = {"language": "typst", "prefix": "eq", "body": fingerprint("$ {{1:x}} $"),
+                 "enabled": True, "placeholder_open": "{{", "placeholder_close": "}}"}
+        return {"snippet_presets": [entry], "snippets": []}
+
+    def test_saved_match_requires_exact_body_options_origin_and_language(self):
+        from desktop_ui_snippet_journeys import snippet_matches
+        document = self.document()
+        self.assertTrue(snippet_matches(document, "preset", "typst", "eq", "$ {{1:x}} $", True, "{{", "}}"))
+        for changed in ({"body": "old"}, {"enabled": False}, {"enabled": 1},
+                        {"placeholder_open": "<<"}, {"placeholder_close": ">>"}, {"language": "tex"}, {"prefix": "other"}):
+            with self.subTest(changed=changed):
+                wrong = {**document, "snippet_presets": [{**document["snippet_presets"][0], **changed}]}
+                self.assertFalse(snippet_matches(wrong, "preset", "typst", "eq", "$ {{1:x}} $", True, "{{", "}}"))
+        self.assertFalse(snippet_matches(document, "custom", "typst", "eq", "$ {{1:x}} $", True, "{{", "}}"))
+
+    def test_duplicate_entries_cannot_pass_saved_or_removed_assertions(self):
+        from desktop_ui_snippet_journeys import snippet_absent, snippet_matches
+        document = self.document()
+        document["snippet_presets"] *= 2
+        self.assertFalse(snippet_matches(document, "preset", "typst", "eq", "$ {{1:x}} $", True, "{{", "}}"))
+        self.assertFalse(snippet_absent(document, "preset", "typst", "eq"))
+        self.assertTrue(snippet_absent(document, "custom", "typst", "eq"))
+
+    def test_completion_requires_current_local_provider_at_the_same_index(self):
+        from desktop_ui_snippet_journeys import snippet_completion
+        document = {"completion_visible": True, "completion_current": True,
+                    "completion_labels": ["eq", "eq"],
+                    "completion_origins": ["Language server", "Snippet"]}
+        self.assertEqual(snippet_completion(document, "eq"), 1)
+        for changed in ({"completion_visible": False}, {"completion_current": False},
+                        {"completion_origins": ["Language server", "Language server"]},
+                        {"completion_labels": ["eq", "other"]}):
+            with self.subTest(changed=changed):
+                self.assertIsNone(snippet_completion({**document, **changed}, "eq"))
+
+    def test_filters_open_the_real_control_before_selecting_an_option(self):
+        from desktop_ui_snippet_journeys import SnippetJourneys
+        journey = SnippetJourneys()
+        actions = []
+        journey.click = lambda target: actions.append(("click", target))
+        journey.wait_target = lambda target: actions.append(("wait", target))
+        journey.filter_snippets("status", "disabled")
+        self.assertEqual(actions, [
+            ("click", "settings.snippets.filter.status"),
+            ("wait", "settings.snippets.filter.status.disabled"),
+            ("click", "settings.snippets.filter.status.disabled"),
+        ])
+
+    def test_draft_ack_requires_the_exact_field_value_in_a_visible_editor(self):
+        from desktop_ui_snippet_journeys import snippet_field_matches
+        from desktop_ui_journeys import fingerprint
+        document = {"snippet_editor_visible": True, "snippet_editor_fields": {
+            "source": fingerprint("$ {{1:x}} $"), "prefix": fingerprint("eq")}}
+        self.assertTrue(snippet_field_matches(document, "source", "$ {{1:x}} $"))
+        self.assertFalse(snippet_field_matches(document, "source", "old source"))
+        self.assertFalse(snippet_field_matches(document, "opening", "{{"))
+        self.assertFalse(snippet_field_matches({**document, "snippet_editor_visible": False},
+                                               "source", "$ {{1:x}} $"))
+
+    def test_paste_adapter_stays_open_until_the_exact_deferred_draft_arrives(self):
+        from desktop_ui_snippet_journeys import SnippetJourneys
+        from desktop_ui_journeys import fingerprint
+        journey = SnippetJourneys()
+        actions = []
+        journey.click = lambda target: actions.append(("click", target))
+        journey.key = lambda *args: actions.append(("key", *args))
+        old = {"snippet_editor_visible": True, "snippet_editor_fields": {"source": fingerprint("old")}}
+        new = {**old, "snippet_editor_fields": {"source": fingerprint("new")}}
+        def wait(description, predicate):
+            self.assertFalse(predicate(old), "already-enabled Save cannot acknowledge stale text")
+            self.assertTrue(predicate(new))
+            actions.append(("draft-consumed",))
+        def paste(text, check):
+            actions.append(("clipboard-open", text))
+            check()
+            actions.append(("clipboard-restored",))
+        journey.wait = wait
+        journey.paste_source = paste
+        journey.wait_target = lambda target: actions.append(("ready", target))
+        journey.edit_snippet_text("source", "new")
+        self.assertEqual(actions, [
+            ("click", "settings.snippets.source"), ("key", 0),
+            ("clipboard-open", "new"), ("draft-consumed",), ("clipboard-restored",),
+            ("ready", "settings.snippets.save"),
+        ])
+
+    def test_empty_query_uses_delete_because_empty_paste_does_not_clear_a_field(self):
+        from desktop_ui_snippet_journeys import SnippetJourneys
+        from desktop_ui_journeys import fingerprint
+        journey = SnippetJourneys()
+        actions = []
+        journey.click = lambda target: actions.append(("click", target))
+        journey.key = lambda *args: actions.append(("key", *args))
+        def wait(description, predicate):
+            self.assertTrue(predicate({"snippet_editor_visible": True,
+                                      "snippet_editor_fields": {"search": fingerprint("")}}))
+        journey.wait = wait
+        journey.paste_source = lambda *_: self.fail("empty paste cannot delete selected text")
+        journey.edit_snippet_text("search", "", dirty=False)
+        self.assertEqual(actions, [("click", "settings.snippets.search"),
+                                   ("key", 0), ("key", 51, "none")])
+
+    def test_delimiter_change_requires_explicit_rewrite_or_literal_source_choice(self):
+        from desktop_ui_snippet_journeys import SnippetJourneys
+        for keep, action in ((False, "rewrite"), (True, "keep-source")):
+            with self.subTest(keep=keep):
+                journey = SnippetJourneys()
+                actions = []
+                journey.edit_snippet_text = lambda *args, **kwargs: actions.append(("edit", args, kwargs))
+                journey.wait_target = lambda target: actions.append(("wait", target))
+                journey.click = lambda target: actions.append(("click", target))
+                journey.change_snippet_delimiters("<<", ">>", keep_source=keep)
+                self.assertEqual(actions, [
+                    ("edit", ("opening", "<<"), {"dirty": False}),
+                    ("edit", ("closing", ">>"), {"dirty": False}),
+                    ("wait", "settings.snippets.delimiters." + action),
+                    ("click", "settings.snippets.delimiters." + action),
+                    ("wait", "settings.snippets.save"),
+                ])
+
+    def test_snippet_window_cannot_change_or_switch_its_document_owner(self):
+        from desktop_ui_snippet_journeys import snippet_owner_unchanged
+        before = {"tabs": 2, "active_tab_id": 7, "path": "/fixture.typ",
+                  "source_bytes": 4, "source_fingerprint": "same"}
+        self.assertTrue(snippet_owner_unchanged({**before, "snippet_editor_visible": True}, before))
+        for field, value in (("tabs", 1), ("active_tab_id", 8), ("path", None),
+                             ("source_bytes", 5), ("source_fingerprint", "edited")):
+            with self.subTest(field=field):
+                self.assertFalse(snippet_owner_unchanged({**before, field: value}, before))
+
+    def test_snippet_cmd_w_must_leave_settings_and_the_document_intact(self):
+        from desktop_ui_snippet_journeys import SnippetJourneys
+        journey = SnippetJourneys()
+        before = {"tabs": 2, "active_tab_id": 7, "path": "/fixture.typ",
+                  "source_bytes": 4, "source_fingerprint": "same",
+                  "settings_visible": True, "snippet_editor_visible": True}
+        after = {**before, "snippet_editor_visible": False}
+        actions = []
+        journey.snapshot = lambda: {"document": before}
+        journey.key = lambda *args: actions.append(("key", *args))
+        def wait(description, predicate):
+            self.assertTrue(predicate(after))
+            for change in ({"settings_visible": False}, {"snippet_editor_visible": True},
+                           {"tabs": 1}, {"source_fingerprint": "edited"}):
+                self.assertFalse(predicate({**after, **change}))
+        def native_wait(description, predicate):
+            settings = {"AXTitle": "tiptoptyp Settings", "AXFocused": True}
+            hidden = {"AXTitle": "tiptoptyp Snippets", "AXFocused": False}
+            self.assertTrue(predicate([settings, hidden]))
+            self.assertFalse(predicate([{**settings, "AXFocused": False}, hidden]))
+            self.assertFalse(predicate([settings, {**hidden, "AXFocused": True}]))
+        journey.wait = wait
+        journey.native_wait = native_wait
+        journey.close_settings = lambda: actions.append(("close-settings",))
+        journey.close_snippet_manager()
+        self.assertEqual(actions, [("key", 13), ("close-settings",)])
+
+    def test_revert_requires_fresh_disabled_save_in_an_open_snippet_window(self):
+        from desktop_ui_snippet_journeys import SnippetJourneys
+        journey = SnippetJourneys()
+        def state(visible=True, enabled=False, age=0):
+            return {"document": {"snippet_editor_visible": visible}, "targets": {
+                "settings.snippets.save": {"enabled": enabled, "age_ms": age}}}
+        observations = iter([state(enabled=True), state(age=501), state(visible=False), state()])
+        journey.snapshot = lambda: next(observations)
+        with patch("time.sleep"):
+            journey.wait_snippet_save_disabled()
+        self.assertEqual(list(observations), [])
+
+
+class NativeImeContract(unittest.TestCase):
+    def state(self, scale=1.0):
+        return {"document": {"frame": 10, "editor_keyboard_focused": True,
+                "interface_scale": scale, "native_ime_area": {
+                    "first_responder": True,
+                    "source": "NSTextInputClient.firstRectForCharacterRange",
+                    "rect": [100.0, 200.0, 3.0 * scale, 25.0 * scale]}},
+                "targets": {"editor.caret": {"frame": 10, "age_ms": 0,
+                    "x": 100.0 + 1.5 * scale, "y": 200.0 + 12.5 * scale},
+                    "editor.source": {"frame": 10, "age_ms": 0,
+                        "x": 300.0, "y": 400.0, "width": 500.0, "height": 700.0}}}
+
+    def test_native_readback_requires_the_caret_instead_of_the_editor_rectangle(self):
+        from desktop_ui_ime_journeys import assert_native_ime_at_caret
+        state = self.state()
+        self.assertEqual(assert_native_ime_at_caret(state), [100.0, 200.0, 3.0, 25.0])
+        for rect in ([30, -2000, 800, 6000], [100, 200, 0, 5000],
+                     [100, 200, 0, -25], [100, 200, 0, float("nan")],
+                     [400, 200, 0, 25], [100, 600, 0, 25]):
+            with self.subTest(rect=rect):
+                state["document"]["native_ime_area"]["rect"] = rect
+                with self.assertRaises(AssertionError):
+                    assert_native_ime_at_caret(state)
+
+    def test_native_anchor_rejects_stale_echoes_and_the_wrong_input_owner(self):
+        from desktop_ui_ime_journeys import assert_native_ime_at_caret
+        for field, value in (("first_responder", False), ("source", "egui cached output")):
+            state = self.state()
+            state["document"]["native_ime_area"][field] = value
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                assert_native_ime_at_caret(state)
+        for field, value in (("frame", 9), ("age_ms", 501)):
+            state = self.state()
+            state["targets"]["editor.caret"][field] = value
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                assert_native_ime_at_caret(state)
+        state = self.state()
+        state["document"]["editor_keyboard_focused"] = False
+        with self.assertRaises(AssertionError):
+            assert_native_ime_at_caret(state)
+
+    def test_composition_accepts_a_collapsed_preedit_but_requires_fresh_ime_caret(self):
+        from desktop_ui_ime_journeys import assert_native_ime_at_caret
+        state = self.state()
+        state["document"]["cursor"] = [45, 45]
+        state["targets"]["editor.ime_cursor"] = state["targets"].pop("editor.caret")
+        self.assertEqual(assert_native_ime_at_caret(state, composing=True), [100.0, 200.0, 3.0, 25.0])
+        state["targets"]["editor.caret"] = state["targets"].pop("editor.ime_cursor")
+        with self.assertRaisesRegex(AssertionError, "fresh source caret"):
+            assert_native_ime_at_caret(state, composing=True)
+
+    def test_phonetic_phase_cannot_pass_the_required_chinese_conversion(self):
+        from desktop_ui_ime_journeys import pinyin_source_matches
+        from desktop_ui_journeys import fingerprint
+        before, after = "L039.\n", "L040.\n"
+        for text, preedit, committed in (("nihao", True, False), ("ni hao", True, False),
+                                         ("ni'hao", True, False), ("nihao ", False, False),
+                                         ("你好", False, True), ("你好 ", False, False)):
+            expected = before + text + after
+            document = {"source_fingerprint": fingerprint(expected),
+                        "source_bytes": len(expected.encode("utf-8")), "cursor": [11, 11]}
+            with self.subTest(text=text):
+                self.assertEqual(pinyin_source_matches(document, before, after, False), preedit)
+                self.assertEqual(pinyin_source_matches(document, before, after, True), committed)
+        document["source_bytes"] += 1
+        self.assertFalse(pinyin_source_matches(document, before, after, True))
+
+    def test_matching_native_hint_and_caret_must_still_be_visible(self):
+        from desktop_ui_ime_journeys import assert_native_ime_at_caret
+        state = self.state()
+        state["document"]["native_ime_area"]["rect"][1] = -100
+        state["targets"]["editor.caret"]["y"] = -87.5
+        with self.assertRaisesRegex(AssertionError, "outside the visible"):
+            assert_native_ime_at_caret(state)
+        for field, value in (("frame", 9), ("age_ms", 501)):
+            state = self.state()
+            state["targets"]["editor.source"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(AssertionError, "fresh visible"):
+                assert_native_ime_at_caret(state)
+        state = self.state()
+        del state["targets"]["editor.source"]
+        with self.assertRaisesRegex(AssertionError, "fresh visible"):
+            assert_native_ime_at_caret(state)
+
+    def test_scaled_caret_uses_its_center_and_scaled_native_width(self):
+        from desktop_ui_ime_journeys import assert_native_ime_at_caret
+        state = self.state(scale=1.5)
+        state["targets"]["editor.caret"]["y"] = 218.75
+        self.assertEqual(assert_native_ime_at_caret(state), [100.0, 200.0, 4.5, 37.5])
+
+    def test_source_cleanup_requires_an_exact_successful_restoration_receipt(self):
+        from desktop_ui_ime_journeys import finish_input_source_scope
+        from types import SimpleNamespace
+        import json
+        valid = {"restored": True, "original": "British", "current": "British"}
+        calls = []
+        child = SimpleNamespace(returncode=0, communicate=lambda value, timeout:
+                                (calls.append((value, timeout)) or json.dumps(valid), ""))
+        self.assertEqual(finish_input_source_scope(child), valid)
+        self.assertEqual(calls, [("restore\n", 6)])
+        for receipt in ({"restored": True}, {**valid, "restored": 1},
+                        {**valid, "restored": False}, {**valid, "current": "External choice"}, []):
+            child.communicate = lambda *_args, **_kwargs: (json.dumps(receipt), "")
+            with self.subTest(receipt=receipt), self.assertRaises(RuntimeError):
+                finish_input_source_scope(child)
+
+    def test_source_cleanup_timeout_is_unavailable_and_reaps_the_adapter(self):
+        from desktop_ui_ime_journeys import finish_input_source_scope
+        from types import SimpleNamespace
+        import subprocess
+        calls = []
+        def communicate(value=None, timeout=None):
+            calls.append(("communicate", value, timeout))
+            if value is not None:
+                raise subprocess.TimeoutExpired("fixture-driver", timeout)
+            return "", ""
+        child = SimpleNamespace(communicate=communicate,
+                                terminate=lambda: calls.append(("terminate",)))
+        with self.assertRaisesRegex(RuntimeError, "restoration could not be verified"):
+            finish_input_source_scope(child)
+        self.assertEqual(calls, [("communicate", "restore\n", 6), ("terminate",),
+                                 ("communicate", None, 2)])
+
+    def test_composition_failure_still_restores_the_original_source(self):
+        from desktop_ui_ime_journeys import ImeJourneys, PINYIN
+        from types import SimpleNamespace
+        from io import StringIO
+        import json
+        journey = ImeJourneys()
+        journey.driver, journey.process = Path("/private/tmp/fixture-driver"), SimpleNamespace(pid=123)
+        journey.focus_document_window = lambda: None
+        journey.record = lambda *_args, **_kwargs: None
+        journey.native = lambda command: {"selected": "British", "sources": [
+            {"id": PINYIN, "enabled": True, "selectable": True}]}
+        restored = []
+        child = SimpleNamespace(returncode=0,
+            stdout=StringIO(json.dumps({"selected": PINYIN, "original": "British"}) + "\n"),
+            communicate=lambda value, timeout: (restored.append(value) or json.dumps({
+                "restored": True, "original": "British", "current": "British"}), ""))
+        with patch("desktop_ui_ime_journeys.subprocess.Popen", return_value=child), \
+                patch("desktop_ui_ime_journeys.select.select", return_value=([child.stdout], [], [])):
+            with self.assertRaisesRegex(ValueError, "composition failed"):
+                with journey.pinyin_input():
+                    raise ValueError("composition failed")
+        self.assertEqual(restored, ["restore\n"])
+
+    def test_unavailable_pinyin_never_attempts_to_enable_or_select_a_source(self):
+        from desktop_ui_ime_journeys import ImeJourneys
+        journey = ImeJourneys()
+        journey.focus_document_window = lambda: None
+        journey.native = lambda command: {"selected": "British", "sources": []}
+        with patch("desktop_ui_ime_journeys.subprocess.Popen") as process:
+            with self.assertRaisesRegex(RuntimeError, "Pinyin.*not already enabled"):
+                with journey.pinyin_input():
+                    self.fail("unavailable input mode was treated as a native pass")
+        process.assert_not_called()
+
+    def test_native_ime_journey_is_registered_on_the_actual_runner(self):
+        self.assertTrue(callable(runner.Journey.ime))
 
 
 if __name__ == "__main__":

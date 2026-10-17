@@ -11,6 +11,10 @@ from desktop_ui_tex_journeys import TexJourneys
 from desktop_ui_image_journeys import ImageJourneys
 from desktop_ui_newest_journeys import NewestJourneys
 from desktop_ui_partial_journeys import PartialPreviewJourneys
+from desktop_ui_snippet_journeys import SnippetJourneys
+from desktop_ui_ime_journeys import ImeJourneys
+from desktop_ui_palette_journeys import PaletteJourneys
+from desktop_ui_jump_journeys import PreviewJumpJourneys
 
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
 
@@ -55,6 +59,99 @@ def settings_window_size(windows):
     return tuple(size)
 
 
+def native_size_matches(actual, expected):
+    """macOS may round a restored content size by one logical point."""
+    return (isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple))
+            and len(actual) == len(expected) == 2
+            and all(not isinstance(value, bool) and isinstance(value, (int, float))
+                    and math.isfinite(value) and value > 0 for value in (*actual, *expected))
+            and all(abs(a - b) <= 1 for a, b in zip(actual, expected)))
+
+
+def pdfium_render_state(document):
+    state = document.get("pdfium_render")
+    if document.get("preview_backend") != "PDFium" or not isinstance(state, dict):
+        raise AssertionError("missing effective PDFium render observation")
+    for field in ("requested_scale", "desired_scale", "active_scale", "resident_count", "requests", "admissions"):
+        value = state.get(field)
+        minimum = 0 if field in ("requests", "admissions") else 1
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise AssertionError("invalid PDFium render observation: " + field)
+    if not isinstance(state.get("settling"), bool):
+        raise AssertionError("missing PDFium settling state")
+    return state
+
+
+def assert_pdfium_resize_held(document, baseline):
+    state = pdfium_render_state(document)
+    if not state["settling"]:
+        raise AssertionError("held PDFium divider did not defer sharp rendering")
+    for field in ("requests", "admissions", "active_scale", "resident_count"):
+        if state[field] != baseline[field]:
+            raise AssertionError("held PDFium divider changed " + field)
+    return state
+
+
+def pdfium_resize_settled(document):
+    state = document.get("pdfium_render") or {}
+    return (document.get("preview_backend") == "PDFium"
+            and document.get("preview_pdfium_ready") is True
+            and state.get("settling") is False
+            and isinstance(state.get("desired_scale"), int)
+            and not isinstance(state["desired_scale"], bool) and state["desired_scale"] > 0
+            and state.get("requested_scale") == state["desired_scale"]
+            and state.get("active_scale") == state["desired_scale"]
+            and isinstance(state.get("resident_count"), int)
+            and not isinstance(state["resident_count"], bool) and state["resident_count"] > 0)
+
+
+def background_fades_applied(document, blur_fade, transparency_fade,
+                             keys=("native_background", "settings_native_background")):
+    preferences = document.get("window_background") or {}
+    if (preferences.get("blur_fade") != blur_fade
+            or preferences.get("transparency_fade") != transparency_fade
+            or preferences.get("enabled") is not True or preferences.get("blur") is not True):
+        return False
+    for field, maximum in (("blur_radius", 50), ("blur_end_radius", 50),
+                           ("opacity_percent", 100), ("opacity_end_percent", 100)):
+        value = preferences.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
+            return False
+    end_radius = preferences["blur_end_radius"] if blur_fade != "none" else 0
+    end_opacity = preferences["opacity_end_percent"] if transparency_fade != "none" else 100
+    if max(preferences["blur_radius"], end_radius) == 0 or min(preferences["opacity_percent"], end_opacity) == 100:
+        return False
+    identities = []
+    for key in keys:
+        background = document.get(key) or {}
+        applied = background.get("blur") or {}
+        if (background.get("translucent") is not True
+                or background.get("blur_fade") != blur_fade
+                or background.get("blur_radius") != preferences["blur_radius"]
+                or applied.get("method") != ("window-server" if blur_fade == "none" else "variable-blur")
+                or applied.get("applied_fade") != blur_fade
+                or background.get("blur_end_radius") != end_radius
+                or applied.get("applied_radius") != max(preferences["blur_radius"], end_radius)):
+            return False
+        for field in ("identity", "applications"):
+            value = applied.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                return False
+        identities.append(applied["identity"])
+    return len(set(identities)) == len(identities)
+
+
+def background_blur_unchanged(document, previous,
+                              keys=("native_background", "settings_native_background")):
+    for key in keys:
+        current = (document.get(key) or {}).get("blur") or {}
+        before = (previous.get(key) or {}).get("blur") or {}
+        for field in ("identity", "applications", "applied_radius", "applied_fade", "method"):
+            if field not in before or current.get(field) != before[field]:
+                return False
+    return True
+
+
 def assert_explorer_frame(state, independent, preview_edge):
     document = state["document"]
     frame = document["frame"]
@@ -70,6 +167,58 @@ def assert_explorer_frame(state, independent, preview_edge):
         if abs(editor["x"] - preview_edge) > 1:
             raise AssertionError("independent preview edge moved during Explorer toggle")
     return frame
+
+
+def assert_git_overview(document, changed_lines=(5, 85, 165), line_count=181):
+    """Validate the observed painted strip against the whole fixture, not its scroll position."""
+    observation = document.get("git_overview")
+    if not isinstance(observation, dict):
+        raise AssertionError("missing freshly painted Git overview")
+
+    def rectangle(value, name):
+        if (not isinstance(value, (list, tuple)) or len(value) != 4
+                or any(isinstance(edge, bool) or not isinstance(edge, (int, float))
+                       or not math.isfinite(edge) for edge in value)
+                or value[2] <= value[0] or value[3] <= value[1]):
+            raise AssertionError("invalid Git overview " + name)
+        return tuple(value)
+
+    def contains(outer, inner):
+        return (inner[0] >= outer[0] - 0.5 and inner[1] >= outer[1] - 0.5
+                and inner[2] <= outer[2] + 0.5 and inner[3] <= outer[3] + 0.5)
+
+    viewport = rectangle(observation.get("viewport"), "viewport")
+    track = rectangle(observation.get("track"), "track")
+    pane = rectangle(document.get("editor_panel_rect"), "code pane")
+    width = document.get("editor_panel_width")
+    if (isinstance(width, bool) or not isinstance(width, (int, float))
+            or not math.isfinite(width) or width <= 0 or viewport[2] - viewport[0] > width + 1
+            or not contains(pane, viewport)):
+        raise AssertionError("Git overview extends beyond its code pane")
+    if (not contains(viewport, track) or track[2] - track[0] > 4.01
+            or abs(track[1] - viewport[1]) > 0.5 or abs(track[3] - viewport[3]) > 0.5
+            or not 0 <= viewport[2] - track[2] <= 2):
+        raise AssertionError("Git overview is not a thin strip inside the code pane's right edge")
+    ticks = observation.get("ticks")
+    if not isinstance(ticks, list) or len(ticks) != len(changed_lines):
+        raise AssertionError("Git overview must include every change, including offscreen hunks")
+    marks = []
+    for tick in ticks:
+        if not isinstance(tick, dict) or tick.get("kind") != "Modified":
+            raise AssertionError("Git overview has the wrong change kind for this fixture")
+        rect = rectangle(tick.get("rect"), "tick")
+        if not contains(track, rect):
+            raise AssertionError("Git overview tick escapes its strip")
+        marks.append(rect)
+    marks.sort(key=lambda rect: rect[1])
+    height = track[3] - track[1]
+    # Allow one logical line for the final empty row and pixel rounding. A
+    # viewport-relative or clipped list of gutter marks cannot satisfy this.
+    tolerance = max(2, height / line_count)
+    for rect, line in zip(marks, changed_lines):
+        if abs(rect[1] - (track[1] + height * line / line_count)) > tolerance:
+            raise AssertionError("Git overview tick does not represent its global document position")
+    return {"viewport": viewport, "track": track, "ticks": tuple(marks)}
 
 
 def finish_clipboard_adapter(process):
@@ -92,7 +241,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys):
+class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys):
     def set_math_conversion_formatting(self, enabled):
         if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
             return
@@ -555,53 +704,6 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.click("explorer.maximize.Draw symbol")
         self.close_scratch(count)
 
-    def snippets(self):
-        self.settings()
-        self.setting_section("snippets", "Custom snippets")
-        self.click("settings.snippets.add.tex")
-        self.wait_target("settings.snippets.source")
-        self.click("settings.snippets.source")
-        self.key(0)
-        body = '\\begin{${1:enumerate}}\n  $x$ \\${2} \\\\\n\\end{${1}}${0}'
-        self.paste_source(body, lambda: self.wait_target("settings.snippets.save"))
-        self.click("settings.snippets.save")
-        self.wait("raw TeX source saved without JSON", lambda d: any(s["language"] == "tex" and s["body"] == fingerprint(body) for s in d["snippets"]))
-        self.click("settings.snippets.add.typst")
-        self.click("settings.snippets.save")
-        self.wait("Typst example saved", lambda d: any(s["prefix"] == "eq" and s["language"] == "typst" for s in d["snippets"]))
-        if self.capture_review:
-            self.capture_viewport("settings")
-        self.close_settings()
-        count = self.scratch("eq")
-        self.key(49, "ctrl")
-        self.wait("snippet symbol identifies custom provider", lambda d: d["completion_visible"] and d["completion_origins"] == ["Custom snippet"])
-        if self.capture_review:
-            self.capture_viewport("main")
-        self.key(48, "none")
-        self.source_is("$ x = y $\n")
-        self.native("text", "alpha")
-        self.source_is("$ alpha = y $\n")
-        self.close_scratch(count)
-        count = self.snapshot()["document"]["tabs"]
-        self.tex_document()
-        original = "\\documentclass{article}\n\\begin{document}\nenv"
-        self.key(0)
-        self.paste_source(original)
-        self.key(49, "ctrl")
-        self.wait("TeX snippet uses its own language and provider", lambda d: d["completion_visible"] and d["completion_origins"] == ["Custom snippet"])
-        self.key(48, "none")
-        expanded = original[:-3] + '\\begin{enumerate}\n  $x$ \\${2} \\\\\n\\end{enumerate}'
-        self.source_is(expanded)
-        self.native("text", "itemize")
-        changed = expanded.replace("enumerate", "itemize")
-        self.source_is(changed)
-        self.key(6)
-        self.source_is(expanded)
-        self.key(6, "cmd+shift")
-        self.source_is(changed)
-        self.close_scratch(count)
-
-
     def completion(self):
         count = self.scratch("#mi(`\\alp`)")
         self.key(123, "none")
@@ -861,6 +963,32 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.stable(baseline)
         self.click("panel.close")
         self.wait("close panel button", lambda d: d["panel"] is None)
+        # The Appearance setting restores the original one-click controls.
+        self.settings()
+        self.setting_section("compact layout", "Compact layout controls")
+        self.click("settings.compact_layout")
+        self.wait("separate layout buttons selected", lambda d: not d["compact_layout_controls"])
+        self.close_settings()
+        if self.capture_review:
+            self.capture_viewport("main")
+        for mode in ("Code", "Preview", "Split"):
+            self.click("toolbar.layout." + mode.lower())
+            self.wait("separate layout button selects " + mode, lambda d: d["view_mode"] == mode)
+        self.click("toolbar.layout.explorer")
+        self.wait("separate Explorer button hides panel", lambda d: not d["explorer_visible"])
+        self.click("toolbar.layout.explorer")
+        self.wait("separate Explorer button restores panel", lambda d: d["explorer_visible"])
+        self.click("toolbar.layout.panel")
+        self.wait("separate Panel button restores selected tab", lambda d: d["panel"] == "Activity")
+        self.stable(baseline)
+        self.click("toolbar.layout.panel")
+        self.wait("separate Panel button hides panel", lambda d: d["panel"] is None)
+        self.settings()
+        self.setting_section("compact layout", "Compact layout controls")
+        self.click("settings.compact_layout")
+        self.wait("compact Layout restored", lambda d: d["compact_layout_controls"])
+        self.close_settings()
+        self.wait_target("toolbar.layout")
         self.wait("layout leaves source unchanged", lambda d: d["source_fingerprint"] == initial["source_fingerprint"])
 
     def explorer_scroll(self):
@@ -1007,6 +1135,48 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.key(20)  # Split: the docked editor must preserve this resizable pane.
         self.wait("split editor shown", lambda d: d["view_mode"] == "Split" and d["editor_panel_width"] is not None)
         self.wait("three separated Git hunks", lambda d: d["git_hunk_count"] == 3)
+        self.click("editor.source")
+        self.key(126, "cmd")
+        initial = self.wait("overview ready at the start of the large document", lambda d:
+                            d["cursor"] == [0, 0] and isinstance(d.get("git_overview"), dict))
+        overview = assert_git_overview(initial["document"])
+        pane_width = initial["document"]["editor_panel_width"]
+        scroll = initial["scrolls"].get("editor")
+        if (not scroll or scroll["frame"] != initial["document"]["frame"]
+                or scroll["content_height"] <= scroll["viewport_height"] + 100):
+            raise AssertionError("Git overview fixture did not expose a fresh scrollable code pane")
+        last_hunk = initial["targets"].get("git.hunk.2")
+        if last_hunk and last_hunk["frame"] == initial["document"]["frame"]:
+            raise AssertionError("last fixture hunk must be offscreen when its overview tick is checked")
+        self.native("move", scroll["x"], scroll["y"])
+        self.native("wheel", scroll["x"], scroll["y"], -8)
+        import time
+        deadline = time.monotonic() + 3
+        while True:
+            moved = self.snapshot()
+            current_scroll = moved["scrolls"].get("editor")
+            if (current_scroll and current_scroll["frame"] == moved["document"]["frame"]
+                    and current_scroll["offset"] > scroll["offset"] + 20):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("normal native wheel input did not scroll the code pane")
+            time.sleep(0.05)
+        for _ in range(8):
+            moved = self.snapshot()
+            current_scroll = moved["scrolls"].get("editor")
+            if (not current_scroll or current_scroll["frame"] != moved["document"]["frame"]
+                    or current_scroll["offset"] <= scroll["offset"] + 20):
+                raise AssertionError("code pane scroll did not persist across fresh frames")
+            current = assert_git_overview(moved["document"])
+            if (abs(moved["document"]["editor_panel_width"] - pane_width) > 0.5
+                    or any(abs(a - b) > 0.5 for key in ("viewport", "track")
+                           for a, b in zip(overview[key], current[key]))
+                    or any(abs(a - b) > 0.5 for before, after in zip(overview["ticks"], current["ticks"])
+                           for a, b in zip(before, after))):
+                raise AssertionError("Git overview moved with the scroll or changed the code pane width")
+        self.source_is(original)
+        self.record("git.overview.scroll-stable", before=overview, after=current,
+                    scroll_before=scroll["offset"], scroll_after=current_scroll["offset"], pane_width=pane_width)
         self.settings()
         self.setting_section("independent main dividers", "Independent main dividers")
         self.click("settings.dividers")
@@ -1052,13 +1222,26 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             self.key(125, "cmd+alt")
             self.wait("keyboard hunk jump keeps normal editor focused", lambda d: d["editor_keyboard_focused"]
                       and not d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])))
+        # A keyboard jump can publish its cursor before its scroll settles.
+        # Track the fresh gutter position while hovering, as click() does for
+        # moving hit targets, rather than hovering an old offscreen rectangle.
         self.wait_target("git.hunk.0")
-        target = self.snapshot()["targets"]["git.hunk.0"]
-        self.native("move", target["x"], target["y"])
-        self.wait("read-only hunk hover preserves editor focus", lambda d: d["hover_tooltip_open"] and not d["git_diff_open"] and d["editor_keyboard_focused"])
+        deadline = time.monotonic() + 6
+        while True:
+            state = self.snapshot()
+            target = state["targets"].get("git.hunk.0")
+            if target and target["frame"] == state["document"]["frame"]:
+                self.native("move", target["x"], target["y"])
+            state = self.snapshot()["document"]
+            if state["hover_tooltip_open"] and not state["git_diff_open"] and state["editor_keyboard_focused"]:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("read-only hunk hover did not preserve editor focus")
+            time.sleep(0.05)
         self.click("git.hunk.0")
         self.wait("full document diff opens at clicked change", lambda d: d["git_diff_open"] and d["git_diff_lines"] == [180, 180]
                   and d["cursor"][0] == sum(map(len, lines[:5])))
+        assert_git_overview(self.snapshot()["document"])
         # The diff is the same editor: its context menu must preserve selected
         # text for Copy and offer the direct Typst math conversion as well.
         import subprocess
@@ -1098,7 +1281,10 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.wait("hunk navigation resumes after menu actions", lambda d: d["cursor"][0] == start and d["git_diff_open"])
         for button, line in (("Next",85), ("Next",165), ("Next",5), ("Previous",165)):
             self.click("git.hunk." + button)
-            self.wait("navigation moves live editor cursor", lambda d: d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])) and d["editor_keyboard_focused"])
+            arrived = self.wait("navigation moves live editor cursor", lambda d: d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])) and d["editor_keyboard_focused"])
+            if button == "Next" and line == 165:
+                at = sum(map(len, lines[:line]))
+                self.jump_reveal_feedback("Diff", "source", arrived, region=(line, at, at + len(lines[line])))
             self.stable_state(lambda d: d["git_diff_open"] and d["cursor"][0] == sum(map(len, lines[:line])))
         self.native("resize-focused", 1400, 850)
         self.wait("document diff resizes with owner", lambda d: d["native_size"] == [1400, 850] and d["git_diff_open"])
@@ -1138,9 +1324,19 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.wait("original gutter markers refreshed", lambda d: d["git_hunk_count"] == 3)
         self.key(126, "cmd")
         self.wait("source cursor returned to start", lambda d: d["cursor"] == [0, 0])
-        self.wait_target("git.hunk.0")
-        self.click("git.hunk.0")
-        self.wait("reopening uses fresh full-document baseline", lambda d: d["git_diff_open"] and d["git_diff_lines"] == [180, 180] and len(d["git_diff_hunks"]) == 3)
+        self.wait_target("git.file.hunks.typ")
+        before = self.snapshot()["document"]
+        self.double_click("git.file.hunks.typ")
+        reopened = self.wait("Git file double-click opens a docked whole-document diff", lambda d:
+                            d["git_diff_open"] and d["git_diff_lines"] == [180, 180]
+                            and len(d["git_diff_hunks"]) == 3
+                            and d["source_fingerprint"] == before["source_fingerprint"]
+                            and abs(d["editor_panel_width"] - before["editor_panel_width"]) < 1)
+        assert_git_overview(reopened["document"])
+        self.stable_state(lambda d: d["git_diff_open"]
+                          and d["source_fingerprint"] == before["source_fingerprint"]
+                          and abs(d["editor_panel_width"] - before["editor_panel_width"]) < 1)
+        self.source_is(original)
         self.key(3)
         self.wait("Find owns keyboard while document diff stays open", lambda d: d["find_focused"] and d["git_diff_open"])
         self.native("text", "Line 085")
@@ -1173,6 +1369,104 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             subprocess.run(["git", "-C", str(self.directory), "show", ":hunks.typ"],
                            capture_output=True, text=True, check=True).stdout == committed)
 
+
+    def pdfium_resize(self):
+        """Drag real dividers repeatedly while retaining the last sharp textures."""
+        import time
+        self.focus_document_window()
+        before = self.snapshot()["document"]
+        fixture = self.directory / "pdfium-resize.tex"
+        # TeX always uses PDFium, independent of the Typst backend preference.
+        # Tall pages keep demand constant, isolating resizing from new pages.
+        source = r'\documentclass{article}' + '\n'
+        source += r'\usepackage[paperwidth=400pt,paperheight=1600pt,margin=24pt]{geometry}' + '\n'
+        source += r'\begin{document}' + '\n'
+        for page in range(3):
+            if page:
+                source += r'\newpage' + '\n'
+            source += r'\section*{Resize page ' + str(page + 1) + '}\n'
+            for row in range(12):
+                source += ('PDFium resident row ' + str(row + 1)
+                           + r'. \( \int_0^1 x^2\,dx = 1/3 \).\par' + '\n')
+        source += r'\end{document}' + '\n'
+        fixture.write_text(source)
+        self.key(31)
+        time.sleep(0.8)
+        self.key(5, "cmd+shift")
+        time.sleep(0.3)
+        self.key(0)
+        self.native("text", str(fixture))
+        self.key(36, "none")
+        time.sleep(0.5)
+        self.native("ax-press-title", "Open")
+        self.wait("isolated PDFium resize document opened", lambda d: d["path"] == str(fixture), timeout=15)
+        fixture_tab = self.snapshot()["document"]["active_tab_id"]
+        self.key(35, "cmd+alt")
+        self.wait("resize fixture is designated for preview", lambda d:
+                  d["preview_tab_id"] == fixture_tab and d["preview_path"] == str(fixture))
+        self.key(20)
+        self.key(15)
+        self.wait("TeX compiles into the effective PDFium resize preview", lambda d:
+                  pdfium_resize_settled(d) and d["preview_pages"] == 3
+                  and not d["compile_indicator_spinning"], timeout=60)
+        if not self.snapshot()["document"]["preview_controls_open"]:
+            self.click("preview.open")
+        self.wait_target("preview.Fit page width")
+        self.click("preview.Fit page width")
+        self.click("preview.Minimize controls")
+        self.wait("fit-width PDFium ready before divider drags", pdfium_resize_settled, timeout=20)
+        self.stable_state(pdfium_resize_settled)
+        for iteration, delta in enumerate((96, -96, 96, -96)):
+            self.wait_target("divider.editor")
+            state = self.snapshot()
+            handle = state["targets"]["divider.editor"]
+            baseline = pdfium_render_state(state["document"])
+            x, y = handle["x"], handle["y"]
+            last_x = x
+            snapshot_ms = []
+            started = time.monotonic()
+            self.native("drag-start", x, y)
+            try:
+                for step in range(1, 7):
+                    last_x = x + delta * step / 6
+                    self.native("drag-move", last_x, y)
+                    observed_at = time.monotonic()
+                    frame = self.snapshot()
+                    snapshot_ms.append((time.monotonic() - observed_at) * 1000)
+                    assert_pdfium_resize_held(frame["document"], baseline)
+                    if frame["document"]["source_fingerprint"] != fingerprint(source):
+                        raise AssertionError("resizing PDFium edited the source")
+                    if step == 3:
+                        # Outlast the quiet deadline with the mouse still held.
+                        time.sleep(0.150)
+                        assert_pdfium_resize_held(self.snapshot()["document"], baseline)
+                        if self.capture_review and iteration == 0:
+                            self.capture_viewport("main")
+                frame = self.snapshot()
+                moved = frame["targets"].get("divider.editor")
+                if not moved or moved["frame"] != frame["document"]["frame"] or abs(moved["x"] - last_x) > 2:
+                    raise AssertionError("PDFium divider did not track the native drag")
+            finally:
+                self.native("drag-end", last_x, y)
+            final = self.wait("released PDFium divider renders its final physical scale", pdfium_resize_settled,
+                              timeout=20)["document"]
+            rendered = pdfium_render_state(final)
+            if rendered["active_scale"] == baseline["active_scale"]:
+                raise AssertionError("PDFium resize never changed the raster scale")
+            if rendered["requests"] != baseline["requests"] + 1 or rendered["admissions"] != baseline["admissions"] + 1:
+                raise AssertionError("PDFium resize did not publish exactly one final sharp batch")
+            self.stable_state(lambda d: pdfium_resize_settled(d)
+                              and pdfium_render_state(d)["requests"] == rendered["requests"]
+                              and pdfium_render_state(d)["admissions"] == rendered["admissions"])
+            self.record("pdfium_resize.drag", iteration=iteration, delta=delta,
+                        before=baseline, after=rendered, snapshot_ms=snapshot_ms,
+                        elapsed_ms=(time.monotonic() - started) * 1000)
+        if self.capture_review:
+            self.capture_viewport("main")
+        self.restore_partial_fixture_tabs(before, [fixture_tab])
+        if before["view_mode"] != "Split":
+            self.key(19 if before["view_mode"] == "Code" else 21)
+            self.wait("PDFium resize journey restores its original view", lambda d: d["view_mode"] == before["view_mode"])
 
     def preview_keyboard(self):
         self.ensure_typesetting_tab()
@@ -1245,6 +1539,10 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.setting_section("backend", "Typst preview backend")
         self.wait_target("settings.backend." + backend)
         self.click("settings.backend." + backend)
+        # Settings is an independently repainted native viewport. Observe the
+        # accepted preference before closing it or issuing a compiler command.
+        self.wait("selected backend preference applies before Settings closes", lambda d:
+                  d["settings_visible"] and d["preview_requested_backend"] == backend)
         self.close_settings()
         if save_pdf:
             self.key(15)
@@ -1604,11 +1902,27 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             if self.capture_review and label == "Appearance":
                 self.capture_viewport("settings")
         self.wait("highlight expires", lambda d: d["settings_highlight"] is None, timeout=5)
+        self.setting_section("dark images", "Apply dark page appearance to images")
+        images = self.snapshot()["document"]["dark_images"]
+        self.click("settings.page.Dark")
+        self.wait("sample uses dark page appearance", lambda d: d["page_dark"])
+        if self.capture_review:
+            self.capture_viewport("settings")
+        self.click("settings.dark_images")
+        self.wait("image appearance preference applies independently", lambda d:
+                  d["dark_images"] != images and d["source_fingerprint"] == source)
+        if self.capture_review:
+            self.capture_viewport("settings")
+        self.click("settings.dark_images")
+        self.wait("image appearance preference restored", lambda d: d["dark_images"] == images)
+        self.click("settings.page.FollowInterface")
+        self.setting_section("appearance", "Appearance")
         self.click("settings.json.mode")
         self.wait("JSON settings opens with valid current settings", lambda d: d["settings_json"]["visible"] and d["settings_json"]["valid"])
         if self.capture_review:
             self.capture_viewport("settings")
         self.click("settings.json")
+        self.wait_target("settings.json", focused=True)
         self.key(0)  # Select all in the focused JSON editor.
         self.native("text", "{broken")
         self.wait("invalid JSON cannot be saved", lambda d: not d["settings_json"]["valid"])
@@ -1628,6 +1942,7 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.click("settings.json.reload")
         self.wait("Reload restores valid settings", lambda d: d["settings_json"]["valid"])
         self.click("settings.json")
+        self.wait_target("settings.json", focused=True)
         self.key(0)
         self.key(124, "none")  # Collapse selection at EOF; append valid whitespace.
         self.native("text", " ")
@@ -1687,53 +2002,234 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             if self.snapshot()["renderer_generation"] != generation:
                 raise AssertionError("revealing the prepared preview reloaded it")
 
-        # Exercise the real native material, both renderer paths, and shared
-        # Settings ownership. Geometry comes from AppKit, not requested settings.
-        def underlay(d, key="native_background"):
-            material = d.get(key)
-            return material and material.get("blur") and material["blur"]["below_renderer"]
-        self.wait("default blur is attached below the document renderer", underlay)
+        # WindowServer acceptance is configuration evidence, not a readback or
+        # pixel proof. Composed native appearance still needs visual inspection.
+        def blur_applied(d, key="native_background"):
+            background = d.get(key) or {}
+            blur = background.get("blur") or {}
+            return (blur.get("method") == "window-server"
+                    and blur.get("applied_radius") == background.get("blur_radius"))
+        def retained_blur(d, before, key="native_background"):
+            return (blur_applied(d, key)
+                    and d[key]["blur"]["identity"] == before["blur"]["identity"]
+                    and d[key]["blur"]["applications"] == before["blur"]["applications"])
+        self.wait("WindowServer accepted the requested document blur radius", blur_applied)
         original = self.snapshot()["document"]["source_fingerprint"]
         for backend in ("Interactive", "Pdfium"):
             self.choose_backend(backend)
             self.wait("effective preview backend is ready with blur", lambda d:
                       d["preview_native_ready"] if backend == "Interactive" else d["preview_pdfium_ready"], timeout=40)
+            before_settings = self.snapshot()["document"]["native_background"]
             self.settings()
             self.setting_section("appearance", "Appearance")
-            self.wait("Settings has its own native sibling underlay", lambda d: underlay(d, "settings_native_background"))
+            self.wait("Settings has its own native blur controller", lambda d:
+                      blur_applied(d, "settings_native_background"))
+            self.wait("Settings focus preserves the document blur controller and accepted radius", lambda d:
+                      retained_blur(d, before_settings)
+                      and blur_applied(d, "settings_native_background"))
             for _ in range(3):
                 self.click("settings.background.blur")
-                self.wait("blur off removes the document underlay", lambda d: d["native_background"]["blur"] is None)
-                self.wait("blur off removes the Settings underlay", lambda d: d["settings_native_background"]["blur"] is None)
+                self.wait("blur off releases the document blur controller", lambda d: d["native_background"]["blur"] is None)
+                self.wait("blur off releases the Settings blur controller", lambda d: d["settings_native_background"]["blur"] is None)
                 self.click("settings.background.blur")
-                self.wait("blur on restores both native underlays", lambda d: underlay(d) and underlay(d, "settings_native_background"))
+                self.wait("blur on restores both WindowServer blur configurations", lambda d:
+                          blur_applied(d) and blur_applied(d, "settings_native_background"))
+            before_theme = self.snapshot()["document"]
             self.click("settings.theme.Light")
-            self.wait("light material follows the app appearance", lambda d:
-                      not d["native_background"]["dark"] and not d["settings_native_background"]["dark"])
+            self.wait("light theme retains both native blur configurations without reapplying", lambda d:
+                      not d["native_background"]["dark"] and not d["settings_native_background"]["dark"]
+                      and retained_blur(d, before_theme["native_background"])
+                      and retained_blur(d, before_theme["settings_native_background"], "settings_native_background"))
             self.click("settings.theme.Dark")
-            self.wait("dark material follows the app appearance", lambda d:
-                      d["native_background"]["dark"] and d["settings_native_background"]["dark"])
+            self.wait("dark theme retains both native blur configurations without reapplying", lambda d:
+                      d["native_background"]["dark"] and d["settings_native_background"]["dark"]
+                      and retained_blur(d, before_theme["native_background"])
+                      and retained_blur(d, before_theme["settings_native_background"], "settings_native_background"))
             if self.capture_review:
                 self.capture_viewport("settings")
             self.close_settings()
             self.click("editor.source")
             self.key(3)
             self.wait("Find gets keyboard ownership with blur", lambda d: d["find_visible"] and d["find_focused"])
+            self.wait("Find focus preserves the document blur controller and accepted radius", lambda d:
+                      retained_blur(d, before_theme["native_background"]))
             self.key(0)  # Find retains its query across both backend checks.
             self.native("text", "Desktop")
             self.wait("Find receives native typing with blur", lambda d: d["find_query_fingerprint"] == fingerprint("Desktop"))
             self.key(53, "none")
             self.wait("Find closes once", lambda d: not d["find_visible"])
-            before = self.snapshot()["document"]["native_background"]
-            self.native("zoom-focused")
-            self.wait("native zoom resizes underlay with the renderer", lambda d:
-                      underlay(d) and d["native_background"]["blur"]["frame"][2:] == d["native_size"])
-            self.native("zoom-focused")
-            self.wait("native zoom restore preserves underlay", underlay)
-            self.stable_state(lambda d: underlay(d) and d["native_background"]["blur"]["identity"] == before["blur"]["identity"])
+            before_state = self.snapshot()["document"]
+            before = before_state["native_background"]
+            size = before_state["native_size"]
+            self.native("resize-focused", 1200, 720)
+            self.wait("ordinary resize retains the blur controller without another API call", lambda d:
+                      native_size_matches(d["native_size"], [1200.0, 720.0]) and retained_blur(d, before))
+            self.native("resize-focused", *size)
+            self.wait("ordinary resize restore retains the same blur configuration", lambda d:
+                      native_size_matches(d["native_size"], size) and retained_blur(d, before))
+            self.stable_state(lambda d: retained_blur(d, before))
+            preferences = self.snapshot()["document"]["window_background"]
+            # On macOS the green native AXZoomButton enters fullscreen. Test
+            # that path and the app shortcut, rather than calling it a resize.
+            self.click("editor.source")
+            if backend == "Interactive":
+                self.native("zoom-focused")
+            else:
+                self.key(3, "cmd+ctrl")
+            self.wait("fullscreen disables transparency and removes blur", lambda d:
+                      d["fullscreen"] and not d["native_background"]["translucent"]
+                      and d["native_background"]["blur"] is None and d["window_background"] == preferences)
+            self.stable_state(lambda d: d["fullscreen"] and not d["native_background"]["translucent"], frames=24)
+            if self.capture_review:
+                self.capture_viewport("main")
+            if backend == "Interactive":
+                self.native("zoom-focused")
+            else:
+                self.key(3, "cmd+ctrl")
+            self.wait("leaving fullscreen restores saved transparency and blur", lambda d:
+                      not d["fullscreen"] and d["native_background"]["translucent"]
+                      and blur_applied(d) and d["window_background"] == preferences)
+            self.stable_state(lambda d: not d["fullscreen"] and blur_applied(d), frames=24)
             if self.capture_review:
                 self.capture_viewport("main")
         self.wait("blur transitions never edit the document", lambda d: d["source_fingerprint"] == original)
+        if self.review_preview:
+            self.click("editor.source")
+            self.settings()
+            self.setting_section("appearance", "Appearance")
+            self.review_native_preview("background-blur", document_focus=False)
+            self.close_settings()
+
+    def background_fades(self):
+        """Independent native blur and tint gradients survive focus/fullscreen."""
+        self.focus_document_window()
+        before = self.snapshot()["document"]
+        source = before["source_fingerprint"]
+        windows = self.native("windows")["windows"]
+        document_title = next(window["AXTitle"] for window in windows if window.get("AXFocused"))
+        self.settings()
+        self.setting_section("appearance", "Appearance")
+        settings_title = next(window["AXTitle"] for window in self.native("windows")["windows"]
+                              if "Settings" in window["AXTitle"])
+        preferences = self.snapshot()["document"]["window_background"]
+        if not preferences["enabled"] or not preferences["blur"] or not 0 <= preferences["opacity_percent"] < 100 or preferences["blur_radius"] <= 0:
+            raise AssertionError("directional background journey requires active translucent blur")
+
+        def select(kind, direction):
+            field = kind + "_fade"
+            selected = direction.lower()
+            current = self.snapshot()["document"]
+            if current["window_background"][field] == selected:
+                return
+            unchanged = current["window_background"]["blur_fade" if kind == "transparency" else "transparency_fade"]
+            target = "settings.background." + field
+            self.wait_target(target)
+            self.click(target)
+            self.wait_target(target + "." + direction)
+            self.click(target + "." + direction)
+            self.wait("direction preference applies independently: " + field, lambda d:
+                      d["window_background"][field] == selected
+                      and d["window_background"]["blur_fade" if kind == "transparency" else "transparency_fade"] == unchanged)
+            expected = self.snapshot()["document"]["window_background"]
+            self.wait("both windows apply their actual directional background", lambda d:
+                      background_fades_applied(d, expected["blur_fade"], expected["transparency_fade"]))
+            if kind == "transparency":
+                self.stable_state(lambda d: background_blur_unchanged(d, current))
+
+        for blur, transparency in (("Right", "None"), ("Right", "Down"),
+                                   ("Up", "Down"), ("Up", "Left"), ("Right", "Down")):
+            select("blur", blur)
+            select("transparency", transparency)
+            self.wait("chosen independent fade pair applied", lambda d:
+                      background_fades_applied(d, blur.lower(), transparency.lower()))
+            self.record("background_fades.configuration", blur=blur.lower(), transparency=transparency.lower())
+        for field, target in (("blur_end_radius", "settings.background.blur_end_radius"),
+                              ("opacity_end_percent", "settings.background.opacity_end_percent")):
+            prior = self.snapshot()["document"]
+            preferences = prior["window_background"]
+            self.wait_target(target)
+            # The two native windows repaint independently. Wait for this
+            # Settings control's hover/geometry, not just a fresh root snapshot,
+            # before posting one click on the actual track (outside its label).
+            import time
+            deadline = time.monotonic() + 3
+            while True:
+                previous = self.snapshot()["targets"][target]
+                x = previous["x"] - previous["width"] / 2 + 35
+                y = previous["y"]
+                self.native("move", x, y)
+                observed = self.snapshot()["targets"][target]
+                if (observed["frame"] > previous["frame"] and observed["hovered"]
+                        and abs(observed["x"] - previous["x"]) <= 0.5
+                        and abs(observed["y"] - previous["y"]) <= 0.5):
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError("endpoint track did not settle: " + field)
+            self.native("click", x, y)
+            self.wait("endpoint slider updates only its own preference: " + field, lambda d:
+                      d["window_background"][field] != preferences[field]
+                      and all(d["window_background"][other] == value for other, value in preferences.items() if other != field)
+                      and background_fades_applied(d, "right", "down"))
+            if field == "opacity_end_percent":
+                self.stable_state(lambda d: background_blur_unchanged(d, prior))
+            self.record("background_fades.endpoint", field=field,
+                        value=self.snapshot()["document"]["window_background"][field])
+        baseline = self.snapshot()["document"]
+        for _ in range(3):
+            self.native("raise", document_title)
+            self.wait("document focus retains both directional controllers", lambda d:
+                      d["focused"] and d["settings_visible"] and background_blur_unchanged(d, baseline))
+            self.click("editor.source")
+            self.key(3)
+            self.wait("Find owns typing above the directional background", lambda d: d["find_visible"] and d["find_focused"])
+            self.key(0)
+            self.native("text", "First")
+            self.wait("Find typing cannot edit source or reapply blur", lambda d:
+                      d["find_query_fingerprint"] == fingerprint("First")
+                      and d["source_fingerprint"] == source and background_blur_unchanged(d, baseline))
+            self.key(53, "none")
+            self.wait("Find closes without changing directional backgrounds", lambda d:
+                      not d["find_visible"] and background_blur_unchanged(d, baseline))
+            self.native("raise", settings_title)
+            self.native_wait("Settings regains native focus", lambda windows:
+                             any(window["AXTitle"] == settings_title and window.get("AXFocused") for window in windows))
+            self.stable_state(lambda d: background_fades_applied(d, "right", "down")
+                              and background_blur_unchanged(d, baseline), frames=12)
+        if self.review_preview:
+            self.review_native_preview("background-fades", document_focus=False)
+        if self.capture_review:
+            self.capture_viewport("settings")
+        self.close_settings()
+        self.click("editor.source")
+        if self.capture_review:
+            self.capture_viewport("main")
+        chosen = self.snapshot()["document"]["window_background"]
+        self.native("fullscreen", document_title, "true")
+        self.wait("fullscreen disables directional blur and transparency", lambda d:
+                  d["fullscreen"] and not d["native_background"]["translucent"]
+                  and d["native_background"]["blur"] is None
+                  and d["native_background"]["blur_fade"] == "none" and d["window_background"] == chosen)
+        self.stable_state(lambda d: d["fullscreen"] and not d["native_background"]["translucent"]
+                          and d["native_background"]["blur"] is None and d["window_background"] == chosen, frames=16)
+        if self.capture_review:
+            self.capture_viewport("main")
+        self.native("fullscreen", document_title, "false")
+        self.wait("fullscreen exit restores chosen directional backgrounds", lambda d:
+                  not d["fullscreen"] and d["window_background"] == chosen
+                  and background_fades_applied(d, "right", "down", keys=("native_background",)))
+        self.settings()
+        self.setting_section("appearance", "Appearance")
+        self.wait("Settings restores its own directional controller", lambda d:
+                  background_fades_applied(d, "right", "down"))
+        select("blur", "None")
+        select("transparency", "None")
+        self.wait("uniform backgrounds restored without editing source or the backend", lambda d:
+                  background_fades_applied(d, "none", "none")
+                  and d["source_fingerprint"] == source
+                  and d["preview_requested_backend"] == before["preview_requested_backend"])
+        self.close_settings()
+        self.stable_state(lambda d: background_fades_applied(d, "none", "none", keys=("native_background",))
+                          and d["source_fingerprint"] == source)
 
     def context_menu(self):
         with self.exact_math_conversion():
