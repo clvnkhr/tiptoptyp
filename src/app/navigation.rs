@@ -6,7 +6,6 @@ use crate::diagnostics::{Diagnostic, DiagnosticSource};
 use std::{
     ops::Range,
     path::{Path, PathBuf},
-    time::Instant,
 };
 use tiptoptyp_core::text::{LspRange, ScalarOffset, range_to_scalar_range};
 
@@ -265,10 +264,7 @@ impl EditorApp {
     }
 
     pub(super) fn navigate_editor_range(&mut self, range: Range<usize>) {
-        self.editor_attention = Some(EditorAttention {
-            char_index: range.start,
-            started: Instant::now(),
-        });
+        self.editor_attention = Some(EditorAttention::arm(range.start));
         self.pending_editor_selection = Some(EditorSelection::Focus(range));
         self.find_bar.focus = false;
         if self.document().kind().is_typst() {

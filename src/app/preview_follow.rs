@@ -136,7 +136,9 @@ impl EditorApp {
         ) {
             FollowAction::Idle => {}
             FollowAction::Wait(delay) => context.request_repaint_after(delay),
-            FollowAction::Jump(char_index) => self.jump_source_to_preview(char_index),
+            FollowAction::Jump(char_index) => {
+                self.jump_source_to_preview_with_mode(char_index, true)
+            }
         }
     }
 }
