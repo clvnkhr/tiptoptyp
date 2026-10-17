@@ -65,10 +65,41 @@ fn reveal_scroll_offset(target: Pos2, viewport: Vec2) -> Vec2 {
     )
 }
 
+#[derive(Default)]
+struct SearchMatches {
+    query: Arc<str>,
+    ranges: Vec<std::ops::Range<usize>>,
+    #[cfg(test)]
+    rebuilds: usize,
+}
+
+impl SearchMatches {
+    fn for_query(
+        &mut self,
+        characters: &[Character],
+        query: &Arc<str>,
+    ) -> &[std::ops::Range<usize>] {
+        if !Arc::ptr_eq(&self.query, query) {
+            if self.query != *query {
+                self.ranges = matching_characters(characters, query);
+                #[cfg(test)]
+                {
+                    self.rebuilds += 1;
+                }
+            }
+            // Every resident shares the view's query instead of retaining a
+            // separate copy, even for a large pasted search.
+            self.query = Arc::clone(query);
+        }
+        &self.ranges
+    }
+}
+
 struct Resident {
     texture: egui::TextureHandle,
     characters: Vec<Character>,
     links: Vec<(Rect, LinkTarget)>,
+    search_matches: SearchMatches,
 }
 
 struct PdfReveal {
@@ -138,7 +169,7 @@ pub(super) struct PdfiumView {
     reveal_observation: Option<serde_json::Value>,
     anchor: (usize, f32),
     restore_anchor: bool,
-    query: String,
+    query: Arc<str>,
     search_pages: Vec<usize>,
     search_pending: bool,
     find_when_ready: bool,
@@ -189,7 +220,7 @@ impl Default for PdfiumView {
             reveal_observation: None,
             anchor: (0, 0.0),
             restore_anchor: false,
-            query: String::new(),
+            query: Arc::from(""),
             search_pages: Vec::new(),
             search_pending: false,
             find_when_ready: false,
@@ -469,6 +500,7 @@ impl PdfiumView {
                     texture,
                     characters: page.characters,
                     links: page.links,
+                    search_matches: SearchMatches::default(),
                 },
             );
         }
@@ -591,7 +623,7 @@ impl PdfiumView {
         self.apply_pending_position();
         if let Some((key, pages)) = search
             && key.revision == self.revision
-            && key.query == self.query
+            && key.query == self.query.as_ref()
         {
             self.search_pages = pages;
             self.search_pending = false;
@@ -708,7 +740,7 @@ impl PdfiumView {
                         size,
                     );
                     ui.painter().rect_filled(rect, 0.0, palette.0);
-                    let Some(resident) = self.residents.get(&index) else {
+                    let Some(resident) = self.residents.get_mut(&index) else {
                         continue;
                     };
                     ui.painter().image(
@@ -807,8 +839,8 @@ impl PdfiumView {
                             }
                         }
                     }
-                    for range in matching_characters(&resident.characters, &self.query) {
-                        for character in &resident.characters[range] {
+                    for range in resident.search_matches.for_query(&resident.characters, &self.query) {
+                        for character in &resident.characters[range.clone()] {
                             if character.rect.is_finite() {
                                 ui.painter().rect_filled(
                                     map(character.rect),
@@ -914,7 +946,7 @@ impl PdfiumView {
             scale: (self.zoom * ui.ctx().pixels_per_point() * 100.0)
                 .round()
                 .max(1.0) as u32,
-            query: self.query.clone(),
+            query: self.query.to_string(),
             palette,
         };
         self.finish_frame(
@@ -1042,8 +1074,8 @@ impl PdfiumView {
                 }
             }
             Action::Find(query) => {
-                if self.query != query {
-                    self.query = query;
+                if self.query.as_ref() != query {
+                    self.query = query.into();
                     self.search_pages.clear();
                     self.search_pending = !self.query.is_empty();
                     self.find_when_ready = self.search_pending;
@@ -1800,6 +1832,45 @@ mod tests {
         ];
         assert_eq!(nearest_character(&chars, Vec2::ZERO), Some(1));
     }
+    #[test]
+    fn unchanged_pdf_search_repaints_reuse_match_ranges() {
+        let characters = "É İ xyz É"
+            .chars()
+            .map(|value| Character {
+                value,
+                rect: Rect::NOTHING,
+            })
+            .collect::<Vec<_>>();
+        let mut matches = SearchMatches::default();
+        assert!(matches.for_query(&characters, &Arc::from("")).is_empty());
+        assert_eq!(matches.rebuilds, 0, "closed Find needs no page scan");
+        for _ in 0..1000 {
+            assert_eq!(
+                matches.for_query(&characters, &Arc::from("é")),
+                &[0..1, 8..9]
+            );
+        }
+        assert_eq!(
+            matches.rebuilds, 1,
+            "animation and scroll frames must reuse unchanged page matches"
+        );
+        let shared_query: Arc<str> = Arc::from("é");
+        assert_eq!(matches.for_query(&characters, &shared_query), &[0..1, 8..9]);
+        assert!(
+            Arc::ptr_eq(&matches.query, &shared_query),
+            "resident pages must share query storage"
+        );
+        assert_eq!(matches.for_query(&characters, &Arc::from("i")), &[2..3]);
+        assert_eq!(matches.rebuilds, 2);
+        assert!(matches.for_query(&characters, &Arc::from("")).is_empty());
+        assert_eq!(matches.rebuilds, 3);
+        let mut replacement = SearchMatches::default();
+        assert!(
+            replacement.for_query(&[], &Arc::from("i")).is_empty(),
+            "new resident pages must not inherit the former text's matches"
+        );
+    }
+
     #[test]
     fn search_handles_unicode_case_expansion_and_byte_indices() {
         let chars = "É İ xyz É"

@@ -279,3 +279,47 @@ fn readiness_follows_desired_pixels_instead_of_the_last_dispatched_request() {
     view.desired = Some(initial);
     assert!(view.ready());
 }
+
+#[test]
+fn publishing_replacement_page_text_retires_its_search_matches() {
+    let (context, mut view, key) = seeded();
+    let characters = |text: &str| {
+        text.chars()
+            .map(|value| Character {
+                value,
+                rect: Rect::NOTHING,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut first = batch(&key);
+    first.pages[0].characters = characters("É");
+    let mut first = Some(first);
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            view.accept(first.take().unwrap(), &key, ui);
+        })
+        .drop_without_applying_deltas();
+    let resident = view.residents.get_mut(&0).unwrap();
+    assert_eq!(
+        resident
+            .search_matches
+            .for_query(&resident.characters, &Arc::from("é")),
+        &[0..1]
+    );
+    let mut replacement = batch(&key);
+    replacement.pages[0].characters = characters("other");
+    let mut replacement = Some(replacement);
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            view.accept(replacement.take().unwrap(), &key, ui);
+        })
+        .drop_without_applying_deltas();
+    let resident = view.residents.get_mut(&0).unwrap();
+    assert!(
+        resident
+            .search_matches
+            .for_query(&resident.characters, &Arc::from("é"))
+            .is_empty()
+    );
+    assert_eq!(resident.search_matches.rebuilds, 1);
+}

@@ -78,3 +78,63 @@ fn pdfium_publication_probe() {
         serde_json::json!({"profile":if cfg!(debug_assertions){"debug"}else{"release"},"viewport_points":[1400,900],"warmups":3,"samples":15,"cases":cases,"scope":"CPU UI admission including texture queue, excludes raster, GPU upload and presentation"})
     );
 }
+
+#[test]
+#[ignore = "optimized unchanged PDF Find component measurement"]
+fn pdf_search_cache_measurement() {
+    use std::hint::black_box;
+    let source = "É İ mathematical preview token and other text. ".repeat(2048);
+    let characters: Vec<_> = source
+        .chars()
+        .map(|value| Character {
+            value,
+            rect: Rect::NOTHING,
+        })
+        .collect();
+    let query: Arc<str> = "PREVIEW".into();
+    let expected = matching_characters(&characters, &query);
+    let mut cache = SearchMatches::default();
+    assert_eq!(cache.for_query(&characters, &query), expected);
+    const FRAMES: usize = 60;
+    const SAMPLES: usize = 15;
+    let mut reference_ns = Vec::new();
+    let mut cached_ns = Vec::new();
+    for sample in 0..SAMPLES + 3 {
+        let start = Instant::now();
+        for _ in 0..FRAMES {
+            black_box(matching_characters(
+                black_box(&characters),
+                black_box(query.as_ref()),
+            ));
+        }
+        let reference = start.elapsed().as_secs_f64() * 1e9 / FRAMES as f64;
+        let start = Instant::now();
+        for _ in 0..FRAMES {
+            black_box(cache.for_query(black_box(&characters), black_box(&query)));
+        }
+        let cached = start.elapsed().as_secs_f64() * 1e9 / FRAMES as f64;
+        if sample >= 3 {
+            reference_ns.push(reference);
+            cached_ns.push(cached);
+        }
+    }
+    assert_eq!(cache.rebuilds, 1);
+    assert_eq!(cache.for_query(&characters, &query), expected);
+    let median = |values: &[f64]| {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        sorted[sorted.len() / 2]
+    };
+    println!(
+        "PDF_SEARCH_CACHE {}",
+        serde_json::json!({
+            "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+            "fixture_bytes": source.len(), "fixture_characters": characters.len(),
+            "query": query.as_ref(), "match_ranges": expected.len(),
+            "warmup_samples": 3, "samples": SAMPLES, "frames_per_sample": FRAMES,
+            "reference_ns_per_frame": reference_ns, "cached_ns_per_frame": cached_ns,
+            "reference_median_ns": median(&reference_ns), "cached_median_ns": median(&cached_ns),
+            "scope": "unchanged resident-page search matching only; excludes highlight painting, layout, PDFium, GPU, and input latency"
+        })
+    );
+}
