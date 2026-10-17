@@ -109,7 +109,7 @@ now exercised through the real app, and the lower-level coverage retained.
 
 | Journey | Input and assertions |
 | --- | --- |
-| typing_particles | Requires factory defaults (off, Medium, Explosion), enables particles through native Settings, then selects Explosion, Shotgun, Flamethrower, Railgun and Plasma through the style dropdown. Each selection preserves emission history; real source typing produces the selected style with bounded live counts and actual instanced GPU draw/upload evidence. Also checks light/dark appearance, expiry, and no extra bursts from cursor movement, paste or disabled typing. Restores the exact initial particle preferences and appearance, including on failure. Also runs inside editor_preferences; optional fresh transient framebuffers for each style and both appearances |
+| typing_particles | Requires factory defaults (off, Medium, Explosion), enables Editor particles through native Settings, then selects Explosion, Shotgun, Flamethrower, Railgun and Plasma. Each selection preserves emission history; typing and editor commands produce exactly one cause-tagged burst with bounded live counts and actual GPU draw/upload evidence. Covers keyboard comment/uncomment, Copy, Paste, Cut, Undo/Redo, newline/delete, and popup Copy/Toggle Comment; clipboard writes are verified and restored. Checks light/dark appearance, expiry/no idle draws, quiet navigation/menu dismissal, Settings input, empty-history commands and disabled typing. Restores exact particle preferences and appearance, including on failure. Also runs inside editor_preferences; optional fresh transient framebuffers for each style, both appearances and command effects |
 | panels | Cmd+5, repeated Terminal/Problems selection and hide/reopen; stable panel height across 30 fresh frames per sample; native terminal typing runs an isolated shell, Off reaps it and remains off across panel transitions, Restart starts a different shell; the header button opens a second shell with its own PID, the numbered switcher moves between shells, a real vim click moves its cursor, exiting one shell leaves the other parked; document stays unchanged |
 | problems_focus | Both effective preview backends hand keyboard ownership to Problems; blank-area/header clicks retain it, typing/paste/undo/comment shortcuts cannot change the source or invert preview pages, Cmd+F opens neither source nor preview Find, and closing/switching panels releases focus so source typing resumes; preview → Terminal shortcut releases native preview ownership, a physical t does not invert pages, and shell typing writes a private receipt without clicking the terminal grid |
 | preview_find | Both effective backends: preview Cmd+F opens and focuses the query without another click, subsequent Cmd+F and typing stay in that field, the source and preview palette stay unchanged; header dragging follows the full pointer displacement and holds a stationary pointer for at least 0.4 seconds and eight fresh frames without drift; a popped-out viewer also opens its hidden controls with Cmd+F |
@@ -301,8 +301,13 @@ text and unchanged source,
 checks Help's Find routing, changes and restores indentation guides, highlighting uses of local definitions and word wrapping, opens the
 custom highlight section, and verifies that source text is unchanged. It also runs
 the focused `typing_particles` checks in an isolated scratch tab. Particle inspection
-reports the selected setting, the last emitted style, and live counts by the style
-stored at birth. The native journey waits for bursts to expire before changing
+reports the selected setting, the last emitted style, live counts by the style
+stored at birth, and cumulative bursts by editor action. Each input must increment
+exactly its own action count once; Copy is checked even though source does not
+change. Clipboard effects are observed immediately after the real key/menu event,
+before waiting for the clipboard receipt, so a slow receipt cannot hide the finite
+animation. Navigation, Settings input and no-op commands must leave all source
+bursts quiet. The native journey waits for bursts to expire before changing
 Settings, so it does not depend on completing a window roundtrip within the 640 ms
 particle lifetime. Mixed live bursts retaining their original styles are covered
 by deterministic state/GPU tests. Use `--capture-review` to retain fresh

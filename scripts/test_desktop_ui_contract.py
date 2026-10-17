@@ -29,7 +29,8 @@ class TypingParticleContract(unittest.TestCase):
                     "emitted_count": 7, "max_live": 7, "pool_limit": 128,
                     "lifetime_ms": 480, "last_emission_age_ms": 100,
                     "origin": [200, 100], "clip": [10, 10, 800, 500],
-                    "last_style": "Explosion", "live_styles": {"Explosion": 7}}}
+                    "last_style": "Explosion", "live_styles": {"Explosion": 7},
+                    "last_action": "Typing", "action_bursts": {"Typing": 1}}}
 
     def test_actual_bounded_fresh_emission_and_expired_counter_history_are_distinct(self):
         from desktop_ui_journeys import typing_particle_state
@@ -50,7 +51,12 @@ class TypingParticleContract(unittest.TestCase):
                  {"last_style": "Unknown"}, {"live_styles": None},
                  {"live_styles": {"Unknown": 7}}, {"live_styles": {"Explosion": 6}},
                  {"live_styles": {"Explosion": True}},
-                 {"live_styles": {"Explosion": 7, "Plasma": 0}}]
+                 {"live_styles": {"Explosion": 7, "Plasma": 0}},
+                 {"last_action": None}, {"last_action": "Unknown"}, {"last_action": "Copy"},
+                 {"action_bursts": None}, {"action_bursts": {}},
+                 {"action_bursts": {"Unknown": 1}}, {"action_bursts": {"Typing": True}},
+                 {"action_bursts": {"Typing": 1, "Copy": 0}},
+                 {"action_bursts": {"Typing": 2}}]
         for change in cases:
             document = self.document()
             document["typing_particles"] = ({**document["typing_particles"], **change}
@@ -91,6 +97,69 @@ class TypingParticleContract(unittest.TestCase):
         document["typing_particles"]["gpu"].update(
             ready=False, draws=0, uploads=0, uploaded_instances=0, last_draw_instances=0)
         self.assertFalse(typing_particle_gpu_state(document)["ready"])
+
+    def test_selected_popup_uses_current_ime_anchor_instead_of_the_old_collapsed_caret(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import editor_particle_popup_target
+        current = {"enabled": True, "age_ms": 1, "frame": 42, "viewport": "source",
+                   "x": 150, "y": 250}
+        state = {"document": {"cursor": [8, 24], "frame": 42, "editor_keyboard_focused": True},
+                 "targets": {"editor.source": {**current, "x": 400, "y": 200, "width": 600, "height": 300},
+                             "editor.ime_cursor": current,
+                             "editor.caret": {**current, "frame": 35, "age_ms": 8000, "x": 300}}}
+        self.assertEqual(editor_particle_popup_target(state), "editor.ime_cursor")
+        for change in ({"age_ms": 501}, {"frame": 41}, {"viewport": "other"}, {"x": 1000}):
+            changed = deepcopy(state)
+            changed["targets"]["editor.ime_cursor"].update(change)
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                editor_particle_popup_target(changed)
+        state["document"]["cursor"] = [24, 24]
+        state["targets"]["editor.caret"] = dict(current)
+        self.assertEqual(editor_particle_popup_target(state), "editor.caret")
+
+    def test_one_unchanged_source_copy_burst_needs_the_exact_cause_and_a_new_gpu_draw(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import particle_action_rendered, fingerprint
+        before = self.gpu_document()
+        before.update(source_fingerprint=fingerprint("alpha"), source_bytes=5,
+                      editor_keyboard_focused=True)
+        actual = deepcopy(before)
+        state = actual["typing_particles"]
+        state.update(burst_count=2, emitted_count=14, last_action="Copy",
+                     action_bursts={"Typing": 1, "Copy": 1})
+        state["gpu"].update(draws=4, uploads=2)
+        self.assertTrue(particle_action_rendered(actual, before, "Copy", "alpha"))
+        cases = [lambda d: d.update(source_fingerprint=fingerprint("changed")),
+                 lambda d: d.update(editor_keyboard_focused=False),
+                 lambda d: d["typing_particles"]["gpu"].update(draws=3),
+                 lambda d: d["typing_particles"].update(last_action="Typing", action_bursts={"Typing": 2}),
+                 lambda d: d["typing_particles"].update(burst_count=3, action_bursts={"Typing": 1, "Copy": 2})]
+        for mutate in cases:
+            changed = deepcopy(actual)
+            mutate(changed)
+            with self.subTest(changed=changed):
+                self.assertFalse(particle_action_rendered(changed, before, "Copy", "alpha"))
+
+    def test_document_return_requires_a_reset_trace_and_no_gpu_replay_before_rebaselining(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import particle_document_returned_quiet, fingerprint
+        prior = self.gpu_document()
+        prior.update(active_tab_id=7, source_fingerprint=fingerprint("alpha"), source_bytes=5)
+        returned = deepcopy(prior)
+        returned["typing_particles"].update(active_count=0, burst_count=0, emitted_count=0,
+            max_live=0, last_style=None, live_styles={}, last_action=None, action_bursts={})
+        self.assertTrue(particle_document_returned_quiet(returned, prior, "alpha"))
+        cases = [lambda d: d.update(active_tab_id=8),
+                 lambda d: d.update(source_fingerprint=fingerprint("other")),
+                 lambda d: d["typing_particles"]["gpu"].update(draws=4),
+                 lambda d: d["typing_particles"].update(emitted_count=7),
+                 lambda d: d["typing_particles"].update(max_live=7, emitted_count=7),
+                 lambda d: d.update(typing_particles=deepcopy(prior["typing_particles"]))]
+        for mutate in cases:
+            changed = deepcopy(returned)
+            mutate(changed)
+            with self.subTest(changed=changed):
+                self.assertFalse(particle_document_returned_quiet(changed, prior, "alpha"))
 
     def test_missing_cpu_only_broken_or_unbounded_gpu_evidence_is_rejected(self):
         from desktop_ui_journeys import typing_particle_gpu_state
@@ -930,8 +999,10 @@ class CopyIsolationContract(unittest.TestCase):
     def test_copy_acknowledges_fixture_match_and_releases_adapter_on_success_or_failure(self):
         import io
         from types import SimpleNamespace
-        for matches, click_fails in [(True, False), (False, False), (True, True)]:
-            with self.subTest(matches=matches, click_fails=click_fails):
+        for matches, click_fails, observer_fails in [
+                (True, False, False), (False, False, False),
+                (True, True, False), (True, False, True)]:
+            with self.subTest(matches=matches, click_fails=click_fails, observer_fails=observer_fails):
                 journey = object.__new__(runner.Journey)
                 journey.driver = Path("private-driver")
                 journey.process = SimpleNamespace(pid=123)
@@ -939,10 +1010,15 @@ class CopyIsolationContract(unittest.TestCase):
                 child = SimpleNamespace(
                     stdin=io.StringIO(),
                     stdout=io.StringIO(runner.json.dumps({"ready": "copy"}) + "\n"
-                                      + runner.json.dumps({"matches": matches}) + "\n"),
-                    returncode=0,
-                    communicate=lambda value, timeout: (restored.append(value) or "", ""),
+                                      + (runner.json.dumps({"matches": matches}) + "\n") * 2),
+                    returncode=None,
+                    poll=lambda: child.returncode,
                 )
+                def communicate(value, timeout):
+                    restored.append(value)
+                    child.returncode = 0
+                    return "", ""
+                child.communicate = communicate
                 def click(name):
                     events.append(name)
                     if click_fails:
@@ -952,7 +1028,13 @@ class CopyIsolationContract(unittest.TestCase):
                 with patch("subprocess.Popen", return_value=child), \
                      patch("select.select", return_value=([child.stdout], [], [])), \
                      patch("time.monotonic", side_effect=[0, 7]):
-                    if click_fails:
+                    if observer_fails:
+                        def observer():
+                            raise AssertionError("particle observation failed")
+                        with self.assertRaisesRegex(AssertionError, "particle observation failed"):
+                            journey.copy_with_receipt("private fixture text", lambda: click("menu.Copy"), observer)
+                        self.assertEqual(child.stdin.getvalue(), "check\n")
+                    elif click_fails:
                         with self.assertRaisesRegex(RuntimeError, "click failed"):
                             journey.copy_from_menu("private fixture text")
                     elif matches:
@@ -963,7 +1045,7 @@ class CopyIsolationContract(unittest.TestCase):
                 self.assertEqual(restored, ["restore\n"])
                 self.assertEqual(events[0], "menu.Copy")
                 self.assertNotIn("private fixture text", repr(events))
-                if matches and not click_fails:
+                if matches and not click_fails and not observer_fails:
                     self.assertEqual(events[1][0], ("clipboard.copy",))
 
 
@@ -986,8 +1068,9 @@ class ClipboardAdapterLifetimeContract(unittest.TestCase):
                     child = SimpleNamespace(
                         stdin=io.StringIO(),
                         stdout=io.StringIO(runner.json.dumps(first) + "\n"
-                                          + runner.json.dumps({"matches": True}) + "\n"),
+                                          + (runner.json.dumps({"matches": True}) + "\n") * 2),
                         returncode=None,
+                        poll=lambda: child.returncode,
                         terminate=lambda: calls.append(("terminate",)),
                         kill=lambda: calls.append(("kill",)),
                     )

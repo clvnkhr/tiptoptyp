@@ -1,4 +1,4 @@
-//! Finite typing feedback over the existing editor, with no input or layout widgets.
+//! Finite editor-action feedback over the existing editor, with no input or layout widgets.
 use crate::{
     document::DocumentKey,
     settings::{EditorParticleSettings, ParticleDensity, ParticleStyle},
@@ -17,28 +17,116 @@ const LIMIT: usize = 256;
 const MAX_INPUT_EVENTS: usize = 64;
 const LIFETIME: f64 = 0.64;
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(super) struct TypingIntent {
-    events: u8,
-    ime_commit: bool,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Action {
+    #[default]
+    Typing,
+    Newline,
+    Indent,
+    Delete,
+    Comment,
+    Undo,
+    Redo,
+    Copy,
+    Cut,
+    Paste,
+}
+impl Action {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    const ALL: [Self; 10] = [
+        Self::Typing,
+        Self::Newline,
+        Self::Indent,
+        Self::Delete,
+        Self::Comment,
+        Self::Undo,
+        Self::Redo,
+        Self::Copy,
+        Self::Cut,
+        Self::Paste,
+    ];
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn label(self) -> &'static str {
+        match self {
+            Self::Typing => "Typing",
+            Self::Newline => "Newline",
+            Self::Indent => "Indent",
+            Self::Delete => "Delete",
+            Self::Comment => "Comment",
+            Self::Undo => "Undo",
+            Self::Redo => "Redo",
+            Self::Copy => "Copy",
+            Self::Cut => "Cut",
+            Self::Paste => "Paste",
+        }
+    }
+
+    fn count(self, density: ParticleDensity, events: u8) -> usize {
+        let base = density_count(density);
+        match self {
+            Self::Typing => usize::from(events) * base,
+            Self::Paste | Self::Cut => base * 2,
+            Self::Copy | Self::Newline | Self::Indent | Self::Delete => base / 2,
+            Self::Comment | Self::Undo | Self::Redo => base,
+        }
+    }
 }
 
-fn typing_events(events: &[egui::Event], enabled: bool, focused: bool) -> TypingIntent {
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct InputIntent {
+    events: u8,
+    ime_commit: bool,
+    action: Option<Action>,
+    copy_output_start: usize,
+    commands_enabled: bool,
+}
+
+fn input_intent(events: &[egui::Event], enabled: bool, focused: bool) -> InputIntent {
+    let mut intent = InputIntent {
+        commands_enabled: enabled,
+        ..Default::default()
+    };
     if !enabled || !focused || events.len() > MAX_INPUT_EVENTS {
-        return TypingIntent::default();
+        return intent;
     }
-    let mut intent = TypingIntent::default();
     for event in events {
+        let action = match event {
+            egui::Event::Paste(text) if !text.is_empty() => Some(Action::Paste),
+            egui::Event::Cut => Some(Action::Cut),
+            egui::Event::Copy => Some(Action::Copy),
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => match key {
+                egui::Key::Z if modifiers.command => Some(if modifiers.shift {
+                    Action::Redo
+                } else {
+                    Action::Undo
+                }),
+                egui::Key::Y if modifiers.command => Some(Action::Redo),
+                egui::Key::Backspace | egui::Key::Delete => Some(Action::Delete),
+                egui::Key::Enter if !modifiers.command => Some(Action::Newline),
+                egui::Key::Tab if !modifiers.command => Some(Action::Indent),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(action) = action
+            && intent
+                .action
+                .is_none_or(|previous| action as u8 > previous as u8)
+        {
+            intent.action = Some(action);
+        }
         let (text, commit) = match event {
-            // Clipboard insertion must not turn into a typing burst, including
-            // native batches which also contain text/key events.
-            egui::Event::Paste(_) => return TypingIntent::default(),
             egui::Event::Text(text) => (text, false),
             egui::Event::Ime(egui::ImeEvent::Commit(text)) => (text, true),
             _ => continue,
         };
-        // Real keystrokes and ordinary IME phrases are small. Conservatively
-        // ignore bulk synthetic text rather than walking arbitrary input data.
+        // Never scan clipboard contents or document-sized synthetic events.
         if text.len() <= 256 && text.chars().take(16).any(|ch| !ch.is_control()) {
             intent.events = intent.events.saturating_add(1).min(4);
             intent.ime_commit |= commit;
@@ -47,13 +135,106 @@ fn typing_events(events: &[egui::Event], enabled: bool, focused: bool) -> Typing
     intent
 }
 
-/// Capture before TextEdit consumes events. An actual edit must still admit it.
-pub(super) fn capture(ui: &Ui, editor: Id, enabled: bool) -> TypingIntent {
+/// Capture before TextEdit consumes events; confirm the actual result afterward.
+pub(super) fn capture(ui: &Ui, editor: Id, enabled: bool) -> InputIntent {
     if !enabled {
-        return TypingIntent::default();
+        return InputIntent::default();
     }
     let focused = ui.memory(|memory| memory.has_focus(editor));
-    ui.input(|input| typing_events(&input.events, enabled, focused))
+    let mut intent = ui.input(|input| input_intent(&input.events, enabled, focused));
+    if intent.action == Some(Action::Copy) {
+        intent.copy_output_start = ui.output(|output| output.commands.len());
+    }
+    intent
+}
+
+#[derive(Clone, Copy)]
+struct Receipt {
+    identity: Identity,
+    frame: u64,
+    action: Action,
+    focus: Option<Id>,
+}
+
+fn receipt_id(editor: Id) -> Id {
+    editor.with("particle-action-receipt")
+}
+
+/// A successful app command can run before or after the editor is painted.
+/// Keep only one receipt, scoped to this document/view and the next root frame.
+pub(super) fn queue(
+    context: &egui::Context,
+    editor: Id,
+    document: DocumentKey,
+    view: View,
+    action: Action,
+) {
+    let receipt = Receipt {
+        identity: Identity::new(document, view),
+        frame: context.cumulative_frame_nr(),
+        action,
+        focus: context.memory(|memory| memory.focused()),
+    };
+    context.data_mut(|data| data.insert_temp(receipt_id(editor), receipt));
+    context.request_repaint();
+}
+
+#[cfg(test)]
+pub(super) fn queued_action(context: &egui::Context, editor: Id) -> Option<Action> {
+    context.data(|data| {
+        data.get_temp::<Receipt>(receipt_id(editor))
+            .map(|receipt| receipt.action)
+    })
+}
+
+fn receipt_frame_valid(created: u64, current: u64) -> bool {
+    (created..=created.saturating_add(1)).contains(&current)
+}
+
+fn take_receipt(
+    context: &egui::Context,
+    editor: Id,
+    identity: Identity,
+    enabled: bool,
+) -> Option<Action> {
+    let receipt = context.data_mut(|data| {
+        let receipt = data.get_temp::<Receipt>(receipt_id(editor));
+        data.remove::<Receipt>(receipt_id(editor));
+        receipt
+    })?;
+    let frame = context.cumulative_frame_nr();
+    let viewport = super::focused_input_viewport(context);
+    let focus = context.memory(|memory| memory.focused());
+    (enabled
+        && (focus.is_none() || focus == Some(editor) || focus == receipt.focus)
+        && receipt.identity == identity
+        && receipt_frame_valid(receipt.frame, frame)
+        && ((viewport == context.viewport_id() && context.input(|input| input.focused))
+            || viewport == super::scoped_child_viewport_id(context, "tiptoptyp-popup-overlay")))
+    .then_some(receipt.action)
+}
+
+fn accepted_input(
+    intent: InputIntent,
+    focused: bool,
+    changed: bool,
+    response_changed: bool,
+    copied: bool,
+) -> Option<Action> {
+    if !focused {
+        return None;
+    }
+    if let Some(action) = intent.action
+        && (if action == Action::Copy {
+            copied
+        } else {
+            changed
+        })
+    {
+        return Some(action);
+    }
+    (intent.events > 0 && (changed || (intent.ime_commit && response_changed)))
+        .then_some(Action::Typing)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,6 +288,7 @@ impl Particle {
 struct State {
     identity: Option<Identity>,
     style: ParticleStyle,
+    action: Action,
     particles: Vec<Particle>,
     last_frame: Option<u64>,
     last_time: f64,
@@ -192,6 +374,7 @@ impl State {
             let size = self.random();
             let color_seed = self.random();
             let (velocity, radius) = launch(self.style, index, angle, energy, size, color_seed);
+            let velocity = action_velocity(self.action, velocity);
             self.particles.push(Particle {
                 origin,
                 velocity,
@@ -302,12 +485,43 @@ type SharedState = Arc<Mutex<State>>;
 fn state_id(editor: Id) -> Id {
     editor.with("typing-particles")
 }
+// The GPU still owns motion, trails and fading. Actions only steer the
+// existing weapon-style launch once; they add no per-frame CPU simulation.
+fn action_velocity(action: Action, velocity: Vec2) -> Vec2 {
+    match action {
+        Action::Typing => velocity,
+        Action::Copy => egui::vec2(velocity.x * 0.65, -velocity.y.abs() - 65.0),
+        Action::Paste => egui::vec2(velocity.x * 1.35, -velocity.y.abs() * 0.75 - 35.0),
+        Action::Cut => egui::vec2(velocity.x * 1.2, velocity.y.abs() + 70.0),
+        Action::Comment | Action::Redo | Action::Indent => {
+            egui::vec2(velocity.x.abs() + 75.0, velocity.y * 0.35)
+        }
+        Action::Undo => egui::vec2(-velocity.x.abs() - 75.0, velocity.y * 0.35),
+        Action::Delete => egui::vec2(velocity.x * 0.6, velocity.y.abs() + 45.0),
+        Action::Newline => egui::vec2(velocity.x * 0.8, -velocity.y.abs() - 85.0),
+    }
+}
+
 fn density_count(density: ParticleDensity) -> usize {
     match density {
         ParticleDensity::Low => 24,
         ParticleDensity::Medium => 48,
         ParticleDensity::High => 80,
     }
+}
+
+fn visible_origin(point: Pos2, viewport: Rect, action: Action) -> Option<Pos2> {
+    if !point.is_finite() || !viewport.is_finite() || !viewport.is_positive() {
+        return None;
+    }
+    if viewport.contains(point) {
+        return Some(point);
+    }
+    if action == Action::Typing {
+        return None;
+    }
+    let inset = viewport.size() * 0.5;
+    Some(viewport.shrink2(inset.min(Vec2::splat(4.0))).clamp(point))
 }
 
 // Cursor lookup can walk the galley, so animation-only frames must never do it.
@@ -328,25 +542,51 @@ pub(super) fn paint(
     ui: &Ui,
     surface: Surface<'_>,
     settings: EditorParticleSettings,
-    intent: TypingIntent,
+    intent: InputIntent,
     document_changed: bool,
 ) {
     let context = ui.ctx();
     let id = state_id(surface.edit.response.id);
     if !settings.enabled {
-        context.data_mut(|data| data.remove::<SharedState>(id));
+        context.data_mut(|data| {
+            data.remove::<SharedState>(id);
+            data.remove::<Receipt>(receipt_id(surface.edit.response.id));
+        });
         return;
     }
     let renderer = Renderer::for_context(context);
     if renderer.is_unavailable() {
-        context.data_mut(|data| data.remove::<SharedState>(id));
+        context.data_mut(|data| {
+            data.remove::<SharedState>(id);
+            data.remove::<Receipt>(receipt_id(surface.edit.response.id));
+        });
         return;
     }
+    let identity = Identity::new(surface.document, surface.view);
+    let receipt = take_receipt(
+        context,
+        surface.edit.response.id,
+        identity,
+        intent.commands_enabled,
+    );
     let existing = context.data(|data| data.get_temp::<SharedState>(id));
-    let focused = surface.edit.response.has_focus();
-    let accepted = focused
-        && intent.events > 0
-        && (document_changed || (intent.ime_commit && surface.edit.response.changed()));
+    let copied = intent.action == Some(Action::Copy)
+        && ui.output(|output| {
+            output.commands.iter().skip(intent.copy_output_start).any(|command| {
+            matches!(command, egui::OutputCommand::CopyText(text) if !text.is_empty())
+        })
+        });
+    let action = receipt.or_else(|| {
+        accepted_input(
+            intent,
+            context.input(|input| input.focused)
+                && super::focused_input_viewport(context) == context.viewport_id(),
+            document_changed,
+            surface.edit.response.changed(),
+            copied,
+        )
+    });
+    let accepted = action.is_some();
     if existing.is_none() && !accepted {
         renderer.warm(ui, surface.viewport.intersect(ui.clip_rect()));
         return;
@@ -359,6 +599,7 @@ pub(super) fn paint(
     let mut state = state.lock().unwrap();
     let frame = context.cumulative_frame_nr();
     let viewport = surface.viewport.intersect(ui.clip_rect());
+    let action = action.unwrap_or(state.action);
     let caret = caret_for_frame(
         settings.enabled,
         accepted,
@@ -377,20 +618,21 @@ pub(super) fn paint(
                         .translate(surface.edit.galley_pos.to_vec2())
                         .center()
                 })
-                .filter(|point| point.is_finite() && viewport.contains(*point))
+                .and_then(|point| visible_origin(point, viewport, action))
         },
     );
     let now = context.input(|input| input.time);
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     let bursts_before = state.bursts;
     state.style = settings.style;
+    state.action = action;
     state.update(
         Identity::new(surface.document, surface.view),
         frame,
         now,
         caret,
         if accepted {
-            usize::from(intent.events) * density_count(settings.density)
+            action.count(settings.density, intent.events.max(1))
         } else {
             0
         },
@@ -424,6 +666,8 @@ struct Trace {
     identity: Identity,
     burst_count: u64,
     last_style: ParticleStyle,
+    last_action: Action,
+    action_bursts: [u64; 10],
     emitted_count: u64,
     max_live: usize,
     last_emission: f64,
@@ -452,6 +696,8 @@ fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, cli
                 identity,
                 burst_count: 0,
                 last_style: particle.style,
+                last_action: state.action,
+                action_bursts: [0; 10],
                 emitted_count: 0,
                 max_live: 0,
                 last_emission: now,
@@ -460,6 +706,9 @@ fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, cli
             });
         trace.identity = identity;
         trace.last_style = particle.style;
+        trace.last_action = state.action;
+        trace.action_bursts[state.action as usize] =
+            trace.action_bursts[state.action as usize].saturating_add(1);
         trace.burst_count = trace.burst_count.saturating_add(1);
         trace.emitted_count = trace.emitted_count.saturating_add(emitted as u64);
         trace.max_live = trace.max_live.max(state.particles.len());
@@ -508,6 +757,11 @@ pub(super) fn inspected(
         "active_count": active_count,
         "live_styles": live_styles,
         "last_style": trace.as_ref().map(|trace| trace.last_style.label()),
+        "last_action": trace.as_ref().map(|trace| trace.last_action.label()),
+        "action_bursts": Action::ALL.into_iter().filter_map(|action| {
+            let count = trace.as_ref().map_or(0, |trace| trace.action_bursts[action as usize]);
+            (count > 0).then_some((action.label(), count))
+        }).collect::<std::collections::BTreeMap<_, _>>(),
         "burst_count": trace.as_ref().map_or(0, |trace| trace.burst_count),
         "emitted_count": trace.as_ref().map_or(0, |trace| trace.emitted_count),
         "max_live": trace.as_ref().map_or(0, |trace| trace.max_live),
@@ -531,6 +785,125 @@ mod tests {
             DocumentKey::new(WindowSessionId::new(1), epoch, revision),
             view,
         )
+    }
+
+    #[test]
+    fn action_origins_stay_inside_even_tiny_clips_without_forcing_hidden_typing() {
+        for width in [1.0, 2.0, 7.0, 8.0, 100.0] {
+            for height in [1.0, 2.0, 7.0, 8.0, 100.0] {
+                let viewport = Rect::from_min_size(Pos2::new(20.0, 30.0), Vec2::new(width, height));
+                for point in [Pos2::ZERO, Pos2::new(1000.0, 1000.0)] {
+                    assert_eq!(visible_origin(point, viewport, Action::Typing), None);
+                    for action in [Action::Copy, Action::Paste, Action::Undo, Action::Comment] {
+                        assert!(
+                            viewport.contains(visible_origin(point, viewport, action).unwrap())
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            visible_origin(Pos2::ZERO, Rect::NOTHING, Action::Copy),
+            None
+        );
+    }
+
+    #[test]
+    fn action_receipts_are_one_shot_owner_bound_and_do_not_survive_focus_changes() {
+        let context = egui::Context::default();
+        context.begin_pass(egui::RawInput::default());
+        context.end_pass().drop_without_applying_deltas();
+        let editor = Id::new("receipt-editor");
+        let key = identity(1, 1, View::Source);
+        queue(&context, editor, key.document, View::Source, Action::Copy);
+        assert_eq!(
+            take_receipt(&context, editor, key, true),
+            Some(Action::Copy)
+        );
+        assert_eq!(take_receipt(&context, editor, key, true), None);
+        for other in [identity(2, 1, View::Source), identity(1, 1, View::Diff)] {
+            queue(&context, editor, key.document, View::Source, Action::Copy);
+            assert_eq!(take_receipt(&context, editor, other, true), None);
+            assert_eq!(take_receipt(&context, editor, key, true), None);
+        }
+        queue(&context, editor, key.document, View::Source, Action::Copy);
+        assert_eq!(take_receipt(&context, editor, key, false), None);
+        context.memory_mut(|memory| memory.request_focus(editor));
+        queue(&context, editor, key.document, View::Source, Action::Copy);
+        context.memory_mut(|memory| memory.request_focus(Id::new("another-field")));
+        assert_eq!(take_receipt(&context, editor, key, true), None);
+        queue(&context, editor, key.document, View::Source, Action::Copy);
+        let info = egui::ViewportInfo {
+            focused: Some(true),
+            ..Default::default()
+        };
+        let settings = super::super::scoped_child_viewport_id(&context, "tiptoptyp-settings");
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(settings, info);
+        context.begin_pass(input);
+        assert_eq!(take_receipt(&context, editor, key, true), None);
+        context.end_pass().drop_without_applying_deltas();
+        queue(&context, editor, key.document, View::Source, Action::Copy);
+        context.begin_pass(egui::RawInput {
+            focused: false,
+            ..Default::default()
+        });
+        assert_eq!(take_receipt(&context, editor, key, true), None);
+        context.end_pass().drop_without_applying_deltas();
+        assert!(receipt_frame_valid(10, 10));
+        assert!(receipt_frame_valid(10, 11));
+        assert!(!receipt_frame_valid(10, 12));
+        assert!(!receipt_frame_valid(10, 9));
+    }
+
+    #[test]
+    fn command_motion_has_direction_and_bulk_input_never_scales_its_emission() {
+        let velocity = egui::vec2(-100.0, 90.0);
+        assert_eq!(action_velocity(Action::Typing, velocity), velocity);
+        assert!(action_velocity(Action::Copy, velocity).y < 0.0);
+        assert!(action_velocity(Action::Cut, velocity).y > 0.0);
+        assert!(action_velocity(Action::Paste, velocity).y < 0.0);
+        assert!(action_velocity(Action::Undo, velocity).x < 0.0);
+        assert!(action_velocity(Action::Redo, velocity).x > 0.0);
+        let intent = input_intent(&[egui::Event::Paste("x".repeat(1_000_000))], true, true);
+        assert_eq!(intent.events, 0);
+        assert_eq!(intent.action, Some(Action::Paste));
+        let mut state = State::default();
+        for frame in 0..100 {
+            state.action = [
+                Action::Paste,
+                Action::Copy,
+                Action::Cut,
+                Action::Undo,
+                Action::Redo,
+                Action::Comment,
+            ][frame as usize % 6];
+            state.update(
+                identity(1, frame, View::Source),
+                frame,
+                frame as f64 * 0.001,
+                Some(Pos2::new(50.0, 50.0)),
+                state.action.count(ParticleDensity::High, 1),
+            );
+            assert!(state.particles.len() <= LIMIT);
+        }
+        let instances = state.instances();
+        let bursts = state.bursts;
+        state.update(
+            identity(1, 99, View::Source),
+            99,
+            0.099,
+            Some(Pos2::ZERO),
+            160,
+        );
+        assert_eq!(state.bursts, bursts);
+        state.update(identity(1, 100, View::Source), 100, 0.1, None, 0);
+        let idle_instances = state.instances();
+        state.update(identity(1, 101, View::Source), 101, 0.101, None, 0);
+        assert!(Arc::ptr_eq(&idle_instances, &state.instances()));
+        assert_eq!(instances.len(), LIMIT);
+        state.update(identity(1, 102, View::Source), 102, 1.0, None, 0);
+        assert!(state.particles.is_empty());
     }
 
     #[test]
@@ -749,14 +1122,14 @@ mod tests {
     }
 
     #[test]
-    fn only_small_typing_and_commits_are_admitted_not_paste_preedit_or_bulk_input() {
+    fn typing_and_actions_are_bounded_and_require_confirmed_results() {
         let typed = egui::Event::Text("α".into());
         assert_eq!(
-            typing_events(std::slice::from_ref(&typed), true, true).events,
+            input_intent(std::slice::from_ref(&typed), true, true).events,
             1
         );
         assert!(
-            typing_events(
+            input_intent(
                 &[egui::Event::Ime(egui::ImeEvent::Commit("日本".into()))],
                 true,
                 true
@@ -767,11 +1140,6 @@ mod tests {
             (vec![typed.clone()], false, true),
             (vec![typed.clone()], true, false),
             (
-                vec![typed.clone(), egui::Event::Paste("clipboard".into())],
-                true,
-                true,
-            ),
-            (
                 vec![egui::Event::Ime(egui::ImeEvent::Preedit {
                     text: "日本".into(),
                     active_range_chars: None,
@@ -780,10 +1148,28 @@ mod tests {
                 true,
             ),
             (vec![egui::Event::Text("x".repeat(257))], true, true),
-            (vec![typed; MAX_INPUT_EVENTS + 1], true, true),
+            (vec![typed.clone(); MAX_INPUT_EVENTS + 1], true, true),
         ] {
-            assert_eq!(typing_events(&events, enabled, focused).events, 0);
+            assert_eq!(input_intent(&events, enabled, focused).events, 0);
         }
+        let paste = input_intent(
+            &[typed.clone(), egui::Event::Paste("clipboard".into())],
+            true,
+            true,
+        );
+        assert_eq!(paste.action, Some(Action::Paste));
+        assert_eq!(
+            accepted_input(paste, true, true, true, false),
+            Some(Action::Paste)
+        );
+        assert_eq!(accepted_input(paste, true, false, false, false), None);
+        let copy = input_intent(&[egui::Event::Copy], true, true);
+        assert_eq!(
+            accepted_input(copy, true, false, false, true),
+            Some(Action::Copy)
+        );
+        assert_eq!(accepted_input(copy, true, false, false, false), None);
+        assert_eq!(accepted_input(copy, false, false, false, true), None);
         assert!(density_count(ParticleDensity::Low) < density_count(ParticleDensity::Medium));
         assert!(density_count(ParticleDensity::Medium) < density_count(ParticleDensity::High));
     }
@@ -886,6 +1272,123 @@ mod tests {
         }
     }
 
+    fn current_action(harness: &Harness<'_, EditorApp>) -> Option<Action> {
+        harness
+            .ctx
+            .data(|data| data.get_temp::<SharedState>(state_id(source_editor_id(&harness.ctx))))
+            .map(|state| state.lock().unwrap().action)
+    }
+
+    #[test]
+    fn real_source_and_diff_widget_actions_confirm_copy_and_changed_text_once() {
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for diff in [false, true] {
+            for (action, event, selection, expected) in [
+                (Action::Copy, egui::Event::Copy, 0..6, "prefix "),
+                (Action::Cut, egui::Event::Cut, 0..6, " "),
+                (
+                    Action::Paste,
+                    egui::Event::Paste("pasted".into()),
+                    7..7,
+                    "prefix pasted",
+                ),
+                (Action::Delete, key(egui::Key::Backspace), 7..7, "prefix"),
+                (Action::Delete, key(egui::Key::Delete), 0..0, "refix "),
+                (Action::Newline, key(egui::Key::Enter), 7..7, "prefix \n"),
+                (Action::Indent, key(egui::Key::Tab), 7..7, "prefix   "),
+            ] {
+                let mut harness = editor(diff);
+                harness.state_mut().pending_editor_selection =
+                    Some(EditorSelection::Focus(selection));
+                harness.step();
+                harness.input_mut().events.push(event);
+                harness.step();
+                assert_eq!(
+                    harness.state().document().source(),
+                    expected,
+                    "{diff}: {action:?}"
+                );
+                assert_eq!(counts(&harness).1, 1, "{diff}: {action:?}");
+                assert_eq!(current_action(&harness), Some(action));
+                if action == Action::Copy {
+                    assert!(harness.output().platform_output.commands.iter().any(|command|
+                        matches!(command, egui::OutputCommand::CopyText(text) if text == "prefix")));
+                }
+                harness.run_steps(45);
+                assert_eq!(counts(&harness), (0, 0), "{action:?} must expire");
+                assert!(
+                    harness
+                        .ctx
+                        .repaint_causes()
+                        .iter()
+                        .all(|cause| cause.file != file!())
+                );
+            }
+            for event in [
+                egui::Event::Copy,
+                egui::Event::Cut,
+                egui::Event::Paste(String::new()),
+                key(egui::Key::Delete),
+            ] {
+                let mut harness = editor(diff);
+                harness.input_mut().events.push(event);
+                harness.step();
+                assert_eq!(harness.state().document().source(), "prefix ");
+                assert_eq!(counts(&harness), (0, 0), "no-op actions stay quiet");
+            }
+        }
+    }
+
+    #[test]
+    fn no_op_copy_does_not_suppress_successful_typing_in_the_same_frame() {
+        for diff in [false, true] {
+            let mut harness = editor(diff);
+            harness
+                .input_mut()
+                .events
+                .extend([egui::Event::Copy, egui::Event::Text("x".into())]);
+            harness.step();
+            assert_eq!(harness.state().document().source(), "prefix x");
+            assert_eq!(counts(&harness).1, 1);
+            assert_eq!(current_action(&harness), Some(Action::Typing));
+        }
+    }
+
+    #[test]
+    fn successful_menu_commands_emit_in_both_views_without_a_text_change_intent() {
+        for diff in [false, true] {
+            let mut harness = editor(diff);
+            let context = harness.ctx.clone();
+            harness.state_mut().pending_editor_selection = Some(EditorSelection::Focus(0..6));
+            harness.step();
+            harness.state_mut().copy_editor_selection(&context);
+            // A duplicate native semantic event and command receipt still admit one burst.
+            harness.input_mut().events.push(egui::Event::Copy);
+            harness.step();
+            assert_eq!(counts(&harness).1, 1);
+            assert_eq!(current_action(&harness), Some(Action::Copy));
+            assert_eq!(harness.state().document().source(), "prefix ");
+            harness.state_mut().toggle_comments(&context);
+            harness.step();
+            assert_eq!(current_action(&harness), Some(Action::Comment));
+            assert!(harness.state().document().source().starts_with("// "));
+            harness.state_mut().undo_editor(&context, false);
+            harness.step();
+            assert_eq!(current_action(&harness), Some(Action::Undo));
+            assert_eq!(harness.state().document().source(), "prefix ");
+            harness.state_mut().undo_editor(&context, true);
+            harness.step();
+            assert_eq!(current_action(&harness), Some(Action::Redo));
+            assert_eq!(counts(&harness).1, 4);
+        }
+    }
+
     #[test]
     fn unavailable_gpu_keeps_editing_but_never_emits_or_repaints_particle_state() {
         for diff in [false, true] {
@@ -923,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn ime_commit_emits_once_even_when_it_keeps_preedit_bytes_and_paste_stays_quiet() {
+    fn ime_commit_and_clipboard_paste_emit_distinct_single_bursts() {
         for diff in [false, true] {
             let mut harness = editor(diff);
             harness
@@ -951,7 +1454,7 @@ mod tests {
                 .push(egui::Event::Paste(" paste".into()));
             harness.step();
             assert_eq!(harness.state().document().source(), "prefix 日本 paste");
-            assert_eq!(counts(&harness).1, 1);
+            assert_eq!(counts(&harness).1, 2);
             harness.run_steps(45);
             assert_eq!(counts(&harness), (0, 0));
         }
@@ -965,7 +1468,7 @@ mod tests {
         let iterations = 100_000;
         let start = Instant::now();
         for _ in 0..iterations {
-            black_box(typing_events(black_box(&events), black_box(false), true));
+            black_box(input_intent(black_box(&events), black_box(false), true));
         }
         let disabled = start.elapsed();
         let mut state = State::default();

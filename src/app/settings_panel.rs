@@ -811,7 +811,7 @@ impl SettingsPanel<'_> {
                     SettingsTarget::EditorParticles,
                     &mut settings_scroll_target,
                 );
-                typing_particle_controls(ui, &mut edited.editor_particles);
+                editor_particle_controls(ui, &mut edited.editor_particles);
                 settings_target_anchor(
                     ui,
                     SettingsTarget::IndependentDividers,
@@ -1580,7 +1580,7 @@ fn reveal_animation_controls(ui: &mut egui::Ui, label: &str, animation: &mut Rev
     });
 }
 
-fn typing_particle_controls(ui: &mut egui::Ui, particles: &mut EditorParticleSettings) {
+fn editor_particle_controls(ui: &mut egui::Ui, particles: &mut EditorParticleSettings) {
     ui.horizontal_wrapped(|ui| {
         let enabled = ui.checkbox(
             &mut particles.enabled,
@@ -2053,7 +2053,7 @@ mod tests {
                         "Reveal in source",
                         &mut settings.source_reveal_animation,
                     );
-                    typing_particle_controls(ui, &mut settings.editor_particles);
+                    editor_particle_controls(ui, &mut settings.editor_particles);
                 },
                 AppSettings::default(),
             );
@@ -2073,7 +2073,7 @@ mod tests {
             harness.state().source_reveal_animation.style,
             RevealStyle::Spotlight
         );
-        harness.get_by_label("Typing particles").click();
+        harness.get_by_label("Editor particles").click();
         harness.run();
         harness
             .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Density")
@@ -2100,7 +2100,7 @@ mod tests {
             .with_size(Vec2::new(680.0, 220.0))
             .build_ui_state(
                 |ui, settings: &mut AppSettings| {
-                    typing_particle_controls(ui, &mut settings.editor_particles);
+                    editor_particle_controls(ui, &mut settings.editor_particles);
                 },
                 AppSettings::default(),
             );

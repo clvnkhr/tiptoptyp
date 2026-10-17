@@ -17,6 +17,8 @@ from desktop_ui_palette_journeys import PaletteJourneys
 from desktop_ui_jump_journeys import PreviewJumpJourneys
 
 PARTICLE_STYLES = ("Explosion", "Shotgun", "Flamethrower", "Railgun", "Plasma")
+PARTICLE_ACTIONS = ("Typing", "Copy", "Cut", "Paste", "Comment", "Undo", "Redo",
+                    "Delete", "Newline", "Indent")
 
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
 
@@ -60,7 +62,17 @@ def typing_particle_state(document):
             or (state.get("last_style") not in PARTICLE_STYLES if state["burst_count"]
                 else state.get("last_style") is not None):
         raise AssertionError("particle styles do not identify their actual live bursts")
+    action_bursts = state.get("action_bursts")
+    if not isinstance(action_bursts, dict) or any(
+            action not in PARTICLE_ACTIONS or type(count) is not int or count <= 0
+            for action, count in action_bursts.items()) \
+            or sum(action_bursts.values()) != state["burst_count"] \
+            or (state.get("last_action") not in PARTICLE_ACTIONS if state["burst_count"]
+                else state.get("last_action") is not None):
+        raise AssertionError("particle actions do not identify their actual bursts")
     if state["burst_count"]:
+        if action_bursts.get(state["last_action"], 0) == 0:
+            raise AssertionError("last particle action has no recorded burst")
         origin, clip, age = state.get("origin"), state.get("clip"), state.get("last_emission_age_ms")
         if not isinstance(origin, list) or len(origin) != 2 \
                 or not isinstance(clip, list) or len(clip) != 4 \
@@ -93,6 +105,58 @@ def typing_particle_gpu_state(document):
             or gpu["last_draw_instances"] > state["pool_limit"]:
         raise AssertionError("particle GPU instance count exceeds the bounded pool")
     return gpu
+
+
+def particle_action_rendered(document, before, action, expected):
+    """Require one cause-specific emission and an actual new native GPU draw."""
+    state, prior = typing_particle_state(document), typing_particle_state(before)
+    gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
+    counts = dict(prior["action_bursts"])
+    counts[action] = counts.get(action, 0) + 1
+    style = before["editor_particles"]["style"]
+    return (state["active_count"] > 0 and state["burst_count"] == prior["burst_count"] + 1
+            and state["last_action"] == action and state["action_bursts"] == counts
+            and state["last_style"] == style and state["live_styles"] == {style: state["active_count"]}
+            and gpu["ready"] and gpu["draws"] > prior_gpu["draws"]
+            and gpu["uploads"] > prior_gpu["uploads"]
+            and gpu["uploaded_instances"] > 0 and gpu["last_draw_instances"] > 0
+            and document["source_fingerprint"] == fingerprint(expected)
+            and document["source_bytes"] == len(expected.encode("utf-8"))
+            and document["editor_keyboard_focused"])
+
+
+def particle_document_returned_quiet(document, before, expected):
+    """A document switch resets its trace; it must not replay a hidden command."""
+    state = typing_particle_state(document)
+    gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
+    return (document["active_tab_id"] == before["active_tab_id"]
+            and document["source_fingerprint"] == fingerprint(expected)
+            and document["source_bytes"] == len(expected.encode("utf-8"))
+            and all(state[field] == 0 for field in (
+                "active_count", "burst_count", "emitted_count", "max_live"))
+            and state["last_style"] is None and state["last_action"] is None
+            and state["live_styles"] == {} and state["action_bursts"] == {}
+            and gpu["draws"] == prior_gpu["draws"])
+
+
+def editor_particle_popup_target(state):
+    """A selection has a current IME anchor, not a collapsed-caret target."""
+    document, targets = state["document"], state["targets"]
+    cursor = document["cursor"]
+    name = "editor.ime_cursor" if cursor[0] != cursor[1] else "editor.caret"
+    target, source = targets.get(name), targets.get("editor.source")
+    if not document["editor_keyboard_focused"] or any(
+            not value or not value.get("enabled") or value.get("age_ms", 501) > 500
+            or value.get("frame") != document["frame"] for value in (target, source)) \
+            or target.get("viewport") != source.get("viewport"):
+        raise AssertionError("source popup needs a fresh focused cursor/selection anchor")
+    if any(type(value.get(key)) not in (int, float) or not math.isfinite(value[key])
+           for value, keys in ((source, ("x", "y", "width", "height")), (target, ("x", "y")))
+           for key in keys) or source["width"] <= 0 or source["height"] <= 0 \
+            or not source["x"] - source["width"] / 2 <= target["x"] <= source["x"] + source["width"] / 2 \
+            or not source["y"] - source["height"] / 2 <= target["y"] <= source["y"] + source["height"] / 2:
+        raise AssertionError("source popup cursor/selection anchor is outside its visible editor")
+    return name
 
 
 def settings_category_target_visible(state, category):
@@ -359,7 +423,10 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             finish_clipboard_adapter(process)
 
     def copy_from_menu(self, expected):
-        """Check native Copy without logging clipboard contents."""
+        self.copy_with_receipt(expected, lambda: self.click("menu.Copy"))
+
+    def copy_with_receipt(self, expected, perform, after_copy=None):
+        """Check a real clipboard write and restore the human's prior clipboard."""
         import json
         import select
         import subprocess
@@ -378,10 +445,14 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                 raise RuntimeError("clipboard adapter exited before acknowledging Copy")
             return json.loads(line)
 
+        ready = False
         try:
             if receipt().get("ready") != "copy":
                 raise RuntimeError("clipboard adapter did not start")
-            self.click("menu.Copy")
+            ready = True
+            perform()
+            if after_copy is not None:
+                after_copy()
             deadline = time.monotonic() + 6
             while True:
                 process.stdin.write("check\n")
@@ -394,7 +465,15 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                     raise AssertionError("Copy did not match the selected fixture text")
                 time.sleep(0.05)
         finally:
-            finish_clipboard_adapter(process)
+            try:
+                if ready and process.poll() is None:
+                    # Arm restoration even if observing the effect failed
+                    # before the ordinary clipboard-confirmation loop ran.
+                    process.stdin.write("check\n")
+                    process.stdin.flush()
+                    receipt()
+            finally:
+                finish_clipboard_adapter(process)
 
     def review_native_preview(self, label, document_focus=True):
         """Optional observation boundary; a resumed pause is not a visual pass."""
@@ -1904,35 +1983,105 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.close_scratch(count)
 
     def typing_particle_burst(self, text, expected, capture=False):
+        self.editor_particle_action("Typing", expected, lambda: self.native("text", text), capture=capture)
+
+    def editor_particle_action(self, editor_action, expected, perform=None,
+                               copy_text=None, paste_text=None, capture=False):
         before = self.snapshot()["document"]
-        style = before["editor_particles"]["style"]
-        prior = typing_particle_state(before)
-        prior_gpu = typing_particle_gpu_state(before)
-        self.native("text", text)
-        def rendered(document):
-            state = typing_particle_state(document)
-            gpu = typing_particle_gpu_state(document)
-            return (state["active_count"] > 0 and state["burst_count"] > prior["burst_count"]
-                    and state["last_style"] == style
-                    and state["live_styles"] == {style: state["active_count"]}
-                    and gpu["ready"] and gpu["draws"] > prior_gpu["draws"]
-                    and gpu["uploads"] > prior_gpu["uploads"]
-                    and gpu["uploaded_instances"] > 0 and gpu["last_draw_instances"] > 0
-                    and document["source_fingerprint"] == fingerprint(expected))
-        active = self.wait("real typing renders a bounded native GPU burst: " + style, rendered)
-        self.record("typing_particles.active", style=style, dark=active["document"]["dark"],
-                    observation=active["document"]["typing_particles"])
-        if capture:
-            self.capture_viewport("main")
+        def observe():
+            active = self.wait("real editor action renders one native GPU burst: " + editor_action,
+                               lambda d: particle_action_rendered(d, before, editor_action, expected))
+            self.record("typing_particles.active", editor_action=editor_action,
+                        style=active["document"]["editor_particles"]["style"],
+                        dark=active["document"]["dark"],
+                        observation=active["document"]["typing_particles"])
+            if capture:
+                self.capture_viewport("main")
+        if paste_text is not None:
+            self.paste_source(paste_text, check=observe)
+        elif copy_text is not None:
+            self.copy_with_receipt(copy_text, perform, after_copy=observe)
+        else:
+            perform()
+            observe()
         self.source_is(expected)
-        self.wait("typing particles expire without further input", lambda d:
-                  typing_particle_state(d)["active_count"] == 0, timeout=3)
+        expired = self.wait("editor particles expire without further input", lambda d:
+                            typing_particle_state(d)["active_count"] == 0, timeout=3)["document"]
+        bursts, draws = typing_particle_state(expired)["burst_count"], typing_particle_gpu_state(expired)["draws"]
+        self.stable_state(lambda d: typing_particle_state(d)["active_count"] == 0
+                          and typing_particle_state(d)["burst_count"] == bursts
+                          and typing_particle_gpu_state(d)["draws"] == draws, frames=3)
+
+    def editor_particle_commands(self, expected):
+        def eof():
+            self.click("editor.source")
+            self.key(125)
+            self.wait("editor action caret is at EOF", lambda d:
+                      d["editor_keyboard_focused"] and d["cursor"] == [len(expected), len(expected)])
+
+        def select_tail(length):
+            eof()
+            whole_line = length == len(expected.rsplit("\n", 1)[-1])
+            if whole_line:
+                self.key(123, "cmd+shift")
+                steps = (length,)
+            else:
+                steps = range(1, length + 1)
+            for selected in steps:
+                if not whole_line:
+                    self.key(123, "shift")
+                self.wait("editor action confirms each native selection step", lambda d:
+                          d["editor_keyboard_focused"]
+                          and d["source_fingerprint"] == fingerprint(expected)
+                          and sorted(d["cursor"]) == [len(expected) - selected, len(expected)])
+
+        def popup():
+            state = self.snapshot()
+            before = typing_particle_state(state["document"])["burst_count"]
+            selection = state["document"]["cursor"]
+            self.right_click(editor_particle_popup_target(state))
+            self.wait_target("menu.Paste")
+            self.stable_state(lambda d: d["source_fingerprint"] == fingerprint(expected)
+                              and d["cursor"] == selection
+                              and typing_particle_state(d)["burst_count"] == before, frames=3)
+
+        eof()
+        prefix, line = expected.rsplit("\n", 1)
+        commented = prefix + "\n// " + line
+        self.editor_particle_action("Comment", commented, lambda: self.key(44), capture=self.capture_review)
+        self.editor_particle_action("Comment", expected, lambda: self.key(44), capture=self.capture_review)
+        select_tail(len(line))
+        self.editor_particle_action("Copy", expected, lambda: self.key(8), copy_text=line, capture=self.capture_review)
+        popup()
+        self.editor_particle_action("Copy", expected, lambda: self.click("menu.Copy"), copy_text=line, capture=self.capture_review)
+        popup()
+        self.editor_particle_action("Comment", commented, lambda: self.click("menu.Toggle Comment"), capture=self.capture_review)
+        self.editor_particle_action("Comment", expected, lambda: self.key(44), capture=self.capture_review)
+        eof()
+        suffix = " pasted"
+        pasted = expected + suffix
+        self.editor_particle_action("Paste", pasted, paste_text=suffix, capture=self.capture_review)
+        expected = pasted
+        select_tail(len(suffix))
+        expected = pasted[:-len(suffix)]
+        self.editor_particle_action("Cut", expected, lambda: self.key(7), copy_text=suffix, capture=self.capture_review)
+        self.editor_particle_action("Undo", pasted, lambda: self.key(6), capture=self.capture_review)
+        self.editor_particle_action("Redo", expected, lambda: self.key(6, "cmd+shift"), capture=self.capture_review)
+        eof()
+        self.editor_particle_action("Newline", expected + "\n", lambda: self.key(36, "none"), capture=self.capture_review)
+        self.editor_particle_action("Delete", expected, lambda: self.key(51, "none"), capture=self.capture_review)
+        # Opening/dismissing a command popup does not execute an editor action.
+        popup()
+        self.key(53, "none")
+        self.source_is(expected)
+        return expected
 
     def typing_particle_choose_style(self, style):
         before = typing_particle_state(self.snapshot()["document"])
-        history = {field: before[field] for field in ("burst_count", "emitted_count", "last_style")}
+        history = {field: before[field] for field in (
+            "burst_count", "emitted_count", "last_style", "last_action", "action_bursts")}
         self.settings()
-        self.setting_section("typing particles", "Typing particles")
+        self.setting_section("editor particles", "Editor particles")
         self.click("settings.editor.particles.style")
         self.wait_target("settings.editor.particles.style." + style)
         self.click("settings.editor.particles.style." + style)
@@ -1964,11 +2113,11 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         typing_particle_gpu_state(document)
         if preferences != {"enabled": False, "density": "Medium", "style": "Explosion"} \
                 or state["active_count"] or state["burst_count"]:
-            raise AssertionError("typing particles must default off at medium density with Explosion style")
+            raise AssertionError("editor particles must default off at medium density with Explosion style")
         expected = initial
         try:
             self.settings()
-            self.setting_section("typing particles", "Typing particles")
+            self.setting_section("editor particles", "Editor particles")
             self.click("settings.editor.particles.enabled")
             self.wait("particle checkbox enables the real setting", lambda d: d["editor_particles"]["enabled"])
             self.close_settings()
@@ -1991,6 +2140,7 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                 self.key(125)
                 expected += text
                 self.typing_particle_burst(text, expected, capture=self.capture_review)
+            expected = self.editor_particle_commands(expected)
             quiet_document = self.snapshot()["document"]
             before = typing_particle_state(quiet_document)["burst_count"]
             idle_draws = typing_particle_gpu_state(quiet_document)["draws"]
@@ -2001,23 +2151,53 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                         and gpu["draws"] == idle_draws)
             self.key(123, "none")  # Moving a caret must not emit another burst.
             self.stable_state(remains_quiet, frames=3)
-            self.key(0)
-            self.paste_source("clipboard paste")
-            self.stable_state(remains_quiet, frames=3)
             self.settings()
-            self.setting_section("typing particles", "Typing particles")
+            self.click("settings.search")
+            self.key(0)
+            self.native("text", "particle focus check")
+            self.wait("Settings typing stays outside the source editor", lambda d:
+                      d["settings_text_input_focused"]
+                      and d["settings_query_fingerprint"] == fingerprint("particle focus check")
+                      and d["source_fingerprint"] == fingerprint(expected))
+            self.stable_state(remains_quiet, frames=3)
+            self.key(6)
+            self.key(6, "cmd+shift")
+            self.stable_state(lambda d: remains_quiet(d)
+                              and d["source_fingerprint"] == fingerprint(expected), frames=3)
+            self.close_settings()
+            # Empty history commands are no-ops even while the feature is on.
+            empty_count = self.scratch()
+            empty = self.snapshot()["document"]
+            empty_bursts = typing_particle_state(empty)["burst_count"]
+            empty_draws = typing_particle_gpu_state(empty)["draws"]
+            self.key(6)
+            self.key(6, "cmd+shift")
+            self.stable_state(lambda d: d["source_fingerprint"] == fingerprint("")
+                              and typing_particle_state(d)["burst_count"] == empty_bursts
+                              and typing_particle_state(d)["active_count"] == 0
+                              and typing_particle_gpu_state(d)["draws"] == empty_draws, frames=3)
+            self.close_scratch(empty_count)
+            self.source_is(expected)
+            # Switching documents resets the scoped trace. Prove no hidden replay
+            # before accepting zero as the baseline for subsequent disabled checks.
+            self.stable_state(lambda d: particle_document_returned_quiet(d, quiet_document, expected), frames=3)
+            self.record("typing_particles.document_return", previous_burst_count=before,
+                        reset_burst_count=0, idle_gpu_draws=idle_draws)
+            before = 0
+            self.settings()
+            self.setting_section("editor particles", "Editor particles")
             self.click("settings.editor.particles.enabled")
             self.wait("particle checkbox disables the real setting", lambda d: not d["editor_particles"]["enabled"])
             self.close_settings()
             self.click("editor.source")
-            self.key(124)
+            self.key(125)
             self.native("text", "z")
-            self.source_is("clipboard pastez")
+            self.source_is(expected + "z")
             self.stable_state(remains_quiet, frames=3)
             self.record("typing_particles.negative", burst_count=before, idle_gpu_draws=idle_draws)
         finally:
             self.settings()
-            self.setting_section("typing particles", "Typing particles")
+            self.setting_section("editor particles", "Editor particles")
             current = self.snapshot()["document"]["editor_particles"]
             if current["style"] != preferences["style"]:
                 self.click("settings.editor.particles.style")

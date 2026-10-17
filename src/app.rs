@@ -49,6 +49,8 @@ use popup_layout::{
 };
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
+#[cfg(test)]
+mod editor_particle_action_tests;
 mod editor_particles;
 pub(crate) use editor_particles::Renderer as ParticleRenderer;
 mod editor_scroll;
@@ -1117,7 +1119,7 @@ impl SettingsTarget {
             Self::DarkImages => "Apply dark page appearance to images",
             Self::SourceRevealAnimation => "Reveal in source",
             Self::PreviewRevealAnimation => "Reveal in preview",
-            Self::EditorParticles => "Typing particles",
+            Self::EditorParticles => "Editor particles",
             Self::WrapLines => "Wrap lines",
             Self::IndependentDividers => "Independent main dividers",
             Self::IndentationGuides => "Indentation guides",
@@ -1258,7 +1260,7 @@ impl SettingsTarget {
                 "preview navigation jump reveal animation effects rings pulse spotlight duration size"
             }
             Self::EditorParticles => {
-                "editor typing particles sparks effects animation density style weapon explosion shotgun flamethrower railgun plasma"
+                "editor typing particles copy cut paste comment undo redo delete newline indent sparks effects animation density style weapon explosion shotgun flamethrower railgun plasma"
             }
             Self::WrapLines => "editor soft wrapping word wrap",
             Self::IndependentDividers => {
@@ -7089,6 +7091,31 @@ impl EditorApp {
         self.document().history_availability()
     }
 
+    fn queue_editor_particle_action(
+        &self,
+        context: &egui::Context,
+        action: editor_particles::Action,
+    ) {
+        if !self.settings.editor_particles.enabled
+            || self.table_editor.is_some()
+            || self.latexdiff.is_some()
+            || !self.document().kind().is_editable()
+        {
+            return;
+        }
+        editor_particles::queue(
+            context,
+            source_editor_id(context),
+            self.document().key(),
+            if self.document_diff.is_some() {
+                editor_particles::View::Diff
+            } else {
+                editor_particles::View::Source
+            },
+            action,
+        );
+    }
+
     fn undo_editor(&mut self, context: &egui::Context, redo: bool) {
         self.snippet_session = None;
         if self.table_editor.is_some() {
@@ -7116,6 +7143,14 @@ impl EditorApp {
         if changed {
             self.find_bar.search.clear();
             self.mark_edited();
+            self.queue_editor_particle_action(
+                context,
+                if redo {
+                    editor_particles::Action::Redo
+                } else {
+                    editor_particles::Action::Undo
+                },
+            );
         }
     }
 
@@ -7157,6 +7192,7 @@ impl EditorApp {
         self.prepare_editor_source_data();
         let bytes = self.editor_data.char_range_to_byte(range);
         context.copy_text(self.document().source()[bytes].to_owned());
+        self.queue_editor_particle_action(context, editor_particles::Action::Copy);
     }
 
     fn cut_editor_selection(&mut self, context: &egui::Context) {
@@ -7184,6 +7220,7 @@ impl EditorApp {
         context.memory_mut(|memory| memory.request_focus(editor_id));
         self.find_bar.search.clear();
         self.mark_edited();
+        self.queue_editor_particle_action(context, editor_particles::Action::Cut);
     }
 
     fn request_editor_paste(&mut self, context: &egui::Context) {
@@ -7266,6 +7303,7 @@ impl EditorApp {
         };
         self.store_editor_cursor(context, cursor);
         context.memory_mut(|memory| memory.request_focus(editor_id));
+        self.queue_editor_particle_action(context, editor_particles::Action::Comment);
     }
 
     fn request_format_document(&mut self) {
