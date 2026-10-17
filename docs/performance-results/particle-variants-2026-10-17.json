@@ -3,7 +3,7 @@
   "change": "Selectable Explosion, Shotgun, Flamethrower, Railgun and Plasma typing effects",
   "baseline_commit": "add7a192232c08d3d420541d679ec8afb46ab659",
   "source_commit": "80ebcb1e60365030186c51d66d1669946daf9609",
-  "status": "implemented; automated/GPU checks passed; native interaction unavailable at locked desktop",
+  "status": "implemented; automated, GPU and native interaction checks passed",
   "environment": {
     "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
     "machine": "arm64",
@@ -516,7 +516,7 @@
       ]
     },
     "native_interaction": {
-      "status": "unavailable; final preflight still reports locked desktop",
+      "status": "passed after unlocking; prior locked attempts retained",
       "attempts": [
         {
           "result": ".tiptoptyp/desktop-ui-tests/run-0ege21x1/result.json",
@@ -525,9 +525,33 @@
           "reason": "macOS preflight reported the desktop locked",
           "preflight": "{\"accessibility\":true,\"desktop\":false,\"input\":true,\"locked\":true,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}]}",
           "log": ".tiptoptyp/profiles/particle-variants-2026-10-17/particle-variants-native.log"
+        },
+        {
+          "result": ".tiptoptyp/desktop-ui-tests/run-x_dptku8/result.json",
+          "log": ".tiptoptyp/profiles/particle-variants-2026-10-17/particle-variants-native-unlocked.log",
+          "passed": true,
+          "interaction_performed": true,
+          "journey": "typing_particles",
+          "build_profile": "debug",
+          "version": "tiptoptyp Dev 0.1.0 (eff8859ca8b0-dirty.1792253792)",
+          "binary_sha256": "e76e4c7e2fd78bf6184abe265b19ab101940432d0ae9876b1c34d0ff13e58b2b",
+          "git_head_at_run": "9834205fa898044e2f21d4840b14c7635293bd5a",
+          "preflight": {
+            "accessibility": true,
+            "desktop": true,
+            "input": true,
+            "locked": false,
+            "screens": [
+              {
+                "height": 982,
+                "scale": 2,
+                "width": 1512
+              }
+            ]
+          }
         }
       ],
-      "final_preflight": {
+      "prior_locked_preflight": {
         "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/particle-variants-preflight-final.json",
         "observed": {
           "accessibility": true,
@@ -544,7 +568,271 @@
         },
         "interaction_performed": false
       },
-      "rerun_command": "python3 scripts/test-desktop-ui.py --executable .tiptoptyp/desktop-ui-tests/particle-variants-binary-final --journey typing_particles --capture-review"
+      "final_preflight": {
+        "observed": {
+          "accessibility": true,
+          "desktop": true,
+          "input": true,
+          "locked": false,
+          "screens": [
+            {
+              "height": 982,
+              "scale": 2,
+              "width": 1512
+            }
+          ]
+        },
+        "source": ".tiptoptyp/desktop-ui-tests/run-x_dptku8/result.json",
+        "interaction_performed": true
+      },
+      "event_summary": {
+        "selected_styles": [
+          "Explosion",
+          "Shotgun",
+          "Flamethrower",
+          "Railgun",
+          "Plasma"
+        ],
+        "active_bursts": [
+          {
+            "style": "Explosion",
+            "dark": false,
+            "active_count": 48,
+            "burst_count": 1,
+            "origin": [
+              351.71875,
+              180.75
+            ],
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "gpu_draws": 6,
+            "gpu_uploads": 1,
+            "uploaded_instances": 48,
+            "uploaded_bytes_total": 1536
+          },
+          {
+            "style": "Shotgun",
+            "dark": false,
+            "active_count": 48,
+            "burst_count": 2,
+            "origin": [
+              361.0,
+              180.75
+            ],
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "gpu_draws": 29,
+            "gpu_uploads": 2,
+            "uploaded_instances": 48,
+            "uploaded_bytes_total": 3072
+          },
+          {
+            "style": "Flamethrower",
+            "dark": false,
+            "active_count": 48,
+            "burst_count": 3,
+            "origin": [
+              370.28125,
+              180.75
+            ],
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "gpu_draws": 53,
+            "gpu_uploads": 3,
+            "uploaded_instances": 48,
+            "uploaded_bytes_total": 4608
+          },
+          {
+            "style": "Railgun",
+            "dark": false,
+            "active_count": 48,
+            "burst_count": 4,
+            "origin": [
+              379.53125,
+              180.75
+            ],
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "gpu_draws": 79,
+            "gpu_uploads": 4,
+            "uploaded_instances": 48,
+            "uploaded_bytes_total": 6144
+          },
+          {
+            "style": "Plasma",
+            "dark": false,
+            "active_count": 48,
+            "burst_count": 5,
+            "origin": [
+              388.8125,
+              180.75
+            ],
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "gpu_draws": 102,
+            "gpu_uploads": 5,
+            "uploaded_instances": 48,
+            "uploaded_bytes_total": 7680
+          },
+          {
+            "style": "Plasma",
+            "dark": false,
+            "active_count": 48,
+            "burst_count": 6,
+            "origin": [
+              398.09375,
+              180.75
+            ],
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "gpu_draws": 126,
+            "gpu_uploads": 6,
+            "uploaded_instances": 48,
+            "uploaded_bytes_total": 9216
+          },
+          {
+            "style": "Plasma",
+            "dark": true,
+            "active_count": 48,
+            "burst_count": 7,
+            "origin": [
+              407.375,
+              180.75
+            ],
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "gpu_draws": 142,
+            "gpu_uploads": 7,
+            "uploaded_instances": 48,
+            "uploaded_bytes_total": 10752
+          }
+        ],
+        "negative_checks": {
+          "burst_count": 7,
+          "idle_gpu_draws": 159
+        },
+        "restored": {
+          "preferences": {
+            "density": "Medium",
+            "enabled": false,
+            "style": "Explosion"
+          },
+          "appearance": "System"
+        },
+        "scope": "Actual native settings selection and typing with read-only state showing real instanced-Glow draws/uploads. Idle, navigation, paste and disabled input did not add particle work."
+      },
+      "capture_review": {
+        "status": "reviewed all eight fresh app viewport frames",
+        "reviewer": "root agent",
+        "images": [
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256637172-0001-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "0f94ef55b20d516a7a7b0bb0a699e0fbead58881c552ed1eb59c2154311368d0"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256646694-0002-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "6eccc9fe94ed2362aa24b5bbf3265aa62aca9b1aac5ec88fb87fe800cf5b1b3e"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256652659-0003-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "1d57ef245bc1c741a4a5c818a6520208e20d4949d9bc15f46daced310332c35a"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256658666-0004-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "779796ccd552f9411d084cbead41c955ca0b4520d8faebfb850e5d9851dc5cb4"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256664640-0005-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "e6f0f16bf150ab2be774bf3032e3cf8d13e2f3f83a2810e55a3a73d8a9650895"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256670691-0006-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "a1bdbab97de162e2870682e705eb2d78f222ccd8fd87b9e1df06e6e87c4e3301"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256676250-0007-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "4519593979f65640d7a35618b6462336f01d73e5c0353199c06fb2b6afffbf89"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/1792256682663-0008-main.png",
+            "pixels": [
+              2800,
+              1766
+            ],
+            "sha256": "71404f6c10ff13374805670be6e56d2210e0500b35bdc7bf1d282b5a42e2f155"
+          }
+        ],
+        "contact_sheets": [
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/native-unlocked-contact-sheet.png",
+            "sha256": "22614cd477d8c44e96821de5259239b10c64cc9143ad114235ec959481fe32a6"
+          },
+          {
+            "path": ".tiptoptyp/profiles/particle-variants-2026-10-17/screenshots/native-unlocked/native-unlocked-caret-sheet.png",
+            "sha256": "254dcf02e37ddd57f61d17232800d21be6caf4dacfac890e8547295db4f5780e"
+          }
+        ],
+        "review": "All five effects appeared at the typed caret; text stayed readable, and clipping and theme appearance were correct. The autocomplete popup appropriately covered Explosion particles.",
+        "scope": "Real-app viewport framebuffers captured during the native journey, with full-workspace and caret contact sheets. These are not proof of native child-preview composition."
+      },
+      "summary_artifact": ".tiptoptyp/profiles/particle-variants-2026-10-17/native-unlocked-summary.json",
+      "command": "python3 scripts/test-desktop-ui.py --executable .tiptoptyp/desktop-ui-tests/particle-variants-binary-final --journey typing_particles --capture-review"
     },
     "explicit_gpu": {
       "status": "passed final portable shader",
@@ -603,7 +891,7 @@
     }
   },
   "remaining_limits": [
-    "The real-app typing_particles journey could not begin because macOS remained locked. Preparation/preflight is not interaction coverage.",
+    "The native journey and reviewed app viewport captures do not establish native child-preview composition.",
     "CPU timings cover only the unchanged bounded default-Explosion state kernel; they exclude egui layout, painting, GPU submission/execution, presentation and native input latency.",
     "The five after CPU samples describe the tree later committed as eff8859. Final commit 80ebcb1 changes only fragment-shader math; the measured particle-state Rust source is unchanged.",
     "GPU evidence establishes bounded draw/upload behavior, numeric alpha/clipping contracts and reviewed offscreen pixels; no GPU throughput or composed-desktop performance claim is made.",
@@ -628,7 +916,13 @@
     },
     "source_state": "committed final source; build/capture bytes match recorded file hashes",
     "historical_cpu_candidate_metadata": ".tiptoptyp/profiles/particle-variants-2026-10-17/source-metadata-eff8859.json",
-    "historical_cpu_candidate_patch": ".tiptoptyp/profiles/particle-variants-2026-10-17/source-eff8859.patch"
+    "historical_cpu_candidate_patch": ".tiptoptyp/profiles/particle-variants-2026-10-17/source-eff8859.patch",
+    "native_rerun_source_verification": {
+      "head": "9834205fa898044e2f21d4840b14c7635293bd5a",
+      "recorded_runtime_source": "80ebcb1e60365030186c51d66d1669946daf9609",
+      "matching_path_count": 11,
+      "all_recorded_source_hashes_match": true
+    }
   },
   "feature_commits": [
     "eff8859ca8b0214ab1a4246c25da9c717c098f3c",
