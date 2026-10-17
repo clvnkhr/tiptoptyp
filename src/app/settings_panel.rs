@@ -17,8 +17,9 @@ use crate::{
     font_catalog::FontCatalog,
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
     settings::{
-        AppSettings, ColorThemeChoice, DocumentTheme, GitDiffStyle, InterfaceTheme,
-        PreviewPreference, SourcePreviewTrigger,
+        AppSettings, ColorThemeChoice, DocumentTheme, EditorParticleSettings, GitDiffStyle,
+        InterfaceTheme, ParticleDensity, PreviewPreference, RevealAnimation, RevealStyle,
+        SourcePreviewTrigger,
     },
     shortcuts::ShortcutAction,
     theme::{self, METRICS},
@@ -470,6 +471,31 @@ impl SettingsPanel<'_> {
                     }
                 });
                 crate::window_background::settings_ui(ui, &mut edited.window_background);
+                let reveal_target = matches!(
+                    settings_scroll_target,
+                    Some(
+                        SettingsTarget::SourceRevealAnimation
+                            | SettingsTarget::PreviewRevealAnimation
+                    )
+                );
+                egui::CollapsingHeader::new("Effects")
+                    .id_salt("appearance-effects")
+                    .open(reveal_target.then_some(true))
+                    .show(ui, |ui| {
+                        for (target, animation) in [
+                            (
+                                SettingsTarget::SourceRevealAnimation,
+                                &mut edited.source_reveal_animation,
+                            ),
+                            (
+                                SettingsTarget::PreviewRevealAnimation,
+                                &mut edited.preview_reveal_animation,
+                            ),
+                        ] {
+                            settings_target_anchor(ui, target, &mut settings_scroll_target);
+                            reveal_animation_controls(ui, target.label(), animation);
+                        }
+                    });
                 settings_target_anchor(
                     ui,
                     SettingsTarget::TypstSyntax,
@@ -780,6 +806,12 @@ impl SettingsPanel<'_> {
                 });
             }
             SettingsSection::Editor => {
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::EditorParticles,
+                    &mut settings_scroll_target,
+                );
+                typing_particle_controls(ui, &mut edited.editor_particles);
                 settings_target_anchor(
                     ui,
                     SettingsTarget::IndependentDividers,
@@ -1497,6 +1529,83 @@ impl SettingsPanel<'_> {
     }
 }
 
+fn reveal_animation_controls(ui: &mut egui::Ui, label: &str, animation: &mut RevealAnimation) {
+    ui.push_id(label, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let enabled = ui.checkbox(&mut animation.enabled, label);
+            let style = egui::ComboBox::from_id_salt("style")
+                .width(94.0)
+                .selected_text(animation.style.label())
+                .show_ui(ui, |ui| {
+                    for value in RevealStyle::ALL {
+                        ui.selectable_value(&mut animation.style, value, value.label());
+                    }
+                })
+                .response
+                .labelled_by(enabled.id);
+            let duration_label = ui.label("Duration");
+            let duration = ui
+                .add(
+                    egui::DragValue::new(&mut animation.duration_ms)
+                        .range(250..=2000)
+                        .speed(25)
+                        .suffix(" ms"),
+                )
+                .labelled_by(duration_label.id);
+            let size_label = ui.label("Size");
+            let size = ui
+                .add(
+                    egui::DragValue::new(&mut animation.size_percent)
+                        .range(50..=200)
+                        .speed(5)
+                        .suffix("%"),
+                )
+                .labelled_by(size_label.id);
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            for (name, response) in [
+                ("enabled", &enabled),
+                ("style", &style),
+                ("duration", &duration),
+                ("size", &size),
+            ] {
+                let scope = if label == SettingsTarget::SourceRevealAnimation.label() {
+                    "source"
+                } else {
+                    "preview"
+                };
+                crate::desktop_test::observe(&format!("settings.reveal.{scope}.{name}"), response);
+            }
+            let _ = (enabled, style, duration, size);
+        });
+    });
+}
+
+fn typing_particle_controls(ui: &mut egui::Ui, particles: &mut EditorParticleSettings) {
+    ui.horizontal_wrapped(|ui| {
+        let enabled = ui.checkbox(
+            &mut particles.enabled,
+            SettingsTarget::EditorParticles.label(),
+        );
+        let density_label = ui.label("Density");
+        let density = egui::ComboBox::from_id_salt("typing-particle-density")
+            .width(94.0)
+            .selected_text(particles.density.label())
+            .show_ui(ui, |ui| {
+                for value in ParticleDensity::ALL {
+                    ui.selectable_value(&mut particles.density, value, value.label());
+                }
+            })
+            .response
+            .labelled_by(density_label.id);
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        {
+            crate::desktop_test::observe("settings.editor.particles.enabled", &enabled);
+            crate::desktop_test::observe("settings.editor.particles.density", &density);
+        }
+        let _ = (enabled, density);
+    });
+}
+
 /// Reserve the complete label/control width before egui places the group in a
 /// wrapping row. A non-wrapping child alone starts at the old cursor position.
 pub(super) fn settings_slider(
@@ -1914,6 +2023,58 @@ mod tests {
     use egui::{Color32, Pos2};
     use egui_kittest::{Harness, kittest::Queryable as _};
     use std::time::Duration;
+
+    #[test]
+    fn reveal_and_typing_effect_controls_change_only_their_own_preferences() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(680.0, 220.0))
+            .build_ui_state(
+                |ui, settings: &mut AppSettings| {
+                    reveal_animation_controls(
+                        ui,
+                        "Reveal in source",
+                        &mut settings.source_reveal_animation,
+                    );
+                    typing_particle_controls(ui, &mut settings.editor_particles);
+                },
+                AppSettings::default(),
+            );
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Reveal in source")
+            .click();
+        harness.run();
+        assert!(!harness.state().source_reveal_animation.enabled);
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Reveal in source")
+            .click();
+        harness.run();
+        harness.get_by_label("Spotlight").click();
+        harness.run();
+        assert_eq!(
+            harness.state().source_reveal_animation.style,
+            RevealStyle::Spotlight
+        );
+        harness.get_by_label("Typing particles").click();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Density")
+            .click();
+        harness.run();
+        harness.get_by_label("High").click();
+        harness.run();
+        assert!(harness.state().editor_particles.enabled);
+        assert_eq!(
+            harness.state().editor_particles.density,
+            ParticleDensity::High
+        );
+        assert_eq!(
+            harness.state().preview_reveal_animation,
+            RevealAnimation::default()
+        );
+        assert_eq!(harness.state().source_reveal_animation.duration_ms, 900);
+        assert_eq!(harness.state().source_reveal_animation.size_percent, 100);
+    }
 
     #[test]
     fn documentation_link_queues_the_exact_url_without_opening_a_browser() {

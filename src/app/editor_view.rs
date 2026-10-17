@@ -411,6 +411,9 @@ impl EditorApp {
                 crate::auto_pairs::ascii_punctuation(&mut input.events);
             });
         }
+        let particle_settings = self.settings.editor_particles;
+        let typing_intent =
+            editor_particles::capture(ui, editor_id, particle_settings.enabled && !read_only);
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
         let fold_press_id = source_editor_id(ui.ctx()).with("fold-press-cursor");
         if ui.input(|i| i.pointer.primary_pressed()) {
@@ -1150,6 +1153,19 @@ impl EditorApp {
                 &output.galley,
                 output.galley_pos,
                 &mut self.editor_attention,
+                self.settings.source_reveal_animation,
+            );
+            editor_particles::paint(
+                ui,
+                editor_particles::Surface {
+                    edit: &output,
+                    document: document.key(),
+                    viewport: visible_viewport,
+                    view: editor_particles::View::Source,
+                },
+                particle_settings,
+                typing_intent,
+                changed,
             );
             (
                 output.response.rect,

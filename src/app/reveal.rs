@@ -1,8 +1,10 @@
 //! Bounded reveal feedback shared by the source and PDF preview surfaces.
 use super::EditorAttention;
+use crate::settings::{RevealAnimation, RevealStyle};
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Ui, Vec2};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 pub(super) const DURATION: Duration = Duration::from_millis(900);
 const ARM_TIMEOUT: Duration = Duration::from_secs(2);
 const RING_DURATION: f32 = 0.66;
@@ -22,11 +24,17 @@ pub(super) struct Frame {
 }
 
 impl Frame {
-    pub(super) fn at(elapsed: Duration) -> Option<Self> {
-        if elapsed >= DURATION {
+    pub(super) fn at(elapsed: Duration, animation: RevealAnimation) -> Option<Self> {
+        let animation = animation.normalized();
+        let duration = Duration::from_millis(u64::from(animation.duration_ms));
+        if !animation.enabled || elapsed >= duration {
             return None;
         }
-        let seconds = elapsed.as_secs_f32();
+        let seconds = if animation.duration_ms == 900 {
+            elapsed.as_secs_f32()
+        } else {
+            elapsed.as_secs_f32() / duration.as_secs_f32() * 0.9
+        };
         let ring = |delay: f32| {
             let progress = ((seconds - delay) / RING_DURATION).clamp(0.0, 1.0);
             Ring {
@@ -38,7 +46,7 @@ impl Frame {
                 },
             }
         };
-        let fade = (1.0 - seconds / DURATION.as_secs_f32()).clamp(0.0, 1.0);
+        let fade = (1.0 - seconds / 0.9).clamp(0.0, 1.0);
         Some(Self {
             rings: [ring(0.0), ring(SECOND_RING_DELAY)],
             wash_opacity: 0.12 * fade,
@@ -58,31 +66,50 @@ fn with_opacity(color: Color32, opacity: f32) -> Color32 {
 
 /// Paint above the surface's text, with no widgets, geometry, or input changes.
 /// The return value is false once the animation is completely finished.
-pub(super) fn paint(ui: &Ui, viewport: Rect, target: Rect, elapsed: Duration) -> bool {
-    let Some(frame) = Frame::at(elapsed) else {
+pub(super) fn paint(
+    ui: &Ui,
+    viewport: Rect,
+    target: Rect,
+    elapsed: Duration,
+    animation: RevealAnimation,
+) -> bool {
+    let animation = animation.normalized();
+    let Some(frame) = Frame::at(elapsed, animation) else {
         return false;
     };
     let accent = crate::theme::palette(ui.ctx()).accent;
     let center = target.center();
-    if !target.is_finite() || !viewport.expand(68.0).contains(center) {
+    let scale = f32::from(animation.size_percent) / 100.0;
+    if !target.is_finite() || !viewport.expand(90.0 * scale).contains(center) {
         return true;
     }
     let painter = ui
         .painter()
         .with_clip_rect(viewport.intersect(ui.clip_rect()));
     let mut wash = egui::epaint::Mesh::default();
-    wash.colored_vertex(center, with_opacity(accent, frame.wash_opacity));
+    let (wash_radius, wash_strength) = match animation.style {
+        RevealStyle::Rings => (52.0, 1.0),
+        RevealStyle::Pulse => (28.0 + 6.0 * frame.marker_opacity, 2.0),
+        RevealStyle::Spotlight => (86.0, 2.5),
+    };
+    wash.colored_vertex(
+        center,
+        with_opacity(accent, frame.wash_opacity * wash_strength),
+    );
     const SEGMENTS: u32 = 32;
     for index in 0..SEGMENTS {
         let angle = index as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        wash.colored_vertex(center + Vec2::angled(angle) * 52.0, Color32::TRANSPARENT);
+        wash.colored_vertex(
+            center + Vec2::angled(angle) * wash_radius * scale,
+            Color32::TRANSPARENT,
+        );
     }
     for index in 0..SEGMENTS {
         wash.add_triangle(0, index + 1, (index + 1) % SEGMENTS + 1);
     }
     painter.add(egui::Shape::mesh(wash));
     for ring in frame.rings {
-        if ring.opacity > 0.0 {
+        if animation.style == RevealStyle::Rings && ring.opacity > 0.0 {
             for (width, color, strength) in [
                 (5.5, Color32::BLACK, 0.72),
                 (3.5, Color32::WHITE, 0.90),
@@ -90,13 +117,13 @@ pub(super) fn paint(ui: &Ui, viewport: Rect, target: Rect, elapsed: Duration) ->
             ] {
                 painter.circle_stroke(
                     center,
-                    ring.radius,
+                    ring.radius * scale,
                     Stroke::new(width, with_opacity(color, ring.opacity * strength)),
                 );
             }
         }
     }
-    let half_height = (target.height() * 0.55).clamp(8.0, 16.0);
+    let half_height = (target.height() * 0.55).clamp(8.0, 16.0) * scale;
     let marker = [
         Pos2::new(center.x, center.y - half_height),
         Pos2::new(center.x, center.y + half_height),
@@ -128,6 +155,7 @@ impl EditorAttention {
             armed_at: Instant::now(),
             started: None,
             fixed_elapsed: None,
+            animation: None,
         }
     }
 
@@ -138,9 +166,15 @@ impl EditorAttention {
         }
     }
 
-    fn phase(&mut self, now: Instant, visible: bool) -> Phase {
+    fn phase(&mut self, now: Instant, visible: bool, animation: RevealAnimation) -> Phase {
+        let animation = animation.normalized();
+        if !animation.enabled || self.animation.is_some_and(|previous| previous != animation) {
+            return Phase::Finished;
+        }
+        self.animation = Some(animation);
+        let duration = Duration::from_millis(u64::from(animation.duration_ms));
         if let Some(elapsed) = self.fixed_elapsed {
-            return if elapsed < DURATION {
+            return if elapsed < duration {
                 Phase::Showing(elapsed)
             } else {
                 Phase::Finished
@@ -148,7 +182,7 @@ impl EditorAttention {
         }
         if let Some(started) = self.started {
             let elapsed = now.saturating_duration_since(started);
-            return if elapsed < DURATION {
+            return if elapsed < duration {
                 Phase::Showing(elapsed)
             } else {
                 Phase::Finished
@@ -167,11 +201,18 @@ impl EditorAttention {
 
     /// Begin only after deferred scrolling has brought the target into view.
     /// An unresolved offscreen request has one expiry wakeup, not a frame loop.
-    pub(super) fn paint(&mut self, ui: &Ui, viewport: Rect, target: Rect) -> bool {
+    pub(super) fn paint(
+        &mut self,
+        ui: &Ui,
+        viewport: Rect,
+        target: Rect,
+        animation: RevealAnimation,
+    ) -> bool {
         let now = Instant::now();
         match self.phase(
             now,
             target.is_finite() && viewport.contains(target.center()),
+            animation,
         ) {
             Phase::Armed => {
                 ui.ctx().request_repaint_after(
@@ -180,7 +221,7 @@ impl EditorAttention {
                 true
             }
             Phase::Showing(elapsed) => {
-                let active = paint(ui, viewport, target, elapsed);
+                let active = paint(ui, viewport, target, elapsed, animation);
                 if active && self.fixed_elapsed.is_none() {
                     ui.ctx()
                         .request_repaint_after(crate::theme::METRICS.motion.animation_frame);
@@ -221,6 +262,7 @@ pub(super) fn paint_editor(
     galley: &egui::Galley,
     galley_pos: Pos2,
     attention: &mut Option<EditorAttention>,
+    animation: RevealAnimation,
 ) {
     #[cfg(any(test, feature = "desktop-ui-tests"))]
     let observation_id = super::source_editor_id(ui.ctx()).with("reveal-observation");
@@ -233,7 +275,7 @@ pub(super) fn paint_editor(
     let target = galley
         .pos_from_cursor(egui::text::CCursor::new(state.char_index))
         .translate(galley_pos.to_vec2());
-    let active = state.paint(ui, viewport, target);
+    let active = state.paint(ui, viewport, target, animation);
     #[cfg(any(test, feature = "desktop-ui-tests"))]
     {
         let elapsed = state
@@ -287,7 +329,13 @@ mod tests {
             let output = context.run_ui(Default::default(), |ui| {
                 let viewport = ui.clip_rect();
                 let target = Rect::from_center_size(viewport.center(), Vec2::new(1.0, 18.0));
-                assert!(paint(ui, viewport, target, Duration::ZERO));
+                assert!(paint(
+                    ui,
+                    viewport,
+                    target,
+                    Duration::ZERO,
+                    RevealAnimation::default()
+                ));
             });
             assert!(output.shapes.iter().any(|shape| {
                 matches!(&shape.shape, egui::Shape::Circle(circle) if circle.stroke.color == accent)
@@ -301,23 +349,27 @@ mod tests {
 
     #[test]
     fn two_expanding_pulses_finish_completely_after_nine_hundred_milliseconds() {
-        let start = Frame::at(Duration::ZERO).unwrap();
+        let start = Frame::at(Duration::ZERO, RevealAnimation::default()).unwrap();
         assert_eq!(start.rings[0].radius, 12.0);
         assert_eq!(start.rings[1].opacity, 0.0);
-        let second = Frame::at(Duration::from_millis(240)).unwrap();
+        let second = Frame::at(Duration::from_millis(240), RevealAnimation::default()).unwrap();
         assert!(second.rings[0].radius > start.rings[0].radius);
         assert_eq!(second.rings[1].radius, 12.0);
         assert_eq!(second.rings[1].opacity, 1.0);
         for milliseconds in 0..900 {
-            let frame = Frame::at(Duration::from_millis(milliseconds)).unwrap();
+            let frame = Frame::at(
+                Duration::from_millis(milliseconds),
+                RevealAnimation::default(),
+            )
+            .unwrap();
             for ring in frame.rings {
                 assert!((12.0..=66.0).contains(&ring.radius));
                 assert!((0.0..=1.0).contains(&ring.opacity));
             }
             assert!(frame.wash_opacity <= 0.12);
         }
-        assert!(Frame::at(DURATION).is_none());
-        assert!(Frame::at(Duration::MAX).is_none());
+        assert!(Frame::at(DURATION, RevealAnimation::default()).is_none());
+        assert!(Frame::at(Duration::MAX, RevealAnimation::default()).is_none());
     }
 
     #[test]
@@ -325,19 +377,30 @@ mod tests {
         let mut attention = EditorAttention::arm(42);
         let armed = attention.armed_at;
         assert_eq!(
-            attention.phase(armed + Duration::from_millis(750), false),
+            attention.phase(
+                armed + Duration::from_millis(750),
+                false,
+                RevealAnimation::default()
+            ),
             Phase::Armed
         );
         let revealed = armed + Duration::from_millis(900);
         assert_eq!(
-            attention.phase(revealed, true),
+            attention.phase(revealed, true, RevealAnimation::default()),
             Phase::Showing(Duration::ZERO)
         );
         assert_eq!(
-            attention.phase(revealed + Duration::from_millis(899), true),
+            attention.phase(
+                revealed + Duration::from_millis(899),
+                true,
+                RevealAnimation::default()
+            ),
             Phase::Showing(Duration::from_millis(899))
         );
-        assert_eq!(attention.phase(revealed + DURATION, true), Phase::Finished);
+        assert_eq!(
+            attention.phase(revealed + DURATION, true, RevealAnimation::default()),
+            Phase::Finished
+        );
     }
 
     #[test]
@@ -354,7 +417,14 @@ mod tests {
                     Color32::BLACK,
                 );
                 ui.painter().galley(origin, galley.clone(), Color32::BLACK);
-                paint_editor(ui, viewport, &galley, origin, &mut attention);
+                paint_editor(
+                    ui,
+                    viewport,
+                    &galley,
+                    origin,
+                    &mut attention,
+                    RevealAnimation::default(),
+                );
                 let observation = editor_observation(ui.ctx()).unwrap();
                 let target = galley
                     .pos_from_cursor(egui::text::CCursor::new(2))
@@ -377,7 +447,14 @@ mod tests {
                     ]
                 );
                 attention = None;
-                paint_editor(ui, viewport, &galley, origin, &mut attention);
+                paint_editor(
+                    ui,
+                    viewport,
+                    &galley,
+                    origin,
+                    &mut attention,
+                    RevealAnimation::default(),
+                );
                 assert!(editor_observation(ui.ctx()).is_none());
             })
             .drop_without_applying_deltas();
@@ -388,23 +465,131 @@ mod tests {
         let elapsed = Duration::from_millis(120);
         let mut attention = EditorAttention::snapshot(42, elapsed);
         assert_eq!(
-            attention.phase(attention.armed_at + ARM_TIMEOUT + DURATION, false),
+            attention.phase(
+                attention.armed_at + ARM_TIMEOUT + DURATION,
+                false,
+                RevealAnimation::default()
+            ),
             Phase::Showing(elapsed)
         );
         assert!(attention.started.is_none());
     }
 
     #[test]
+    fn settings_control_both_timing_and_retirement_without_extending_an_active_cue() {
+        for duration_ms in [250, 1500, 2000] {
+            let animation = RevealAnimation {
+                duration_ms,
+                ..Default::default()
+            };
+            let mut attention = EditorAttention::arm(0);
+            let start = attention.armed_at;
+            assert_eq!(
+                attention.phase(start, true, animation),
+                Phase::Showing(Duration::ZERO)
+            );
+            let duration = Duration::from_millis(u64::from(duration_ms));
+            assert!(Frame::at(duration - Duration::from_millis(1), animation).is_some());
+            assert_eq!(
+                attention.phase(start + duration, true, animation),
+                Phase::Finished
+            );
+            assert!(Frame::at(duration, animation).is_none());
+        }
+        let disabled = RevealAnimation {
+            enabled: false,
+            ..Default::default()
+        };
+        let mut attention = EditorAttention::arm(0);
+        assert_eq!(
+            attention.phase(attention.armed_at, false, disabled),
+            Phase::Finished
+        );
+        assert!(Frame::at(Duration::ZERO, disabled).is_none());
+        assert!(attention.started.is_none());
+        let mut attention = EditorAttention::arm(0);
+        attention.phase(attention.armed_at, true, Default::default());
+        let changed = RevealAnimation {
+            duration_ms: 2000,
+            ..Default::default()
+        };
+        assert_eq!(
+            attention.phase(
+                attention.armed_at + Duration::from_millis(10),
+                true,
+                changed
+            ),
+            Phase::Finished
+        );
+    }
+
+    #[test]
+    fn styles_and_size_only_change_painted_shapes_inside_the_same_clip() {
+        let context = egui::Context::default();
+        for style in RevealStyle::ALL {
+            for size_percent in [50, 100, 200] {
+                let output = context.run_ui(Default::default(), |ui| {
+                    let viewport = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(200.0));
+                    let target = Rect::from_center_size(viewport.center(), Vec2::new(1.0, 18.0));
+                    let before = ui.min_rect();
+                    assert!(paint(
+                        ui,
+                        viewport,
+                        target,
+                        Duration::ZERO,
+                        RevealAnimation {
+                            style,
+                            size_percent,
+                            ..Default::default()
+                        }
+                    ));
+                    assert_eq!(before, ui.min_rect());
+                });
+                let circles = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::Shape::Circle(circle) = &shape.shape {
+                            assert_eq!(
+                                shape.clip_rect,
+                                Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(200.0))
+                            );
+                            Some(circle.radius)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if style == RevealStyle::Rings {
+                    assert_eq!(circles.len(), 3);
+                    assert!(
+                        circles
+                            .iter()
+                            .all(|radius| *radius == 12.0 * f32::from(size_percent) / 100.0)
+                    );
+                } else {
+                    assert!(circles.is_empty());
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+    }
+
+    #[test]
     fn unresolved_reveals_expire_and_explicit_repeated_jumps_rearm() {
         let mut attention = EditorAttention::arm(42);
         assert_eq!(
-            attention.phase(attention.armed_at + ARM_TIMEOUT, false),
+            attention.phase(
+                attention.armed_at + ARM_TIMEOUT,
+                false,
+                RevealAnimation::default()
+            ),
             Phase::Finished
         );
         attention = EditorAttention::arm(42);
         assert_eq!(attention.started, None);
         assert_eq!(
-            attention.phase(attention.armed_at, true),
+            attention.phase(attention.armed_at, true, RevealAnimation::default()),
             Phase::Showing(Duration::ZERO)
         );
         attention = EditorAttention::arm(42);

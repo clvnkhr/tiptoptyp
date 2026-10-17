@@ -58,6 +58,13 @@ fn page_context_menu(
     });
 }
 
+fn reveal_scroll_offset(target: Pos2, viewport: Vec2) -> Vec2 {
+    egui::vec2(
+        (target.x - viewport.x * 0.5).max(0.0),
+        (target.y - viewport.y * 0.382).max(0.0),
+    )
+}
+
 struct Resident {
     texture: egui::TextureHandle,
     characters: Vec<Character>,
@@ -72,17 +79,29 @@ struct PdfReveal {
 }
 
 impl PdfReveal {
-    fn obsolete(&self, bytes: &Arc<[u8]>, now: Instant) -> bool {
+    fn obsolete(
+        &self,
+        bytes: &Arc<[u8]>,
+        now: Instant,
+        animation: crate::settings::RevealAnimation,
+    ) -> bool {
         let attention = &self.attention;
-        ((attention.started.is_some() || attention.fixed_elapsed.is_some())
-            && self
-                .expected_pdf
-                .as_ref()
-                .is_some_and(|expected| !Arc::ptr_eq(expected, bytes) && **expected != **bytes))
+        !animation.enabled
+            || attention
+                .animation
+                .is_some_and(|previous| previous != animation.normalized())
+            || ((attention.started.is_some() || attention.fixed_elapsed.is_some())
+                && self
+                    .expected_pdf
+                    .as_ref()
+                    .is_some_and(|expected| !Arc::ptr_eq(expected, bytes) && **expected != **bytes))
             || (attention.fixed_elapsed.is_none()
                 && attention.started.map_or_else(
                     || now.saturating_duration_since(attention.armed_at) >= Duration::from_secs(2),
-                    |start| now.saturating_duration_since(start) >= super::reveal::DURATION,
+                    |start| {
+                        now.saturating_duration_since(start)
+                            >= Duration::from_millis(u64::from(animation.normalized().duration_ms))
+                    },
                 ))
     }
 }
@@ -112,7 +131,7 @@ pub(super) struct PdfiumView {
     page: usize,
     goto: Option<usize>,
     pending_position: Option<(usize, f32)>,
-    position_is_reveal: bool,
+    position_point: Option<Vec2>,
     position_pdf: Option<Arc<[u8]>>,
     reveal: Option<PdfReveal>,
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -163,7 +182,7 @@ impl Default for PdfiumView {
             page: 0,
             goto: None,
             pending_position: None,
-            position_is_reveal: false,
+            position_point: None,
             position_pdf: None,
             reveal: None,
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -338,7 +357,7 @@ impl PdfiumView {
             return;
         }
         self.go_to_position(page, y);
-        self.position_is_reveal = explicit;
+        self.position_point = explicit.then_some(egui::vec2(x, y));
         self.position_pdf = expected_pdf.clone();
         if explicit {
             self.reveal = Some(PdfReveal {
@@ -361,7 +380,7 @@ impl PdfiumView {
         self.reveal = None;
         self.pending_position = None;
         self.position_pdf = None;
-        self.position_is_reveal = false;
+        self.position_point = None;
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         {
             self.reveal_observation = None;
@@ -382,7 +401,7 @@ impl PdfiumView {
         // The new map may arrive before its PDF has been inspected. Resolve
         // point coordinates only against that PDF's admitted page dimensions.
         self.pending_position = Some((page, y));
-        self.position_is_reveal = false;
+        self.position_point = None;
         self.position_pdf = None;
     }
     fn apply_pending_position(&mut self) {
@@ -481,16 +500,38 @@ impl PdfiumView {
             let position = matches.then(|| self.pending_position.take()).flatten();
             let position_pdf = matches.then(|| self.position_pdf.take()).flatten();
             let reveal = matches.then(|| self.reveal.take()).flatten();
-            let position_is_reveal = matches && self.position_is_reveal;
+            let position_point = matches.then_some(self.position_point).flatten();
             *self = Self {
                 pending_position: position,
                 position_pdf,
                 reveal,
-                position_is_reveal,
+                position_point,
                 ..Default::default()
             };
         }
         self.path = path;
+    }
+
+    fn update_reveal_options(
+        &mut self,
+        bytes: &Arc<[u8]>,
+        now: Instant,
+        animation: crate::settings::RevealAnimation,
+    ) {
+        let Some(reveal) = &self.reveal else {
+            return;
+        };
+        if !animation.enabled
+            || reveal
+                .attention
+                .animation
+                .is_some_and(|previous| previous != animation.normalized())
+        {
+            // Effects preferences control feedback, never the pending SyncTeX jump.
+            self.reveal = None;
+        } else if reveal.obsolete(bytes, now, animation) {
+            self.clear_reveal();
+        }
     }
 
     fn show(
@@ -500,19 +541,14 @@ impl PdfiumView {
         bytes: Arc<[u8]>,
         palette: (Color32, Color32),
         can_reveal_source: bool,
+        animation: crate::settings::RevealAnimation,
     ) -> Option<String> {
         self.prepare_path(path, &bytes);
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         {
             self.reveal_observation = None;
         }
-        if self
-            .reveal
-            .as_ref()
-            .is_some_and(|reveal| reveal.obsolete(&bytes, Instant::now()))
-        {
-            self.clear_reveal();
-        }
+        self.update_reveal_options(&bytes, Instant::now(), animation);
         if self
             .bytes
             .as_ref()
@@ -617,26 +653,23 @@ impl PdfiumView {
                 .auto_shrink([false, false]);
             if let Some(page) = self.goto.take() {
                 scroll = scroll.vertical_scroll_offset(self.tops[page.min(self.tops.len() - 1)]);
+                self.position_point = None;
                 self.restore_anchor = false;
             } else if self.restore_anchor {
                 let (page, fraction) = self.anchor;
                 let page = page.min(catalog.sizes.len() - 1);
                 let target_y = self.tops[page] + fraction * catalog.sizes[page][1] * self.zoom;
-                let offset = if self.position_is_reveal {
-                    if let Some(reveal) = &self.reveal {
-                        let page_width = catalog.sizes[page][0] * self.zoom;
-                        scroll = scroll.horizontal_scroll_offset(
-                            ((width - page_width) / 2.0 + reveal.point.x * self.zoom
-                                - available.width() * 0.5)
-                                .max(0.0),
-                        );
-                    }
-                    (target_y - available.height() * 0.382).max(0.0)
+                let offset = if let Some(point) = self.position_point.take() {
+                    let page_width = catalog.sizes[page][0] * self.zoom;
+                    let target =
+                        Pos2::new((width - page_width) / 2.0 + point.x * self.zoom, target_y);
+                    let offset = reveal_scroll_offset(target, available.size());
+                    scroll = scroll.horizontal_scroll_offset(offset.x);
+                    offset.y
                 } else {
                     target_y
                 };
                 scroll = scroll.vertical_scroll_offset(offset);
-                self.position_is_reveal = false;
                 self.restore_anchor = false;
             }
             let interaction_bounds =
@@ -763,7 +796,7 @@ impl PdfiumView {
                                             self.reveal = None;
                                             self.pending_position = None;
                                             self.position_pdf = None;
-                                            self.position_is_reveal = false;
+                                            self.position_point = None;
                                             push_history(&mut self.back, self.anchor);
                                             self.forward.clear();
                                             self.goto = Some(*page);
@@ -808,7 +841,7 @@ impl PdfiumView {
                         let point = rect.min + reveal.point * self.zoom;
                         let target = Rect::from_center_size(point, egui::vec2(2.0, 18.0));
                         let visible = clip.intersect(interaction_bounds);
-                        let active = reveal.attention.paint(ui, visible, target);
+                        let active = reveal.attention.paint(ui, visible, target, animation);
                         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                         if active && visible.contains(point)
                             && let Some(elapsed) = reveal.attention.fixed_elapsed.or_else(||
@@ -868,7 +901,10 @@ impl PdfiumView {
         {
             let remaining = reveal.attention.started.map_or_else(
                 || Duration::from_secs(2).saturating_sub(reveal.attention.armed_at.elapsed()),
-                |started| super::reveal::DURATION.saturating_sub(started.elapsed()),
+                |started| {
+                    Duration::from_millis(u64::from(animation.normalized().duration_ms))
+                        .saturating_sub(started.elapsed())
+                },
             );
             ui.ctx().request_repaint_after(remaining);
         }
@@ -1188,6 +1224,7 @@ impl EditorApp {
         let palette = self.preview_palette(ui.ctx(), preview.render_dark());
         let can_reveal_source = self.pdfium_source_jump_available(asset, &path, &bytes);
         let source_popped_out = self.preview_source_popped_out();
+        let animation = self.settings.preview_reveal_animation;
         let view = if asset {
             &mut self.pdfium_asset
         } else {
@@ -1205,7 +1242,7 @@ impl EditorApp {
                 } else {
                     "pdfium-preview"
                 },
-                |ui| view.show(ui, path, bytes, palette, can_reveal_source),
+                |ui| view.show(ui, path, bytes, palette, can_reveal_source, animation),
             )
             .inner
             && crate::pdfium::safe_url(&link)
@@ -1360,6 +1397,7 @@ mod tests {
                         bytes.clone(),
                         (Color32::WHITE, Color32::BLACK),
                         allowed,
+                        crate::settings::RevealAnimation::default(),
                     );
                 })
                 .drop_without_applying_deltas();
@@ -1491,10 +1529,11 @@ mod tests {
         let reveal = view.reveal.as_ref().unwrap();
         assert_eq!(reveal.page, 2);
         assert_eq!(reveal.point, egui::vec2(125.0, 360.0));
+        assert_eq!(view.position_point, Some(reveal.point));
         assert!(reveal.attention.started.is_none());
         view.reveal_position(2, 200.0, 400.0, false);
         assert!(view.reveal.is_none());
-        assert!(!view.position_is_reveal);
+        assert!(view.position_point.is_none());
         assert_eq!(view.pending_position, Some((2, 400.0)));
         view.reveal_position(0, f32::NAN, 10.0, true);
         assert!(view.reveal.is_none());
@@ -1541,16 +1580,105 @@ mod tests {
             attention: EditorAttention::arm(0),
         };
         assert!(
-            !reveal.obsolete(&other, now),
+            !reveal.obsolete(&other, now, crate::settings::RevealAnimation::default()),
             "wait for the intended PDF to arrive"
         );
         reveal.attention.started = Some(now);
-        assert!(!reveal.obsolete(&bytes, now + Duration::from_millis(899)));
-        assert!(reveal.obsolete(&bytes, now + super::super::reveal::DURATION));
-        assert!(reveal.obsolete(&other, now));
+        assert!(!reveal.obsolete(
+            &bytes,
+            now + Duration::from_millis(899),
+            crate::settings::RevealAnimation::default()
+        ));
+        assert!(reveal.obsolete(
+            &bytes,
+            now + super::super::reveal::DURATION,
+            crate::settings::RevealAnimation::default()
+        ));
+        assert!(reveal.obsolete(&other, now, crate::settings::RevealAnimation::default()));
         reveal.attention = EditorAttention::snapshot(0, Duration::from_millis(300));
-        assert!(!reveal.obsolete(&bytes, now + Duration::from_secs(10)));
-        assert!(reveal.obsolete(&other, now));
+        assert!(!reveal.obsolete(
+            &bytes,
+            now + Duration::from_secs(10),
+            crate::settings::RevealAnimation::default()
+        ));
+        assert!(reveal.obsolete(&other, now, crate::settings::RevealAnimation::default()));
+    }
+
+    #[test]
+    fn reveal_scroll_offsets_keep_the_destination_visible_at_page_edges() {
+        let viewport = Vec2::new(400.0, 300.0);
+        assert_eq!(
+            reveal_scroll_offset(Pos2::new(10.0, 20.0), viewport),
+            Vec2::ZERO
+        );
+        let offset = reveal_scroll_offset(Pos2::new(640.0, 750.0), viewport);
+        assert_eq!(offset.x, 440.0);
+        assert!((offset.y - 635.4).abs() < 0.001);
+    }
+
+    #[test]
+    fn disabled_or_changed_pdf_feedback_keeps_the_pending_navigation() {
+        let bytes: Arc<[u8]> = Arc::from([1u8]);
+        for animation in [
+            crate::settings::RevealAnimation {
+                enabled: false,
+                ..Default::default()
+            },
+            crate::settings::RevealAnimation {
+                style: crate::settings::RevealStyle::Pulse,
+                ..Default::default()
+            },
+        ] {
+            let mut view = PdfiumView {
+                bytes: Some(bytes.clone()),
+                ..Default::default()
+            };
+            view.reveal_position(2, 640.0, 750.0, true);
+            let point = view.position_point.unwrap();
+            let viewport = Vec2::new(400.0, 300.0);
+            let expected_offset =
+                reveal_scroll_offset(Pos2::new(point.x, 2000.0 + point.y), viewport);
+            view.reveal.as_mut().unwrap().attention.animation = Some(Default::default());
+            view.update_reveal_options(&bytes, Instant::now(), animation);
+            assert!(view.reveal.is_none());
+            assert_eq!(view.pending_position, Some((2, 750.0)));
+            assert!(view.position_pdf.is_some());
+            assert_eq!(view.position_point, Some(point));
+            view.catalog = Some(Arc::new(Catalog {
+                sizes: vec![[800.0, 1000.0]; 3],
+                outline: vec![],
+            }));
+            view.apply_pending_position();
+            assert_eq!(view.anchor, (2, 0.75));
+            let retained = view.position_point.unwrap();
+            let actual_offset = reveal_scroll_offset(
+                Pos2::new(retained.x, 2000.0 + view.anchor.1 * 1000.0),
+                viewport,
+            );
+            assert_eq!(actual_offset, expected_offset);
+            assert_eq!(actual_offset, egui::vec2(440.0, 2635.4));
+        }
+    }
+
+    #[test]
+    fn configured_pdf_duration_expires_offscreen_and_cancels_stale_navigation() {
+        let bytes: Arc<[u8]> = Arc::from([1u8]);
+        let mut view = PdfiumView {
+            bytes: Some(bytes.clone()),
+            ..Default::default()
+        };
+        view.reveal_position(2, 40.0, 50.0, true);
+        let now = Instant::now();
+        view.reveal.as_mut().unwrap().attention.started = Some(now);
+        let animation = crate::settings::RevealAnimation {
+            duration_ms: 1500,
+            ..Default::default()
+        };
+        view.update_reveal_options(&bytes, now + Duration::from_millis(1499), animation);
+        assert!(view.reveal.is_some());
+        view.update_reveal_options(&bytes, now + Duration::from_millis(1500), animation);
+        assert!(view.reveal.is_none());
+        assert!(view.pending_position.is_none());
     }
 
     #[test]
@@ -1565,6 +1693,7 @@ mod tests {
             }
             assert!(view.reveal.is_none());
             assert!(view.pending_position.is_none());
+            assert!(view.position_point.is_none());
             view.apply_pending_position();
             assert_eq!(view.goto, Some(5));
         }
@@ -1596,6 +1725,10 @@ mod tests {
             view.prepare_path(PathBuf::from("b.pdf"), &next);
             assert_eq!(view.reveal.is_some(), matching);
             assert_eq!(view.pending_position.is_some(), matching);
+            assert_eq!(
+                view.position_point,
+                matching.then_some(egui::vec2(40.0, 50.0))
+            );
             assert!(view.bytes.is_none());
         }
     }
@@ -1709,6 +1842,7 @@ mod tests {
                             bytes.clone(),
                             (Color32::WHITE, Color32::BLACK),
                             false,
+                            crate::settings::RevealAnimation::default(),
                         );
                     },
                 )

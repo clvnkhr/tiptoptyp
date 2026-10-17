@@ -109,6 +109,8 @@ impl EditorApp {
         if settings.ascii_punctuation && ui.memory(|m| m.has_focus(source_id)) {
             ui.input_mut(|input| crate::auto_pairs::ascii_punctuation(&mut input.events));
         }
+        let particle_settings = settings.editor_particles;
+        let typing_intent = editor_particles::capture(ui, source_id, particle_settings.enabled);
         let mut output = self
             .tabs
             .current_record_mut()
@@ -197,6 +199,19 @@ impl EditorApp {
             &output.edit.galley,
             output.edit.galley_pos,
             &mut self.editor_attention,
+            self.settings.source_reveal_animation,
+        );
+        editor_particles::paint(
+            ui,
+            editor_particles::Surface {
+                edit: &output.edit,
+                document: self.document().key(),
+                viewport: attention_viewport,
+                view: editor_particles::View::Diff,
+            },
+            particle_settings,
+            typing_intent,
+            self.document().key() != key,
         );
         match output.action {
             Some(full_view::Action::Close) => {

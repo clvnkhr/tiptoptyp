@@ -121,6 +121,14 @@ impl EditorApp {
             .map(ShortcutAction::id)
             .collect::<Vec<_>>()
             .into();
+        observation["editor_particles"] =
+            serde_json::to_value(self.settings.editor_particles).unwrap();
+        observation["typing_particles"] =
+            editor_particles::inspected(context, source_editor_id(context), self.document().key());
+        observation["reveal_animation_options"] = serde_json::json!({
+            "source": self.settings.source_reveal_animation,
+            "preview": self.settings.preview_reveal_animation,
+        });
         observation["settings_category"] = settings_category.into();
         observation["compact_layout_controls"] = self.settings.compact_layout_controls.into();
         observation["pdfium_render"] = self.pdfium_preview.inspected_render();

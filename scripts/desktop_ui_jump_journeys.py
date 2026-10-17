@@ -79,8 +79,11 @@ def renderer_ink_point(state, page):
             target["y"] - target["height"] / 2 + client[1] * target["height"] / size[1]]
 
 
-def assert_reveal(value, page=None, region=None):
+def assert_reveal(value, page=None, region=None, duration_ms=900):
     """Require actual visible, finite feedback at the observed destination."""
+    if (isinstance(duration_ms, bool) or not isinstance(duration_ms, (int, float))
+            or not math.isfinite(duration_ms) or not 250 <= duration_ms <= 2000):
+        raise AssertionError("invalid expected reveal duration")
     if not isinstance(value, dict) or value.get("active") is not True or value.get("pending") is True:
         raise AssertionError("destination reveal is not visibly animating")
     center, viewport = value.get("center"), value.get("viewport")
@@ -89,7 +92,7 @@ def assert_reveal(value, page=None, region=None):
             or not isinstance(viewport, list) or len(viewport) != 4
             or any(isinstance(number, bool) or not isinstance(number, (int, float))
                    or not math.isfinite(number) for number in [*center, *viewport, elapsed])
-            or not 0 <= elapsed < 900
+            or not 0 <= elapsed < duration_ms
             or viewport[0] >= viewport[2] or viewport[1] >= viewport[3]
             or not viewport[0] <= center[0] <= viewport[2]
             or not viewport[1] <= center[1] <= viewport[3]):
@@ -118,7 +121,9 @@ def reveal_retired(value):
 
 
 class PreviewJumpJourneys:
-    def jump_reveal_feedback(self, backend, destination, arrival=None, page=None, region=None):
+    def jump_reveal_feedback(self, backend, destination, arrival=None, page=None, region=None, options=None):
+        options = options or {"enabled": True, "style": "Rings", "duration_ms": 900, "size_percent": 100}
+        duration_ms = options["duration_ms"]
         def observation(state):
             if destination == "source":
                 return state["document"].get("source_reveal"), True
@@ -128,17 +133,41 @@ class PreviewJumpJourneys:
             return (renderer.get("value") or {}).get("reveal"), renderer.get("age_ms", 1000) <= 500
 
         state = arrival or self.snapshot()
+        if not options["enabled"]:
+            deadline = time.monotonic() + 4
+            samples = 0
+            while samples < 5:
+                value, fresh = observation(state)
+                if fresh:
+                    if not reveal_retired(value):
+                        raise AssertionError("disabled reveal feedback still armed or painted a cue")
+                    if isinstance(value, dict) and value.get("options") != options:
+                        raise AssertionError("disabled native preview did not receive its configured options")
+                    samples += 1
+                if time.monotonic() >= deadline:
+                    raise AssertionError("disabled reveal feedback could not be observed freshly")
+                time.sleep(0.06)
+                state = self.snapshot()
+            self.record("navigation.reveal", backend=backend, destination=destination,
+                        options=options, disabled=True, fresh_observations=samples)
+            return
         deadline = time.monotonic() + 4
         while True:
             value, fresh = observation(state)
             if fresh and isinstance(value, dict) and value.get("active") is True and value.get("pending") is not True:
-                first = assert_reveal(value, page=page, region=region)
+                first = assert_reveal(value, page=page, region=region, duration_ms=duration_ms)
+                if value.get("options") is not None and value["options"] != options:
+                    raise AssertionError("native preview did not receive its configured reveal options")
                 break
             if time.monotonic() >= deadline:
                 raise AssertionError("navigation reached its destination without visible reveal feedback")
             time.sleep(0.025)
             state = self.snapshot()
-        deadline = time.monotonic() + 2
+        if (getattr(self, "capture_review", False) and destination == "source"
+                and duration_ms != 900 and not getattr(self, "jump_effect_captured", False)):
+            self.capture_viewport("main")
+            self.jump_effect_captured = True
+        deadline = time.monotonic() + duration_ms / 1000 + 1
         while True:
             state = self.snapshot()
             value, fresh = observation(state)
@@ -147,14 +176,14 @@ class PreviewJumpJourneys:
             if time.monotonic() >= deadline:
                 raise AssertionError("destination reveal did not retire after its finite animation")
             if fresh and isinstance(value, dict) and value.get("active") is True and value.get("pending") is not True:
-                assert_reveal(value, page=page, region=region)
+                assert_reveal(value, page=page, region=region, duration_ms=duration_ms)
             time.sleep(0.025)
         for _ in range(4):
             value, fresh = observation(self.snapshot())
             if not fresh or not reveal_retired(value):
                 raise AssertionError("destination reveal reappeared after it retired")
         self.record("navigation.reveal", backend=backend, destination=destination,
-                    first_visible=first, retired=True)
+                    first_visible=first, options=options, retired=True)
 
     def jump_open_fixture(self, path, source):
         path.write_text(source)
@@ -250,7 +279,7 @@ class PreviewJumpJourneys:
                     raise
                 time.sleep(0.05)
 
-    def jump_context_roundtrip(self, backend, source, path):
+    def jump_context_roundtrip(self, backend, source, path, options=None):
         from desktop_ui_journeys import fingerprint
         unchanged = lambda d: (d["path"] == str(path) and not d["dirty"]
                                and d["source_fingerprint"] == fingerprint(source)
@@ -270,7 +299,8 @@ class PreviewJumpJourneys:
         self.click("menu.Reveal in Preview")
         arrived = self.wait("source context action reveals the last paper", lambda d:
                             unchanged(d) and d["preview_page"] == 2, timeout=20)
-        self.jump_reveal_feedback(backend, "preview", arrived, page=2)
+        self.jump_reveal_feedback(backend, "preview", arrived, page=2,
+                                  options=options["preview"] if options else None)
         self.stable_state(lambda d: unchanged(d) and d["preview_page"] == 2)
         # Source menus may preserve a pre-existing caret/selection. Establish a
         # distinct origin before testing that inverse navigation moves it.
@@ -294,7 +324,8 @@ class PreviewJumpJourneys:
                                 unchanged(d) and cursor_in_region(d, region)
                                 and d["editor_keyboard_focused"] and not d["preview_keyboard_focused"], timeout=20)
             after = arrived["document"]
-            self.jump_reveal_feedback(backend, "source", arrived, region=region)
+            self.jump_reveal_feedback(backend, "source", arrived, region=region,
+                                      options=options["source"] if options else None)
             self.stable_state(lambda d: unchanged(d) and cursor_in_region(d, region)
                               and d["editor_keyboard_focused"])
             self.record("preview.jump", backend=backend, page=page,
@@ -349,6 +380,70 @@ class PreviewJumpJourneys:
         self.wait("detached source check restores split view", lambda d:
                   not d["preview_popout"] and d["view_mode"] == "Split" and unchanged(d))
 
+    def jump_effect_settings(self, options):
+        """Edit effects through real form controls, never through inspection."""
+        generation = self.snapshot()["document"]["preview_generation"]
+        self.settings()
+        for scope in ("source", "preview"):
+            title = "Reveal in " + scope
+            self.setting_section(title, title)
+            for field, control in (("duration_ms", "duration"), ("size_percent", "size")):
+                current = self.snapshot()["document"]["reveal_animation_options"][scope]
+                if current[field] == options[scope][field]:
+                    continue
+                name = f"settings.reveal.{scope}.{control}"
+                self.wait_target(name)
+                self.double_click(name, minimum_height=18)
+                self.wait_target(name, focused=True)
+                self.key(0)
+                self.native("text", str(options[scope][field]))
+                self.key(36, "none")
+                self.wait("reveal numeric option applies through Settings", lambda d:
+                          d["reveal_animation_options"][scope][field] == options[scope][field])
+            current = self.snapshot()["document"]["reveal_animation_options"][scope]
+            if current["enabled"] != options[scope]["enabled"]:
+                self.click(f"settings.reveal.{scope}.enabled")
+                self.wait("reveal enabled option applies through Settings", lambda d:
+                          d["reveal_animation_options"][scope]["enabled"] is options[scope]["enabled"])
+        self.close_settings()
+        self.click("editor.source")
+        deadline = time.monotonic() + 4
+        while True:
+            state = self.snapshot()
+            if state["document"]["preview_generation"] != generation:
+                raise AssertionError("effect preferences restarted the preview server")
+            renderer = state.get("renderer") or {}
+            reveal = (renderer.get("value") or {}).get("reveal") or {}
+            if renderer.get("age_ms", 1000) <= 500 and reveal.get("options") == options["preview"]:
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("reveal preferences did not reach the existing native preview")
+            time.sleep(0.05)
+
+    def jump_effect_options(self, source, path):
+        """Long effects and independent Off controls preserve real navigation."""
+        original = self.snapshot()["document"]["reveal_animation_options"]
+        custom = {scope: {**value, "duration_ms": 1500, "size_percent": 150, "enabled": True}
+                  for scope, value in original.items()}
+        try:
+            self.jump_effect_settings(custom)
+            self.jump_renderer_ready("Interactive")
+            self.jump_context_roundtrip("Interactive", source, path, options=custom)
+            preview_off = {scope: {**value, "enabled": scope != "preview"}
+                           for scope, value in custom.items()}
+            self.jump_effect_settings(preview_off)
+            self.jump_renderer_ready("Interactive")
+            self.jump_context_roundtrip("Interactive", source, path, options=preview_off)
+            source_off = {scope: {**value, "enabled": scope != "source"}
+                          for scope, value in custom.items()}
+            self.jump_effect_settings(source_off)
+            self.jump_renderer_ready("Interactive")
+            self.jump_context_roundtrip("Interactive", source, path, options=source_off)
+        finally:
+            self.jump_effect_settings(original)
+        self.record("navigation.reveal.options", independent_off=True,
+                    configured_duration_ms=1500, configured_size_percent=150, restored=original)
+
     def preview_jump(self):
         self.focus_document_window()
         before = self.snapshot()["document"]
@@ -373,6 +468,7 @@ class PreviewJumpJourneys:
             self.jump_context_roundtrip(backend, JUMP_TYPST_SOURCE, typst_path)
             if backend == "InteractivePartial":
                 self.jump_detached_partial_inverse(JUMP_TYPST_SOURCE, typst_path)
+        self.jump_effect_options(JUMP_TYPST_SOURCE, typst_path)
         # The original tab may be plain text, with no compiler controls. Restore
         # the preference while our small Typst fixture can still start its renderer.
         if self.snapshot()["document"]["preview_requested_backend"] != before["preview_requested_backend"]:

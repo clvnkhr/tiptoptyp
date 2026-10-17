@@ -166,6 +166,85 @@ impl SourcePreviewTrigger {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum RevealStyle {
+    #[default]
+    Rings,
+    Pulse,
+    Spotlight,
+}
+impl RevealStyle {
+    pub(crate) const ALL: [Self; 3] = [Self::Rings, Self::Pulse, Self::Spotlight];
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Rings => "Rings",
+            Self::Pulse => "Pulse",
+            Self::Spotlight => "Spotlight",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct RevealAnimation {
+    pub(crate) enabled: bool,
+    pub(crate) style: RevealStyle,
+    pub(crate) duration_ms: u16,
+    pub(crate) size_percent: u16,
+}
+impl Default for RevealAnimation {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            style: RevealStyle::Rings,
+            duration_ms: 900,
+            size_percent: 100,
+        }
+    }
+}
+impl RevealAnimation {
+    pub(crate) fn validate(self) -> Result<(), String> {
+        if !(250..=2000).contains(&self.duration_ms) {
+            return Err("duration_ms: choose a duration between 250 and 2000 milliseconds".into());
+        }
+        if !(50..=200).contains(&self.size_percent) {
+            return Err("size_percent: choose a size between 50 and 200 percent".into());
+        }
+        Ok(())
+    }
+    pub(crate) fn normalized(self) -> Self {
+        Self {
+            duration_ms: self.duration_ms.clamp(250, 2000),
+            size_percent: self.size_percent.clamp(50, 200),
+            ..self
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ParticleDensity {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+impl ParticleDensity {
+    pub(crate) const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+        }
+    }
+}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct EditorParticleSettings {
+    pub(crate) enabled: bool,
+    pub(crate) density: ParticleDensity,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum ToolMode {
     #[default]
     Bundled,
@@ -374,6 +453,12 @@ pub(crate) struct AppSettings {
     pub(crate) interface_theme: InterfaceTheme,
     #[serde(default)]
     pub(crate) window_background: crate::window_background::Settings,
+    #[serde(default)]
+    pub(crate) source_reveal_animation: RevealAnimation,
+    #[serde(default)]
+    pub(crate) preview_reveal_animation: RevealAnimation,
+    #[serde(default)]
+    pub(crate) editor_particles: EditorParticleSettings,
     /// Color scheme used whenever the effective interface appearance is light.
     pub(crate) light_theme: ColorThemeChoice,
     /// Color scheme used whenever the effective interface appearance is dark.
@@ -511,6 +596,9 @@ impl Default for AppSettings {
         Self {
             interface_theme: InterfaceTheme::System,
             window_background: crate::window_background::Settings::default(),
+            source_reveal_animation: RevealAnimation::default(),
+            preview_reveal_animation: RevealAnimation::default(),
+            editor_particles: EditorParticleSettings::default(),
             light_theme: ColorThemeChoice::builtin("tiptop-light"),
             dark_theme: ColorThemeChoice::builtin("tiptop-dark"),
             theme_invert: false,
@@ -603,6 +691,9 @@ impl AppSettings {
         merge!(
             interface_theme,
             window_background,
+            source_reveal_animation,
+            preview_reveal_animation,
+            editor_particles,
             light_theme,
             dark_theme,
             theme_invert,
@@ -738,6 +829,8 @@ impl AppSettings {
         settings.code_font_weight = settings.code_font_weight.clamp(1, 1_000);
         settings.normalize_builtin_theme_slots();
         settings.theme_colors = settings.theme_colors.normalized();
+        settings.source_reveal_animation = settings.source_reveal_animation.normalized();
+        settings.preview_reveal_animation = settings.preview_reveal_animation.normalized();
         settings.normalize_workspace_history();
         settings.shortcut_overrides.normalize();
         Ok(settings)
@@ -775,6 +868,8 @@ impl AppSettings {
     pub(crate) fn save(&self, storage: &mut dyn Storage) {
         let mut normalized = self.clone();
         normalized.theme_colors = normalized.theme_colors.normalized();
+        normalized.source_reveal_animation = normalized.source_reveal_animation.normalized();
+        normalized.preview_reveal_animation = normalized.preview_reveal_animation.normalized();
         normalized.normalize_workspace_history();
         normalized.shortcut_overrides.normalize();
         if let Ok(serialized) = serde_json::to_string(&normalized) {
@@ -1078,6 +1173,9 @@ mod tests {
         dark_comment.italic = Some(false);
         let expected = AppSettings {
             window_background: crate::window_background::Settings::default(),
+            source_reveal_animation: RevealAnimation::default(),
+            preview_reveal_animation: RevealAnimation::default(),
+            editor_particles: EditorParticleSettings::default(),
             tex: Default::default(),
             latexdiff: Default::default(),
             interface_theme: InterfaceTheme::Light,
@@ -1477,6 +1575,109 @@ mod tests {
             AppSettings::load(Some(&storage)).unwrap().git_diff_style,
             GitDiffStyle::Unified
         );
+    }
+
+    #[test]
+    fn motion_settings_defaults_roundtrip_and_merge_independently() {
+        let defaults = AppSettings::default();
+        assert_eq!(
+            defaults.source_reveal_animation,
+            RevealAnimation {
+                enabled: true,
+                style: RevealStyle::Rings,
+                duration_ms: 900,
+                size_percent: 100
+            }
+        );
+        assert_eq!(
+            defaults.preview_reveal_animation,
+            defaults.source_reveal_animation
+        );
+        assert_eq!(
+            defaults.editor_particles,
+            EditorParticleSettings {
+                enabled: false,
+                density: ParticleDensity::Medium
+            }
+        );
+        let mut value = serde_json::to_value(&defaults).unwrap();
+        for key in [
+            "source_reveal_animation",
+            "preview_reveal_animation",
+            "editor_particles",
+        ] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        assert_eq!(
+            serde_json::from_value::<AppSettings>(value).unwrap(),
+            defaults
+        );
+        let mut source = defaults.clone();
+        source.source_reveal_animation = RevealAnimation {
+            enabled: false,
+            style: RevealStyle::Spotlight,
+            duration_ms: 1250,
+            size_percent: 150,
+        };
+        let mut preview = defaults.clone();
+        preview.preview_reveal_animation.style = RevealStyle::Pulse;
+        preview.editor_particles = EditorParticleSettings {
+            enabled: true,
+            density: ParticleDensity::High,
+        };
+        let mut current = defaults.clone();
+        current.apply_edits(&defaults, source);
+        current.apply_edits(&defaults, preview);
+        assert!(!current.source_reveal_animation.enabled);
+        assert_eq!(
+            current.source_reveal_animation.style,
+            RevealStyle::Spotlight
+        );
+        assert_eq!(current.preview_reveal_animation.style, RevealStyle::Pulse);
+        assert!(current.editor_particles.enabled);
+        assert_eq!(current.editor_particles.density, ParticleDensity::High);
+        let mut storage = MemoryStorage::default();
+        current.save(&mut storage);
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), current);
+    }
+
+    #[test]
+    fn persisted_motion_ranges_are_normalized_without_enabling_effects() {
+        let invalid = AppSettings {
+            source_reveal_animation: RevealAnimation {
+                enabled: false,
+                duration_ms: 0,
+                size_percent: 65535,
+                ..Default::default()
+            },
+            preview_reveal_animation: RevealAnimation {
+                duration_ms: 65535,
+                size_percent: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut storage = MemoryStorage::default();
+        storage.set_string(STORAGE_KEY, serde_json::to_string(&invalid).unwrap());
+        let loaded = AppSettings::load(Some(&storage)).unwrap();
+        assert_eq!(
+            (
+                loaded.source_reveal_animation.duration_ms,
+                loaded.source_reveal_animation.size_percent
+            ),
+            (250, 200)
+        );
+        assert_eq!(
+            (
+                loaded.preview_reveal_animation.duration_ms,
+                loaded.preview_reveal_animation.size_percent
+            ),
+            (2000, 50)
+        );
+        assert!(!loaded.source_reveal_animation.enabled);
+        assert!(!loaded.editor_particles.enabled);
+        invalid.save(&mut storage);
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), loaded);
     }
 
     #[test]

@@ -21,6 +21,17 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     let roundtrip = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
     reject_unknown(&original, &roundtrip, "settings")?;
     settings.window_background.validate()?;
+    for (name, animation) in [
+        ("source_reveal_animation", settings.source_reveal_animation),
+        (
+            "preview_reveal_animation",
+            settings.preview_reveal_animation,
+        ),
+    ] {
+        animation
+            .validate()
+            .map_err(|error| format!("{name}.{error}"))?;
+    }
     crate::writing::validate_dictionary(&settings.harper_dictionary)
         .map_err(|error| format!("harper_dictionary: {error}"))?;
     crate::snippets::validate(&settings.snippet_presets)
@@ -199,6 +210,56 @@ impl Draft {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn motion_json_accepts_valid_options_and_rejects_impossible_or_out_of_range_values() {
+        use crate::settings::{ParticleDensity, RevealStyle};
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        for style in RevealStyle::ALL {
+            for key in ["source_reveal_animation", "preview_reveal_animation"] {
+                value[key]["style"] = serde_json::to_value(style).unwrap();
+            }
+            assert!(super::parse(&value.to_string()).is_ok());
+        }
+        for density in ParticleDensity::ALL {
+            value["editor_particles"]["density"] = serde_json::to_value(density).unwrap();
+            assert!(super::parse(&value.to_string()).is_ok());
+        }
+        for key in ["source_reveal_animation", "preview_reveal_animation"] {
+            for (field, invalid, expected) in [
+                ("duration_ms", 249, "250 and 2000"),
+                ("duration_ms", 2001, "250 and 2000"),
+                ("size_percent", 49, "50 and 200"),
+                ("size_percent", 201, "50 and 200"),
+            ] {
+                let mut invalid_value = value.clone();
+                invalid_value[key]["enabled"] = serde_json::json!(false);
+                invalid_value[key][field] = serde_json::json!(invalid);
+                let error = super::parse(&invalid_value.to_string()).unwrap_err();
+                assert!(
+                    error.contains(&format!("{key}.{field}")) && error.contains(expected),
+                    "{error}"
+                );
+            }
+            let mut invalid_value = value.clone();
+            invalid_value[key]["style"] = serde_json::json!("Impossible");
+            let error = super::parse(&invalid_value.to_string()).unwrap_err();
+            assert!(
+                error.contains(&format!("{key}.style"))
+                    && error.contains("choose")
+                    && error.contains("Spotlight"),
+                "{error}"
+            );
+        }
+        value["editor_particles"]["density"] = serde_json::json!("Impossible");
+        let error = super::parse(&value.to_string()).unwrap_err();
+        assert!(
+            error.contains("editor_particles.density")
+                && error.contains("choose")
+                && error.contains("Medium"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn personal_dictionary_json_validates_words_and_name_toggle_types() {
         let mut settings = AppSettings {

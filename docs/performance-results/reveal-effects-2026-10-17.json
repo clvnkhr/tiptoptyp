@@ -1,0 +1,1060 @@
+{
+  "date": "2026-10-17",
+  "baseline_commit": "6a9fe0f63cfbd98643a051528df99249cd6a1ef4",
+  "change": "Configurable source/preview reveal feedback and optional editor typing particles",
+  "performance": {
+    "scope": "Warmed V8 VM navigation/reveal kernel only; fake DOM; excludes native rendering, CSS/layout/GPU, input latency and Rust paint.",
+    "before": {
+      "node": "v26.9.0",
+      "v8": "14.6.202.34-node.32",
+      "platform": "darwin",
+      "arch": "arm64",
+      "sha256": "41900ed2fc2f6f79c29b49d79ac6d6d84ddb18a9b0388d460aa01c65f1aaf229",
+      "scope": "Warmed V8 VM navigation/reveal kernel only; fake DOM; excludes native rendering, CSS/layout/GPU, input latency and Rust paint.",
+      "fixture": {
+        "pages": 2,
+        "pageWidth": 600,
+        "pageHeight": 300,
+        "viewport": [
+          646,
+          374
+        ],
+        "destination": [
+          0,
+          100,
+          80
+        ],
+        "reveals": 100,
+        "logicalFramesPerReveal": 58,
+        "tickMs": 16,
+        "durationMs": 900,
+        "warmup": 5,
+        "samples": 9
+      },
+      "modes": {
+        "full": {
+          "runs": [
+            {
+              "cpuMs": 17.775,
+              "wallMs": 13.443417
+            },
+            {
+              "cpuMs": 15.483,
+              "wallMs": 12.967375
+            },
+            {
+              "cpuMs": 15.349,
+              "wallMs": 12.917959
+            },
+            {
+              "cpuMs": 16.005,
+              "wallMs": 13.20725
+            },
+            {
+              "cpuMs": 16.234,
+              "wallMs": 13.657958
+            },
+            {
+              "cpuMs": 15.373,
+              "wallMs": 12.897167
+            },
+            {
+              "cpuMs": 15.321,
+              "wallMs": 12.882959
+            },
+            {
+              "cpuMs": 15.236,
+              "wallMs": 12.9
+            },
+            {
+              "cpuMs": 15.48,
+              "wallMs": 12.990375
+            }
+          ],
+          "counts": {
+            "styleWrites": 17100,
+            "elementCreates": 500,
+            "attributeWrites": 100,
+            "propertyWrites": 0,
+            "layouts": 0,
+            "reads": 0,
+            "rectReads": 5700,
+            "domReads": 0,
+            "frames": 0
+          }
+        },
+        "partial": {
+          "runs": [
+            {
+              "cpuMs": 15.37,
+              "wallMs": 12.884125
+            },
+            {
+              "cpuMs": 15.614,
+              "wallMs": 13.133083
+            },
+            {
+              "cpuMs": 29.031,
+              "wallMs": 14.988
+            },
+            {
+              "cpuMs": 15.805,
+              "wallMs": 13.1625
+            },
+            {
+              "cpuMs": 15.396,
+              "wallMs": 12.903083
+            },
+            {
+              "cpuMs": 15.175,
+              "wallMs": 12.700875
+            },
+            {
+              "cpuMs": 15.198,
+              "wallMs": 12.70475
+            },
+            {
+              "cpuMs": 15.394,
+              "wallMs": 12.957833
+            },
+            {
+              "cpuMs": 15.212,
+              "wallMs": 12.797292
+            }
+          ],
+          "counts": {
+            "styleWrites": 17100,
+            "elementCreates": 500,
+            "attributeWrites": 100,
+            "propertyWrites": 0,
+            "layouts": 0,
+            "reads": 0,
+            "rectReads": 5700,
+            "domReads": 0,
+            "frames": 0
+          }
+        }
+      }
+    },
+    "after": {
+      "node": "v26.9.0",
+      "v8": "14.6.202.34-node.32",
+      "platform": "darwin",
+      "arch": "arm64",
+      "sha256": "febf0dcef62529b302e49ba654b9ab14ef4aee8cdb9bd1636dab7936225a5a11",
+      "scope": "Warmed V8 VM navigation/reveal kernel only; fake DOM; excludes native rendering, CSS/layout/GPU, input latency and Rust paint.",
+      "fixture": {
+        "pages": 2,
+        "pageWidth": 600,
+        "pageHeight": 300,
+        "viewport": [
+          646,
+          374
+        ],
+        "destination": [
+          0,
+          100,
+          80
+        ],
+        "reveals": 100,
+        "logicalFramesPerReveal": 58,
+        "tickMs": 16,
+        "durationMs": 900,
+        "warmup": 5,
+        "samples": 9
+      },
+      "modes": {
+        "full": {
+          "runs": [
+            {
+              "cpuMs": 18.17,
+              "wallMs": 13.753333
+            },
+            {
+              "cpuMs": 16.465,
+              "wallMs": 13.778417
+            },
+            {
+              "cpuMs": 16.363,
+              "wallMs": 13.627375
+            },
+            {
+              "cpuMs": 16.099,
+              "wallMs": 13.282209
+            },
+            {
+              "cpuMs": 16.556,
+              "wallMs": 13.946833
+            },
+            {
+              "cpuMs": 15.792,
+              "wallMs": 13.362167
+            },
+            {
+              "cpuMs": 15.669,
+              "wallMs": 13.121875
+            },
+            {
+              "cpuMs": 15.79,
+              "wallMs": 13.282208
+            },
+            {
+              "cpuMs": 16.206,
+              "wallMs": 13.579834
+            }
+          ],
+          "counts": {
+            "styleWrites": 17200,
+            "elementCreates": 500,
+            "attributeWrites": 200,
+            "propertyWrites": 300,
+            "layouts": 0,
+            "reads": 0,
+            "rectReads": 5700,
+            "domReads": 0,
+            "frames": 0
+          }
+        },
+        "partial": {
+          "runs": [
+            {
+              "cpuMs": 15.626,
+              "wallMs": 13.175792
+            },
+            {
+              "cpuMs": 22.742,
+              "wallMs": 14.595167
+            },
+            {
+              "cpuMs": 16.218,
+              "wallMs": 13.609125
+            },
+            {
+              "cpuMs": 15.756,
+              "wallMs": 13.227417
+            },
+            {
+              "cpuMs": 15.566,
+              "wallMs": 13.120666
+            },
+            {
+              "cpuMs": 15.827,
+              "wallMs": 13.263792
+            },
+            {
+              "cpuMs": 15.806,
+              "wallMs": 13.234292
+            },
+            {
+              "cpuMs": 15.405,
+              "wallMs": 12.964583
+            },
+            {
+              "cpuMs": 15.556,
+              "wallMs": 13.167959
+            }
+          ],
+          "counts": {
+            "styleWrites": 17200,
+            "elementCreates": 500,
+            "attributeWrites": 200,
+            "propertyWrites": 300,
+            "layouts": 0,
+            "reads": 0,
+            "rectReads": 5700,
+            "domReads": 0,
+            "frames": 0
+          }
+        }
+      }
+    },
+    "medians": {
+      "full": {
+        "before_cpu_ms_per_100_cues": 15.48,
+        "after_cpu_ms_per_100_cues": 16.206
+      },
+      "partial": {
+        "before_cpu_ms_per_100_cues": 15.394,
+        "after_cpu_ms_per_100_cues": 15.756
+      }
+    },
+    "interpretation": "No speedup claimed. Per-frame work is unchanged; configurable cues add bounded setup work. Both variants perform zero work for 1000 idle state reads after the finite effect. CPU samples are process CPU, not GUI frame or key-to-pixel latency.",
+    "particle_invariants": {
+      "default_enabled": false,
+      "max_particles": 128,
+      "lifetime_ms": 480,
+      "max_input_events_scanned": 64,
+      "max_admitted_events_per_frame": 4,
+      "idle_cursor_geometry_lookups": 0,
+      "animation_only_cursor_geometry_lookups": 0,
+      "idle_repaint_requests": 0,
+      "coverage": "Deterministic tests cover bounded pool/input scan, finite expiry, lazy cursor lookup, discarded passes, source/diff clipping, IME commit and paste/navigation exclusion."
+    }
+  },
+  "checks": {
+    "cargo_fmt_all_check": "passed",
+    "cargo_clippy_all_targets_D_warnings": "passed",
+    "cargo_test_no_fail_fast": {
+      "passed": 2172,
+      "failed": 0,
+      "ignored": 54
+    },
+    "xtask_tests": {
+      "passed": 27,
+      "failed": 0
+    },
+    "javascript_navigation_tests": {
+      "passed": 148,
+      "failed": 0
+    },
+    "python_journey_contract_tests": {
+      "passed": 103,
+      "failed": 0
+    },
+    "release_build": "passed",
+    "maintained_theme_gallery": {
+      "captures": 25,
+      "single_session": true,
+      "validation": "passed; every PNG decoded with ImageMagick",
+      "command": "scripts/capture-theme-gallery.sh && scripts/capture-theme-gallery.sh --validate-latest"
+    }
+  },
+  "native_interaction": [
+    {
+      "run": ".tiptoptyp/desktop-ui-tests/run-xyhhf458",
+      "passed": true,
+      "journeys": [
+        "preview_jump"
+      ],
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "build_profile": "debug",
+      "version": "tiptoptyp Dev 0.1.0 (6a9fe0f63cfb-dirty.1792235280)",
+      "binary_sha256": "13a66bee6dcaf01e99af21fb8155240a10f75d158e40ee64ed482444c4986653",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "observations": [
+        {
+          "action": "navigation.reveal",
+          "backend": "Pdfium",
+          "destination": "preview",
+          "first_visible": {
+            "active": true,
+            "center": [
+              894.6602172851562,
+              346.56524658203125
+            ],
+            "elapsed_ms": 28,
+            "page": 2,
+            "pending": false,
+            "target": [
+              893.6602172851562,
+              337.56524658203125,
+              895.6602172851562,
+              355.56524658203125
+            ],
+            "viewport": [
+              841.4063110351562,
+              30.0,
+              1400.0,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Pdfium",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              268.0,
+              180.75
+            ],
+            "char_index": 142,
+            "elapsed_ms": 21,
+            "target": [
+              268.0,
+              172.0,
+              268.0,
+              189.5
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Pdfium",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              268.0,
+              285.75
+            ],
+            "char_index": 244,
+            "elapsed_ms": 8,
+            "target": [
+              268.0,
+              277.0,
+              268.0,
+              294.5
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "InteractivePartial",
+          "destination": "preview",
+          "first_visible": {
+            "active": true,
+            "center": [
+              55.8,
+              335.7130651171874
+            ],
+            "debug": {
+              "explicit": 1,
+              "intent_age_ms": 236.9999999999991,
+              "intents": 1,
+              "location_age_ms": 234,
+              "locations": 1,
+              "retired": null
+            },
+            "elapsed_ms": 115,
+            "options": {
+              "duration_ms": 900,
+              "enabled": true,
+              "size_percent": 100,
+              "style": "Rings"
+            },
+            "page": 2,
+            "pending": false,
+            "viewport": [
+              0,
+              0,
+              558,
+              829
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "InteractivePartial",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              128.25
+            ],
+            "char_index": 64,
+            "elapsed_ms": 103,
+            "target": [
+              286.5,
+              119.5,
+              286.5,
+              137.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "InteractivePartial",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              233.25
+            ],
+            "char_index": 156,
+            "elapsed_ms": 86,
+            "target": [
+              286.5,
+              224.5,
+              286.5,
+              242.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "InteractivePartial",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              128.25
+            ],
+            "char_index": 64,
+            "elapsed_ms": 223,
+            "target": [
+              286.5,
+              119.5,
+              286.5,
+              137.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              1392.0,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "preview",
+          "first_visible": {
+            "active": true,
+            "center": [
+              55.8,
+              316.8130407031249
+            ],
+            "debug": {
+              "explicit": 1,
+              "intent_age_ms": 254,
+              "intents": 1,
+              "location_age_ms": 253,
+              "locations": 1,
+              "retired": null
+            },
+            "elapsed_ms": 124,
+            "options": {
+              "duration_ms": 900,
+              "enabled": true,
+              "size_percent": 100,
+              "style": "Rings"
+            },
+            "page": 2,
+            "pending": false,
+            "viewport": [
+              0,
+              0,
+              558,
+              829
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              128.25
+            ],
+            "char_index": 64,
+            "elapsed_ms": 101,
+            "target": [
+              286.5,
+              119.5,
+              286.5,
+              137.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              233.25
+            ],
+            "char_index": 156,
+            "elapsed_ms": 71,
+            "target": [
+              286.5,
+              224.5,
+              286.5,
+              242.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "enabled": true,
+            "style": "Rings",
+            "duration_ms": 900,
+            "size_percent": 100
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "preview",
+          "first_visible": {
+            "active": true,
+            "center": [
+              55.8,
+              315.8130407031249
+            ],
+            "debug": {
+              "explicit": 2,
+              "intent_age_ms": 284,
+              "intents": 2,
+              "location_age_ms": 283,
+              "locations": 2,
+              "retired": "finished-or-disconnected"
+            },
+            "elapsed_ms": 158,
+            "options": {
+              "duration_ms": 1500,
+              "enabled": true,
+              "size_percent": 150,
+              "style": "Rings"
+            },
+            "page": 2,
+            "pending": false,
+            "viewport": [
+              0,
+              0,
+              558,
+              829
+            ]
+          },
+          "options": {
+            "duration_ms": 1500,
+            "enabled": true,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              128.25
+            ],
+            "char_index": 64,
+            "elapsed_ms": 95,
+            "target": [
+              286.5,
+              119.5,
+              286.5,
+              137.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "duration_ms": 1500,
+            "enabled": true,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              233.25
+            ],
+            "char_index": 156,
+            "elapsed_ms": 133,
+            "target": [
+              286.5,
+              224.5,
+              286.5,
+              242.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "duration_ms": 1500,
+            "enabled": true,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "preview",
+          "options": {
+            "duration_ms": 1500,
+            "enabled": false,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "disabled": true,
+          "fresh_observations": 5
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              128.25
+            ],
+            "char_index": 64,
+            "elapsed_ms": 119,
+            "target": [
+              286.5,
+              119.5,
+              286.5,
+              137.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "duration_ms": 1500,
+            "enabled": true,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "first_visible": {
+            "active": true,
+            "center": [
+              286.5,
+              233.25
+            ],
+            "char_index": 156,
+            "elapsed_ms": 121,
+            "target": [
+              286.5,
+              224.5,
+              286.5,
+              242.0
+            ],
+            "viewport": [
+              238.0,
+              30.0,
+              829.40625,
+              859.0
+            ]
+          },
+          "options": {
+            "duration_ms": 1500,
+            "enabled": true,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "preview",
+          "first_visible": {
+            "active": true,
+            "center": [
+              55.8,
+              331.8130407031249
+            ],
+            "debug": {
+              "explicit": 4,
+              "intent_age_ms": 226,
+              "intents": 4,
+              "location_age_ms": 225,
+              "locations": 4,
+              "retired": "finished-or-disconnected"
+            },
+            "elapsed_ms": 106,
+            "options": {
+              "duration_ms": 1500,
+              "enabled": true,
+              "size_percent": 150,
+              "style": "Rings"
+            },
+            "page": 2,
+            "pending": false,
+            "viewport": [
+              0,
+              0,
+              558,
+              829
+            ]
+          },
+          "options": {
+            "duration_ms": 1500,
+            "enabled": true,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "retired": true
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "options": {
+            "duration_ms": 1500,
+            "enabled": false,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "disabled": true,
+          "fresh_observations": 5
+        },
+        {
+          "action": "navigation.reveal",
+          "backend": "Interactive",
+          "destination": "source",
+          "options": {
+            "duration_ms": 1500,
+            "enabled": false,
+            "size_percent": 150,
+            "style": "Rings"
+          },
+          "disabled": true,
+          "fresh_observations": 5
+        },
+        {
+          "action": "journey.passed",
+          "name": "preview_jump"
+        },
+        {
+          "action": "navigation.reveal.options",
+          "independent_off": true,
+          "configured_duration_ms": 1500,
+          "configured_size_percent": 150,
+          "restored": {
+            "preview": {
+              "duration_ms": 900,
+              "enabled": true,
+              "size_percent": 100,
+              "style": "Rings"
+            },
+            "source": {
+              "duration_ms": 900,
+              "enabled": true,
+              "size_percent": 100,
+              "style": "Rings"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "run": ".tiptoptyp/desktop-ui-tests/run-kyiapr1h",
+      "passed": true,
+      "journeys": [
+        "typing_particles"
+      ],
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "build_profile": "debug",
+      "version": "tiptoptyp Dev 0.1.0 (6a9fe0f63cfb-dirty.1792235734)",
+      "binary_sha256": "7c24e575e10afd41719d77ea9b9c7d1eeb6f24a07664feaa4626ff30adcc6ffc",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "observations": [
+        {
+          "action": "typing_particles.active",
+          "observation": {
+            "active_count": 7,
+            "burst_count": 1,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 7,
+            "last_emission_age_ms": 97.04133400000003,
+            "lifetime_ms": 480,
+            "max_live": 7,
+            "origin": [
+              351.71875,
+              180.75
+            ],
+            "pool_limit": 128
+          }
+        },
+        {
+          "action": "typing_particles.negative",
+          "burst_count": 2
+        },
+        {
+          "action": "journey.passed",
+          "name": "typing_particles"
+        }
+      ]
+    }
+  ],
+  "framebuffers_inspected": [
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/effects/typing-particles-native.png",
+      "observation": "Theme-accent sparks around the line 9 caret; no layout shift or escape from the editor clip."
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/effects/source-reveal-custom-native.png",
+      "observation": "150% source reveal rings centered on the target caret, clipped at the code-panel boundary."
+    },
+    {
+      "path": "docs/ui-snapshots/latest/settings-settings-window--catppuccin-latte.png",
+      "sha256": "7d7f798df6bb8c901696dcefe3c360a56278a3cba18f3cbc3ccfc2aa8c742ec9",
+      "observation": "Fresh maintained Settings viewport; Effects disclosure fits the Appearance page without overlapping controls or the sidebar. Existing tooltip remains content-sized."
+    },
+    {
+      "path": "docs/ui-snapshots/latest/settings-settings-tooltip--catppuccin-latte.png",
+      "sha256": "9995700cd8ba712bf3cfb48562af7986f6b2e54359cef32f584e6119cef61118",
+      "observation": "Fresh maintained Settings viewport; Effects disclosure fits the Appearance page without overlapping controls or the sidebar. Existing tooltip remains content-sized."
+    }
+  ],
+  "limitations": [
+    "Paired performance measurements cover only warmed V8 with a fake DOM, not WebKit layout, GPU paint or native input latency.",
+    "Native journeys use the debug desktop-ui-tests build and verify real input plus read-only runtime state.",
+    "Root viewport framebuffers do not composite the native Tinymist child view and cannot establish whole-window visual composition.",
+    "Particle timing is bounded by deterministic invariants; no optimized key-to-pixel benchmark was measured."
+  ]
+}

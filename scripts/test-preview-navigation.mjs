@@ -308,7 +308,7 @@ function partialFixture({ pages = Array.from({length:48}, () => ({width:600, hei
   const requestAnimationFrame=callback=>{const id=nextFrame++;frames.set(id,callback);return id;};
   const cancelAnimationFrame=id=>frames.delete(id);
   const properties=new Map();let propertyWrites=0;
-  const element=()=>({style:{setProperty(name,value) {propertyWrites++;properties.set(name,value);}},children:[],setAttribute(){},append(child){child.parentElement=this;this.children.push(child);},
+  const element=()=>({style:{setProperty(name,value) {propertyWrites++;properties.set(name,value);}},children:[],attrs:{},setAttribute(name,value){this.attrs[name]=String(value);},getAttribute(name){return this.attrs[name]??null;},append(child){child.parentElement=this;this.children.push(child);},
     remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(child=>child!==this);},
     get firstElementChild(){return this.children[0];}});
   const body=element(),head=element();
@@ -328,6 +328,7 @@ function partialFixture({ pages = Array.from({length:48}, () => ({width:600, hei
   return {doc,scroll,windows,merges,errors,frames,container,messages,body,head,properties,
     palette:(...args)=>window.tiptoptypSetPalette(...args),get propertyWrites(){return propertyWrites;},
     advance(ms){now+=ms;},
+    revealOptions:options=>window.tiptoptypSetRevealOptions(options),
     revealIntent:explicit=>window.tiptoptypPreviewRevealIntent(explicit),
     revealActive:()=>window.tiptoptypPreviewRevealActive(),
     revealState:()=>JSON.parse(JSON.stringify(window.tiptoptypPreviewRevealState())),
@@ -1511,6 +1512,8 @@ test('full rescale still corrects a visible geometry shift', () => {
 });
 
 
+const defaultRevealOptions = Object.freeze({enabled:true,style:'Rings',duration_ms:900,size_percent:100});
+
 function revealFixture(options = {}) {
   const calls = [], snapshots = {invalidates:0, settles:0};
   const f = partialFixture({pages:[{width:600,height:300},{width:600,height:300}],
@@ -1538,7 +1541,7 @@ for (const partial of [false,true]) {
     assert.deepEqual(f.revealState().center,null);
     assert.equal(f.revealState().pending,true);
     f.locate(0,100,80); f.flush();
-    assert.deepEqual({...f.revealState(),debug:undefined},{active:true,pending:false,page:0,center:[123,117],viewport:[0,0,646,374],elapsed_ms:0,debug:undefined});
+    assert.deepEqual({...f.revealState(),debug:undefined},{active:true,pending:false,page:0,center:[123,117],viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined});
     assert.equal(f.beacon().style.left,'123px');
     assert.equal(f.beacon().style.top,'117px');
     assert.equal(f.beacon().children.length,4);
@@ -1555,7 +1558,7 @@ for (const partial of [false,true]) {
     assert.equal(f.frames.size,0);
     assert.ok(f.snapshots.invalidates>=2);
     assert.ok(f.snapshots.settles>=1);
-    assert.deepEqual({...f.revealState(),debug:undefined},{active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,debug:undefined});
+    assert.deepEqual({...f.revealState(),debug:undefined},{active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined});
   });
 }
 
@@ -1570,7 +1573,7 @@ for (const partial of [false,true]) for (const pending of [false,true]) {
     const beacon=f.beacon(),snapshots={...f.snapshots};
     assert.equal(f.frames.size,1);
     f.advance(1);
-    const inactive={active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,debug:undefined};
+    const inactive={active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined};
     for(let index=0;index<100;index++){
       assert.equal(f.revealActive(),false);
       assert.deepEqual({...f.revealState(),debug:undefined},inactive);
@@ -1688,8 +1691,8 @@ test('beacon styling is pointer transparent and preserves the hidden frontend ri
   assert.match(css,/\.typst-jump-ripple\s*\{ visibility: hidden !important; pointer-events: none !important;/);
   assert.doesNotMatch(css,/\.typst-jump-ripple\s*\{[^}]*display:/);
   assert.match(css,/\.tiptoptyp-reveal-beacon\s*\{[^}]*position: fixed;[^}]*pointer-events: none;[^}]*var\(--tiptoptyp-reveal-accent\)/);
-  assert.match(css,/animation: tiptoptyp-reveal-ring 900ms/);
-  assert.match(css,/animation-delay: 160ms/);
+  assert.match(css,/animation: tiptoptyp-reveal-ring [^;]+ ease-out/);
+  assert.match(css,/animation-delay:/);
 });
 
 
@@ -1779,4 +1782,118 @@ test('incremental patches rebind the revealed page matrix without extending its 
     assert.equal(f.revealActive(),false);
     assert.equal(f.frames.size,0);
   }
+});
+
+
+for (const partial of [false,true]) {
+  test(`${partial?'partial':'full'} reveal options can disable feedback while preserving the native location action`, () => {
+    const f=revealFixture({partial});
+    assert.deepEqual(f.revealState().options,defaultRevealOptions);
+    const options={...defaultRevealOptions,enabled:false};
+    f.revealOptions(options);
+    const snapshots={...f.snapshots},layouts=f.layouts,reads=f.reads;
+    for(let index=0;index<100;index++){
+      f.revealIntent(true);f.locate(0,100,80);f.flush();
+      assert.equal(f.revealActive(),false);
+      assert.equal(f.beacon(),undefined);
+      assert.equal(f.frames.size,0);
+    }
+    assert.equal(f.calls.length,100,'turning off the effect must not suppress actual navigation');
+    assert.deepEqual(f.snapshots,snapshots,'disabled effects do not touch screenshot caches');
+    assert.equal(f.layouts,layouts);assert.equal(f.reads,reads);
+    assert.deepEqual(f.revealState().options,options);
+    f.revealOptions(defaultRevealOptions);
+    f.revealIntent(true);f.locate();f.flush();
+    assert.equal(f.revealActive(),true);
+  });
+
+  for(const options of [
+    {enabled:true,style:'Rings',duration_ms:250,size_percent:50},
+    {enabled:true,style:'Pulse',duration_ms:1100,size_percent:125},
+    {enabled:true,style:'Spotlight',duration_ms:2000,size_percent:200},
+  ]) test(`${partial?'partial':'full'} ${options.style} honors its configured duration and size with one finite animation`, () => {
+    const f=revealFixture({partial});
+    f.revealOptions(options);
+    assert.deepEqual(f.revealState().options,options);
+    f.revealIntent(true);f.locate(0,100,80);f.flush();
+    assert.equal(f.revealActive(),true);
+    assert.deepEqual(f.revealState().center,[123,117]);
+    assert.equal(f.calls.length,1);
+    assert.equal(f.frames.size,1);
+    assert.equal(f.beacon().getAttribute('data-style'),options.style);
+    f.advance(options.duration_ms-1);f.flush();
+    assert.equal(f.revealActive(),true);
+    f.advance(1);f.flush();
+    assert.equal(f.revealActive(),false);
+    assert.equal(f.beacon(),undefined);
+    assert.equal(f.frames.size,0);
+    const snapshots={...f.snapshots};
+    for(let index=0;index<100;index++){f.revealState();f.revealActive();}
+    assert.deepEqual(f.snapshots,snapshots);
+    assert.equal(f.frames.size,0);
+  });
+
+  test(`${partial?'partial':'full'} changed reveal options retire pending and visible effects without restarting or rendering`, () => {
+    const f=revealFixture({partial});
+    for(const visible of [false,true]){
+      f.revealOptions(defaultRevealOptions);
+      f.revealIntent(true);
+      if(visible){f.locate();f.flush();f.advance(200);f.flush();}
+      assert.equal(f.revealActive(),true);
+      const layouts=f.layouts,reads=f.reads;
+      f.revealOptions({...defaultRevealOptions,style:'Spotlight',duration_ms:1500,size_percent:150});
+      assert.equal(f.revealActive(),false);
+      assert.equal(f.beacon(),undefined);
+      assert.equal(f.frames.size,0);
+      assert.equal(f.layouts,layouts);assert.equal(f.reads,reads);
+      f.flush();assert.equal(f.frames.size,0,'changing options cannot arm a replacement cue');
+    }
+  });
+
+  test(`${partial?'partial':'full'} equal reveal options do no work while idle or during an active cue`, () => {
+    const f=revealFixture({partial});
+    f.revealOptions(defaultRevealOptions);
+    for(const active of [false,true]){
+      if(active){f.revealIntent(true);f.locate();f.flush();f.advance(300);f.flush();}
+      const beacon=f.beacon(),snapshots={...f.snapshots},writes=f.propertyWrites;
+      const layouts=f.layouts,reads=f.reads,frames=f.frames.size;
+      for(let index=0;index<100;index++)f.revealOptions({...defaultRevealOptions});
+      assert.equal(f.beacon(),beacon);assert.deepEqual(f.snapshots,snapshots);
+      assert.equal(f.propertyWrites,writes);assert.equal(f.layouts,layouts);assert.equal(f.reads,reads);
+      assert.equal(f.frames.size,frames);
+      if(active){assert.equal(f.revealState().elapsed_ms,300);f.advance(600);f.flush();}
+    }
+  });
+}
+
+test('reveal option bounds are sanitized and invalid styles use the default', () => {
+  const f=revealFixture();
+  f.revealOptions({...defaultRevealOptions,style:'impossible',duration_ms:0,size_percent:0});
+  assert.deepEqual(f.revealState().options,{...defaultRevealOptions,duration_ms:250,size_percent:50});
+  f.revealOptions({...defaultRevealOptions,duration_ms:9000,size_percent:9000});
+  assert.deepEqual(f.revealState().options,{...defaultRevealOptions,duration_ms:2000,size_percent:200});
+  f.revealOptions({...defaultRevealOptions,duration_ms:NaN,size_percent:Infinity});
+  assert.deepEqual(f.revealState().options,defaultRevealOptions);
+  assert.equal(f.revealActive(),false);assert.equal(f.frames.size,0);
+});
+
+test('reveal preferences set before DOM mount survive frontend startup without premature work', () => {
+  let locations=0;
+  const f=partialFixture({lateContainer:true,configure(doc){doc.windowElem.handleTypstLocation=()=>locations++;}});
+  const options={enabled:true,style:'Spotlight',duration_ms:1500,size_percent:175};
+  const writes=f.propertyWrites,layouts=f.layouts,reads=f.reads;
+  f.revealOptions(options);
+  assert.deepEqual(f.revealState().options,options);
+  assert.equal(f.body.children.length,0);assert.equal(f.head.children.length,0);
+  assert.equal(f.propertyWrites,writes);assert.equal(f.layouts,layouts);assert.equal(f.reads,reads);
+  f.event('DOMContentLoaded');f.start();f.flush();f.flush();f.flush();
+  assert.deepEqual(f.revealState().options,options);
+  f.revealIntent(true);
+  f.doc.windowElem.handleTypstLocation(f.doc.hookedElem.firstElementChild,1,100,80);
+  f.flush();
+  const beacon=f.body.children.find(node=>node.className==='tiptoptyp-reveal-beacon');
+  assert.equal(beacon.getAttribute('data-style'),'Spotlight');
+  assert.equal(locations,1);assert.equal(f.revealActive(),true);
+  f.advance(1500);f.flush();
+  assert.equal(f.revealActive(),false);assert.equal(f.frames.size,0);
 });

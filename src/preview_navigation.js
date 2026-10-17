@@ -17,6 +17,8 @@
   // updates still scroll through the same frontend hook, without a typing pulse.
   const revealWindows = new WeakMap();
   let reveal = null, revealFrame = 0;
+  const defaultRevealOptions = Object.freeze({enabled:true, style:"Rings", duration_ms:900, size_percent:100});
+  let revealOptions = {...defaultRevealOptions};
   const revealDebug = { intents: 0, explicit: 0, locations: 0, retired: null, last_intent: null, last_location: null };
   const revealViewport = state => {
     const scroll = state?.doc?.hookedElem.parentElement;
@@ -31,6 +33,20 @@
     reveal = null;
     window.tiptoptypZoomSnapshot?.invalidate();
     if (recapture) window.tiptoptypZoomSnapshot?.settle();
+  };
+  window.tiptoptypSetRevealOptions = options => {
+    const bounded = (value, fallback, min, max) => Number.isFinite(value) ? Math.max(min, Math.min(max, Math.round(value))) : fallback;
+    const next = {
+      enabled: options?.enabled !== false,
+      style: ['Rings','Pulse','Spotlight'].includes(options?.style) ? options.style : 'Rings',
+      duration_ms: bounded(options?.duration_ms,900,250,2000),
+      size_percent: bounded(options?.size_percent,100,50,200),
+    };
+    if (Object.keys(next).every(key => next[key] === revealOptions[key])) return;
+    revealOptions = next;
+    // Changing a preference retires the old cue instead of extending its timer.
+    // No DOM, snapshot or frame work is needed when no cue is currently active.
+    if (reveal) retireReveal(true, 'options-changed');
   };
   const revealPage = state => {
     const svg = state.doc.hookedElem.firstElementChild;
@@ -51,6 +67,11 @@
       const element = document.createElement('div');
       element.className = 'tiptoptyp-reveal-beacon';
       element.setAttribute('aria-hidden', 'true');
+      element.setAttribute('data-style', revealOptions.style);
+      element.style.transform = `scale(${revealOptions.size_percent / 100})`;
+      element.style.setProperty('--tiptoptyp-reveal-duration', `${revealOptions.duration_ms}ms`);
+      element.style.setProperty('--tiptoptyp-reveal-second-duration', `${revealOptions.duration_ms * 74 / 90}ms`);
+      element.style.setProperty('--tiptoptyp-reveal-second-delay', `${revealOptions.duration_ms * 16 / 90}ms`);
       for (const name of ['halo', 'ring', 'ring second', 'center']) {
         const part = document.createElement('span');
         part.className = `tiptoptyp-reveal-${name.replace(' ', ' tiptoptyp-reveal-')}`;
@@ -62,7 +83,7 @@
     state.element.style.left = `${state.center[0]}px`;
     state.element.style.top = `${state.center[1]}px`;
   };
-  const revealExpired = (state, now) => now - (state.started ?? state.armed) >= (state.started === null ? 3000 : 900);
+  const revealExpired = (state, now) => now - (state.started ?? state.armed) >= (state.started === null ? 3000 : revealOptions.duration_ms);
   const currentReveal = now => reveal && !revealExpired(reveal, now) ? reveal : null;
   const tickReveal = () => {
     revealFrame = 0;
@@ -122,7 +143,7 @@
     revealDebug.explicit += explicit && revealDebug.explicit < Number.MAX_SAFE_INTEGER ? 1 : 0;
     revealDebug.last_intent = performance.now();
     retireReveal(false, explicit ? 'superseded' : 'automatic-follow');
-    if (!explicit) { if (wasActive) window.tiptoptypZoomSnapshot?.settle(); return; }
+    if (!explicit || !revealOptions.enabled) { if (wasActive) window.tiptoptypZoomSnapshot?.settle(); return; }
     const doc = documentRenderer();
     if (doc) installRevealWindow(doc.windowElem);
     reveal = { doc, page: null, x: 0, y: 0, armed: performance.now(), started: null, center: null, element: null, svg: null, node: null };
@@ -135,7 +156,7 @@
     return {
       active: state !== null, pending: state !== null && state.started === null, page: state?.page ?? null,
       center: state?.center?.slice() ?? null, viewport: revealViewport(state),
-      elapsed_ms: state ? now - (state.started ?? state.armed) : 0,
+      elapsed_ms: state ? now - (state.started ?? state.armed) : 0, options: {...revealOptions},
       debug: { intents: revealDebug.intents, explicit: revealDebug.explicit, locations: revealDebug.locations, retired: revealDebug.retired,
         intent_age_ms: revealDebug.last_intent === null ? null : now - revealDebug.last_intent,
         location_age_ms: revealDebug.last_location === null ? null : now - revealDebug.last_location },
@@ -1133,20 +1154,31 @@
       /* Preserve the pinned ripple's animationend cleanup, while replacing its
          subtle teal ring with our explicit-navigation-only destination cue. */
       .typst-jump-ripple { visibility: hidden !important; pointer-events: none !important; }
-      .tiptoptyp-reveal-beacon { position: fixed; width: 0; height: 0; z-index: 2147483645; pointer-events: none; color: var(--tiptoptyp-reveal-accent); }
+      .tiptoptyp-reveal-beacon { position: fixed; width: 0; height: 0; z-index: 2147483645; pointer-events: none; color: var(--tiptoptyp-reveal-accent); transform-origin: 0 0; }
       .tiptoptyp-reveal-beacon span { position: absolute; box-sizing: border-box; pointer-events: none; }
       .tiptoptyp-reveal-halo { width: 34px; height: 34px; left: -17px; top: -17px; border-radius: 50%;
         border: 2px solid #fff; box-shadow: 0 0 0 2px #171717, inset 0 0 0 2px #171717;
-        background: var(--tiptoptyp-reveal-wash); animation: tiptoptyp-reveal-center 900ms ease-out both; }
+        background: var(--tiptoptyp-reveal-wash); animation: tiptoptyp-reveal-center var(--tiptoptyp-reveal-duration,900ms) ease-out both; }
       .tiptoptyp-reveal-ring { width: 18px; height: 18px; left: 0; top: 0; transform: translate(-50%, -50%); border: 3px solid currentColor; border-radius: 50%;
-        box-shadow: 0 0 0 1px #171717, inset 0 0 0 1px #fff; animation: tiptoptyp-reveal-ring 900ms ease-out both; }
-      .tiptoptyp-reveal-second { animation-duration: 740ms; animation-delay: 160ms; }
+        box-shadow: 0 0 0 1px #171717, inset 0 0 0 1px #fff; animation: tiptoptyp-reveal-ring var(--tiptoptyp-reveal-duration,900ms) ease-out both; }
+      .tiptoptyp-reveal-second { animation-duration: var(--tiptoptyp-reveal-second-duration,740ms); animation-delay: var(--tiptoptyp-reveal-second-delay,160ms); }
       .tiptoptyp-reveal-center { width: 20px; height: 20px; left: -10px; top: -10px;
-        animation: tiptoptyp-reveal-center 900ms ease-out both; }
+        animation: tiptoptyp-reveal-center var(--tiptoptyp-reveal-duration,900ms) ease-out both; }
       .tiptoptyp-reveal-center::before, .tiptoptyp-reveal-center::after { content: ''; position: absolute; background: currentColor;
         box-shadow: 0 0 0 1px #171717, 0 0 0 2px #fff; border-radius: 1px; }
       .tiptoptyp-reveal-center::before { width: 20px; height: 2px; left: 0; top: 9px; }
       .tiptoptyp-reveal-center::after { width: 2px; height: 20px; left: 9px; top: 0; }
+      .tiptoptyp-reveal-beacon[data-style="Pulse"] .tiptoptyp-reveal-ring,
+      .tiptoptyp-reveal-beacon[data-style="Spotlight"] .tiptoptyp-reveal-ring { display: none; }
+      .tiptoptyp-reveal-beacon[data-style="Pulse"] .tiptoptyp-reveal-halo {
+        width: 54px; height: 54px; left: -27px; top: -27px; border-color: currentColor;
+        animation-name: tiptoptyp-reveal-pulse;
+      }
+      .tiptoptyp-reveal-beacon[data-style="Spotlight"] .tiptoptyp-reveal-halo {
+        width: 172px; height: 172px; left: -86px; top: -86px; border: none; box-shadow: none;
+        background: radial-gradient(circle,var(--tiptoptyp-reveal-wash),transparent 70%);
+      }
+      @keyframes tiptoptyp-reveal-pulse { 0% { opacity: 1; transform: scale(0.8); } 55% { opacity: 0.8; transform: scale(1.1); } 100% { opacity: 0; transform: scale(1); } }
       @keyframes tiptoptyp-reveal-ring { from { width: 18px; height: 18px; opacity: 1; } to { width: 126px; height: 126px; opacity: 0; } }
       @keyframes tiptoptyp-reveal-center { 0%, 55% { opacity: 1; } 100% { opacity: 0; } }
       #typst-container-top { display: none !important; }

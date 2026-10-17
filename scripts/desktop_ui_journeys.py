@@ -33,6 +33,36 @@ def fingerprint(text):
     return f"{value:016x}"
 
 
+def typing_particle_state(document):
+    """Reject missing/stale-looking animation evidence rather than infer a pass."""
+    state = document.get("typing_particles")
+    settings = document.get("editor_particles")
+    if not isinstance(state, dict) or not isinstance(settings, dict) \
+            or type(settings.get("enabled")) is not bool:
+        raise AssertionError("particle settings/inspection is unavailable")
+    for field in ("active_count", "burst_count", "emitted_count", "max_live", "pool_limit", "lifetime_ms"):
+        if type(state.get(field)) is not int or state[field] < 0:
+            raise AssertionError("invalid particle counter: " + field)
+    if not 0 < state["pool_limit"] <= 128 or not 0 < state["lifetime_ms"] < 600 \
+            or state["active_count"] > state["pool_limit"] \
+            or state["max_live"] > state["pool_limit"]:
+        raise AssertionError("particle work/lifetime is not bounded")
+    if state["burst_count"]:
+        origin, clip, age = state.get("origin"), state.get("clip"), state.get("last_emission_age_ms")
+        if not isinstance(origin, list) or len(origin) != 2 \
+                or not isinstance(clip, list) or len(clip) != 4 \
+                or not all(isinstance(value, (int, float)) and math.isfinite(value)
+                           for value in origin + clip) \
+                or not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0 \
+                or not clip[0] <= origin[0] <= clip[2] \
+                or not clip[1] <= origin[1] <= clip[3]:
+            raise AssertionError("particle emission was not located inside its editor clip")
+    if state["active_count"] and (not settings["enabled"] or not state["burst_count"]
+                                  or state["last_emission_age_ms"] >= state["lifetime_ms"]):
+        raise AssertionError("inactive/expired particles were reported as active")
+    return state
+
+
 def settings_category_target_visible(state, category):
     target = state["targets"].get("settings.category." + category)
     search = state["targets"].get("settings.search")
@@ -1835,8 +1865,66 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             self.capture_viewport("settings")
         self.close_settings()
         self.wait("preferences do not edit source", lambda d: d["source_fingerprint"] == original)
+        self.typing_particles()
+        self.wait("particle scratch leaves the preference fixture intact", lambda d: d["source_fingerprint"] == original)
         if self.capture_review:
             self.capture_viewport("main")
+        self.close_scratch(count)
+
+    def typing_particles(self):
+        initial = "\n" * 8 + "particle "
+        count = self.scratch(initial)
+        document = self.snapshot()["document"]
+        state = typing_particle_state(document)
+        if document["editor_particles"] != {"enabled": False, "density": "Medium"} \
+                or state["active_count"] or state["burst_count"]:
+            raise AssertionError("typing particles must default off at medium density")
+        self.settings()
+        self.setting_section("typing particles", "Typing particles")
+        self.click("settings.editor.particles.enabled")
+        self.wait("particle checkbox enables the real setting", lambda d: d["editor_particles"]["enabled"])
+        self.close_settings()
+        self.click("editor.source")
+        self.key(125)  # Cmd+Down reaches EOF even if the click landed on a blank line.
+        self.wait("source owns particle input at EOF", lambda d:
+                  d["editor_keyboard_focused"] and d["cursor"] == [len(initial), len(initial)])
+        before = typing_particle_state(self.snapshot()["document"])["burst_count"]
+        self.native("text", "x")
+        active = self.wait("real typing emits bounded transient sparks", lambda d:
+                           typing_particle_state(d)["active_count"] > 0
+                           and d["typing_particles"]["burst_count"] > before
+                           and d["source_fingerprint"] == fingerprint(initial + "x"))
+        self.record("typing_particles.active", observation=active["document"]["typing_particles"])
+        self.wait("typing sparks expire without further input", lambda d:
+                  typing_particle_state(d)["active_count"] == 0, timeout=3)
+        expected = initial + "x"
+        if self.capture_review:
+            self.native("text", "y")
+            # Capture while the real effect is still young, before any polling.
+            self.capture_viewport("main")
+            expected += "y"
+            self.source_is(expected)
+            self.wait("captured particles expire", lambda d: typing_particle_state(d)["active_count"] == 0)
+        before = typing_particle_state(self.snapshot()["document"])["burst_count"]
+        self.key(123, "none")  # Moving a caret must not emit another burst.
+        self.stable_state(lambda d: typing_particle_state(d)["burst_count"] == before
+                          and d["typing_particles"]["active_count"] == 0, frames=3)
+        self.key(0)
+        self.paste_source("clipboard paste")
+        self.stable_state(lambda d: typing_particle_state(d)["burst_count"] == before
+                          and d["typing_particles"]["active_count"] == 0, frames=3)
+        self.settings()
+        self.setting_section("typing particles", "Typing particles")
+        self.click("settings.editor.particles.enabled")
+        self.wait("particle checkbox disables the real setting", lambda d: not d["editor_particles"]["enabled"])
+        self.close_settings()
+        self.click("editor.source")
+        self.key(124)
+        self.native("text", "z")
+        self.source_is("clipboard pastez")
+        self.stable_state(lambda d: typing_particle_state(d)["burst_count"] == before
+                          and d["typing_particles"]["active_count"] == 0, frames=3)
+        self.record("typing_particles.negative", burst_count=before)
         self.close_scratch(count)
 
     def settings_category(self, category, query, source, size):

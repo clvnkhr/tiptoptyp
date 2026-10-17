@@ -22,6 +22,39 @@ class FixtureFingerprintContract(unittest.TestCase):
         self.assertEqual(fingerprint("é🙂z"), "3a046d85bff8a56f")
 
 
+class TypingParticleContract(unittest.TestCase):
+    def document(self):
+        return {"editor_particles": {"enabled": True, "density": "Medium"},
+                "typing_particles": {"active_count": 7, "burst_count": 1,
+                    "emitted_count": 7, "max_live": 7, "pool_limit": 128,
+                    "lifetime_ms": 480, "last_emission_age_ms": 100,
+                    "origin": [200, 100], "clip": [10, 10, 800, 500]}}
+
+    def test_actual_bounded_fresh_emission_and_expired_counter_history_are_distinct(self):
+        from desktop_ui_journeys import typing_particle_state
+        document = self.document()
+        self.assertEqual(typing_particle_state(document)["active_count"], 7)
+        document["typing_particles"].update(active_count=0, last_emission_age_ms=900)
+        self.assertEqual(typing_particle_state(document)["burst_count"], 1)
+
+    def test_missing_unbounded_disabled_or_expired_particles_cannot_pass(self):
+        from desktop_ui_journeys import typing_particle_state
+        cases = [{}, {"active_count": 129}, {"max_live": 129},
+                 {"lifetime_ms": 600}, {"active_count": True},
+                 {"last_emission_age_ms": 481}, {"origin": [900, 100]},
+                 {"origin": [float("nan"), 100]}]
+        for change in cases:
+            document = self.document()
+            document["typing_particles"] = ({**document["typing_particles"], **change}
+                                               if change else {})
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                typing_particle_state(document)
+        document = self.document()
+        document["editor_particles"]["enabled"] = False
+        with self.assertRaises(AssertionError):
+            typing_particle_state(document)
+
+
 class PartialFixtureCleanupContract(unittest.TestCase):
     def test_mru_selection_never_closes_an_original_tab(self):
         from desktop_ui_partial_journeys import PartialPreviewJourneys

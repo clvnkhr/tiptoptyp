@@ -60,6 +60,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.heading("Try these");
         for tip in [
             "Right-click code and choose Reveal in Preview; right-click the preview and choose Reveal in Source. Typst uses Tinymist; TeX needs its compiled SyncTeX map.",
+            "Appearance → Effects lets you choose separate source and preview jump cues: Rings, Pulse or Spotlight, with duration and size. Either cue can be turned off. Editor → Typing particles adds optional sparks while typing, with Low, Medium or High density.",
             "Cmd/Ctrl+Shift+P opens the command palette. Type a command, choose with Up/Down, then Enter; Escape cancels. The palette shows your current shortcut bindings.",
             "Select text, then type an opening bracket, quote or $ to surround it. Undo reverses it in one step.",
             "Layout in the title bar groups Code, Split, Preview, Explorer and the bottom panel. Their keyboard shortcuts still work, and toggling a panel keeps its chosen size. Turn off Appearance → Compact layout controls to restore the separate title-bar buttons.",

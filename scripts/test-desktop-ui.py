@@ -259,13 +259,44 @@ class Journey(EditorJourneys):
                     source_target=source, destination_target=destination)
         self.native("drag", source["x"], source["y"], destination["x"], destination["y"])
 
-    def double_click(self, name):
-        state = self.snapshot()
-        target = state["targets"].get(name)
-        if not target or not target["enabled"] or target["age_ms"] > 500:
-            raise AssertionError(f"missing, disabled or stale double-click target: {name}")
+    def double_click(self, name, minimum_height=0):
+        def target_in(state, require_fresh=True):
+            target = state["targets"].get(name)
+            if not target or not target["enabled"] or (require_fresh and target["age_ms"] > 500):
+                raise AssertionError(f"missing, disabled or stale double-click target: {name}")
+            return target
+
+        target = target_in(self.snapshot(), require_fresh=False)
         self.native("move", target["x"], target["y"])
-        self.native("double-click", target["x"], target["y"])
+        deadline = time.monotonic() + 3
+        stable_since = None
+        stable_frames = 0
+        previous_frame = None
+        while True:
+            observed = target_in(self.snapshot())
+            now = time.monotonic()
+            same = all(abs(observed[field] - target[field]) <= 0.5
+                       for field in ("x", "y", "width", "height"))
+            visible = observed["height"] >= minimum_height and observed.get("hovered", False)
+            if same and visible:
+                if observed["frame"] != previous_frame:
+                    stable_frames += 1
+                    previous_frame = observed["frame"]
+                if stable_since is None:
+                    stable_since = now
+                if stable_frames >= 2 and now - stable_since >= 0.15:
+                    break
+            else:
+                stable_since = None
+                stable_frames = 0
+                previous_frame = None
+                self.native("move", observed["x"], observed["y"])
+                target = observed
+            if now >= deadline:
+                raise AssertionError(f"target did not settle before double-click: {name}")
+            time.sleep(0.05)
+        self.record("target", name=name, target=observed)
+        self.native("double-click", observed["x"], observed["y"])
 
     def stable(self, baseline, frames=30):
         previous = None
@@ -869,7 +900,7 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "partial_preview", "partial_zoom_stress", "partial_cache_edges", "controls", "settings_search", "editor_preferences", "background", "background_fades", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=["all", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "partial_preview", "partial_zoom_stress", "partial_cache_edges", "controls", "settings_search", "editor_preferences", "typing_particles", "background", "background_fades", "context_menu"], default="all")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--executable", type=Path, help="reuse a preserved build for paired benchmarks; record its version and binary hash")
     parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")

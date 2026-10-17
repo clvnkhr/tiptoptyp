@@ -9,6 +9,7 @@ pub(super) struct WebviewStyle {
     hover: Stroke,
     focus: Stroke,
     zoom_snapshot: bool,
+    reveal_animation: crate::settings::RevealAnimation,
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -25,13 +26,14 @@ impl WebviewStyle {
             )
         };
         format!(
-            "window.tiptoptypSetPalette?.({}, {}, {}, {}, {}); window.tiptoptypZoomSnapshot?.configure({});",
+            "window.tiptoptypSetPalette?.({}, {}, {}, {}, {}); window.tiptoptypZoomSnapshot?.configure({}); window.tiptoptypSetRevealOptions?.({});",
             serde_json::json!([self.palette.0.r(), self.palette.0.g(), self.palette.0.b()]),
             serde_json::json!([self.palette.1.r(), self.palette.1.g(), self.palette.1.b()]),
             serde_json::json!(css(self.hover)),
             serde_json::json!(css(self.focus)),
             serde_json::json!([self.accent.r(), self.accent.g(), self.accent.b()]),
             self.zoom_snapshot,
+            serde_json::json!(self.reveal_animation),
         )
     }
 }
@@ -47,6 +49,7 @@ impl EditorApp {
             hover: visuals.widgets.hovered.bg_stroke,
             focus: visuals.selection.stroke,
             zoom_snapshot: self.settings.preview_zoom_snapshot && cfg!(target_os = "macos"),
+            reveal_animation: self.settings.preview_reveal_animation.normalized(),
         }
     }
 }
@@ -1942,6 +1945,37 @@ mod property_tests {
                 theme.palette.accent.b
             ])
         );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn reveal_preferences_reach_existing_webviews_without_changing_the_palette_or_bounds() {
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let before = app.preview_webview_style(&context);
+        app.settings.preview_reveal_animation = crate::settings::RevealAnimation {
+            enabled: false,
+            style: crate::settings::RevealStyle::Spotlight,
+            duration_ms: 1500,
+            size_percent: 150,
+        };
+        let after = app.preview_webview_style(&context);
+        assert_ne!(before, after);
+        assert_eq!(before.palette, after.palette);
+        assert_eq!(before.hover, after.hover);
+        assert_eq!(before.focus, after.focus);
+        assert_eq!(before.zoom_snapshot, after.zoom_snapshot);
+        assert_eq!(app.preview_webview_style(&context), after);
+        let script = after.script();
+        let options = script
+            .split("window.tiptoptypSetRevealOptions?.(")
+            .nth(1)
+            .unwrap()
+            .strip_suffix(");")
+            .unwrap();
+        let options: crate::settings::RevealAnimation = serde_json::from_str(options).unwrap();
+        assert_eq!(options, app.settings.preview_reveal_animation);
     }
 
     #[test]

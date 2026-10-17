@@ -49,6 +49,7 @@ use popup_layout::{
 };
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
+mod editor_particles;
 mod editor_scroll;
 mod editor_surface;
 mod editor_view;
@@ -580,6 +581,7 @@ struct EditorAttention {
     armed_at: Instant,
     started: Option<Instant>,
     fixed_elapsed: Option<Duration>,
+    animation: Option<crate::settings::RevealAnimation>,
 }
 
 #[cfg(test)]
@@ -986,6 +988,9 @@ enum SettingsTarget {
     ThemeColors,
     PageTheme,
     DarkImages,
+    SourceRevealAnimation,
+    PreviewRevealAnimation,
+    EditorParticles,
     WrapLines,
     IndependentDividers,
     IndentationGuides,
@@ -1036,7 +1041,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 56] = [
+    const ALL: [Self; 59] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -1046,6 +1051,9 @@ impl SettingsTarget {
         Self::ThemeColors,
         Self::PageTheme,
         Self::DarkImages,
+        Self::SourceRevealAnimation,
+        Self::PreviewRevealAnimation,
+        Self::EditorParticles,
         Self::WrapLines,
         Self::IndependentDividers,
         Self::IndentationGuides,
@@ -1106,6 +1114,9 @@ impl SettingsTarget {
             Self::ThemeColors => "Color adjustments",
             Self::PageTheme => "Page",
             Self::DarkImages => "Apply dark page appearance to images",
+            Self::SourceRevealAnimation => "Reveal in source",
+            Self::PreviewRevealAnimation => "Reveal in preview",
+            Self::EditorParticles => "Typing particles",
             Self::WrapLines => "Wrap lines",
             Self::IndependentDividers => "Independent main dividers",
             Self::IndentationGuides => "Indentation guides",
@@ -1167,6 +1178,8 @@ impl SettingsTarget {
             | Self::ThemeColors
             | Self::PageTheme
             | Self::DarkImages
+            | Self::SourceRevealAnimation
+            | Self::PreviewRevealAnimation
             | Self::InterfaceScale
             | Self::TitleBarMenus
             | Self::ToolbarStyle
@@ -1175,6 +1188,7 @@ impl SettingsTarget {
             | Self::UiFont
             | Self::UiFontWeight => SettingsSection::Appearance,
             Self::IndependentDividers
+            | Self::EditorParticles
             | Self::WrapLines
             | Self::IndentationGuides
             | Self::LocalUseHighlights
@@ -1236,6 +1250,13 @@ impl SettingsTarget {
             Self::DarkImages => {
                 "image images invert inversion colors colours dark light page appearance"
             }
+            Self::SourceRevealAnimation => {
+                "source navigation jump reveal animation effects rings pulse spotlight duration size"
+            }
+            Self::PreviewRevealAnimation => {
+                "preview navigation jump reveal animation effects rings pulse spotlight duration size"
+            }
+            Self::EditorParticles => "editor typing particles sparks effects animation density",
             Self::WrapLines => "editor soft wrapping word wrap",
             Self::IndependentDividers => {
                 "resize explorer code preview independent panel drag border width"
