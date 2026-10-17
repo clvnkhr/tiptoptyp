@@ -1,6 +1,23 @@
 //! Divider grips and ownership: no extra widgets, spacing, or changed resize hit areas.
 use eframe::egui::{self, Pos2, Rect, Stroke, StrokeKind};
 
+/// Only actual divider drags count; text selections and other held buttons do
+/// not defer preview work. Require the current button state on the release frame.
+pub(super) fn main_panel_resizing(context: &egui::Context) -> bool {
+    context.input(|input| input.pointer.primary_down())
+        && [
+            super::explorer_panel_id(context),
+            super::editor_panel_id(context),
+            crate::child_view::viewport_scoped_id(context, "bottom-panel"),
+        ]
+        .into_iter()
+        .any(|id| {
+            context
+                .read_response(id.with("__resize"))
+                .is_some_and(|response| response.dragged())
+        })
+}
+
 /// Reserve the real panel resize handles for pointer interaction without
 /// shrinking painted preview pages, their fit-width geometry, or focus bounds.
 pub(super) fn preview_interaction_bounds(ui: &egui::Ui, rect: Rect) -> Rect {

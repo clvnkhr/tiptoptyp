@@ -109,6 +109,7 @@ pub(crate) struct RequestKey {
     pub pages: Vec<usize>,
     pub scale: u32, // physical pixels per PDF point, hundredths
     pub query: String,
+    pub palette: (egui::Color32, egui::Color32),
 }
 
 pub(crate) struct Request {
@@ -128,6 +129,36 @@ pub(crate) struct Character {
     pub rect: egui::Rect, // normalized display coordinates, including page rotation
 }
 
+/// Prepare display pixels on the raster worker. The UI receives a movable,
+/// shared image and never clones, recolors or converts a full page on resize.
+pub(crate) fn prepared_image(
+    size: [usize; 2],
+    rgba: Vec<u8>,
+    palette: (egui::Color32, egui::Color32),
+) -> Arc<egui::ColorImage> {
+    if palette == (egui::Color32::WHITE, egui::Color32::BLACK) {
+        return Arc::new(egui::ColorImage::from_rgba_unmultiplied(size, &rgba));
+    }
+    assert_eq!(size[0] * size[1] * 4, rgba.len());
+    let (background, foreground) = palette;
+    let pixels = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|pixel| {
+            let channels: [u8; 3] = std::array::from_fn(|channel| {
+                let value = u32::from(pixel[channel]);
+                ((u32::from(foreground[channel]) * (255 - value)
+                    + u32::from(background[channel]) * value
+                    + 127)
+                    / 255) as u8
+            });
+            egui::Color32::from_rgba_unmultiplied(channels[0], channels[1], channels[2], pixel[3])
+        })
+        .collect();
+    Arc::new(egui::ColorImage::new(size, pixels))
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum LinkTarget {
     Page(usize),
@@ -136,8 +167,7 @@ pub(crate) enum LinkTarget {
 
 pub(crate) struct Page {
     pub index: usize,
-    pub size: [usize; 2],
-    pub rgba: Vec<u8>,
+    pub image: Arc<egui::ColorImage>,
     pub characters: Vec<Character>,
     pub links: Vec<(egui::Rect, LinkTarget)>,
 }
@@ -168,6 +198,14 @@ pub(crate) struct Worker {
 }
 
 impl Worker {
+    #[cfg(test)]
+    pub(crate) fn idle_for_tests() -> Self {
+        Self {
+            mailbox: Arc::new((Mutex::new(Mailbox::default()), Condvar::new())),
+            serial: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
     pub fn start(repaint: crate::worker::RepaintTarget) -> Self {
         let mailbox = Arc::new((Mutex::new(Mailbox::default()), Condvar::new()));
         let serial = Arc::new(AtomicU64::new(0));
@@ -321,10 +359,16 @@ impl Worker {
                                 Some((rect, target))
                             })
                             .collect();
+                        if !current() {
+                            return Err("Superseded".into());
+                        }
+                        let image = prepared_image(size, rgba, request.key.palette);
+                        if !current() {
+                            return Err("Superseded".into());
+                        }
                         pages.push(Page {
                             index,
-                            size,
-                            rgba,
+                            image,
                             characters,
                             links,
                         });
@@ -435,6 +479,70 @@ pub(crate) fn safe_url(uri: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_pixels_match_the_previous_palette_conversion_including_alpha() {
+        let rgba: Vec<_> = [0, 1, 31, 64, 127, 128, 254, 255]
+            .into_iter()
+            .flat_map(|alpha| {
+                (0..=255u8)
+                    .flat_map(move |value| [value, 255 - value, value.wrapping_mul(7), alpha])
+            })
+            .collect();
+        let size = [256, 8];
+        for palette in [
+            (egui::Color32::WHITE, egui::Color32::BLACK),
+            (egui::Color32::BLACK, egui::Color32::WHITE),
+            (
+                egui::Color32::from_rgb(27, 38, 44),
+                egui::Color32::from_rgb(224, 214, 182),
+            ),
+            (
+                egui::Color32::from_rgba_unmultiplied(27, 38, 44, 127),
+                egui::Color32::from_rgba_unmultiplied(224, 214, 182, 64),
+            ),
+        ] {
+            // Preserve the former two-pass implementation as a test oracle.
+            let mut expected = rgba.clone();
+            for pixel in expected.as_chunks_mut::<4>().0 {
+                for (channel, output) in pixel.iter_mut().take(3).enumerate() {
+                    let value = u32::from(*output);
+                    *output = ((u32::from(palette.1[channel]) * (255 - value)
+                        + u32::from(palette.0[channel]) * value
+                        + 127)
+                        / 255) as u8;
+                }
+            }
+            let expected = egui::ColorImage::from_rgba_unmultiplied(size, &expected);
+            let actual = prepared_image(size, rgba.clone(), palette);
+            assert_eq!(*actual, expected);
+            assert!(
+                actual
+                    .pixels
+                    .iter()
+                    .zip(rgba.as_chunks::<4>().0.iter())
+                    .all(|(prepared, original)| prepared.a() == original[3])
+            );
+        }
+    }
+
+    #[test]
+    fn palette_changes_are_part_of_render_request_identity() {
+        let key = RequestKey {
+            revision: 1,
+            pages: vec![0],
+            scale: 100,
+            query: String::new(),
+            palette: (egui::Color32::WHITE, egui::Color32::BLACK),
+        };
+        assert_ne!(
+            key,
+            RequestKey {
+                palette: (egui::Color32::BLACK, egui::Color32::WHITE),
+                ..key.clone()
+            }
+        );
+    }
+
     #[test]
     fn thumbnail_preflight_rejects_cancelled_or_invalid_requests_without_pdfium() {
         assert!(
@@ -550,6 +658,7 @@ mod tests {
                         pages: vec![page_index],
                         scale: 429,
                         query: String::new(),
+                        palette: (egui::Color32::WHITE, egui::Color32::BLACK),
                     },
                     bytes,
                 });
@@ -605,6 +714,7 @@ mod tests {
             pages: vec![0],
             scale: 100,
             query: String::new(),
+            palette: (egui::Color32::WHITE, egui::Color32::BLACK),
         };
         worker.request(Request {
             key: key.clone(),
@@ -613,9 +723,28 @@ mod tests {
         let first = receive(&worker).result.unwrap();
         assert!(first.parsed_new_document);
         assert_eq!(first.catalog.sizes, vec![[200.0, 100.0]]);
-        assert_eq!(first.pages[0].size, [200, 100]);
-        assert_eq!(&first.pages[0].rgba[..4], &[255, 0, 0, 255]);
+        assert_eq!(first.pages[0].image.size, [200, 100]);
+        assert_eq!(first.pages[0].image.pixels[0], egui::Color32::RED);
         assert_eq!(first.pages[0].links.len(), 1);
+        let recolored_key = RequestKey {
+            palette: (
+                egui::Color32::from_rgb(20, 30, 40),
+                egui::Color32::from_rgb(200, 210, 220),
+            ),
+            ..key.clone()
+        };
+        worker.request(Request {
+            key: recolored_key.clone(),
+            bytes: bytes.clone(),
+        });
+        let recolored = receive(&worker);
+        assert_eq!(recolored.key, recolored_key);
+        let recolored = recolored.result.unwrap();
+        assert!(!recolored.parsed_new_document);
+        assert_eq!(
+            recolored.pages[0].image.pixels[0],
+            egui::Color32::from_rgb(20, 210, 220)
+        );
         for scale in 110..=160 {
             worker.request(Request {
                 key: RequestKey {
@@ -652,7 +781,7 @@ mod tests {
         });
         let batch = receive(&worker).result.unwrap();
         assert!(batch.parsed_new_document);
-        assert_eq!(&batch.pages[0].rgba[..4], &[0, 255, 0, 255]);
+        assert_eq!(batch.pages[0].image.pixels[0], egui::Color32::GREEN);
         assert!(
             worker.poll().0.is_none(),
             "idle workers must not regenerate pages"

@@ -1,16 +1,5 @@
 //! Preview-only color transforms; never rewrite source or rebuild the document.
 use super::*;
-pub(super) fn recolor(rgba: &mut [u8], background: Color32, foreground: Color32) {
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        for channel in 0..3 {
-            let value = u32::from(pixel[channel]);
-            pixel[channel] = ((u32::from(foreground[channel]) * (255 - value)
-                + u32::from(background[channel]) * value
-                + 127)
-                / 255) as u8;
-        }
-    }
-}
 /// Resolve page colors without creating a renderer or changing a document.
 /// The Settings sample and both preview backends share this policy.
 pub(super) fn resolve_palette(
@@ -63,14 +52,6 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn palette_maps_black_and_white_exactly_and_preserves_alpha() {
-        let bg = Color32::from_rgb(32, 45, 60);
-        let fg = Color32::from_rgb(190, 200, 220);
-        let mut rgba = [0, 0, 0, 255, 255, 255, 255, 137];
-        recolor(&mut rgba, bg, fg);
-        assert_eq!(rgba, [190, 200, 220, 255, 32, 45, 60, 137]);
-    }
     #[test]
     fn comfy_background_and_text_are_independent() {
         let context = egui::Context::default();

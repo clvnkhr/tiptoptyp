@@ -1,14 +1,90 @@
 //! Persistent egui PDFium viewer. New visible regions commit as a single batch.
+use super::pdfium_render_settle::{Geometry, SettleState};
 use super::*;
-use crate::pdfium::{Batch, Catalog, Character, LinkTarget, Request, RequestKey, Worker};
+use crate::pdfium::{Batch, Catalog, Character, LinkTarget, Reply, Request, RequestKey, Worker};
 use std::collections::BTreeMap;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PageContextLocation {
+    revision: u64,
+    page: usize,
+    point: Vec2,
+}
+
+impl PageContextLocation {
+    fn capture(
+        response: &egui::Response,
+        revision: u64,
+        page: usize,
+        page_rect: Rect,
+        zoom: f32,
+    ) -> Option<Self> {
+        let pointer = response.interact_pointer_pos()?;
+        (zoom.is_finite() && zoom > 0.0 && page_rect.contains(pointer)).then(|| Self {
+            revision,
+            page,
+            point: (pointer - page_rect.min) / zoom,
+        })
+    }
+
+    fn current(self, revision: u64, page: usize) -> Option<Self> {
+        (self.revision == revision && self.page == page).then_some(self)
+    }
+}
+
+fn page_context_menu(
+    response: &egui::Response,
+    location: Option<PageContextLocation>,
+    characters: &[Character],
+) {
+    response.context_menu(|ui| {
+        if let Some(location) = location {
+            let reveal = ui.button("Reveal in Source");
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("preview.Reveal in Source", &reveal);
+            if reveal.clicked() {
+                let id = viewport_scoped_id(ui.ctx(), "pdf-synctex");
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(id, (location.page, location.point.x, location.point.y));
+                });
+                ui.close();
+            }
+        }
+        if ui.button("Copy page text").clicked() {
+            ui.ctx()
+                .copy_text(characters.iter().map(|c| c.value).collect());
+            ui.close();
+        }
+    });
+}
 
 struct Resident {
     texture: egui::TextureHandle,
-    original: Vec<u8>,
-    size: [usize; 2],
     characters: Vec<Character>,
     links: Vec<(Rect, LinkTarget)>,
+}
+
+struct PdfReveal {
+    page: usize,
+    point: Vec2,
+    expected_pdf: Option<Arc<[u8]>>,
+    attention: EditorAttention,
+}
+
+impl PdfReveal {
+    fn obsolete(&self, bytes: &Arc<[u8]>, now: Instant) -> bool {
+        let attention = &self.attention;
+        ((attention.started.is_some() || attention.fixed_elapsed.is_some())
+            && self
+                .expected_pdf
+                .as_ref()
+                .is_some_and(|expected| !Arc::ptr_eq(expected, bytes) && **expected != **bytes))
+            || (attention.fixed_elapsed.is_none()
+                && attention.started.map_or_else(
+                    || now.saturating_duration_since(attention.armed_at) >= Duration::from_secs(2),
+                    |start| now.saturating_duration_since(start) >= super::reveal::DURATION,
+                ))
+    }
 }
 
 pub(super) struct PdfiumView {
@@ -18,6 +94,15 @@ pub(super) struct PdfiumView {
     revision: u64,
     active_revision: u64,
     requested: Option<RequestKey>,
+    desired: Option<RequestKey>,
+    pending_reply: Option<Reply>,
+    settle: SettleState,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    render_requests: u64,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    render_admissions: u64,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    settling: bool,
     catalog: Option<Arc<Catalog>>,
     residents: BTreeMap<usize, Resident>,
     active_scale: u32,
@@ -27,6 +112,11 @@ pub(super) struct PdfiumView {
     page: usize,
     goto: Option<usize>,
     pending_position: Option<(usize, f32)>,
+    position_is_reveal: bool,
+    position_pdf: Option<Arc<[u8]>>,
+    reveal: Option<PdfReveal>,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    reveal_observation: Option<serde_json::Value>,
     anchor: (usize, f32),
     restore_anchor: bool,
     query: String,
@@ -34,6 +124,7 @@ pub(super) struct PdfiumView {
     search_pending: bool,
     find_when_ready: bool,
     selection: Option<(usize, usize, usize)>,
+    context_location: Option<PageContextLocation>,
     error: Option<String>,
     layout_zoom: f32,
     tops: Vec<f32>,
@@ -54,6 +145,15 @@ impl Default for PdfiumView {
             revision: 0,
             active_revision: 0,
             requested: None,
+            desired: None,
+            pending_reply: None,
+            settle: SettleState::default(),
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            render_requests: 0,
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            render_admissions: 0,
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            settling: false,
             catalog: None,
             residents: BTreeMap::new(),
             active_scale: 0,
@@ -63,6 +163,11 @@ impl Default for PdfiumView {
             page: 0,
             goto: None,
             pending_position: None,
+            position_is_reveal: false,
+            position_pdf: None,
+            reveal: None,
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            reveal_observation: None,
             anchor: (0, 0.0),
             restore_anchor: false,
             query: String::new(),
@@ -70,6 +175,7 @@ impl Default for PdfiumView {
             search_pending: false,
             find_when_ready: false,
             selection: None,
+            context_location: None,
             error: None,
             layout_zoom: 0.0,
             tops: Vec::new(),
@@ -181,31 +287,116 @@ impl PdfiumView {
 
     pub(super) fn ready(&self) -> bool {
         self.bytes.is_some()
-            && self.active_revision == self.revision
+            && self
+                .desired
+                .as_ref()
+                .is_some_and(|key| self.reusable(key) && key.scale == self.active_scale)
+    }
+
+    // Reuse at any scale: resizing is GPU geometry until the final sharp batch.
+    fn reusable(&self, key: &RequestKey) -> bool {
+        self.active_revision == key.revision
+            && self.palette == key.palette
             && !self.residents.is_empty()
-            && self.requested.as_ref().is_some_and(|key| {
-                key.scale == self.active_scale
-                    && key.pages.iter().all(|p| {
-                        self.residents.contains_key(p)
-                            || self.catalog.as_ref().is_some_and(|c| *p >= c.sizes.len())
-                    })
+            && key.pages.iter().all(|p| {
+                self.residents.contains_key(p)
+                    || self.catalog.as_ref().is_some_and(|c| *p >= c.sizes.len())
             })
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn inspected_render(&self) -> serde_json::Value {
+        serde_json::json!({
+            "requested_scale": self.requested.as_ref().map(|key| key.scale),
+            "desired_scale": self.desired.as_ref().map(|key| key.scale),
+            "active_scale": self.active_scale,
+            "resident_count": self.residents.len(),
+            "requests": self.render_requests,
+            "admissions": self.render_admissions,
+            "settling": self.settling,
+        })
     }
     #[cfg(test)]
     pub(super) fn requested_page(&self) -> Option<usize> {
         self.goto
     }
 
+    pub(super) fn reveal_position(&mut self, page: usize, x: f32, y: f32, explicit: bool) {
+        self.reveal_position_for_pdf(page, x, y, explicit, self.bytes.clone());
+    }
+
+    pub(super) fn reveal_position_for_pdf(
+        &mut self,
+        page: usize,
+        x: f32,
+        y: f32,
+        explicit: bool,
+        expected_pdf: Option<Arc<[u8]>>,
+    ) {
+        self.clear_reveal();
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
+        self.go_to_position(page, y);
+        self.position_is_reveal = explicit;
+        self.position_pdf = expected_pdf.clone();
+        if explicit {
+            self.reveal = Some(PdfReveal {
+                page,
+                point: egui::vec2(x, y),
+                expected_pdf,
+                attention: EditorAttention::arm(0),
+            });
+        }
+    }
+
+    pub(super) fn snapshot_reveal(&mut self, page: usize, x: f32, y: f32, elapsed: Duration) {
+        self.reveal_position(page, x, y, true);
+        if let Some(reveal) = self.reveal.as_mut() {
+            reveal.attention = EditorAttention::snapshot(0, elapsed);
+        }
+    }
+
+    pub(super) fn clear_reveal(&mut self) {
+        self.reveal = None;
+        self.pending_position = None;
+        self.position_pdf = None;
+        self.position_is_reveal = false;
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        {
+            self.reveal_observation = None;
+        }
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn inspected_reveal(&self) -> serde_json::Value {
+        self.reveal_observation.clone().unwrap_or_else(|| {
+            serde_json::json!({
+                "active": false, "pending": self.reveal.is_some(),
+            })
+        })
+    }
+
     pub(super) fn go_to_position(&mut self, page: usize, y: f32) {
+        self.clear_reveal();
         // The new map may arrive before its PDF has been inspected. Resolve
         // point coordinates only against that PDF's admitted page dimensions.
         self.pending_position = Some((page, y));
+        self.position_is_reveal = false;
+        self.position_pdf = None;
     }
     fn apply_pending_position(&mut self) {
-        if self.active_revision != self.revision {
+        if self.active_revision != self.revision
+            || self.position_pdf.as_ref().is_some_and(|expected| {
+                self.bytes
+                    .as_ref()
+                    .is_none_or(|bytes| !Arc::ptr_eq(expected, bytes) && **expected != **bytes)
+            })
+        {
             return;
         }
         if let Some((page, y)) = self.pending_position.take() {
+            self.position_pdf = None;
             if let Some(size) = self.catalog.as_ref().and_then(|c| c.sizes.get(page)) {
                 push_history(&mut self.back, self.anchor);
                 self.forward.clear();
@@ -218,6 +409,7 @@ impl PdfiumView {
         }
     }
     pub(super) fn go_to_page(&mut self, page: usize) {
+        self.clear_reveal();
         self.goto = Some(page);
     }
 
@@ -236,13 +428,7 @@ impl PdfiumView {
         self.restore_anchor = true;
     }
 
-    fn accept(
-        &mut self,
-        batch: Batch,
-        key: &RequestKey,
-        ui: &egui::Ui,
-        palette: (Color32, Color32),
-    ) {
+    fn accept(&mut self, batch: Batch, key: &RequestKey, ui: &egui::Ui) {
         let changed = self.active_revision != key.revision;
         if changed || self.active_scale != key.scale {
             self.residents.clear();
@@ -253,20 +439,15 @@ impl PdfiumView {
             self.layout_zoom = 0.0;
         }
         for page in batch.pages {
-            let original = page.rgba.clone();
-            let mut rgba = page.rgba;
-            super::preview_palette::recolor(&mut rgba, palette.0, palette.1);
             let texture = ui.ctx().load_texture(
                 format!("pdfium-{}-{}", key.revision, page.index),
-                egui::ColorImage::from_rgba_unmultiplied(page.size, &rgba),
+                egui::ImageData::Color(page.image),
                 egui::TextureOptions::LINEAR,
             );
             self.residents.insert(
                 page.index,
                 Resident {
                     texture,
-                    original,
-                    size: page.size,
                     characters: page.characters,
                     links: page.links,
                 },
@@ -281,8 +462,35 @@ impl PdfiumView {
         self.catalog = Some(batch.catalog);
         self.active_revision = key.revision;
         self.active_scale = key.scale;
-        self.palette = palette;
+        self.palette = key.palette;
         self.error = None;
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        {
+            self.render_admissions += 1;
+        }
+    }
+
+    fn prepare_path(&mut self, path: PathBuf, bytes: &Arc<[u8]>) {
+        if self.bytes.is_some() && self.path != path {
+            // A source jump may open a previously hidden preview. Preserve only
+            // navigation bound to the incoming PDF; retire the former document.
+            let matches = self
+                .position_pdf
+                .as_ref()
+                .is_some_and(|expected| Arc::ptr_eq(expected, bytes) || **expected == **bytes);
+            let position = matches.then(|| self.pending_position.take()).flatten();
+            let position_pdf = matches.then(|| self.position_pdf.take()).flatten();
+            let reveal = matches.then(|| self.reveal.take()).flatten();
+            let position_is_reveal = matches && self.position_is_reveal;
+            *self = Self {
+                pending_position: position,
+                position_pdf,
+                reveal,
+                position_is_reveal,
+                ..Default::default()
+            };
+        }
+        self.path = path;
     }
 
     fn show(
@@ -291,11 +499,20 @@ impl PdfiumView {
         path: PathBuf,
         bytes: Arc<[u8]>,
         palette: (Color32, Color32),
+        can_reveal_source: bool,
     ) -> Option<String> {
-        if self.bytes.is_some() && self.path != path {
-            *self = Self::default();
+        self.prepare_path(path, &bytes);
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        {
+            self.reveal_observation = None;
         }
-        self.path = path;
+        if self
+            .reveal
+            .as_ref()
+            .is_some_and(|reveal| reveal.obsolete(&bytes, Instant::now()))
+        {
+            self.clear_reveal();
+        }
         if self
             .bytes
             .as_ref()
@@ -304,8 +521,11 @@ impl PdfiumView {
             self.revision += 1;
             self.bytes = Some(bytes.clone());
             self.requested = None;
+            self.desired = None;
+            self.pending_reply = None;
             self.error = None;
             self.search_pages.clear();
+            self.context_location = None;
         }
         // Adopt equal-byte Arcs so repeated frames take the pointer fast path.
         self.bytes = Some(bytes);
@@ -318,10 +538,19 @@ impl PdfiumView {
         if let Some(reply) = reply
             && self.requested.as_ref() == Some(&reply.key)
         {
-            match reply.result {
-                Ok(batch) => self.accept(batch, &reply.key, ui, palette),
-                Err(error) => self.error = Some(error),
-            }
+            self.pending_reply = Some(reply);
+        }
+        // Catalog metadata is small and needed to calculate the current fit
+        // scale. Pixels wait until AFTER layout, so an old width never uploads.
+        if let Some(Ok(batch)) = self.pending_reply.as_ref().map(|reply| &reply.result)
+            && self
+                .catalog
+                .as_ref()
+                .is_none_or(|old| !Arc::ptr_eq(old, &batch.catalog))
+        {
+            self.catalog = Some(batch.catalog.clone());
+            self.layout_zoom = 0.0;
+            self.restore_anchor = true;
         }
         self.apply_pending_position();
         if let Some((key, pages)) = search
@@ -334,16 +563,11 @@ impl PdfiumView {
                 self.find_next();
             }
         }
-        if self.palette != palette {
-            for resident in self.residents.values_mut() {
-                let mut rgba = resident.original.clone();
-                super::preview_palette::recolor(&mut rgba, palette.0, palette.1);
-                resident.texture.set(
-                    egui::ColorImage::from_rgba_unmultiplied(resident.size, &rgba),
-                    egui::TextureOptions::LINEAR,
-                );
-            }
-            self.palette = palette;
+        // Stale pixels may remain visible while a replacement PDF is being
+        // rendered. Their coordinates must never be queried against its map.
+        let can_reveal_source = can_reveal_source && self.active_revision == self.revision;
+        if !can_reveal_source {
+            self.context_location = None;
         }
         let mut link = None;
         let available = ui.available_rect_before_wrap();
@@ -397,9 +621,22 @@ impl PdfiumView {
             } else if self.restore_anchor {
                 let (page, fraction) = self.anchor;
                 let page = page.min(catalog.sizes.len() - 1);
-                scroll = scroll.vertical_scroll_offset(
-                    self.tops[page] + fraction * catalog.sizes[page][1] * self.zoom,
-                );
+                let target_y = self.tops[page] + fraction * catalog.sizes[page][1] * self.zoom;
+                let offset = if self.position_is_reveal {
+                    if let Some(reveal) = &self.reveal {
+                        let page_width = catalog.sizes[page][0] * self.zoom;
+                        scroll = scroll.horizontal_scroll_offset(
+                            ((width - page_width) / 2.0 + reveal.point.x * self.zoom
+                                - available.width() * 0.5)
+                                .max(0.0),
+                        );
+                    }
+                    (target_y - available.height() * 0.382).max(0.0)
+                } else {
+                    target_y
+                };
+                scroll = scroll.vertical_scroll_offset(offset);
+                self.position_is_reveal = false;
                 self.restore_anchor = false;
             }
             let interaction_bounds =
@@ -468,8 +705,30 @@ impl PdfiumView {
                             rect.min + normalized.max.to_vec2() * rect.size(),
                         )
                     };
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if can_reveal_source && index == self.page {
+                        let visible = clip.intersect(interaction_bounds);
+                        if let Some(bounds) = resident
+                            .characters
+                            .iter()
+                            .filter(|character| {
+                                !character.value.is_whitespace() && character.rect.is_finite()
+                            })
+                            .map(|character| map(character.rect))
+                            .find(|bounds| {
+                                bounds.is_positive() && visible.contains(bounds.center())
+                            })
+                        {
+                            let mut ink = response.clone();
+                            ink.interact_rect = bounds.intersect(visible);
+                            crate::desktop_test::observe("preview.source_ink", &ink);
+                        }
+                    }
                     if let Some(pointer) = response.interact_pointer_pos() {
-                        if response.clicked() && ui.input(|i| i.modifiers.command) {
+                        if can_reveal_source
+                            && response.clicked()
+                            && ui.input(|i| i.modifiers.command)
+                        {
                             let point = (pointer - rect.min) / self.zoom;
                             let id = viewport_scoped_id(ui.ctx(), "pdf-synctex");
                             ui.ctx()
@@ -501,6 +760,10 @@ impl PdfiumView {
                                 if map(*bounds).contains(pointer) {
                                     match target {
                                         LinkTarget::Page(page) => {
+                                            self.reveal = None;
+                                            self.pending_position = None;
+                                            self.position_pdf = None;
+                                            self.position_is_reveal = false;
                                             push_history(&mut self.back, self.anchor);
                                             self.forward.clear();
                                             self.goto = Some(*page);
@@ -526,24 +789,60 @@ impl PdfiumView {
                         .selection
                         .filter(|(page, _, _)| *page == index)
                         .map(|(_, a, b)| a.min(b)..=a.max(b));
-                    for (i, character) in resident.characters.iter().enumerate() {
-                        if selected.as_ref().is_some_and(|r| r.contains(&i))
-                            && character.rect.is_finite()
-                        {
-                            ui.painter().rect_filled(
-                                map(character.rect),
-                                0.0,
-                                Color32::from_rgba_unmultiplied(60, 130, 230, 75),
-                            );
+                    if let Some(selected) = selected.clone() {
+                        for character in &resident.characters[selected] {
+                            if character.rect.is_finite() {
+                                ui.painter().rect_filled(
+                                    map(character.rect),
+                                    0.0,
+                                    Color32::from_rgba_unmultiplied(60, 130, 230, 75),
+                                );
+                            }
                         }
                     }
-                    response.context_menu(|ui| {
-                        if ui.button("Copy page text").clicked() {
-                            ui.ctx()
-                                .copy_text(resident.characters.iter().map(|c| c.value).collect());
-                            ui.close();
+                    if self.active_revision == self.revision
+                        && let Some(reveal) = self.reveal.as_mut().filter(|r| r.page == index
+                            && r.expected_pdf.as_ref().is_none_or(|expected| self.bytes.as_ref()
+                                .is_some_and(|bytes| Arc::ptr_eq(expected, bytes) || **expected == **bytes)))
+                    {
+                        let point = rect.min + reveal.point * self.zoom;
+                        let target = Rect::from_center_size(point, egui::vec2(2.0, 18.0));
+                        let visible = clip.intersect(interaction_bounds);
+                        let active = reveal.attention.paint(ui, visible, target);
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        if active && visible.contains(point)
+                            && let Some(elapsed) = reveal.attention.fixed_elapsed.or_else(||
+                                reveal.attention.started.map(|start| start.elapsed()))
+                        {
+                            self.reveal_observation = Some(serde_json::json!({
+                                "active": true, "pending": false, "page": index,
+                                "center": [point.x,point.y],
+                                "target": [target.left(),target.top(),target.right(),target.bottom()],
+                                "viewport": [visible.left(),visible.top(),visible.right(),visible.bottom()],
+                                "elapsed_ms": elapsed.as_millis() as u64,
+                            }));
                         }
-                    });
+                        if !active { self.reveal = None; }
+                    }
+                    if response.secondary_clicked() {
+                        self.context_location = can_reveal_source
+                            .then(|| {
+                                PageContextLocation::capture(
+                                    &response,
+                                    self.revision,
+                                    index,
+                                    rect,
+                                    self.zoom,
+                                )
+                            })
+                            .flatten();
+                    }
+                    page_context_menu(
+                        &response,
+                        self.context_location
+                            .and_then(|location| location.current(self.revision, index)),
+                        &resident.characters,
+                    );
                     if response.has_focus()
                         && ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, egui::Key::C))
                         && let Some(selected) = selected
@@ -564,6 +863,15 @@ impl PdfiumView {
             show_centered_preview_message(ui, "Preparing PDF preview…", self.error.is_none());
         }
 
+        if let Some(reveal) = &self.reveal
+            && reveal.attention.fixed_elapsed.is_none()
+        {
+            let remaining = reveal.attention.started.map_or_else(
+                || Duration::from_secs(2).saturating_sub(reveal.attention.armed_at.elapsed()),
+                |started| super::reveal::DURATION.saturating_sub(started.elapsed()),
+            );
+            ui.ctx().request_repaint_after(remaining);
+        }
         let key = RequestKey {
             revision: self.revision,
             pages: demand,
@@ -571,17 +879,69 @@ impl PdfiumView {
                 .round()
                 .max(1.0) as u32,
             query: self.query.clone(),
+            palette,
         };
-        if self.requested.as_ref() != Some(&key) {
-            self.palette = palette;
+        self.finish_frame(
+            ui,
+            key,
+            available,
+            super::panel_handles::main_panel_resizing(ui.ctx()),
+        );
+        link
+    }
+
+    fn finish_frame(&mut self, ui: &egui::Ui, key: RequestKey, available: Rect, resizing: bool) {
+        let now = ui.input(|input| input.time);
+        let physical = available.size() * ui.ctx().pixels_per_point();
+        self.settle.observe(
+            Geometry {
+                size: [
+                    physical.x.round().max(0.0) as u32,
+                    physical.y.round().max(0.0) as u32,
+                ],
+                scale: key.scale,
+            },
+            resizing,
+            now,
+        );
+        // New documents, palette changes and newly visible missing pages cannot
+        // wait behind a gesture. Otherwise keep the exact same GPU textures.
+        let deferred = self.reusable(&key) && self.settle.deferred(now);
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        {
+            self.settling = deferred;
+        }
+        if deferred {
+            if let Some(delay) = self.settle.wake_after(now) {
+                ui.ctx().request_repaint_after(delay);
+            }
+        } else if let Some(reply) = self.pending_reply.take()
+            && reply.key == key
+        {
+            match reply.result {
+                Ok(batch) => {
+                    self.accept(batch, &reply.key, ui);
+                    self.apply_pending_position();
+                    // This frame painted the retained image. Present its sharp
+                    // replacement on the next ordinary frame.
+                    ui.ctx().request_repaint();
+                }
+                Err(error) => self.error = Some(error),
+            }
+        }
+        if !deferred && self.requested.as_ref() != Some(&key) {
             self.worker.as_ref().unwrap().request(Request {
                 key: key.clone(),
                 bytes: self.bytes.as_ref().unwrap().clone(),
             });
-            self.requested = Some(key);
+            self.requested = Some(key.clone());
             self.search_pending = !self.query.is_empty();
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            {
+                self.render_requests += 1;
+            }
         }
-        link
+        self.desired = Some(key);
     }
 
     fn find_next(&mut self) {
@@ -597,6 +957,7 @@ impl PdfiumView {
     }
 
     fn navigate(&mut self, page: usize) {
+        self.clear_reveal();
         push_history(&mut self.back, self.anchor);
         self.forward.clear();
         self.goto = Some(page);
@@ -620,6 +981,7 @@ impl PdfiumView {
         use super::preview_controls::Action;
         match action {
             Action::Back => {
+                self.clear_reveal();
                 if let Some(target) = self.back.pop() {
                     push_history(&mut self.forward, self.anchor);
                     self.anchor = target;
@@ -627,6 +989,7 @@ impl PdfiumView {
                 }
             }
             Action::Forward => {
+                self.clear_reveal();
                 if let Some(target) = self.forward.pop() {
                     push_history(&mut self.back, self.anchor);
                     self.anchor = target;
@@ -654,7 +1017,9 @@ impl PdfiumView {
                     self.find_next();
                 }
             }
-            Action::Location(location) => self.go_to_position(location.page, location.y),
+            Action::Location(location) => {
+                self.reveal_position(location.page, location.x, location.y, true)
+            }
             Action::PopOut => {}
         }
     }
@@ -769,6 +1134,23 @@ impl EditorApp {
     pub(super) fn pdfium_asset_requested(&self) -> bool {
         self.document().kind() == DocumentKind::Pdf
     }
+    pub(super) fn pdfium_source_jump_available(
+        &self,
+        asset: bool,
+        path: &Path,
+        bytes: &Arc<[u8]>,
+    ) -> bool {
+        !asset
+            && self.preview_document_kind() == DocumentKind::Tex
+            && self.tex_tools.synctex.is_some()
+            && self.synctex.artifact.as_ref().is_some_and(|artifact| {
+                artifact.path == path
+                    && Some(artifact.key) == self.preview.content.artifact_key()
+                    && (Arc::ptr_eq(&artifact.pdf, bytes)
+                        || artifact.pdf.as_ref() == bytes.as_ref())
+            })
+    }
+
     pub(super) fn show_pdfium_view(&mut self, ui: &mut egui::Ui, asset: bool) {
         let viewport = ui.available_rect_before_wrap();
         let target = if asset {
@@ -804,6 +1186,7 @@ impl EditorApp {
             return;
         };
         let palette = self.preview_palette(ui.ctx(), preview.render_dark());
+        let can_reveal_source = self.pdfium_source_jump_available(asset, &path, &bytes);
         let source_popped_out = self.preview_source_popped_out();
         let view = if asset {
             &mut self.pdfium_asset
@@ -822,7 +1205,7 @@ impl EditorApp {
                 } else {
                     "pdfium-preview"
                 },
-                |ui| view.show(ui, path, bytes, palette),
+                |ui| view.show(ui, path, bytes, palette, can_reveal_source),
             )
             .inner
             && crate::pdfium::safe_url(&link)
@@ -860,19 +1243,220 @@ impl EditorApp {
             ui.ctx().request_repaint_of(owner);
         }
         let id = viewport_scoped_id(ui.ctx(), "pdf-synctex");
-        if !asset
-            && let Some((page, x, y)) = ui
-                .ctx()
-                .data_mut(|data| data.remove_temp::<(usize, f32, f32)>(id))
-        {
+        let location = ui
+            .ctx()
+            .data_mut(|data| data.remove_temp::<(usize, f32, f32)>(id));
+        if can_reveal_source && let Some((page, x, y)) = location {
             self.request_synctex(crate::synctex::Query::Page { page, x, y }, false);
         }
     }
 }
 
 #[cfg(test)]
+#[path = "pdfium_view_perf.rs"]
+mod perf;
+
+#[cfg(test)]
+#[path = "pdfium_resize_tests.rs"]
+mod resize_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_jump_requires_the_matching_compiled_tex_map_and_binary() {
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.tex");
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut().replace_loaded_unprojected(
+            "Text".into(),
+            path.clone(),
+            DocumentKind::Tex,
+            None,
+        );
+        let bytes: Arc<[u8]> = Arc::from(&b"compiled PDF"[..]);
+        let key = ArtifactKey {
+            revision: 3,
+            generation: 5,
+        };
+        app.preview.accept_artifact(key, bytes.clone());
+        app.tex_tools.synctex = Some(directory.path().join("synctex"));
+        assert!(!app.pdfium_source_jump_available(false, &path, &bytes));
+        app.synctex.artifact = Some(super::super::synctex::VersionedMap {
+            path: path.clone(),
+            key,
+            map: Arc::new(crate::synctex::Artifact {
+                data: Arc::from(&b"source map"[..]),
+                compressed: false,
+                root: directory.path().into(),
+                mirror: directory.path().join("mirror"),
+            }),
+            pdf: bytes.clone(),
+        });
+        assert!(app.pdfium_source_jump_available(false, &path, &bytes));
+        assert!(app.pdfium_source_jump_available(false, &path, &Arc::from(bytes.as_ref())));
+        assert!(!app.pdfium_source_jump_available(true, &path, &bytes));
+        assert!(!app.pdfium_source_jump_available(false, &path.with_extension("pdf"), &bytes));
+        assert!(!app.pdfium_source_jump_available(false, &path, &Arc::from(&b"old PDF"[..])));
+        app.tex_tools.synctex = None;
+        assert!(!app.pdfium_source_jump_available(false, &path, &bytes));
+        app.tex_tools.synctex = Some(directory.path().join("synctex"));
+        app.preview.accept_artifact(
+            ArtifactKey {
+                generation: 6,
+                ..key
+            },
+            bytes.clone(),
+        );
+        assert!(!app.pdfium_source_jump_available(false, &path, &bytes));
+        app.preview.accept_artifact(key, bytes.clone());
+        app.document_mut().replace_loaded_unprojected(
+            "Text".into(),
+            path.with_extension("typ"),
+            DocumentKind::Typst,
+            None,
+        );
+        assert!(!app.pdfium_source_jump_available(false, &path, &bytes));
+    }
+
+    #[test]
+    fn page_context_locations_reject_other_pages_and_replaced_pdfs() {
+        let location = PageContextLocation {
+            revision: 7,
+            page: 2,
+            point: egui::vec2(20.0, 30.0),
+        };
+        assert_eq!(location.current(7, 2), Some(location));
+        assert_eq!(location.current(8, 2), None);
+        assert_eq!(location.current(7, 3), None);
+    }
+
+    #[test]
+    fn pending_pdf_or_lost_source_capability_flushes_the_context_location() {
+        let context = egui::Context::default();
+        for (active_revision, allowed) in [(1, true), (2, false)] {
+            let bytes: Arc<[u8]> = Arc::from(&b"prepared PDF"[..]);
+            let path = PathBuf::from("source.tex");
+            let mut view = PdfiumView {
+                worker: Some(Worker::idle_for_tests()),
+                path: path.clone(),
+                bytes: Some(bytes.clone()),
+                revision: 2,
+                active_revision,
+                context_location: Some(PageContextLocation {
+                    revision: active_revision,
+                    page: 0,
+                    point: egui::vec2(20.0, 30.0),
+                }),
+                ..Default::default()
+            };
+            context
+                .run_ui(Default::default(), |ui| {
+                    view.show(
+                        ui,
+                        path.clone(),
+                        bytes.clone(),
+                        (Color32::WHITE, Color32::BLACK),
+                        allowed,
+                    );
+                })
+                .drop_without_applying_deltas();
+            assert!(view.context_location.is_none());
+        }
+    }
+
+    #[test]
+    fn reveal_in_source_uses_the_original_right_click_after_the_pointer_moves() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        struct Menu {
+            location: Option<PageContextLocation>,
+            page: Rect,
+        }
+        let mut harness = Harness::builder()
+            .with_step_dt(1.0 / 60.0)
+            .with_max_steps(30)
+            .with_size(egui::vec2(600.0, 500.0))
+            .build_ui_state(
+                |ui, state: &mut Menu| {
+                    let response =
+                        ui.allocate_response(egui::vec2(400.0, 360.0), Sense::click_and_drag());
+                    state.page = response.rect;
+                    if response.secondary_clicked() {
+                        state.location =
+                            PageContextLocation::capture(&response, 7, 2, response.rect, 2.0);
+                    }
+                    page_context_menu(
+                        &response,
+                        state.location.and_then(|location| location.current(7, 2)),
+                        &[],
+                    );
+                },
+                Menu {
+                    location: None,
+                    page: Rect::NOTHING,
+                },
+            );
+        harness.run();
+        let point = harness.state().page.min + egui::vec2(80.0, 120.0);
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerMoved(point));
+            harness.event(egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            harness.run();
+        }
+        assert_eq!(
+            harness.state().location.unwrap().point,
+            egui::vec2(40.0, 60.0)
+        );
+        let _ = harness.get_by_label("Copy page text");
+        let row = harness.get_by_label("Reveal in Source").rect().center();
+        assert_ne!(row, point);
+        harness.event(egui::Event::PointerMoved(row));
+        harness.run();
+        harness.get_by_label("Reveal in Source").click();
+        harness.run();
+        let id = viewport_scoped_id(&harness.ctx, "pdf-synctex");
+        assert_eq!(
+            harness
+                .ctx
+                .data_mut(|data| data.remove_temp::<(usize, f32, f32)>(id)),
+            Some((2, 40.0, 60.0)),
+        );
+    }
+
+    #[test]
+    fn page_context_menu_without_a_source_map_still_allows_copy() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness = Harness::builder()
+            .with_step_dt(1.0 / 60.0)
+            .with_max_steps(30)
+            .with_size(egui::vec2(600.0, 500.0))
+            .build_ui(|ui| {
+                let response =
+                    ui.allocate_response(egui::vec2(400.0, 360.0), Sense::click_and_drag());
+                page_context_menu(&response, None, &[]);
+            });
+        harness.run();
+        let point = egui::pos2(80.0, 120.0);
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerMoved(point));
+            harness.event(egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            harness.run();
+        }
+        let _ = harness.get_by_label("Copy page text");
+        assert!(harness.query_by_label("Reveal in Source").is_none());
+    }
 
     #[test]
     fn source_position_waits_for_the_new_pdfs_dimensions() {
@@ -898,6 +1482,122 @@ mod tests {
         assert!(view.pending_position.is_none());
         assert_eq!(view.anchor, (0, 0.25));
         assert!(view.restore_anchor);
+    }
+
+    #[test]
+    fn explicit_pdf_reveal_keeps_both_coordinates_and_automatic_follow_is_silent() {
+        let mut view = PdfiumView::default();
+        view.reveal_position(2, 125.0, 360.0, true);
+        let reveal = view.reveal.as_ref().unwrap();
+        assert_eq!(reveal.page, 2);
+        assert_eq!(reveal.point, egui::vec2(125.0, 360.0));
+        assert!(reveal.attention.started.is_none());
+        view.reveal_position(2, 200.0, 400.0, false);
+        assert!(view.reveal.is_none());
+        assert!(!view.position_is_reveal);
+        assert_eq!(view.pending_position, Some((2, 400.0)));
+        view.reveal_position(0, f32::NAN, 10.0, true);
+        assert!(view.reveal.is_none());
+    }
+
+    #[test]
+    fn pending_synctex_position_waits_for_its_exact_pdf_before_using_dimensions() {
+        let expected: Arc<[u8]> = Arc::from([2u8]);
+        let mut view = PdfiumView {
+            bytes: Some(Arc::from([1u8])),
+            revision: 1,
+            active_revision: 1,
+            catalog: Some(Arc::new(Catalog {
+                sizes: vec![[400.0, 100.0]],
+                outline: vec![],
+            })),
+            ..Default::default()
+        };
+        for explicit in [true, false] {
+            view.reveal_position_for_pdf(0, 80.0, 50.0, explicit, Some(expected.clone()));
+            view.apply_pending_position();
+            assert_eq!(view.pending_position, Some((0, 50.0)));
+            assert_eq!(view.anchor, (0, 0.0));
+        }
+        view.bytes = Some(expected);
+        view.catalog = Some(Arc::new(Catalog {
+            sizes: vec![[400.0, 200.0]],
+            outline: vec![],
+        }));
+        view.apply_pending_position();
+        assert_eq!(view.anchor, (0, 0.25));
+        assert!(view.position_pdf.is_none());
+    }
+
+    #[test]
+    fn pdf_beacons_expire_without_their_page_being_painted_and_frozen_targets_cannot_cross_pdfs() {
+        let bytes: Arc<[u8]> = Arc::from([1u8]);
+        let other: Arc<[u8]> = Arc::from([2u8]);
+        let now = Instant::now();
+        let mut reveal = PdfReveal {
+            page: 0,
+            point: Vec2::ZERO,
+            expected_pdf: Some(bytes.clone()),
+            attention: EditorAttention::arm(0),
+        };
+        assert!(
+            !reveal.obsolete(&other, now),
+            "wait for the intended PDF to arrive"
+        );
+        reveal.attention.started = Some(now);
+        assert!(!reveal.obsolete(&bytes, now + Duration::from_millis(899)));
+        assert!(reveal.obsolete(&bytes, now + super::super::reveal::DURATION));
+        assert!(reveal.obsolete(&other, now));
+        reveal.attention = EditorAttention::snapshot(0, Duration::from_millis(300));
+        assert!(!reveal.obsolete(&bytes, now + Duration::from_secs(10)));
+        assert!(reveal.obsolete(&other, now));
+    }
+
+    #[test]
+    fn latest_navigation_cancels_pending_reveal_coordinates_and_animation() {
+        let mut view = PdfiumView::default();
+        for history in [true, false] {
+            view.reveal_position(2, 30.0, 40.0, true);
+            if history {
+                view.navigate(5);
+            } else {
+                view.go_to_page(5);
+            }
+            assert!(view.reveal.is_none());
+            assert!(view.pending_position.is_none());
+            view.apply_pending_position();
+            assert_eq!(view.goto, Some(5));
+        }
+        view.reveal_position(2, 30.0, 40.0, true);
+        view.clear_reveal();
+        assert!(view.pending_position.is_none());
+    }
+
+    #[test]
+    fn first_frame_of_a_new_pdf_preserves_only_a_jump_bound_to_that_pdf() {
+        for matching in [true, false] {
+            let next: Arc<[u8]> = Arc::from([2u8]);
+            let mut view = PdfiumView {
+                path: PathBuf::from("a.pdf"),
+                bytes: Some(Arc::from([1u8])),
+                ..Default::default()
+            };
+            view.reveal_position_for_pdf(
+                2,
+                40.0,
+                50.0,
+                true,
+                Some(if matching {
+                    next.clone()
+                } else {
+                    Arc::from([3u8])
+                }),
+            );
+            view.prepare_path(PathBuf::from("b.pdf"), &next);
+            assert_eq!(view.reveal.is_some(), matching);
+            assert_eq!(view.pending_position.is_some(), matching);
+            assert!(view.bytes.is_none());
+        }
     }
 
     #[test]
@@ -1008,6 +1708,7 @@ mod tests {
                             PathBuf::from("fixture.pdf"),
                             bytes.clone(),
                             (Color32::WHITE, Color32::BLACK),
+                            false,
                         );
                     },
                 )

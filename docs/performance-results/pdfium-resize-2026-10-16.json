@@ -1,0 +1,879 @@
+{
+  "date": "2026-10-16",
+  "problem": "Repeated fit-width raster results performed page cloning, palette recoloring, ColorImage conversion and texture allocation on the UI thread during preview resizing.",
+  "changes": [
+    "The existing latest-request-wins PDFium worker now prepares shared ColorImage pixels, fusing recoloring and conversion and skipping recoloring for the identity palette.",
+    "The UI retains and scales resident GPU textures while divider geometry changes, then queues a sharp exact-current batch after release.",
+    "Other resize and zoom geometry changes use a passive 90 ms quiet deadline; unchanged idle frames do not request repaint.",
+    "Revision, palette and missing-page changes bypass settling; render identity includes palette and stale batches cannot replace current pixels.",
+    "No additional screenshot cache is created, and the UI no longer retains a separate raw-RGBA page buffer."
+  ],
+  "measurement": {
+    "scope": "CPU execution of PdfiumView::accept(), including texture queue updates. Before includes clone, recolor and ColorImage conversion; after receives worker-prepared shared images.",
+    "excluded": [
+      "PDF compilation or parsing",
+      "PDFium rasterization and worker duration",
+      "worker-side pixel preparation",
+      "GPU texture upload",
+      "compositor presentation",
+      "input-to-pixel latency",
+      "filesystem-cold startup",
+      "whole-app throughput"
+    ],
+    "common": {
+      "profile": "release",
+      "features": [],
+      "viewport_points": [
+        1400,
+        900
+      ],
+      "warmups": 3,
+      "measured_samples_per_case": 15,
+      "fixture": {
+        "kind": "synthetic already-rasterized single-page payload",
+        "catalog_page_size_points": [
+          595,
+          842
+        ],
+        "physical_image_sizes": [
+          [
+            1200,
+            1697
+          ],
+          [
+            2000,
+            2828
+          ]
+        ],
+        "alternating_rgba_pixels": [
+          [
+            0,
+            64,
+            128,
+            255
+          ],
+          [
+            255,
+            128,
+            64,
+            255
+          ]
+        ],
+        "characters": 0,
+        "links": 0,
+        "palettes": [
+          [
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              0,
+              0,
+              0,
+              255
+            ]
+          ],
+          [
+            [
+              32,
+              45,
+              60,
+              255
+            ],
+            [
+              190,
+              200,
+              220,
+              255
+            ]
+          ]
+        ],
+        "request_revision": 1,
+        "request_scale_hundredths": "100 through 117; each iteration changes scale to force publication replacement"
+      },
+      "percentiles": "p50 is sorted sample index 7; p95 is sorted sample index 14 (maximum of 15 samples)",
+      "reproduce": "cargo test --release --bin tiptoptyp pdfium_publication_probe -- --ignored --nocapture --test-threads=1"
+    },
+    "baseline": {
+      "metadata": {
+        "binary_sha256": "6a4ee6f233b18d18f37f9b506e5d83deccc014917a6a73ade4412cf44e9f0df0",
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "machine": "Darwin Calvins-MacBook-Pro.local 23.6.0 Darwin Kernel Version 23.6.0: Mon Jul 29 21:13:04 PDT 2024; root:xnu-10063.141.2~1/RELEASE_ARM64_T6020 arm64\n",
+        "head": "ae1f7ae5ce77ab0ecee1a388bf317b5fb8aec0db\n",
+        "profile": "release",
+        "native_gui": false
+      },
+      "build_artifact": {
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": true
+        },
+        "features": [],
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "tiptoptyp",
+          "src_path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/main.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        }
+      },
+      "source_sha256": {
+        "src/app/pdfium_view.rs": "41f4e321ea4fbb8a8248762eff029d6acaa92872a1256c1f7d52197afb4b8a5b",
+        "src/pdfium.rs": "9fe26f765dbf183ca13fffac97f785351ab1706932f9487a65d8ccbb00d36908"
+      },
+      "frozen_sources": {
+        "src/app/pdfium_view.rs": "baseline-source-view.rs",
+        "src/pdfium.rs": "baseline-source-worker.rs"
+      },
+      "probe": {
+        "cases": [
+          {
+            "p50_ms": 5.869375,
+            "p95_ms": 6.379542,
+            "palette": [
+              [
+                255,
+                255,
+                255,
+                255
+              ],
+              [
+                0,
+                0,
+                0,
+                255
+              ]
+            ],
+            "pixels": [
+              1200,
+              1697
+            ],
+            "samples_ms": [
+              5.6965,
+              5.701459,
+              5.941541,
+              5.775625000000001,
+              6.048208,
+              5.7285,
+              5.698125,
+              6.379542,
+              5.6174170000000005,
+              5.815375,
+              6.118209,
+              6.091041000000001,
+              6.242375,
+              5.869375,
+              5.939917
+            ]
+          },
+          {
+            "p50_ms": 5.815542,
+            "p95_ms": 6.280958,
+            "palette": [
+              [
+                32,
+                45,
+                60,
+                255
+              ],
+              [
+                190,
+                200,
+                220,
+                255
+              ]
+            ],
+            "pixels": [
+              1200,
+              1697
+            ],
+            "samples_ms": [
+              5.716417,
+              6.020333,
+              5.832375,
+              5.750834,
+              5.840916,
+              5.80675,
+              5.81175,
+              5.877041999999999,
+              5.815542,
+              5.993958,
+              5.6965,
+              6.280958,
+              5.77025,
+              5.941167,
+              5.731792
+            ]
+          },
+          {
+            "p50_ms": 14.24975,
+            "p95_ms": 14.843125,
+            "palette": [
+              [
+                255,
+                255,
+                255,
+                255
+              ],
+              [
+                0,
+                0,
+                0,
+                255
+              ]
+            ],
+            "pixels": [
+              2000,
+              2828
+            ],
+            "samples_ms": [
+              14.197916999999999,
+              14.241041,
+              14.22475,
+              14.433792,
+              14.843125,
+              14.624084,
+              13.957,
+              14.268792000000001,
+              14.630125000000001,
+              14.555416,
+              13.791875000000001,
+              13.803833999999998,
+              14.130375,
+              14.498040999999999,
+              14.24975
+            ]
+          },
+          {
+            "p50_ms": 14.377832999999999,
+            "p95_ms": 15.028959,
+            "palette": [
+              [
+                32,
+                45,
+                60,
+                255
+              ],
+              [
+                190,
+                200,
+                220,
+                255
+              ]
+            ],
+            "pixels": [
+              2000,
+              2828
+            ],
+            "samples_ms": [
+              14.600667,
+              14.512291,
+              14.476916,
+              14.1555,
+              13.76975,
+              14.447583999999999,
+              13.891416999999999,
+              14.334917,
+              14.071291,
+              13.948667,
+              14.377832999999999,
+              14.648417,
+              14.884458,
+              14.185375,
+              15.028959
+            ]
+          }
+        ],
+        "profile": "release",
+        "samples": 15,
+        "scope": "CPU UI admission including texture queue, excludes raster, GPU upload and presentation",
+        "viewport_points": [
+          1400,
+          900
+        ],
+        "warmups": 3
+      },
+      "log": ".tiptoptyp/profiles/pdfium-resize-2026-10-16/baseline.log"
+    },
+    "after": {
+      "metadata": {
+        "binary_sha256": "ddf5578a2889de024d0637b672848f13c540df9dbb144d879b72a5d4c2ec5937",
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+        "uname": "Darwin Calvins-MacBook-Pro.local 23.6.0 Darwin Kernel Version 23.6.0: Mon Jul 29 21:13:04 PDT 2024; root:xnu-10063.141.2~1/RELEASE_ARM64_T6020 arm64\n",
+        "head": "ae1f7ae5ce77ab0ecee1a388bf317b5fb8aec0db\n",
+        "command": "cargo test --release --bin tiptoptyp pdfium_publication_probe --no-run --message-format=json",
+        "features": []
+      },
+      "build_artifact": {
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": true
+        },
+        "features": [],
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "tiptoptyp",
+          "src_path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/main.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        }
+      },
+      "source_sha256": {
+        "src/app/pdfium_view.rs": "098cf622b2e8a972f0acfa5b5ae8f7bb3d970d18da257b56a4f997c2b81daad8",
+        "src/pdfium.rs": "1f2f6ba1441ce067860eacb960283674ab66b6343a022e04cc816fd03fd9061f",
+        "src/app/pdfium_view_perf.rs": "81040c5e56011bc23ca0aea3621752e1c902b5f5f2485de38d9fb61d9062c34d"
+      },
+      "frozen_sources": {
+        "src/app/pdfium_view.rs": "after-view.rs",
+        "src/pdfium.rs": "after-worker.rs",
+        "src/app/pdfium_view_perf.rs": "after-probe.rs"
+      },
+      "probe": {
+        "cases": [
+          {
+            "p50_ms": 0.001667,
+            "p95_ms": 0.003708,
+            "palette": [
+              [
+                255,
+                255,
+                255,
+                255
+              ],
+              [
+                0,
+                0,
+                0,
+                255
+              ]
+            ],
+            "pixels": [
+              1200,
+              1697
+            ],
+            "samples_ms": [
+              0.003209,
+              0.001916,
+              0.000917,
+              0.003458,
+              0.002417,
+              0.000916,
+              0.001542,
+              0.003375,
+              0.001375,
+              0.000375,
+              0.003708,
+              0.001667,
+              0.000833,
+              0.0005,
+              0.00275
+            ]
+          },
+          {
+            "p50_ms": 0.001666,
+            "p95_ms": 0.00775,
+            "palette": [
+              [
+                32,
+                45,
+                60,
+                255
+              ],
+              [
+                190,
+                200,
+                220,
+                255
+              ]
+            ],
+            "pixels": [
+              1200,
+              1697
+            ],
+            "samples_ms": [
+              0.00775,
+              0.001375,
+              0.00725,
+              0.000959,
+              0.00041600000000000003,
+              0.003083,
+              0.00575,
+              0.0025,
+              0.000625,
+              0.0005,
+              0.00033299999999999996,
+              0.003125,
+              0.001666,
+              0.0029170000000000003,
+              0.0011250000000000001
+            ]
+          },
+          {
+            "p50_ms": 0.0018750000000000001,
+            "p95_ms": 0.008792,
+            "palette": [
+              [
+                255,
+                255,
+                255,
+                255
+              ],
+              [
+                0,
+                0,
+                0,
+                255
+              ]
+            ],
+            "pixels": [
+              2000,
+              2828
+            ],
+            "samples_ms": [
+              0.001834,
+              0.008667,
+              0.004,
+              0.000791,
+              0.00075,
+              0.0029170000000000003,
+              0.0048330000000000005,
+              0.0015409999999999998,
+              0.001833,
+              0.002875,
+              0.002209,
+              0.0012079999999999999,
+              0.00175,
+              0.008792,
+              0.0018750000000000001
+            ]
+          },
+          {
+            "p50_ms": 0.001625,
+            "p95_ms": 0.008749999999999999,
+            "palette": [
+              [
+                32,
+                45,
+                60,
+                255
+              ],
+              [
+                190,
+                200,
+                220,
+                255
+              ]
+            ],
+            "pixels": [
+              2000,
+              2828
+            ],
+            "samples_ms": [
+              0.001625,
+              0.001084,
+              0.001458,
+              0.0038330000000000005,
+              0.002333,
+              0.003333,
+              0.001166,
+              0.001834,
+              0.001458,
+              0.003834,
+              0.001625,
+              0.001375,
+              0.008749999999999999,
+              0.004209,
+              0.0015
+            ]
+          }
+        ],
+        "profile": "release",
+        "samples": 15,
+        "scope": "CPU UI admission including texture queue, excludes raster, GPU upload and presentation",
+        "viewport_points": [
+          1400,
+          900
+        ],
+        "warmups": 3
+      },
+      "log": ".tiptoptyp/profiles/pdfium-resize-2026-10-16/after.log"
+    },
+    "comparison": [
+      {
+        "pixels": [
+          1200,
+          1697
+        ],
+        "palette": [
+          [
+            255,
+            255,
+            255,
+            255
+          ],
+          [
+            0,
+            0,
+            0,
+            255
+          ]
+        ],
+        "baseline_p50_ms": 5.869375,
+        "after_p50_ms": 0.001667,
+        "baseline_p95_ms": 6.379542,
+        "after_p95_ms": 0.003708
+      },
+      {
+        "pixels": [
+          1200,
+          1697
+        ],
+        "palette": [
+          [
+            32,
+            45,
+            60,
+            255
+          ],
+          [
+            190,
+            200,
+            220,
+            255
+          ]
+        ],
+        "baseline_p50_ms": 5.815542,
+        "after_p50_ms": 0.001666,
+        "baseline_p95_ms": 6.280958,
+        "after_p95_ms": 0.00775
+      },
+      {
+        "pixels": [
+          2000,
+          2828
+        ],
+        "palette": [
+          [
+            255,
+            255,
+            255,
+            255
+          ],
+          [
+            0,
+            0,
+            0,
+            255
+          ]
+        ],
+        "baseline_p50_ms": 14.24975,
+        "after_p50_ms": 0.0018750000000000001,
+        "baseline_p95_ms": 14.843125,
+        "after_p95_ms": 0.008792
+      },
+      {
+        "pixels": [
+          2000,
+          2828
+        ],
+        "palette": [
+          [
+            32,
+            45,
+            60,
+            255
+          ],
+          [
+            190,
+            200,
+            220,
+            255
+          ]
+        ],
+        "baseline_p50_ms": 14.377832999999999,
+        "after_p50_ms": 0.001625,
+        "baseline_p95_ms": 15.028959,
+        "after_p95_ms": 0.008749999999999999
+      }
+    ],
+    "limitations": [
+      "Sequential local runs on one macOS arm64 machine; ordinary operating-system activity is not controlled.",
+      "The microsecond after timings measure resource publication, not the pixel preparation moved to the worker or the GPU transfer still required for a new sharp image.",
+      "No claim of a whole-app speedup, native interaction pass, end-to-end resize latency or cross-platform guarantee follows from this component probe."
+    ]
+  },
+  "deterministic_coverage": {
+    "held_resize": "100 distinct divider widths retain the same texture and dispatch one final request after release.",
+    "stale_results": "Wrong scale, palette and revision replies never replace resident pixels; a matching reply survives a stationary held drag.",
+    "required_work": "New revisions, palettes and missing visible pages bypass dispatch/admission delay.",
+    "readiness": "Readiness follows desired scale, palette, revision and page coverage rather than the last dispatched request.",
+    "pixel_equivalence": "Worker output matches the previous recolor-plus-conversion semantics, including alpha."
+  },
+  "native_interaction_validation": {
+    "passed": true,
+    "journey": "pdfium_resize",
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "build_profile": "debug",
+    "version": "tiptoptyp Dev 0.1.0 (ae1f7ae5ce77-dirty.1792170420)",
+    "binary_sha256": "449fa6292c4b8fd743822687640dc7e15914379123efc8aa890471b668fb61c8",
+    "git_head": "ae1f7ae5ce77ab0ecee1a388bf317b5fb8aec0db",
+    "preflight": {
+      "accessibility": true,
+      "desktop": true,
+      "input": true,
+      "locked": false,
+      "screens": [
+        {
+          "height": 982,
+          "scale": 2,
+          "width": 1512
+        }
+      ]
+    },
+    "app_window_points": [
+      1400.0,
+      883.0
+    ],
+    "fixture": {
+      "kind": "TeX compiled through the normal app document/preview controls",
+      "filename": "pdfium-resize.tex",
+      "pages": 3,
+      "rows_per_page": 12,
+      "source_bytes": 2281,
+      "source_sha256": "fff24ac1889e5afaefe18077aa63acf72236a1710ba44f7902f9d8887b24c091",
+      "observed_source_fingerprint": "b05da11fef517dd3",
+      "effective_backend": "PDFium",
+      "typst_backend_preference_changed": false,
+      "geometry_page_size_tex_points": [
+        400,
+        1600
+      ],
+      "geometry_margin_tex_points": 24
+    },
+    "workload": {
+      "divider": "editor/preview",
+      "native_mouse_sequence": "down, six move events, stationary 150 ms hold, up",
+      "drag_deltas_points": [
+        96,
+        -96,
+        96,
+        -96
+      ],
+      "assertions": [
+        "Resident batch, active scale and request/admission counters remain unchanged on every observed held frame, including the stationary hold.",
+        "Each release publishes exactly one batch at the final physical scale.",
+        "Source text stays unchanged and the original session ownership is restored."
+      ]
+    },
+    "render_counters_before": {
+      "active_scale": 282,
+      "admissions": 1,
+      "desired_scale": 282,
+      "requested_scale": 282,
+      "requests": 2,
+      "resident_count": 1,
+      "settling": false
+    },
+    "render_counters_after": {
+      "active_scale": 282,
+      "admissions": 5,
+      "desired_scale": 282,
+      "requested_scale": 282,
+      "requests": 6,
+      "resident_count": 1,
+      "settling": false
+    },
+    "drag_observations": [
+      {
+        "time": 182724.349294166,
+        "action": "pdfium_resize.drag",
+        "iteration": 0,
+        "delta": 96,
+        "before": {
+          "active_scale": 282,
+          "admissions": 1,
+          "desired_scale": 282,
+          "requested_scale": 282,
+          "requests": 2,
+          "resident_count": 1,
+          "settling": false
+        },
+        "after": {
+          "active_scale": 234,
+          "admissions": 2,
+          "desired_scale": 234,
+          "requested_scale": 234,
+          "requests": 3,
+          "resident_count": 1,
+          "settling": false
+        },
+        "snapshot_ms": [
+          16.57825001166202,
+          15.736999979708344,
+          13.905667001381516,
+          14.92537499871105,
+          13.280417013447732,
+          18.088624987285584
+        ],
+        "elapsed_ms": 4061.9202500092797
+      },
+      {
+        "time": 182725.91703225,
+        "action": "pdfium_resize.drag",
+        "iteration": 1,
+        "delta": -96,
+        "before": {
+          "active_scale": 234,
+          "admissions": 2,
+          "desired_scale": 234,
+          "requested_scale": 234,
+          "requests": 3,
+          "resident_count": 1,
+          "settling": false
+        },
+        "after": {
+          "active_scale": 282,
+          "admissions": 3,
+          "desired_scale": 282,
+          "requested_scale": 282,
+          "requests": 4,
+          "resident_count": 1,
+          "settling": false
+        },
+        "snapshot_ms": [
+          13.905542000429705,
+          15.11100001516752,
+          12.6763750158716,
+          14.057624997803941,
+          17.683165991911665,
+          13.978708011563867
+        ],
+        "elapsed_ms": 1534.0995420119725
+      },
+      {
+        "time": 182727.450686708,
+        "action": "pdfium_resize.drag",
+        "iteration": 2,
+        "delta": 96,
+        "before": {
+          "active_scale": 282,
+          "admissions": 3,
+          "desired_scale": 282,
+          "requested_scale": 282,
+          "requests": 4,
+          "resident_count": 1,
+          "settling": false
+        },
+        "after": {
+          "active_scale": 234,
+          "admissions": 4,
+          "desired_scale": 234,
+          "requested_scale": 234,
+          "requests": 5,
+          "resident_count": 1,
+          "settling": false
+        },
+        "snapshot_ms": [
+          13.57545901555568,
+          17.207416996825486,
+          17.653165996307507,
+          15.055124997161329,
+          17.072749993531033,
+          21.03241698932834
+        ],
+        "elapsed_ms": 1501.2117919977754
+      },
+      {
+        "time": 182729.040770875,
+        "action": "pdfium_resize.drag",
+        "iteration": 3,
+        "delta": -96,
+        "before": {
+          "active_scale": 234,
+          "admissions": 4,
+          "desired_scale": 234,
+          "requested_scale": 234,
+          "requests": 5,
+          "resident_count": 1,
+          "settling": false
+        },
+        "after": {
+          "active_scale": 282,
+          "admissions": 5,
+          "desired_scale": 282,
+          "requested_scale": 282,
+          "requests": 6,
+          "resident_count": 1,
+          "settling": false
+        },
+        "snapshot_ms": [
+          16.755999997258186,
+          18.25062499847263,
+          12.18491600593552,
+          16.793124988907948,
+          17.031958006555215,
+          17.29295900440775
+        ],
+        "elapsed_ms": 1556.9646670192014
+      }
+    ],
+    "captures": [
+      {
+        "state": "held_drag",
+        "path": ".tiptoptyp/desktop-ui-tests/run-f7iip6r0/1792171207833-0002-main.png",
+        "sha256": "f7917b44af0e61324e9c4f8988e39cbbd5a18a895b73cd218043ac6f4f468561",
+        "size_pixels": [
+          2800,
+          1766
+        ],
+        "inspected": true,
+        "target": "root viewport framebuffer",
+        "observation": "Preview content remains visible with aligned/clipped panel boundaries; no blank preview during the held resize."
+      },
+      {
+        "state": "settled",
+        "path": ".tiptoptyp/desktop-ui-tests/run-f7iip6r0/1792171215880-0003-main.png",
+        "sha256": "81e54f4cbc1ee66213b0219dfaeab0f3c839c6baeabd0a4314a5ad404256abf1",
+        "size_pixels": [
+          2800,
+          1766
+        ],
+        "inspected": true,
+        "target": "root viewport framebuffer",
+        "observation": "Final sharp preview is visible and aligned/clipped within its panel."
+      }
+    ],
+    "evidence_files": {
+      "result": ".tiptoptyp/desktop-ui-tests/run-f7iip6r0/result.json",
+      "events": ".tiptoptyp/desktop-ui-tests/run-f7iip6r0/events.jsonl"
+    },
+    "limits": [
+      "Debug-build native input/state validation is separate from the optimized CPU publication measurements.",
+      "Driver snapshot roundtrips and drag elapsed times are observations, not CPU costs, presentation rates or input-to-pixel latency.",
+      "Fresh root framebuffer captures were inspected; they do not establish whole-desktop native compositor/blur composition."
+    ]
+  }
+}
