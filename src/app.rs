@@ -4476,6 +4476,15 @@ impl EditorApp {
     }
 
     fn reset_untitled_document(&mut self) {
+        // Match opening a saved source: a non-buildable launch tab cannot own
+        // the preview of the first newly created source document.
+        if self.tab_preview_document().is_none_or(|document| {
+            LanguageSupport::for_document(document.kind())
+                .build
+                .is_none()
+        }) {
+            self.tabs.adopt_active_preview();
+        }
         let preserve_preview =
             self.tabs.len() > 1 && self.tabs.active_id() != self.tabs.preview_id();
         let record = self.tabs.current_record_mut();

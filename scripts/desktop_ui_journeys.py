@@ -1915,8 +1915,18 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                   typing_particle_state(d)["active_count"] == 0, timeout=3)
 
     def typing_particles(self):
+        launch = self.snapshot()["document"]
+        needs_source_preview = (launch["tabs"] == 1
+                                and (launch["path"] or "").endswith("/journey.txt"))
         initial = "\n" * 8 + "particle "
         count = self.scratch(initial)
+        if needs_source_preview:
+            self.wait("first unsaved source adopts preview ownership", lambda d:
+                      d["path"] is None and d["active_tab_id"] == d["preview_tab_id"])
+            self.stable_state(lambda d:
+                              "Could not read preview entry" not in (d["completion_notice"] or "")
+                              and "Could not read preview entry" not in (d["preview_failure"] or ""),
+                              frames=3)
         document = self.snapshot()["document"]
         appearance = document["interface_theme"]
         initial_dark = document["dark"]

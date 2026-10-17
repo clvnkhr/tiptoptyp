@@ -128,6 +128,53 @@ fn first_source_after_pdf_becomes_preview_and_later_sources_preserve_it() {
 }
 
 #[test]
+fn new_unsaved_source_after_a_non_buildable_launch_becomes_the_preview() {
+    for extension in ["txt", "pdf", "png"] {
+        let context = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        let mut app = fixture(&context, root.path());
+        app.snapshot_scene = None;
+        app.lifecycle = DocumentLifecycle::Active;
+        app.preview = PreviewController::new(false, PreviewPreference::Pdfium);
+        let path = root.path().join(format!("journey.{extension}"));
+        match extension {
+            "pdf" => fs::write(&path, crate::pdf::test_pdf()).unwrap(),
+            "png" => image::RgbaImage::from_pixel(1, 1, image::Rgba([255; 4]))
+                .save(&path)
+                .unwrap(),
+            _ => fs::write(&path, "Plain launch document").unwrap(),
+        }
+        assert!(app.load_path(path));
+        let original = app.tabs.active_id().unwrap();
+        let original_source = app.document().source().clone();
+        assert!(!app.source_preview_available());
+
+        app.new_tab(&context);
+        let source = app.tabs.active_id().unwrap();
+        assert_ne!(source, original);
+        assert_eq!(
+            app.preview_document_source(),
+            Ok(String::new()),
+            "{extension}: an unsaved preview must use its in-memory buffer"
+        );
+        assert_eq!(app.tabs.preview_id(), Some(source));
+        assert!(app.current_is_preview_document());
+        assert_eq!(app.preview_document_path(), app.untitled_tab_path(source));
+        app.document_mut().edit(CCursorRange::default(), |text| {
+            text.push_str("= Unsaved source\n")
+        });
+        app.mark_edited();
+        assert_eq!(app.preview_document_source().unwrap(), "= Unsaved source\n");
+        assert!(app.source_preview_available());
+        assert!(app.compile_deadline.is_some());
+        assert_eq!(
+            app.document_for_tab(original).unwrap().source(),
+            &original_source
+        );
+    }
+}
+
+#[test]
 fn opening_tex_preserves_native_source_and_never_requests_typst_services() {
     let context = egui::Context::default();
     let root = tempfile::tempdir().unwrap();
