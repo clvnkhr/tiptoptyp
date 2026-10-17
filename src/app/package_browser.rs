@@ -122,111 +122,262 @@ pub(super) fn show_package_browser_ui(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for package in packages {
-                let version = package
-                    .latest_available
-                    .or_else(|| package.latest_installed());
-                let release = package.display_release();
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        let identity = version.map_or_else(
-                            || format!("@{}/{}", package.namespace, package.name),
-                            |version| format!("@{}/{}:{version}", package.namespace, package.name),
+                ui.push_id((&package.namespace, &package.name), |ui| {
+                    package_row(ui, package, loading, action);
+                });
+                ui.separator();
+            }
+        });
+}
+
+fn package_row(
+    ui: &mut egui::Ui,
+    package: &PackageRecord,
+    loading: bool,
+    action: &mut PackageBrowserAction,
+) -> egui::Rect {
+    let version = package
+        .latest_available
+        .or_else(|| package.latest_installed());
+    let release = package.display_release();
+    ui.scope(|ui| {
+        ui.horizontal(|ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add_enabled(version.is_some(), egui::Button::new("Copy import"))
+                    .clicked()
+                    && let Some(version) = version
+                {
+                    action.copied = Some(format!(
+                        "#import \"@{}/{}:{version}\": *",
+                        package.namespace, package.name
+                    ));
+                }
+                if let Some(website) = release.and_then(|release| {
+                    release
+                        .metadata
+                        .homepage
+                        .as_deref()
+                        .or(release.metadata.repository.as_deref())
+                }) && ui.button("Website").clicked()
+                {
+                    action.open_link = Some(website.to_owned());
+                }
+                let identity = version.map_or_else(
+                    || format!("@{}/{}", package.namespace, package.name),
+                    |version| format!("@{}/{}:{version}", package.namespace, package.name),
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(identity).monospace().strong())
+                                .truncate()
+                                .show_tooltip_when_elided(false),
                         );
-                        ui.label(RichText::new(&identity).monospace().strong());
-                        if package.is_installed() {
-                            ui.label(RichText::new("Installed").color(success_color(ui.ctx())));
-                        }
-                        if package.latest_available.is_some() {
-                            ui.label(RichText::new("Published").weak());
-                        }
-                        if package.has_update() {
-                            ui.label(
-                                RichText::new("Update available").color(warning_color(ui.ctx())),
-                            );
-                        }
-                        if let Some(website) = release.and_then(|release| {
-                            release
-                                .metadata
-                                .homepage
-                                .as_deref()
-                                .or(release.metadata.repository.as_deref())
-                        }) && crate::app::icons::action_button(ui, "Website").clicked()
-                        {
-                            action.open_link = Some(website.to_owned());
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if crate::app::icons::action_button_enabled(
-                                ui,
-                                version.is_some(),
-                                "Copy import",
-                            )
-                            .clicked()
-                                && let Some(version) = version
-                            {
-                                action.copied = Some(format!(
-                                    "#import \"@{}/{}:{version}\": *",
-                                    package.namespace, package.name
-                                ));
-                            }
-                        });
-                    });
-                    if let Some(description) =
-                        release.and_then(|release| release.metadata.description.as_deref())
-                    {
-                        ui.label(description);
+                    },
+                );
+            });
+        });
+        if let Some(description) =
+            release.and_then(|release| release.metadata.description.as_deref())
+        {
+            ui.label(description);
+        }
+        if let Some(installed) = package.latest_installed() {
+            let label = if package.has_update() {
+                format!(
+                    "Installed versions · {installed} installed · {} available",
+                    package.latest_available.unwrap()
+                )
+            } else {
+                format!(
+                    "Installed versions · {installed}{}",
+                    if package.latest_available.is_none() {
+                        " · Local"
+                    } else {
+                        ""
                     }
-                    if let Some(installed) = package.latest_installed() {
+                )
+            };
+            let color = if package.has_update() {
+                warning_color(ui.ctx())
+            } else {
+                success_color(ui.ctx())
+            };
+            egui::CollapsingHeader::new(RichText::new(label).color(color))
+                .id_salt("installed-versions")
+                .show(ui, |ui| {
+                    for release in package.installed_releases() {
                         ui.label(
-                            RichText::new(format!("Latest local version: {installed}"))
-                                .size(theme::TYPE.supporting)
-                                .weak(),
-                        );
-                    }
-                    for local_release in package.installed_releases() {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(
-                                RichText::new(format!("Installed {}", local_release.version))
-                                    .monospace()
-                                    .strong(),
-                            );
-                            if local_release.available {
-                                ui.label(RichText::new("Published release").weak());
-                            }
-                        });
-                        for installation in &local_release.installations {
-                            if crate::app::icons::icon_button_enabled(
-                                ui,
-                                !loading,
-                                crate::app::icons::UiIcon::Trash,
-                                &format!("Uninstall {}…", local_release.version),
-                            )
-                            .clicked()
-                            {
-                                action.uninstall = Some(installation.clone());
-                            }
-                            let root_kind = match installation.root.kind {
-                                PackageRootKind::Data => "data",
-                                PackageRootKind::Cache => "cache",
-                            };
-                            let root_kind = if installation.root.custom {
-                                format!("custom {root_kind}")
-                            } else {
-                                root_kind.to_owned()
-                            };
-                            ui.label(
-                                RichText::new(format!(
-                                    "{root_kind}: {}",
-                                    installation.package_path.display()
-                                ))
-                                .size(theme::TYPE.supporting)
+                            RichText::new(release.version.to_string())
                                 .monospace()
-                                .weak(),
-                            );
+                                .strong(),
+                        );
+                        for installation in &release.installations {
+                            ui.horizontal_wrapped(|ui| {
+                                let uninstall = ui.add_enabled(
+                                    !loading,
+                                    egui::Button::new(format!("Uninstall {}…", release.version)),
+                                );
+                                if uninstall.clicked() {
+                                    action.uninstall = Some(installation.clone());
+                                }
+                                let kind = match installation.root.kind {
+                                    PackageRootKind::Data => "data",
+                                    PackageRootKind::Cache => "cache",
+                                };
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{}{kind}: {}",
+                                        if installation.root.custom {
+                                            "custom "
+                                        } else {
+                                            ""
+                                        },
+                                        installation.package_path.display()
+                                    ))
+                                    .monospace()
+                                    .weak(),
+                                );
+                            });
                         }
                     }
                 });
-                ui.add_space(theme::SPACE.tight);
-            }
-        });
+        } else {
+            ui.label(
+                RichText::new(if version.is_some() {
+                    "Available"
+                } else {
+                    "Not installed"
+                })
+                .weak(),
+            );
+        }
+    })
+    .response
+    .rect
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PackageBrowserAction, package_row};
+    use crate::{
+        package_catalog::{
+            PackageInstallation, PackageMetadata, PackageRecord, PackageRelease, PackageRoot,
+            PackageRootKind,
+        },
+        theme,
+    };
+    use eframe::egui;
+    use egui_kittest::{Harness, kittest::Queryable as _};
+
+    fn record() -> PackageRecord {
+        let root = PackageRoot {
+            path: "/private/packages".into(),
+            kind: PackageRootKind::Data,
+            custom: true,
+        };
+        let path = root.path.join("preview/cetz/0.2.0");
+        let metadata = PackageMetadata {
+            description: Some("Draw diagrams directly in Typst.".into()),
+            homepage: Some("https://typst.app/universe/package/cetz".into()),
+            ..Default::default()
+        };
+        PackageRecord {
+            namespace: "preview".into(),
+            name: "cetz".into(),
+            latest_available: Some("0.3.0".parse().unwrap()),
+            releases: vec![
+                PackageRelease {
+                    version: "0.3.0".parse().unwrap(),
+                    available: true,
+                    installations: vec![],
+                    metadata: metadata.clone(),
+                    updated_at: None,
+                },
+                PackageRelease {
+                    version: "0.2.0".parse().unwrap(),
+                    available: true,
+                    installations: vec![PackageInstallation {
+                        manifest_path: path.join("typst.toml"),
+                        package_path: path,
+                        root,
+                    }],
+                    metadata,
+                    updated_at: None,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn compact_package_row_keeps_actions_visible_and_installations_collapsed() {
+        let package = record();
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(520.0, 420.0))
+            .build_ui_state(
+                move |ui, state: &mut (PackageBrowserAction, egui::Rect)| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    state.1 = package_row(ui, &package, false, &mut state.0);
+                },
+                (PackageBrowserAction::default(), egui::Rect::NOTHING),
+            );
+        harness.run_steps(3);
+        assert!(
+            harness.state().1.height() < 110.0,
+            "{:?}",
+            harness.state().1
+        );
+        for label in ["Copy import", "Website"] {
+            let rect = harness.get_by_label(label).rect();
+            assert!(
+                rect.left() >= 0.0 && rect.right() <= 520.0,
+                "{label}: {rect:?}"
+            );
+        }
+        let identity = harness
+            .get_by_role_and_label(egui::accesskit::Role::Label, "@preview/cetz:0.3.0")
+            .rect();
+        let description = harness
+            .get_by_role_and_label(
+                egui::accesskit::Role::Label,
+                "Draw diagrams directly in Typst.",
+            )
+            .rect();
+        assert_eq!(
+            identity.left(),
+            description.left(),
+            "{identity:?} {description:?}"
+        );
+        assert!(harness.query_by_label_contains("custom data:").is_none());
+        assert!(harness.query_by_label("Uninstall 0.2.0…").is_none());
+        harness.get_by_label("Copy import").click();
+        harness.run();
+        assert_eq!(
+            harness.state().0.copied.as_deref(),
+            Some("#import \"@preview/cetz:0.3.0\": *")
+        );
+        harness.get_by_label("Website").click();
+        harness.run();
+        assert_eq!(
+            harness.state().0.open_link.as_deref(),
+            Some("https://typst.app/universe/package/cetz")
+        );
+        harness.get_by_label_contains("Installed versions").click();
+        harness.run_steps(10);
+        assert!(harness.query_by_label_contains("custom data:").is_some());
+        harness.get_by_label("Uninstall 0.2.0…").click();
+        harness.run();
+        assert_eq!(
+            harness.state().0.uninstall.as_ref().unwrap().package_path,
+            std::path::Path::new("/private/packages/preview/cetz/0.2.0")
+        );
+    }
 }

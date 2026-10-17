@@ -880,6 +880,78 @@ impl PackageCatalogLoad {
     pub(crate) fn load(roots: &PackageRoots) -> Self {
         load_catalog_with(roots, fetch_official_index)
     }
+
+    /// Deterministic QA catalog merged through the same installed/published path.
+    pub(crate) fn snapshot_fixture() -> Self {
+        let root = PackageRoot::standard("/Library/Typst/packages".into(), PackageRootKind::Data);
+        let mut installed = Vec::new();
+        let mut available = Vec::new();
+        for (name, description, published, local) in [
+            (
+                "cetz",
+                "Draw illustrations, plots and diagrams directly in Typst.",
+                Some("0.3.4"),
+                Some("0.3.3"),
+            ),
+            (
+                "fletcher",
+                "Node and edge diagrams with flexible layouts.",
+                Some("0.5.7"),
+                Some("0.5.7"),
+            ),
+            (
+                "mitex",
+                "Render familiar LaTeX math commands in a Typst document.",
+                Some("0.2.4"),
+                None,
+            ),
+            (
+                "research-notes",
+                "Shared theorem environments and notation for a research project.",
+                None,
+                Some("0.1.0"),
+            ),
+        ] {
+            let metadata = PackageMetadata {
+                entrypoint: "lib.typ".into(),
+                description: Some(description.into()),
+                homepage: published.map(|_| format!("https://typst.app/universe/package/{name}")),
+                ..Default::default()
+            };
+            let namespace = if published.is_some() {
+                "preview"
+            } else {
+                "local"
+            };
+            if let Some(version) = local {
+                let package_path = root.path.join(namespace).join(name).join(version);
+                installed.push(InstalledPackage {
+                    namespace: namespace.into(),
+                    name: name.into(),
+                    version: version.parse().unwrap(),
+                    metadata: metadata.clone(),
+                    installation: PackageInstallation {
+                        manifest_path: package_path.join("typst.toml"),
+                        package_path,
+                        root: root.clone(),
+                    },
+                });
+            }
+            if let Some(version) = published {
+                available.push(AvailablePackage {
+                    name: name.into(),
+                    version: version.parse().unwrap(),
+                    metadata,
+                    updated_at: None,
+                });
+            }
+        }
+        Self {
+            catalog: PackageCatalog::from_sources(installed, available),
+            warnings: Vec::new(),
+            official_index_error: None,
+        }
+    }
 }
 
 fn load_catalog_with(
@@ -900,6 +972,32 @@ fn load_catalog_with(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn snapshot_catalog_exercises_each_status_through_the_normal_merge() {
+        let load = PackageCatalogLoad::snapshot_fixture();
+        let records = load.catalog.filtered("");
+        assert_eq!(records.len(), 4);
+        assert_eq!(
+            records.iter().filter(|record| record.has_update()).count(),
+            1
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.is_installed())
+                .count(),
+            3
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| record.latest_available.is_some())
+                .count(),
+            3
+        );
+        assert!(load.warnings.is_empty() && load.official_index_error.is_none());
+    }
+
     use super::*;
     use std::{collections::HashMap, io::Cursor};
 

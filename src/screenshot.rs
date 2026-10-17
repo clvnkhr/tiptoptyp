@@ -66,6 +66,10 @@ impl UiCaptureStep {
 /// remain in the root app viewport.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UiSnapshotScene {
+    Snippets,
+    Shortcuts,
+    Packages,
+    LatexDiff,
     TableEditor,
     TableEditorNarrow,
     TableEditorTex,
@@ -136,7 +140,11 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 67] = [
+    pub const ALL: [Self; 71] = [
+        Self::Snippets,
+        Self::Shortcuts,
+        Self::Packages,
+        Self::LatexDiff,
         Self::TableEditor,
         Self::TableEditorNarrow,
         Self::TableEditorTex,
@@ -208,6 +216,10 @@ impl UiSnapshotScene {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Snippets => "snippets",
+            Self::Shortcuts => "shortcuts",
+            Self::Packages => "packages",
+            Self::LatexDiff => "latexdiff",
             Self::TableEditor => "table-editor",
             Self::TableEditorNarrow => "table-editor-narrow",
             Self::TableEditorTex => "table-editor-tex",
@@ -281,6 +293,10 @@ impl UiSnapshotScene {
     /// Logical framebuffer target used by [`CaptureController`].
     pub const fn viewport_target(self) -> &'static str {
         match self {
+            Self::Snippets => "snippets",
+            Self::Shortcuts => "shortcuts",
+            Self::Packages => "packages",
+            Self::LatexDiff => "latexdiff",
             Self::Templates => "templates",
             Self::EncodingImport => "encoding-import",
             Self::WritingChecks => ROOT_VIEWPORT_NAME,
@@ -357,6 +373,10 @@ impl UiSnapshotScene {
     pub(crate) fn parse(value: &str) -> Result<Self, String> {
         let value = value.trim();
         let scene = match value {
+            "snippets" => Self::Snippets,
+            "shortcuts" => Self::Shortcuts,
+            "packages" => Self::Packages,
+            "latexdiff" => Self::LatexDiff,
             "main" => Self::Main,
             "draw-symbol" => Self::DrawSymbol,
             "table-editor" => Self::TableEditor,
@@ -1690,6 +1710,21 @@ mod tests {
         )
         .unwrap_err();
         assert!(invalid_environment.contains("settings-popup"));
+    }
+
+    #[test]
+    fn standalone_editor_scenes_capture_their_real_child_and_have_unique_names() {
+        let mut names = BTreeSet::new();
+        for scene in [
+            UiSnapshotScene::Snippets,
+            UiSnapshotScene::Shortcuts,
+            UiSnapshotScene::Packages,
+            UiSnapshotScene::LatexDiff,
+        ] {
+            assert_eq!(UiSnapshotScene::parse(scene.as_str()).unwrap(), scene);
+            assert_eq!(scene.viewport_target(), scene.as_str());
+            assert!(names.insert((scene.capture_spec().target, scene.capture_spec().name)));
+        }
     }
 
     #[test]

@@ -62,6 +62,10 @@ The accepted scenes and their framebuffer targets are:
 | Scene | Capture target | Themed state |
 | --- | --- | --- |
 | `main` | `main` | Main split editor and preview |
+| `snippets` | `snippets` | Real independent snippet library and source workbench, with pinned Save/Revert |
+| `shortcuts` | `shortcuts` | Real shortcut editor with compact action groups and key bindings |
+| `packages` | `packages` | Real package browser with deterministic installed, available, local and update records; no registry request |
+| `latexdiff` | `latexdiff` | Real comparison dialog with deterministic file paths and edited diff output |
 | `table-editor` | `table-editor` | Resizable table workbench with a merged heading, compact toolbar, Format popup and read-only source |
 | `table-editor-narrow` | `table-editor` | The table workbench at its minimum width |
 | `table-editor-tex` | `table-editor` | Real named TeX/booktabs fixture in the same table workbench |

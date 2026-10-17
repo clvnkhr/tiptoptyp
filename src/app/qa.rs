@@ -14,6 +14,7 @@ pub(super) struct QaSession {
     preview_window_prepared: bool,
     reveal_prepared: bool,
     asset_fixture: Option<tempfile::TempDir>,
+    auxiliary_prepared: bool,
 }
 
 /// A capture batch owns its fixture independently of each scene's editor state.
@@ -203,6 +204,23 @@ pub(super) fn prepare_sticky_context_snapshot_document(document: &mut DocumentSe
     true
 }
 
+fn snapshot_requires_pdfium(scene: UiSnapshotScene) -> bool {
+    matches!(
+        scene,
+        UiSnapshotScene::Main
+            | UiSnapshotScene::Tabs
+            | UiSnapshotScene::TabsPdf
+            | UiSnapshotScene::TabsImage
+            | UiSnapshotScene::ProblemsPanel
+            | UiSnapshotScene::TerminalPanel
+            | UiSnapshotScene::FindReplace
+            | UiSnapshotScene::PdfiumReveal
+            | UiSnapshotScene::PdfiumPreview
+            | UiSnapshotScene::PreviewControls
+            | UiSnapshotScene::PreviewWindow
+    )
+}
+
 impl QaSession {
     pub(super) fn prepare(&mut self, app: &mut EditorApp, context: &egui::Context) {
         let Some(scene) = app.snapshot_scene else {
@@ -248,6 +266,28 @@ impl QaSession {
         }
         let toolbar_anchor = Pos2::new(theme::SPACE.content, METRICS.chrome.toolbar_height);
         match scene {
+            UiSnapshotScene::Snippets => {
+                if !self.auxiliary_prepared {
+                    app.settings.snippets.clear();
+                    app.settings.snippet_presets = AppSettings::default().snippet_presets;
+                    app.snippet_window = Arc::default();
+                    self.auxiliary_prepared = true;
+                }
+                app.snippets_visible = true;
+            }
+            UiSnapshotScene::Shortcuts => app.shortcut_editor_visible = true,
+            UiSnapshotScene::Packages => {
+                if !self.auxiliary_prepared {
+                    app.package_catalog = Some(PackageCatalogLoad::snapshot_fixture());
+                    app.package_query.clear();
+                    app.package_filter = PackageFilter::All;
+                    self.auxiliary_prepared = true;
+                }
+                app.packages_visible = true;
+            }
+            UiSnapshotScene::LatexDiff => {
+                super::latexdiff::prepare_snapshot(app, context);
+            }
             UiSnapshotScene::PreviewWindow | UiSnapshotScene::PreviewNativeWindow => {
                 let native = scene == UiSnapshotScene::PreviewNativeWindow;
                 if !self.preview_window_prepared {
@@ -987,7 +1027,11 @@ impl QaSession {
         app.git.visible = false;
         app.git_editor = crate::git::editor::GitEditorState::default();
         app.settings_visible = false;
+        app.snippets_visible = false;
+        app.snippet_window.lock().unwrap().suspend();
         app.shortcut_editor_visible = false;
+        app.latexdiff = None;
+        self.auxiliary_prepared = false;
         app.packages_visible = false;
         app.typst_overrides_visible = false;
         app.workspace_chooser_visible = false;
@@ -1056,17 +1100,8 @@ impl QaSession {
             app.document_mut().set_history_reset(true);
         }
 
-        if matches!(
-            step.scene,
-            UiSnapshotScene::Main
-                | UiSnapshotScene::Tabs
-                | UiSnapshotScene::TabsPdf
-                | UiSnapshotScene::TabsImage
-                | UiSnapshotScene::ProblemsPanel
-                | UiSnapshotScene::TerminalPanel
-                | UiSnapshotScene::FindReplace
-                | UiSnapshotScene::PdfiumReveal
-        ) && !app.pdfium_preview.ready_for(app.preview.content.pdf())
+        if snapshot_requires_pdfium(step.scene)
+            && !app.pdfium_preview.ready_for(app.preview.content.pdf())
         {
             app.schedule_compile_now();
         }
@@ -1090,6 +1125,61 @@ fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPan
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn pdf_backed_capture_steps_request_a_new_artifact_after_source_restoration() {
+        for scene in [
+            UiSnapshotScene::PreviewWindow,
+            UiSnapshotScene::PreviewControls,
+            UiSnapshotScene::PdfiumPreview,
+            UiSnapshotScene::PdfiumReveal,
+        ] {
+            assert!(snapshot_requires_pdfium(scene), "{scene:?}");
+        }
+        assert!(!snapshot_requires_pdfium(
+            UiSnapshotScene::PreviewNativeWindow
+        ));
+        assert!(!snapshot_requires_pdfium(UiSnapshotScene::Packages));
+    }
+
+    #[test]
+    fn standalone_editor_scenes_open_their_real_child_state_without_catalog_workers() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        for scene in [
+            UiSnapshotScene::Snippets,
+            UiSnapshotScene::Shortcuts,
+            UiSnapshotScene::Packages,
+            UiSnapshotScene::LatexDiff,
+        ] {
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            let mut qa = QaSession::default();
+            app.snapshot_scene = Some(scene);
+            qa.prepare(&mut app, &context);
+            let key = app.document().key();
+            assert_eq!(app.snippets_visible, scene == UiSnapshotScene::Snippets);
+            assert_eq!(
+                app.shortcut_editor_visible,
+                scene == UiSnapshotScene::Shortcuts
+            );
+            assert_eq!(app.packages_visible, scene == UiSnapshotScene::Packages);
+            assert_eq!(app.latexdiff.is_some(), scene == UiSnapshotScene::LatexDiff);
+            if scene == UiSnapshotScene::Packages {
+                assert_eq!(
+                    app.package_catalog
+                        .as_ref()
+                        .unwrap()
+                        .catalog
+                        .filtered("")
+                        .len(),
+                    4
+                );
+                assert!(!app.package_catalog_job.is_running());
+            }
+            qa.prepare(&mut app, &context);
+            assert_eq!(app.document().key(), key);
+        }
+    }
 
     #[test]
     fn table_snapshot_scenes_prepare_the_real_language_and_keep_the_draft_stable() {

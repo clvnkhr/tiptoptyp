@@ -128,6 +128,24 @@ impl Dialog {
     }
 }
 
+pub(super) fn prepare_snapshot(app: &mut EditorApp, context: &egui::Context) {
+    if app.latexdiff.is_some() {
+        return;
+    }
+    app.begin_latexdiff(context);
+    if let Some(dialog) = &mut app.latexdiff {
+        dialog.older = "/project/revision-before.tex".into();
+        dialog.newer = "/project/revision-after.tex".into();
+        dialog.current = Some((PathBuf::from(&dialog.newer), "Updated source".into()));
+        dialog.output = Some(Output {
+            source: "\\DIFdel{Original text}\\DIFadd{Revised text}".into(),
+            warnings: String::new(),
+            older: PathBuf::from(&dialog.older),
+            newer: PathBuf::from(&dialog.newer),
+        });
+    }
+}
+
 impl EditorApp {
     pub(super) fn begin_latexdiff(&mut self, context: &egui::Context) {
         if self.document_flow_busy() {
@@ -214,13 +232,10 @@ impl EditorApp {
                     .show(ui.ctx(), |ui| {
                         theme::dialog_card_frame(&style).show(ui, |ui| {
                             ui.set_width(card_width(owner.width()));
-                            egui::ScrollArea::vertical()
-                                .max_height((owner.height() - 48.0).max(120.0))
-                                .show(ui, |ui| {
-                                    if let Some(clicked) = show(ui, dialog) {
-                                        action = Some(clicked);
-                                    }
-                                });
+                            ui.set_height(card_height(owner.height()));
+                            if let Some(clicked) = show(ui, dialog) {
+                                action = Some(clicked);
+                            }
                         });
                     });
             },
@@ -318,6 +333,10 @@ fn card_width(owner_width: f32) -> f32 {
     (owner_width - 48.0).clamp(1.0, 660.0)
 }
 
+fn card_height(owner_height: f32) -> f32 {
+    (owner_height - 48.0).clamp(1.0, 260.0)
+}
+
 fn close_requested(
     context: &egui::Context,
     input: crate::child_view::ChildViewInput,
@@ -336,58 +355,204 @@ fn close_requested(
 }
 
 fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
+    theme::apply_compact_tool_spacing(ui);
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.heading("LaTeXdiff");
+        ui.strong("LaTeXdiff");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if icon_button(ui, UiIcon::Close, "Close LaTeXdiff").clicked() {
                 action = Some(Action::Close);
             }
         });
     });
-    ui.label("Mark additions and deletions between two LaTeX documents.");
     ui.separator();
     let busy = dialog.busy();
+    let bounds = ui.available_rect_before_wrap();
+    let footer_height = footer_height(ui, busy);
+    let footer_top = (bounds.bottom() - footer_height).max(bounds.top());
+    let body = Rect::from_min_max(bounds.min, Pos2::new(bounds.right(), footer_top));
+    let footer = Rect::from_min_max(Pos2::new(bounds.left(), footer_top), bounds.max);
     let mut changed = false;
-    ui.add_enabled_ui(!busy, |ui| {
-        for (label, value, pick) in [("Older file", &mut dialog.older, Action::Older), ("Newer file", &mut dialog.newer, Action::Newer)] {
-            let label_response = ui.label(label);
-            ui.horizontal(|ui| {
-                let field = ui.add(egui::TextEdit::singleline(value).hint_text("/path/to/document.tex").desired_width((ui.available_width() - 88.0).max(100.0)));
-                let field = field.labelled_by(label_response.id);
-                if pick == Action::Older && dialog.focus_file { field.request_focus(); dialog.focus_file = false; }
-                changed |= field.changed();
-                if ui.button("Choose…").on_hover_text(format!("Choose {label}")).clicked() { action = Some(pick); }
-            });
-        }
-        if dialog.current.as_ref().is_some_and(|(path, _)| path == Path::new(dialog.newer.trim())) {
-            changed |= ui.checkbox(&mut dialog.include_edits, "Include unsaved editor changes").on_hover_text("The older file is read from disk; the newer file uses a snapshot of the current editor.").changed();
-        }
-        changed |= preferences(ui, &mut dialog.settings);
-    });
-    if changed {
-        dialog.output = None;
-        dialog.error = None;
-    }
-    if let Some(error) = &dialog.error {
-        ui.colored_label(ui.visuals().error_fg_color, error);
-    }
-    if let Some(output) = &dialog.output {
-        ui.label(format!("Diff source ready · {} bytes", output.source.len()));
-        if !output.warnings.trim().is_empty() {
-            egui::CollapsingHeader::new("LaTeXdiff messages").show(ui, |ui| {
-                ui.label(&output.warnings);
-            });
-        }
-    }
-    ui.separator();
-    ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(!busy, egui::Button::new("Generate diff")).clicked() { action = Some(Action::Generate); }
-        if ui.add_enabled(!busy && dialog.output.is_some(), egui::Button::new("Save and open…")).on_hover_text("Save the marked-up .tex file and open it with its PDF preview. Save beside the newer file to preserve image and bibliography paths. Your selected TeX engine builds its PDF.").clicked() { action = Some(Action::Save); }
-        if ui.add_enabled(!busy && dialog.output.is_some(), egui::Button::new("Copy source")).clicked() { action = Some(Action::Copy); }
-        if busy { ui.spinner(); }
-    });
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("latexdiff-body")
+            .max_rect(body),
+        |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(body));
+            egui::ScrollArea::vertical()
+                .id_salt("latexdiff-options-scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(!busy, |ui| {
+                        let label_width = text_width(ui, "Newer file");
+                        let button_width =
+                            text_width(ui, "Choose…") + ui.spacing().button_padding.x * 2.0;
+                        let field_width = (ui.available_width()
+                            - label_width
+                            - button_width
+                            - ui.spacing().item_spacing.x * 2.0)
+                            .max(1.0);
+                        egui::Grid::new("latexdiff-files")
+                            .num_columns(3)
+                            .min_col_width(0.0)
+                            .show(ui, |ui| {
+                                for (label, value, pick) in [
+                                    ("Older file", &mut dialog.older, Action::Older),
+                                    ("Newer file", &mut dialog.newer, Action::Newer),
+                                ] {
+                                    let label = ui.label(label);
+                                    let field = ui
+                                        .add_sized(
+                                            [field_width, ui.spacing().interact_size.y],
+                                            egui::TextEdit::singleline(value)
+                                                .hint_text("/path/to/document.tex")
+                                                .desired_width(field_width),
+                                        )
+                                        .labelled_by(label.id);
+                                    if pick == Action::Older && dialog.focus_file {
+                                        field.request_focus();
+                                        dialog.focus_file = false;
+                                    }
+                                    changed |= field.changed();
+                                    if ui.button("Choose…").clicked() {
+                                        action = Some(pick);
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                        if dialog
+                            .current
+                            .as_ref()
+                            .is_some_and(|(path, _)| path == Path::new(dialog.newer.trim()))
+                        {
+                            changed |= ui
+                                .checkbox(
+                                    &mut dialog.include_edits,
+                                    "Include unsaved editor changes",
+                                )
+                                .changed();
+                        }
+                        changed |= preferences(ui, &mut dialog.settings);
+                    });
+                    if changed {
+                        dialog.output = None;
+                        dialog.error = None;
+                    }
+                    if let Some(error) = &dialog.error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                    if let Some(output) = &dialog.output {
+                        ui.weak(format!("Diff source ready · {} bytes", output.source.len()));
+                        if !output.warnings.trim().is_empty() {
+                            egui::CollapsingHeader::new("LaTeXdiff messages").show(ui, |ui| {
+                                ui.label(&output.warnings);
+                            });
+                        }
+                    }
+                });
+        },
+    );
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("latexdiff-actions")
+            .max_rect(footer),
+        |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(footer));
+            ui.separator();
+            ui.allocate_ui_with_layout(
+                Vec2::new(ui.available_width(), ui.spacing().interact_size.y),
+                Layout::right_to_left(Align::Center).with_main_wrap(true),
+                |ui| {
+                    let ready = dialog.output.is_some();
+                    let save = if ready {
+                        egui::Button::new(RichText::new("Save and open…").strong())
+                            .fill(ui.visuals().selection.bg_fill)
+                    } else {
+                        egui::Button::new("Save and open…")
+                    };
+                    if ui.add_enabled(!busy && ready, save).clicked() {
+                        action = Some(Action::Save);
+                    }
+                    let generate = if ready {
+                        egui::Button::new("Generate diff")
+                    } else {
+                        egui::Button::new(RichText::new("Generate diff").strong())
+                            .fill(ui.visuals().selection.bg_fill)
+                    };
+                    if ui.add_enabled(!busy, generate).clicked() {
+                        action = Some(Action::Generate);
+                    }
+                    if ui
+                        .add_enabled(!busy && ready, egui::Button::new("Copy source"))
+                        .clicked()
+                    {
+                        action = Some(Action::Copy);
+                    }
+                    if busy {
+                        ui.spinner();
+                    }
+                },
+            );
+        },
+    );
+    ui.advance_cursor_after_rect(bounds);
     action
+}
+
+fn text_width(ui: &egui::Ui, text: &str) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            text.into(),
+            egui::TextStyle::Body.resolve(ui.style()),
+            ui.visuals().text_color(),
+        )
+        .size()
+        .x
+}
+
+fn footer_height(ui: &egui::Ui, busy: bool) -> f32 {
+    let button_sizes = ["Save and open…", "Generate diff", "Copy source"].map(|label| {
+        egui::WidgetText::from(RichText::new(label).strong())
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            )
+            .size()
+            + ui.spacing().button_padding * 2.0
+            + Vec2::splat(ui.visuals().widgets.inactive.bg_stroke.width * 2.0)
+    });
+    let widths = [
+        button_sizes[0].x,
+        button_sizes[1].x,
+        button_sizes[2].x,
+        ui.spacing().interact_size.y,
+    ];
+    let rows = wrapped_rows(
+        ui.available_width(),
+        &widths[..if busy { 4 } else { 3 }],
+        ui.spacing().item_spacing.x,
+    );
+    let button_height = button_sizes
+        .iter()
+        .map(|size| size.y)
+        .fold(ui.spacing().interact_size.y, f32::max);
+    rows as f32 * (button_height + ui.spacing().item_spacing.y) + 8.0
+}
+
+fn wrapped_rows(width: f32, items: &[f32], gap: f32) -> usize {
+    let mut rows = 1;
+    let mut used = 0.0;
+    for &item in items {
+        if used > 0.0 && used + gap + item > width {
+            rows += 1;
+            used = item;
+        } else {
+            used += if used == 0.0 { item } else { gap + item };
+        }
+    }
+    rows
 }
 
 pub(super) fn preferences(ui: &mut egui::Ui, settings: &mut diff::Settings) -> bool {
@@ -400,17 +565,25 @@ pub(super) fn preferences(ui: &mut egui::Ui, settings: &mut diff::Settings) -> b
         changed |= ui.checkbox(&mut settings.flatten, "Include subfiles").on_hover_text("Expand \\input and \\include before comparing (--flatten). Both projects' included files must be available.").changed();
     });
     egui::CollapsingHeader::new("LaTeXdiff options").show(ui, |ui| {
-        for (name, value, example) in [
-            ("Executable", &mut settings.executable, "Blank finds latexdiff in PATH or MacTeX; otherwise enter its full path."),
-            ("Arguments", &mut settings.command.arguments, "Example: --math-markup=1. Mark whole equations rather than individual mathematical terms. Input paths, style and include expansion are supplied by the app."),
-            ("Environment", &mut settings.command.environment, "Example: {\"LC_ALL\":\"C\"}. Use a predictable process locale. Enter a JSON object of strings."),
-            ("Working directory", &mut settings.command.directory, "Example: /Users/me/paper. Blank uses the newer file's directory."),
-        ] {
-            let label = preference_help(ui.label(name), example);
-            let field = preference_help(ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY)), example);
-            let field = field.labelled_by(label.id);
-            changed |= field.changed();
-        }
+        let label_width = text_width(ui, "Working directory");
+        let field_width = (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(1.0);
+        egui::Grid::new("latexdiff-command-options")
+            .num_columns(2)
+            .min_col_width(0.0)
+            .show(ui, |ui| {
+                for (name, value, example) in [
+                    ("Executable", &mut settings.executable, "Blank finds latexdiff in PATH or MacTeX; otherwise enter its full path."),
+                    ("Arguments", &mut settings.command.arguments, "Example: --math-markup=1. Mark whole equations rather than individual mathematical terms. Input paths, style and include expansion are supplied by the app."),
+                    ("Environment", &mut settings.command.environment, "Example: {\"LC_ALL\":\"C\"}. Use a predictable process locale. Enter a JSON object of strings."),
+                    ("Working directory", &mut settings.command.directory, "Example: /Users/me/paper. Blank uses the newer file's directory."),
+                ] {
+                    let label = preference_help(ui.label(name), example);
+                    let field = preference_help(ui.add_sized([field_width, ui.spacing().interact_size.y], egui::TextEdit::singleline(value).desired_width(field_width)), example)
+                        .labelled_by(label.id);
+                    changed |= field.changed();
+                    ui.end_row();
+                }
+            });
         super::settings_controls::documentation_link(ui, "LaTeXdiff documentation", diff::DOCS);
         if ui.button("Reset LaTeXdiff options").clicked() { *settings = diff::Settings::default(); changed = true; }
         if let Err(error) = settings.validate() { ui.colored_label(ui.visuals().error_fg_color, error); }
@@ -687,6 +860,103 @@ mod tests {
         }
     }
     #[test]
+    fn paths_and_expanded_command_fields_fill_finite_columns_in_the_real_card() {
+        assert_eq!(card_height(600.0), 260.0);
+        for (width, path_minimum, options_minimum) in [(320.0, 120.0, 140.0), (660.0, 440.0, 460.0)]
+        {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 500.0))
+                .build_ui_state(
+                    |ui, dialog| {
+                        ui.set_height(card_height(500.0));
+                        let _ = show(ui, dialog);
+                    },
+                    fixture(),
+                );
+            harness.run();
+            for label in ["Older file", "Newer file"] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.width() >= path_minimum,
+                    "{width}px / {label}: {rect:?}"
+                );
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width,
+                    "{label}: {rect:?}"
+                );
+            }
+            let footer = harness.get_by_label("Generate diff").rect();
+            assert!(footer.bottom() <= 268.0, "{footer:?}");
+            harness.get_by_label("LaTeXdiff options").click();
+            harness.run();
+            for label in [
+                "Executable",
+                "Arguments",
+                "Environment",
+                "Working directory",
+            ] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.width() >= options_minimum,
+                    "{width}px / {label}: {rect:?}"
+                );
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width,
+                    "{label}: {rect:?}"
+                );
+            }
+            assert_eq!(
+                harness.get_by_label("Generate diff").rect(),
+                footer,
+                "expanded options must scroll above a stationary footer"
+            );
+        }
+    }
+
+    #[test]
+    fn footer_reserves_every_wrapped_row_including_busy_spinner() {
+        assert_eq!(wrapped_rows(166.0, &[80.0, 80.0], 6.0), 1);
+        assert_eq!(wrapped_rows(165.0, &[80.0, 80.0], 6.0), 2);
+        assert_eq!(wrapped_rows(100.0, &[80.0, 80.0, 80.0], 6.0), 3);
+        assert_eq!(wrapped_rows(240.0, &[70.0, 70.0, 70.0], 6.0), 1);
+        assert_eq!(wrapped_rows(240.0, &[70.0, 70.0, 70.0, 20.0], 6.0), 2);
+    }
+
+    #[test]
+    fn expanded_options_and_long_errors_cannot_scroll_actions_out_of_view() {
+        for width in [320.0, 660.0] {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 320.0))
+                .build_ui_state(
+                    |ui, dialog| {
+                        let _ = show(ui, dialog);
+                    },
+                    fixture(),
+                );
+            harness.run();
+            let before = harness.get_by_label("Generate diff").rect();
+            harness.get_by_label("LaTeXdiff options").click();
+            harness.state_mut().error = Some("Could not generate this comparison. ".repeat(200));
+            harness.run();
+            assert_eq!(harness.get_by_label("Generate diff").rect(), before);
+            for label in ["Generate diff", "Save and open…", "Copy source"] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width,
+                    "{label}: {rect:?}"
+                );
+                assert!(
+                    rect.bottom() <= 320.0 && rect.top() >= 240.0,
+                    "{label}: {rect:?}"
+                );
+            }
+        }
+        for height in [100.0, 320.0, 600.0] {
+            assert!(card_height(height) + 32.0 <= height);
+        }
+    }
+
+    #[test]
     fn a_custom_shortcut_opens_the_modal_from_the_editor() {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -808,6 +1078,7 @@ mod tests {
                             .show(ui.ctx(), |ui| {
                                 theme::dialog_card_frame(ui.style()).show(ui, |ui| {
                                     ui.set_width(660.0);
+                                    ui.set_height(card_height(600.0));
                                     let _ = show(ui, &mut dialog);
                                 });
                             });
