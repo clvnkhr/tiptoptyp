@@ -399,7 +399,7 @@ impl EditorApp {
         }
     }
 
-    fn main_preview_controls_target(&self) -> Option<Target> {
+    pub(super) fn main_preview_controls_target(&self) -> Option<Target> {
         if self.tabs.is_empty() || self.bottom_panel.is_maximized() {
             return None;
         }
@@ -761,6 +761,10 @@ impl EditorApp {
                         Target::Asset(_) => self.show_asset_view(ui),
                     });
                 self.show_preview_controls(ui.ctx(), true);
+                if matches!(self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if window == ui.ctx().viewport_id())
+                {
+                    self.show_app_popup_window(ui.ctx());
+                }
             },
         );
         if close {
@@ -788,7 +792,7 @@ impl EditorApp {
         self.preview_control_action_for(self.preview_controls.target, action);
     }
 
-    fn preview_control_action_for(&mut self, target: Target, action: Action) {
+    pub(super) fn preview_control_action_for(&mut self, target: Target, action: Action) {
         if !self.valid_preview_target(target) {
             return;
         }
