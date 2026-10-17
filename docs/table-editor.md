@@ -112,8 +112,19 @@ grid. The compiler samples named macros in supported grid cells with the
 original package and imported-preamble context.
 
 The checked-in [package fixture](../tests/fixtures/tex-table-packages.tex)
-covers 12 formats, including real macro sampling in numeric columns. Package
-syntax follows the maintainers' references for
+covers 12 formats, including real macro sampling in numeric columns. Three
+[arXiv fixtures](../tests/fixtures/arxiv-tables/provenance.json) also retain
+complete original table environments with versioned attribution and checksums:
+[SciPy's roadmap](../tests/fixtures/arxiv-tables/scipy-roadmap.tex) and
+[optimizer comparison](../tests/fixtures/arxiv-tables/scipy-optimizers.tex) open
+as grids; the [Platonic metric comparison](../tests/fixtures/arxiv-tables/platonic-metrics.tex)
+uses Source to preserve its merged cells. All three are standalone documents.
+Grid Apply preserves the author's spacing, comments and rules; omitted trailing
+empty cells remain omitted unless edited. Fixture regressions cover detection,
+no-op Apply, exact edits, cancellation and Undo. The `arxiv_tables` native
+journey exercises the same edits through the real workbench.
+
+Package syntax follows the maintainers' references for
 [tabularray](https://ctan.org/pkg/tabularray),
 [tabulary](https://ctan.org/pkg/tabulary),
 [xltabular](https://ctan.org/pkg/xltabular),

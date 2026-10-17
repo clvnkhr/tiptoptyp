@@ -1,10 +1,37 @@
 """Real input regressions for focus, preview controls and table draft lifetimes."""
 
+import json
 import math
+from pathlib import Path
 import shlex
 import time
 
-NEWEST_JOURNEYS = ("problems_focus", "preview_find", "tables")
+NEWEST_JOURNEYS = ("problems_focus", "preview_find", "tables", "arxiv_tables")
+
+
+def arxiv_table_cases():
+    """Use the attributed excerpts unchanged; keep native edit expectations literal."""
+    directory = Path(__file__).resolve().parents[1] / "tests/fixtures/arxiv-tables"
+    cells = {"scipy-roadmap.tex": (1, 1), "scipy-optimizers.tex": (1, 0),
+             "platonic-metrics.tex": None}
+    metadata = json.loads((directory / "provenance.json").read_text())
+    if len(metadata) != len(cells) or {entry["file"] for entry in metadata} != set(cells):
+        raise AssertionError("native arXiv table fixture inventory changed")
+    cases = []
+    for entry in metadata:
+        source = (directory / entry["file"]).read_bytes().decode("utf-8")
+        opening, closing = r"\begin{tabular}", r"\end{tabular}"
+        if source.count(opening) != 1 or source.count(closing) != 1:
+            raise AssertionError("native arXiv excerpt needs one complete table: " + entry["file"])
+        start, end = source.index(opening), source.index(closing) + len(closing)
+        environment = source[start:end]
+        before, after = entry["edit_before"], entry["edit_after"]
+        if not before or before == after or source.count(before) != 1 or environment.count(before) != 1:
+            raise AssertionError("native arXiv edit must name one literal inside its table: " + entry["file"])
+        cases.append({"file": entry["file"], "source": source, "table": environment,
+                      "line": source[:start].count("\n") + 1, "cell": cells[entry["file"]],
+                      "edit_before": before, "edit_after": after})
+    return cases
 
 
 def assert_preview_drag_position(document, baseline, delta, tolerance=3):
@@ -45,8 +72,8 @@ def table_parent_sizes(windows):
             if window.get("AXTitle") and window["AXTitle"] != TABLE_WINDOW_TITLE}
 
 
-def table_grid_geometry(state, baseline_footer=None):
-    """Require a real scrollable grid and current, stationary child footer."""
+def table_grid_geometry(state, baseline_footer=None, *, require_overflow=True):
+    """Require a current child grid/footer, optionally with the compact stress overflow."""
     document = state["document"]
     scroll = state.get("scrolls", {}).get("table.grid")
     targets = state.get("targets", {})
@@ -64,8 +91,8 @@ def table_grid_geometry(state, baseline_footer=None):
             raise AssertionError("table footer geometry is invalid")
     if any(type(scroll.get(key)) not in (int, float) or not math.isfinite(scroll[key])
            for key in ("x", "y", "offset", "content_height", "viewport_height")) \
-            or scroll["offset"] < 0 or scroll["viewport_height"] <= 0 \
-            or scroll["content_height"] <= scroll["viewport_height"] + 100:
+            or scroll["offset"] < 0 or scroll["viewport_height"] <= 0 or scroll["content_height"] <= 0 \
+            or (require_overflow and scroll["content_height"] <= scroll["viewport_height"] + 100):
         raise AssertionError("table fixture did not expose its scrollable grid")
     scale = document.get("interface_scale")
     if type(scale) not in (int, float) or not math.isfinite(scale) or scale <= 0:
@@ -383,6 +410,64 @@ class NewestJourneys:
         self.native("ax-press-title", "Open")
         self.wait("private TeX table opens", lambda d: d["path"] == str(path), timeout=15)
 
+    def arxiv_tables(self):
+        from desktop_ui_journeys import fingerprint
+        self.focus_document_window()
+        view_mode = self.snapshot()["document"]["view_mode"]
+        self.key(19)
+        if self.snapshot()["document"]["find_visible"]:
+            self.click("find.close")
+        if self.snapshot()["document"]["preview_controls_open"]:
+            self.click("preview.Minimize controls")
+        for case in arxiv_table_cases():
+            path = self.directory / ("arxiv-" + case["file"])
+            original = case["source"]
+            path.write_bytes(original.encode("utf-8"))
+            count = self.snapshot()["document"]["tabs"]
+            self.open_table_fixture(path)
+            self.source_is(original)
+            for disposition in ("cancel", "apply"):
+                old = self.open_table_workbench(line=case["line"])
+                if case["cell"] is None:
+                    self.table_target("table.source", previous_frame=old.get("table.source"))
+                    self.wait_table_source_draft(case["table"], True)
+                    self.click("table.source")
+                    self.key(0)
+                    edited_table = case["table"].replace(case["edit_before"], case["edit_after"], 1)
+                    self.paste_source(edited_table,
+                                      check=lambda: self.wait_table_source_draft(edited_table, True))
+                else:
+                    # Grid scrolling belongs to the child and may survive reopening.
+                    self.table_target("table.apply", previous_frame=old.get("table.apply"))
+                    self.scroll_table_grid_to_top("arxiv:" + case["file"], disposition,
+                                                  require_overflow=False)
+                    row, column = case["cell"]
+                    target = f"table.cell.{row}.{column}"
+                    self.table_target(target, previous_frame=old.get(target))
+                    self.click(target)
+                    self.key(0)
+                    self.native("text", case["edit_after"])
+                self.source_is(original)
+                self.stable_state(lambda d: d["source_fingerprint"] == fingerprint(original), frames=3)
+                self.table_target("table.apply")
+                if self.capture_review:
+                    self.capture_viewport("table-editor")
+                self.click("table." + disposition)
+                self.wait("arXiv table draft closes once", lambda d: not d["table_editor_open"])
+                expected = (original if disposition == "cancel" else
+                            original.replace(case["edit_before"], case["edit_after"], 1))
+                self.source_is(expected)
+                if disposition == "apply":
+                    self.click("editor.source")
+                    self.key(6)
+                    self.source_is(original)
+                self.record("table.arxiv", fixture=case["file"], disposition=disposition,
+                            mode="source" if case["cell"] is None else "grid",
+                            source_fingerprint=fingerprint(original), exact_undo=disposition == "apply")
+            self.close_scratch(count)
+        self.key({"Code": 19, "Split": 20, "Preview": 21}[view_mode])
+        self.wait("arXiv table journey restores its original layout", lambda d: d["view_mode"] == view_mode)
+
     def tables(self):
         from desktop_ui_journeys import fingerprint
         self.focus_document_window()
@@ -508,8 +593,7 @@ class NewestJourneys:
         self.key(0)
         self.native("text", "Changed")
         unchanged(tex)
-        rendered = r"\begin{tabular}[t]{lc}Changed & Beta\\[2pt]Gamma & Delta\\\end{tabular}"
-        applied = tex.replace(environment, rendered)
+        applied = tex.replace("Alpha", "Changed", 1)
         close_draft("apply", applied)
         self.key(6)
         self.source_is(tex)
@@ -639,15 +723,15 @@ class NewestJourneys:
         self.key(20)
         self.wait("table journey restores the split editor", lambda d: d["view_mode"] == "Split")
 
-    def scroll_table_grid_to_top(self, language, disposition):
-        scroll, footer = table_grid_geometry(self.snapshot())
+    def scroll_table_grid_to_top(self, language, disposition, *, require_overflow=True):
+        scroll, footer = table_grid_geometry(self.snapshot(), require_overflow=require_overflow)
         before = scroll["offset"]
         if before > 1:
             self.native("move", scroll["x"], scroll["y"])
             self.native("wheel", scroll["x"], scroll["y"], 20)
         deadline, stable_samples = time.monotonic() + 4, 0
         while time.monotonic() < deadline:
-            scroll, _ = table_grid_geometry(self.snapshot(), footer)
+            scroll, _ = table_grid_geometry(self.snapshot(), footer, require_overflow=require_overflow)
             stable_samples = stable_samples + 1 if scroll["offset"] <= 1 else 0
             if stable_samples >= 3:
                 self.record("table.scroll_top", language=language, disposition=disposition,
@@ -683,10 +767,6 @@ class NewestJourneys:
             self.open_table_fixture(path)
             line = 2
         applied = source.replace(long_text, edited_long).replace("Neighbour", "Edited neighbour")
-        if language == "tex":
-            # The existing grid serializer canonicalizes the first row's
-            # leading newline; Cancel and Undo still preserve the original.
-            applied = applied.replace("\\begin{tabular}{lll}\n", "\\begin{tabular}{lll}", 1)
         for action in ("cancel", "apply"):
             self.open_table_workbench(line=line)
             windows = self.native_wait("the native Table editor owns focus before resizing", lambda ws:

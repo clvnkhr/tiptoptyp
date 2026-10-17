@@ -1,0 +1,47 @@
+% SciPy 1.0--Fundamental Algorithms for Scientific Computing in Python
+% Pauli Virtanen et al. and the SciPy 1.0 Contributors
+% Source: https://arxiv.org/abs/1907.10121v1; scipy-optimize.tex
+% License: CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+% Original tabular environment retained byte-for-byte; standalone preamble added.
+\documentclass{article}
+\usepackage[a3paper,landscape,margin=15mm]{geometry}
+\usepackage{amsmath,graphicx,makecell,pifont}
+\usepackage[super]{nth}
+\newcommand{\cmark}{\ding{51}}
+\begin{document}
+\begin{tabular}{cccccccccccccc}
+      & \rotatebox{80}{\texttt{Nelder-Mead}} & \rotatebox{80}{\texttt{Powell}} & \rotatebox{80}{\texttt{COBYLA}} & \rotatebox{80}{\texttt{CG}} & \rotatebox{80}{\texttt{BFGS}}&  \rotatebox{80}{\texttt{L-BFGS-B}} & \rotatebox{80}{\texttt{SLSQP}} & \rotatebox{80}{\texttt{TNC}} & \rotatebox{80}{\texttt{Newton-CG}} & \rotatebox{80}{\texttt{dogleg}} & \rotatebox{80}{\texttt{trust-ncg}} & \rotatebox{80}{\texttt{trust-exact}} & \rotatebox{80}{\texttt{trust-krylov}} \\
+    \hline
+    Version added &  0.6* &  0.6* &  0.6* &  0.6* &  0.6* &  0.6* &  0.9 &  0.6* &  0.6* & 0.13 & 0.13 & 0.19 & 1.0 \\
+    \hline
+    Wrapper & & & \cmark & & & \cmark & \cmark & \cmark & &  & & & \cmark \\
+    \hline
+    \nth{1} derivatives &  & & & \cmark  & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark \\
+    \hline
+    \nth{2} derivatives &  &  &  &  & $\sim$ & $\sim$ & $\sim$ & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark \\
+    \hline
+    \makecell{Iterative Hessian \\
+    factorization} & & & &  & & & & \cmark & \cmark &  & \cmark &  & \cmark \\
+    \hline
+    Local convergence& & & & L & S &  L & S & S$^*$ & S$^*$ & Q & S$^*$ & Q & S$^*$  \\
+    \hline
+    Global convergence & & &  &   & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark & \cmark  \\
+    \hline
+    \makecell{Line-search (LS) or\\ trust-region (TR)} & Neither  & LS &  TR & LS & LS & LS & LS & LS & LS & TR & TR & TR & TR \\
+    \hline
+    Bound constraints &&&\cmark&&&&\cmark&\cmark&\cmark&&&& \\
+    \hline
+    Equality constraints &&&&&&&\cmark&&&&& \\
+    \hline
+    Inequality constraint &&&\cmark&&&&\cmark&&&&& \\
+    \hline
+    References & \cite{nelder_simplex_1965, wright_direct_1996} & \cite{powell_efficient_1964} &
+      \cite{powell_direct_1994, powell_direct_1998, powell_view_2007} &
+      \cite{polak_note_1969, nocedal_numerical_2006} & \cite{nocedal_numerical_2006} & \cite{byrd_limited_1995, zhu_algorithm_1997} &
+      \cite{schittkowski_nonlinear_1982, schittkowski_nonlinear_1982-1, schittkowski_convergence_1983, kraft_software_1988} &
+      \cite{nash_newton-type_1984} & \cite{nocedal_numerical_2006}  & 
+      \cite{powell_new_1970, nocedal_numerical_2006} &  \cite{steihaug_conjugate_1983, nocedal_numerical_2006} &
+      \cite{conn_trust_2000, more_computing_1983} & \cite{gould_solving_1999, doi:10.1080/10556788.2018.1449842} \\
+    \hline
+  \end{tabular}
+\end{document}

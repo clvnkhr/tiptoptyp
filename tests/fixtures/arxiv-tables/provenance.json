@@ -1,0 +1,65 @@
+[
+  {
+    "file": "scipy-roadmap.tex",
+    "description": "Roadmap of subpackages",
+    "title": "SciPy 1.0--Fundamental Algorithms for Scientific Computing in Python",
+    "authors": "Pauli Virtanen et al. and the SciPy 1.0 Contributors",
+    "arxiv": "1907.10121v1",
+    "article_url": "https://arxiv.org/abs/1907.10121v1",
+    "source_url": "https://arxiv.org/src/1907.10121v1",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "archive_sha256": "f7a0d00b4116cb42dc84f8c8b13f1b3772bbbc8002de2d918eb399553983d2ee",
+    "archive_member": "paper.tex",
+    "original_lines": [
+      1066,
+      1085
+    ],
+    "table_sha256": "fa3a0aab5204aed36a2385bad0fe87955bc294a173f7f35420017827dd4fcf21",
+    "adaptations": "Only attribution, a standalone article preamble, dependencies, and document delimiters were added. The complete tabular environment is unchanged. Bibliography and appendix references remain unresolved in this isolated excerpt.",
+    "edit_before": "a few more high quality global optimizers",
+    "edit_after": "additional global optimizers"
+  },
+  {
+    "file": "scipy-optimizers.tex",
+    "description": "Optimization algorithm comparison",
+    "title": "SciPy 1.0--Fundamental Algorithms for Scientific Computing in Python",
+    "authors": "Pauli Virtanen et al. and the SciPy 1.0 Contributors",
+    "arxiv": "1907.10121v1",
+    "article_url": "https://arxiv.org/abs/1907.10121v1",
+    "source_url": "https://arxiv.org/src/1907.10121v1",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "archive_sha256": "f7a0d00b4116cb42dc84f8c8b13f1b3772bbbc8002de2d918eb399553983d2ee",
+    "archive_member": "scipy-optimize.tex",
+    "original_lines": [
+      47,
+      81
+    ],
+    "table_sha256": "cfb4f1ac438df3ad168df606939946ee5bd519a46d923389258d382521da4efe",
+    "adaptations": "Only attribution, a standalone article preamble, dependencies, and document delimiters were added. The complete tabular environment is unchanged. Bibliography and appendix references remain unresolved in this isolated excerpt.",
+    "edit_before": "Version added",
+    "edit_after": "Version introduced"
+  },
+  {
+    "file": "platonic-metrics.tex",
+    "description": "Similarity metric properties",
+    "title": "The Platonic Representation Hypothesis",
+    "authors": "Minyoung Huh, Brian Cheung, Tongzhou Wang, Phillip Isola",
+    "arxiv": "2405.07987v5",
+    "article_url": "https://arxiv.org/abs/2405.07987v5",
+    "source_url": "https://arxiv.org/src/2405.07987v5",
+    "license": "CC-BY-4.0",
+    "license_url": "https://creativecommons.org/licenses/by/4.0/",
+    "archive_sha256": "f5b6414edc04aa2a39770017bdfe7533a2acbf65f0afef3ba1da220f26b66a28",
+    "archive_member": "appendix.tex",
+    "original_lines": [
+      104,
+      166
+    ],
+    "table_sha256": "5133c1af5b411b981146c12e5c68f6037b7facbdf5da6ee903b83ff6045185b3",
+    "adaptations": "Only attribution, a standalone article preamble, dependencies, and document delimiters were added. The complete tabular environment is unchanged. Bibliography and appendix references remain unresolved in this isolated excerpt.",
+    "edit_before": "Unbiased estimator of CKA",
+    "edit_after": "Bias-corrected estimator of CKA"
+  }
+]

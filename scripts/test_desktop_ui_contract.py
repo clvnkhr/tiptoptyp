@@ -1423,6 +1423,33 @@ class MathConversionPreparationContract(unittest.TestCase):
         self.assertEqual(actions, ["settings.editor.math_format"])
 
 
+class ArxivTableFixtureContract(unittest.TestCase):
+    def test_real_attributed_excerpts_and_unique_edits_match_the_native_modes(self):
+        import hashlib
+        import json
+        from desktop_ui_newest_journeys import arxiv_table_cases
+        directory = Path(__file__).resolve().parents[1] / "tests/fixtures/arxiv-tables"
+        metadata = {entry["file"]: entry for entry in json.loads((directory / "provenance.json").read_text())}
+        cases = arxiv_table_cases()
+        self.assertEqual([(case["file"], case["cell"]) for case in cases], [
+            ("scipy-roadmap.tex", (1, 1)), ("scipy-optimizers.tex", (1, 0)),
+            ("platonic-metrics.tex", None)])
+        for case in cases:
+            with self.subTest(fixture=case["file"]):
+                self.assertEqual(case["source"].encode("utf-8"), (directory / case["file"]).read_bytes())
+                self.assertEqual(hashlib.sha256(case["table"].encode("utf-8")).hexdigest(),
+                                 metadata[case["file"]]["table_sha256"])
+                self.assertIn(r"\begin{tabular}", case["source"].splitlines()[case["line"] - 1])
+                changed = case["source"].replace(case["edit_before"], case["edit_after"], 1)
+                self.assertNotEqual(changed, case["source"])
+                self.assertEqual(changed.replace(case["edit_after"], case["edit_before"], 1), case["source"])
+
+    def test_registered_lane_runs_without_the_full_synthetic_table_suite(self):
+        from desktop_ui_newest_journeys import NEWEST_JOURNEYS, NewestJourneys
+        self.assertIn("arxiv_tables", NEWEST_JOURNEYS)
+        self.assertTrue(callable(NewestJourneys.arxiv_tables))
+
+
 class TableJourneyRecordingContract(unittest.TestCase):
     def test_record_details_cannot_collide_with_the_event_action_argument(self):
         import ast
@@ -1513,6 +1540,17 @@ class CompactTableGeometryContract(unittest.TestCase):
         self.assertEqual(records[0][1]["before"], 320)
         self.assertEqual(records[0][1]["after"], 0)
         self.assertEqual(records[0][1]["stable_samples"], 3)
+
+    def test_small_real_tables_keep_geometry_checks_without_requiring_stress_overflow(self):
+        from desktop_ui_newest_journeys import table_grid_geometry
+        state = self.state()
+        state["scrolls"]["table.grid"]["content_height"] = 280
+        with self.assertRaises(AssertionError):
+            table_grid_geometry(state)
+        self.assertEqual(table_grid_geometry(state, require_overflow=False)[0]["offset"], 0)
+        state["targets"]["table.cancel"]["frame"] = 9
+        with self.assertRaises(AssertionError):
+            table_grid_geometry(state, require_overflow=False)
 
     def test_scroll_offset_may_change_but_the_child_footer_must_stay_fixed(self):
         from desktop_ui_newest_journeys import table_grid_geometry, assert_compact_table_rows

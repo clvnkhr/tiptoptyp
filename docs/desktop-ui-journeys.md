@@ -20,6 +20,7 @@ python3 scripts/test-desktop-ui.py --journey panels
 python3 scripts/test-desktop-ui.py --journey problems_focus
 python3 scripts/test-desktop-ui.py --journey preview_find
 python3 scripts/test-desktop-ui.py --journey tables
+python3 scripts/test-desktop-ui.py --journey arxiv_tables
 python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey command_palette --capture-review
 python3 scripts/test-desktop-ui.py --journey preview_jump --capture-review
@@ -114,6 +115,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | problems_focus | Both effective preview backends hand keyboard ownership to Problems; blank-area/header clicks retain it, typing/paste/undo/comment shortcuts cannot change the source or invert preview pages, Cmd+F opens neither source nor preview Find, and closing/switching panels releases focus so source typing resumes; preview → Terminal shortcut releases native preview ownership, a physical t does not invert pages, and shell typing writes a private receipt without clicking the terminal grid |
 | preview_find | Both effective backends: preview Cmd+F opens and focuses the query without another click, subsequent Cmd+F and typing stay in that field, the source and preview palette stay unchanged; header dragging follows the full pointer displacement and holds a stationary pointer for at least 0.4 seconds and eight fresh frames without drift; a popped-out viewer also opens its hidden controls with Cmd+F |
 | tables | Real Typst and named TeX workbenches: cell Cmd+A/typing changes only the draft, Cancel preserves source, Apply updates once with original column widths/rules or TeX placement/row height, and Undo/Redo restores exact source; computed Typst tables open in source mode, invalid drafts disable Apply, and an invalid TeX grid cell can be repaired in Source. Both languages also exercise a compact minimum-size 36-row grid with long keyboard-edited cell text, real wheel scrolling and fixed Apply/Cancel footer; Typst verifies Tab moves to the next cell. Optional fresh table framebuffer for separate visual inspection |
+| arxiv_tables | Opens private copies of three attributed arXiv TeX excerpts through native Open and detects each table with the source context menu. Edits literal cells in both SciPy tables and uses the automatic Source fallback for the Platonic metric table. Cancel preserves the complete original; Apply changes only the chosen literal, including all surrounding whitespace, rules, macros and preamble, and one Undo restores the exact file. Optional fresh table framebuffers for separate visual inspection |
 | preview_jump | Right-click source → Reveal in Preview and preview → Reveal in Source in TeX/PDFium and both Tinymist modes, including a detached Tinymist preview; original clicked positions survive moving to the menu, right-click alone does not navigate, source focus returns after inverse navigation, a visible destination pulse is centered on the mapped page/caret and retires without reappearing; native Settings edits apply a 1500ms/150% effect, source and preview Off controls independently suppress only their cue while navigation/focus still work, both settings restore afterwards, and source files stay unchanged |
 | command_palette | Cmd+Shift+P focuses palette search; an unmatched query cannot execute, mixed/lowercase queries return identical actions, Up/Down select exactly one enabled row, Enter and a row click each toggle wrapping once, and Escape/outside clicks preserve source and pending commands. A private real terminal retains keyboard ownership through cancellation and command execution, Comfy Preview toggles exactly once from that terminal, and palette Find targets its query instead of source Find. Native Settings ignores the document palette shortcut. The standalone journey also closes the final clean tab, creates exactly one empty document through palette New, then reopens the unchanged launch fixture; aggregate runs preserve existing tabs. Optional fresh popup framebuffer for separate visual inspection |
 | terminal_find | Focused terminal Cmd+F searches a real isolated shell, including three case-insensitive matches separated by hundreds of scrolled-off lines; Cmd+G/Shift+Cmd+G and Enter/Shift+Enter step exactly once and wrap, button navigation reveals the match; Cmd+A changes only the query; grid Escape leaves search open, grid Cmd+F refocuses it, focused Cmd+F/Escape and one close click hide it; queries and matches stay separate between two shell panes; source stays unchanged |
@@ -335,6 +337,17 @@ The `tables` journey additionally checks real Typst variable/spread samples and
 TeX macro samples, attempts to type into their read-only cells, edits a literal
 neighbour, and verifies that Apply preserves the original variable expressions.
 Sample fingerprints come from the actual configured compiler result.
+
+The separate `arxiv_tables` journey uses the unchanged table environments and
+attribution in `tests/fixtures/arxiv-tables/provenance.json`. It opens only copies
+inside the private journey directory. The SciPy roadmap and optimizer comparison
+exercise grid editing around real rules, macro cells, wrapped lines and omitted
+trailing cells; the Platonic metrics excerpt exercises automatic Source fallback
+for spans and row formatting. Each draft is cancelled once, then applied and
+undone. Exact full-file fingerprints prove that an edit changes only the chosen
+literal and preserves the rest of the excerpt. The fixture contracts also verify
+the attributed table hashes. This lane can run without the larger synthetic
+`tables` journey and does not require resolved bibliography or appendix references.
 
 The compact-grid cases first require the native Table editor to own focus,
 resize it to its 620×420-point minimum, and observe three stable native size

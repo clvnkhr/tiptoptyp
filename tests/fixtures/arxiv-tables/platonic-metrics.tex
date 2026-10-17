@@ -1,0 +1,77 @@
+% The Platonic Representation Hypothesis
+% Minyoung Huh, Brian Cheung, Tongzhou Wang, Phillip Isola
+% Source: https://arxiv.org/abs/2405.07987v5; appendix.tex
+% License: CC BY 4.0, https://creativecommons.org/licenses/by/4.0/
+% Original tabular environment retained byte-for-byte; standalone preamble added.
+\documentclass{article}
+\usepackage[a3paper,landscape,margin=15mm]{geometry}
+\usepackage[table]{xcolor}
+\usepackage{amsmath,amssymb,booktabs,multirow,makecell,natbib,pifont}
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\app}[1]{Appendix~\ref{#1}}
+\definecolor{lightgray}{gray}{0.9}
+\begin{document}
+\begin{tabular}{rccccp{8.2cm}} 
+    \toprule
+    \multirow{2}{*}{\textbf{Metric}} & \multicolumn{4}{c}{\textbf{Property}} & \thead{\multirow{2}{*}{\textbf{Description}}} \\
+    \cmidrule(lr){2-6}
+    & \small symmetric & \small global & \small ordinal & \small batchable & \\
+    \midrule
+    \rowcolor{lightgray}
+    \multirow{3}{*}[-0.5em]{CKA} & 
+    \multirow{3}{*}[-0.5em]{\cmark} & 
+    \multirow{3}{*}[-0.5em]{\cmark} & 
+    \multirow{3}{*}[-0.5em]{\cmark} & 
+    \multirow{3}{*}[-0.5em]{\cmark} & 
+    {\vspace{-0.5em}Centered Kernel Alignment~(CKA; \citet{kornblith2019similarity}) measures the similarity of neural networks by comparing the alignment of their kernel induced by their feature spaces.} \\[3.1em]
+    \multirow{2}{*}[-0.5em]{Unbiased CKA} & 
+    \multirow{2}{*}[-0.5em]{\cmark} & 
+    \multirow{2}{*}[-0.5em]{\cmark} & 
+    \multirow{2}{*}[-0.5em]{\cmark} & 
+    \multirow{2}{*}[-0.5em]{\cmark} & 
+    {\vspace{-0.5em}Unbiased estimator of CKA that corrects for sample bias in HSIC~\cite{song2012feature}.} \\[1.8em]
+    \rowcolor{lightgray}
+    \multirow{4}{*}[-0.5em]{SVCCA} & 
+    \multirow{4}{*}[-0.5em]{\cmark} & 
+    \multirow{4}{*}[-0.5em]{\cmark} & 
+    \multirow{4}{*}[-0.5em]{\cmark} & 
+    \multirow{4}{*}[-0.5em]{\cmark} & 
+    {\vspace{-0.5em}Singular Value Canonical Correlation Analysis~(SVCCA; \citet{raghu2017svcca}) compares neural networks by decomposing their activities into singular vectors and measuring correlation.} \\[4.2em]
+    % \rowcolor{lightgray}
+    \multirow{2}{*}[-0.5em]{Mutual $k$-NN} & 
+    \multirow{2}{*}[-0.5em]{\cmark} & 
+    \multirow{2}{*}[-0.5em]{ } & 
+    \multirow{2}{*}[-0.5em]{ } & 
+    \multirow{2}{*}[-0.5em]{\cmark} &
+    {\vspace{-0.5em}Measures the intersection over union (IoU) of nearest neighbors between two models.} \\[1.8em]
+    \rowcolor{lightgray}
+    \multirow{2}{*}[-0.5em]{CKNNA} &
+    \multirow{2}{*}[-0.5em]{\cmark} &
+    \multirow{2}{*}[-0.5em]{\cmark$\ast$} &
+    \multirow{2}{*}[-0.5em]{\cmark} &
+    \multirow{2}{*}[-0.5em]{\cmark} & 
+    {\vspace{-0.5em}Modified CKA measure that computes the kernel alignment only for its nearest neighbors. See~\app{sec:align-metric}.} \\[1.8em]
+    % \rowcolor{lightgray}
+    \multirow{3}{*}[-0.5em]{Cycle $k$-NN} &
+    \multirow{3}{*}[-0.5em]{ } &
+    \multirow{3}{*}[-0.5em]{ } &
+    \multirow{3}{*}[-0.5em]{ } &
+    \multirow{3}{*}[-0.5em]{\cmark} & 
+    {\vspace{-0.5em}Measures whether the nearest neighbor in one domain also considers the original sample as its nearest neighbor in the other domain.}  \\[3.1em]
+    \rowcolor{lightgray}
+    \multirow{3}{*}[-0.5em]{Edit $k$-NN} &
+    \multirow{3}{*}[-0.5em]{\cmark} &
+    \multirow{3}{*}[-0.5em]{\cmark$\ast$} &
+    \multirow{3}{*}[-0.5em]{\cmark} &
+    \multirow{3}{*}[-0.5em]{ } & 
+    {\vspace{-0.5em}Computes the edit distance required to match the nearest neighbors between two datasets. The score is normalized by the maximum edit distance.} \\[3.1em]
+    % \rowcolor{lightgray}
+    \multirow{2}{*}[-0.5em]{LCS $k$-NN} &
+    \multirow{2}{*}[-0.5em]{\cmark} &
+    \multirow{2}{*}[-0.5em]{\cmark$\ast$} &
+    \multirow{2}{*}[-0.5em]{\cmark} &
+    \multirow{2}{*}[-0.5em]{ } & 
+    {\vspace{-0.5em}Calculates the longest common subsequence of nearest neighbors and is normalized by the sequence length.} \\[1.7em]
+    \bottomrule
+\end{tabular}
+\end{document}

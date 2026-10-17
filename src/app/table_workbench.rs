@@ -959,6 +959,146 @@ mod tests {
     }
 
     #[test]
+    fn real_arxiv_complex_table_source_starts_valid() {
+        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
+        let cursor = source[..source.find("Unbiased estimator of CKA").unwrap()]
+            .chars()
+            .count();
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("platonic-metrics.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        app.begin_table_target(TableTarget::at(source, cursor, DocumentKind::Tex).unwrap());
+        let Some(TableEditorDialog::Tex(dialog)) = app.table_editor.as_ref() else {
+            panic!("expected TeX table source workbench");
+        };
+        assert!(dialog.source_mode);
+        assert!(
+            dialog.validation.is_none(),
+            "valid source fallback must be ready to apply: {:?}",
+            dialog.validation
+        );
+    }
+
+    #[test]
+    fn real_arxiv_table_workbench_preserves_exact_edits_cancel_and_undo() {
+        let provenance: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/arxiv-tables/provenance.json"
+        ))
+        .unwrap();
+        for (name, fixture, source_mode) in [
+            (
+                "scipy-roadmap.tex",
+                include_str!("../../tests/fixtures/arxiv-tables/scipy-roadmap.tex"),
+                false,
+            ),
+            (
+                "scipy-optimizers.tex",
+                include_str!("../../tests/fixtures/arxiv-tables/scipy-optimizers.tex"),
+                false,
+            ),
+            (
+                "platonic-metrics.tex",
+                include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex"),
+                true,
+            ),
+        ] {
+            let metadata = provenance
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["file"] == name)
+                .unwrap();
+            let before = metadata["edit_before"].as_str().unwrap();
+            let after = metadata["edit_after"].as_str().unwrap();
+            // A multibyte prefix catches accidental byte/character offset mixing.
+            let original = format!("% Préface α🙂\n{fixture}");
+            assert_eq!(original.matches(before).count(), 1, "{name}");
+            let cursor = original[..original.find(before).unwrap()].chars().count();
+            let target = TableTarget::at(&original, cursor, DocumentKind::Tex).unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            app.document_mut().replace_loaded_unprojected(
+                original.clone(),
+                directory.path().join(name),
+                DocumentKind::Tex,
+                None,
+            );
+            let initial_key = app.document().key();
+            let initial_history = app.document().history_availability();
+            let initial_dirty = app.is_dirty();
+            app.begin_table_target(target.clone());
+            let dialog = app.table_editor.as_ref().unwrap();
+            let TableEditorDialog::Tex(tex) = dialog else {
+                panic!("{name}: expected TeX workbench");
+            };
+            assert_eq!(tex.source_mode, source_mode, "{name}");
+            let no_op = prepare_source_edit(&original, initial_key, dialog).unwrap();
+            let mut unchanged = original.clone();
+            unchanged.replace_range(no_op.byte_range, &no_op.replacement);
+            assert_eq!(
+                unchanged, original,
+                "{name}: untouched draft must be lossless"
+            );
+            app.cancel_table_editor(&context);
+            assert!(app.table_editor.is_none());
+            assert_eq!(app.document().source(), &original, "{name}: cancel source");
+            assert_eq!(app.document().key(), initial_key, "{name}: cancel revision");
+            assert_eq!(app.document().history_availability(), initial_history);
+            assert_eq!(app.is_dirty(), initial_dirty, "{name}: cancel dirty state");
+
+            app.begin_table_target(target);
+            let mut dialog = app.table_editor.take().unwrap();
+            let TableEditorDialog::Tex(tex) = &mut dialog else {
+                unreachable!();
+            };
+            if source_mode {
+                tex.draft = tex.draft.replacen(before, after, 1);
+            } else {
+                let cell = tex
+                    .table
+                    .cells
+                    .as_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .flatten()
+                    .find(|cell| cell.contains(before))
+                    .unwrap();
+                *cell = cell.replacen(before, after, 1);
+            }
+            let mut stale = initial_key;
+            stale.revision += 1;
+            assert!(
+                prepare_source_edit(&original, stale, &dialog).is_err(),
+                "{name}"
+            );
+            let edit = prepare_source_edit(&original, initial_key, &dialog).unwrap();
+            let expected = original.replacen(before, after, 1);
+            app.document_mut()
+                .edit(CCursorRange::one(CCursor::new(cursor)), |source| {
+                    source.replace_range(edit.byte_range, &edit.replacement)
+                });
+            // Exact full-source equality also guards every preamble import and
+            // macro definition against duplication, rewriting or removal.
+            assert_eq!(app.document().source(), &expected, "{name}: one exact edit");
+            app.undo_editor(&context, false);
+            assert_eq!(app.document().source(), &original, "{name}: one exact undo");
+            assert!(
+                !app.document().history_availability().0,
+                "{name}: one edit only"
+            );
+            app.undo_editor(&context, true);
+            assert_eq!(app.document().source(), &expected, "{name}: exact redo");
+        }
+    }
+
+    #[test]
     fn tex_imports_drawn_symbols_are_atomic_and_leave_typst_untouched() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -1367,6 +1507,151 @@ mod tests {
         let mut result = original.to_owned();
         result.replace_range(edit.byte_range, &edit.replacement);
         assert_eq!(result, format!("#{complete}"));
+    }
+
+    #[test]
+    fn source_workbench_child_keyboard_pastes_real_tex_after_select_all() {
+        struct State {
+            dialog: TableEditorDialog,
+            queued: Vec<egui::Event>,
+            allow_requested_paste: bool,
+            requested_paste_admitted: bool,
+        }
+        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
+        let table = crate::editor_features::tex_table_at(
+            source,
+            source[..source.find("Unbiased estimator of CKA").unwrap()]
+                .chars()
+                .count(),
+        )
+        .unwrap();
+        let original = table.source.clone();
+        let edited = original.replacen(
+            "Unbiased estimator of CKA",
+            "Bias-corrected estimator of CKA",
+            1,
+        );
+        for (modifiers, allow_requested_paste) in [
+            (Modifiers::COMMAND, false),
+            (Modifiers::NONE, true),
+            // Without a physical chord or an explicit RequestPaste receipt,
+            // semantic clipboard input is intentionally not admitted.
+            (Modifiers::NONE, false),
+        ] {
+            let mut fonts_ready = false;
+            let settings = AppSettings::default();
+            let shortcuts = settings.effective_shortcuts();
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(700.0, 560.0))
+                .build_ui_state(
+                    move |ui, state: &mut State| {
+                        if !fonts_ready {
+                            theme::configure_test_fonts(ui.ctx());
+                            fonts_ready = true;
+                            return;
+                        }
+                        // Keep the same normalization and event lifetimes as
+                        // the native persistent table child, before its field.
+                        let physical = prepare_child_keyboard(
+                            ui,
+                            &mut state.dialog,
+                            &shortcuts,
+                            state.allow_requested_paste,
+                        );
+                        state.requested_paste_admitted |= physical.requested_paste_admitted;
+                        let _queued = crate::child_view::begin_queued_edit_events(
+                            ui.ctx(),
+                            &mut state.queued,
+                        );
+                        show(ui, &mut state.dialog, 670.0, 520.0, &settings);
+                    },
+                    State {
+                        dialog: TableEditorDialog::Tex(Box::new(TexDialog {
+                            original: original.clone(),
+                            draft: original.clone(),
+                            column_spec: table.column_spec.clone(),
+                            source_mode: true,
+                            validation: None,
+                            table: table.clone(),
+                            key: key(),
+                            error: None,
+                        })),
+                        queued: Vec::new(),
+                        allow_requested_paste,
+                        requested_paste_admitted: false,
+                    },
+                );
+            harness.run();
+            let field = harness
+                .get(
+                    by().role(egui::accesskit::Role::MultilineTextInput)
+                        .value(&original),
+                )
+                .rect();
+            // A long source field's geometric center lies below the clipped
+            // viewport. Click the visible first line, as the user does.
+            let point = Pos2::new(field.left() + 24.0, field.top() + 8.0);
+            harness.input_mut().events.extend([
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+            ]);
+            harness.run();
+            let focused = harness.ctx.memory(|memory| memory.focused()).unwrap();
+            harness.state_mut().queued.push(egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::COMMAND,
+            });
+            harness.step();
+            let selected = egui::text_edit::TextEditState::load(&harness.ctx, focused)
+                .unwrap()
+                .cursor
+                .char_range()
+                .unwrap()
+                .as_sorted_char_range();
+            assert_eq!(
+                selected.start.0..selected.end.0,
+                0..original.chars().count()
+            );
+            harness.input_mut().events.extend([
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Paste(edited.clone()),
+            ]);
+            harness.step();
+            let TableEditorDialog::Tex(dialog) = &harness.state().dialog else {
+                unreachable!();
+            };
+            let expected = if modifiers.command || allow_requested_paste {
+                &edited
+            } else {
+                &original
+            };
+            assert!(
+                dialog.draft == *expected,
+                "Source paste must obey physical/requested ownership: {modifiers:?}, requested={allow_requested_paste}, got {} bytes, expected {}",
+                dialog.draft.len(),
+                expected.len(),
+            );
+            assert!(dialog.validation.is_none());
+            assert!(harness.state().queued.is_empty());
+            assert_eq!(harness.ctx.memory(|memory| memory.focused()), Some(focused));
+            if allow_requested_paste {
+                assert!(harness.state().requested_paste_admitted);
+            }
+        }
     }
 
     #[test]

@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Preserve original arXiv excerpts byte-for-byte, including author whitespace.
+tests/fixtures/arxiv-tables/*.tex -text -whitespace

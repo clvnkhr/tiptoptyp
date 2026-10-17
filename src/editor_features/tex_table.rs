@@ -76,9 +76,14 @@ pub(crate) struct TexTable {
     header: String,
     spec_range: std::ops::Range<usize>,
     footer: String,
-    row_prefixes: Vec<String>,
-    row_endings: Vec<String>,
-    trailing: String,
+    body_range: std::ops::Range<usize>,
+    rows: Vec<RowSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RowSource {
+    cells: Vec<std::ops::Range<usize>>,
+    end: usize,
 }
 
 impl TexTable {
@@ -142,24 +147,40 @@ impl TexTable {
         let columns = self
             .columns()
             .ok_or("Edit this column specification in source mode")?;
-        if cells.len() != self.row_prefixes.len()
-            || cells.len() != self.row_endings.len()
-            || cells.len().saturating_mul(columns) > 4096
-        {
+        if cells.len() != self.rows.len() || cells.len().saturating_mul(columns) > 4096 {
             return Err(
                 "Keep the table's row structure; change structural commands in source mode".into(),
             );
         }
+        let body = &self.source[self.body_range.clone()];
         let mut replacement = self.header.clone();
-        for (r, row) in cells.iter().enumerate() {
-            if row.len() != columns {
+        let mut copied = 0;
+        for (r, (cells, row)) in cells.iter().zip(&self.rows).enumerate() {
+            if cells.len() != columns {
                 return Err(format!("Row {} must have {columns} cells", r + 1));
             }
-            replacement.push_str(&self.row_prefixes[r]);
-            replacement.push_str(&row.join(" & "));
-            replacement.push_str(&self.row_endings[r]);
+            for (cell, range) in cells.iter().zip(&row.cells) {
+                if *cell != cell_source(&body[range.clone()]) {
+                    replacement.push_str(&body[copied..range.start]);
+                    replacement.push_str(cell);
+                    copied = range.end;
+                }
+            }
+            // TeX permits the last empty cells to be omitted. Keep that exact
+            // spelling unless one of those implicit cells has actually changed.
+            if let Some(last) = cells[row.cells.len()..]
+                .iter()
+                .rposition(|cell| !cell.is_empty())
+            {
+                replacement.push_str(&body[copied..row.end]);
+                for cell in &cells[row.cells.len()..=row.cells.len() + last] {
+                    replacement.push_str(" & ");
+                    replacement.push_str(cell);
+                }
+                copied = row.end;
+            }
         }
-        replacement.push_str(&self.trailing);
+        replacement.push_str(&body[copied..]);
         replacement.push_str(&self.footer);
         Ok(replacement)
     }
@@ -313,9 +334,9 @@ fn parse_table(
         .then_some(columns)
         .flatten()
         .and_then(|columns| split_rows(body, columns));
-    let (cells, row_prefixes, row_endings, trailing) = match parsed {
-        Some((cells, prefixes, endings, trailing)) => (Some(cells), prefixes, endings, trailing),
-        None => (None, Vec::new(), Vec::new(), body.to_owned()),
+    let (cells, rows) = match parsed {
+        Some((cells, rows)) => (Some(cells), rows),
+        None => (None, Vec::new()),
     };
     Some(TexTable {
         source_range: byte_range_to_char(source, begin..end),
@@ -327,9 +348,8 @@ fn parse_table(
         header: source.get(begin..body_start)?.to_owned(),
         spec_range: (spec_start - begin)..(spec_start - begin + spec.len()),
         footer: source.get(close..end)?.to_owned(),
-        row_prefixes,
-        row_endings,
-        trailing,
+        body_range: (body_start - begin)..(close - begin),
+        rows,
     })
 }
 
@@ -439,11 +459,10 @@ fn top_level_parts(source: &str, separator: u8) -> Option<Vec<&str>> {
     Some(result)
 }
 
-type ParsedRows = (Vec<Vec<String>>, Vec<String>, Vec<String>, String);
+type ParsedRows = (Vec<Vec<String>>, Vec<RowSource>);
 fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
     let mut rows = Vec::new();
-    let mut prefixes = Vec::new();
-    let mut endings = Vec::new();
+    let mut sources = Vec::new();
     let mut row = Vec::new();
     let mut start = 0;
     let mut i = 0;
@@ -465,7 +484,7 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                 i += 1;
             }
             b'&' if depth == 0 && !math => {
-                row.push(cell_source(body.get(start..i)?));
+                row.push(start..i);
                 // This delimiter requires another cell. Reject an overwide
                 // row now instead of allocating every remaining source segment.
                 if row.len() >= columns {
@@ -499,10 +518,13 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                     return None;
                 }
                 if depth == 0 && !math && matches!(name, "\\" | "tabularnewline") {
-                    row.push(cell_source(body.get(start..i)?));
-                    let (prefix, first) = row_prefix(&row[0])
-                        .map(|(prefix, first)| (prefix.to_owned(), first.to_owned()))?;
-                    row[0] = cell_source(&first);
+                    row.push(start..i);
+                    if (rows.len() + 1).saturating_mul(columns) > 4096 {
+                        return None;
+                    }
+                    let (cells, source) = row_source(body, std::mem::take(&mut row), i, columns)?;
+                    rows.push(cells);
+                    sources.push(source);
                     let mut ending = end;
                     if body.as_bytes().get(ending) == Some(&b'*') {
                         ending += 1;
@@ -510,18 +532,9 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                     if let Some((_, next)) = group(body, ending, b'[', b']') {
                         ending = next;
                     }
-                    if row.len() != columns || (rows.len() + 1).saturating_mul(columns) > 4096 {
-                        return None;
-                    }
-                    // The terminating whitespace belongs to a control-word
-                    // delimiter such as \tabularnewline. Trimming it from the
-                    // next cell would concatenate that command with its text.
-                    // Keep comments here too, including their terminating newline.
-                    ending = skip_trivia(body, ending);
-                    prefixes.push(prefix);
-                    endings.push(body[i..ending].to_owned());
-                    rows.push(std::mem::take(&mut row));
-                    i = ending;
+                    // Keep the control-word delimiter's terminating trivia in
+                    // the source rather than moving it into the next cell.
+                    i = skip_trivia(body, ending);
                     start = i;
                 } else {
                     i = end;
@@ -534,24 +547,41 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
         return None;
     }
     let rest = body.get(start..)?;
-    let (prefix, first) = row_prefix(if row.is_empty() { rest } else { &row[0] })
-        .map(|(prefix, first)| (prefix.to_owned(), first.to_owned()))?;
-    let trailing = if row.is_empty() && first.trim().is_empty() {
-        rest.to_owned()
-    } else {
-        row.push(cell_source(rest));
-        if row.len() != columns || (rows.len() + 1).saturating_mul(columns) > 4096 {
+    let (_, first) = row_prefix(rest)?;
+    if !row.is_empty() || !first.trim().is_empty() {
+        if (rows.len() + 1).saturating_mul(columns) > 4096 {
             return None;
         }
-        if !prefix.is_empty() {
-            row[0] = cell_source(&first);
+        row.push(start..body.len());
+        let (cells, source) = row_source(body, row, body.len(), columns)?;
+        rows.push(cells);
+        sources.push(source);
+    }
+    Some((rows, sources))
+}
+
+fn row_source(
+    body: &str,
+    mut ranges: Vec<std::ops::Range<usize>>,
+    end: usize,
+    columns: usize,
+) -> Option<(Vec<String>, RowSource)> {
+    if ranges.len() > columns {
+        return None;
+    }
+    let mut cells = Vec::with_capacity(columns);
+    for (column, range) in ranges.iter_mut().enumerate() {
+        let mut source = &body[range.clone()];
+        if column == 0 {
+            source = row_prefix(source)?.1;
+            range.start = range.end - source.len();
         }
-        prefixes.push(prefix.to_owned());
-        endings.push(String::new());
-        rows.push(row);
-        String::new()
-    };
-    Some((rows, prefixes, endings, trailing))
+        range.start += source.len() - source.trim_start().len();
+        range.end = range.start + source.trim().len();
+        cells.push(cell_source(&body[range.clone()]));
+    }
+    cells.resize(columns, String::new());
+    Some((cells, RowSource { cells: ranges, end }))
 }
 
 /// A comment at a cell's end still needs its newline: otherwise a following
@@ -891,6 +921,105 @@ fn next_char(source: &str, start: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn arxiv_table(source: &str) -> TexTable {
+        let cursor = source[..source.find("\\begin{tabular}").unwrap()]
+            .chars()
+            .count()
+            + 1;
+        tex_table_at(source, cursor).unwrap()
+    }
+
+    #[test]
+    fn arxiv_tables_detect_their_real_grid_and_structural_layouts() {
+        for (name, source, rows, columns) in [
+            (
+                "scipy-roadmap",
+                include_str!("../../tests/fixtures/arxiv-tables/scipy-roadmap.tex"),
+                16,
+                2,
+            ),
+            (
+                "scipy-optimizers",
+                include_str!("../../tests/fixtures/arxiv-tables/scipy-optimizers.tex"),
+                13,
+                14,
+            ),
+        ] {
+            let table = arxiv_table(source);
+            let cells = table.cells.as_ref().expect(name);
+            assert_eq!(table.environment, TexTableEnvironment::Tabular);
+            assert_eq!(table.columns(), Some(columns), "{name}");
+            assert_eq!(cells.len(), rows, "{name}");
+            assert!(cells.iter().all(|row| row.len() == columns), "{name}");
+        }
+        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
+        let table = arxiv_table(source);
+        assert_eq!(table.columns(), Some(6));
+        assert!(table.cells.is_none());
+        assert_eq!(table.render_replacement().unwrap(), table.source);
+        let draft = table.source.replace(
+            "Unbiased estimator of CKA",
+            "Bias-corrected estimator of CKA",
+        );
+        assert_eq!(table.source_edit(&draft).unwrap().replacement, draft);
+    }
+
+    #[test]
+    fn arxiv_grid_apply_changes_only_the_selected_literal_cell() {
+        for (name, source, before, after) in [
+            (
+                "scipy-roadmap",
+                include_str!("../../tests/fixtures/arxiv-tables/scipy-roadmap.tex"),
+                "a few more high quality global optimizers",
+                "additional global optimizers",
+            ),
+            (
+                "scipy-optimizers",
+                include_str!("../../tests/fixtures/arxiv-tables/scipy-optimizers.tex"),
+                "Version added",
+                "Version introduced",
+            ),
+        ] {
+            let mut table = arxiv_table(source);
+            assert_eq!(
+                table.grid_source_edit().unwrap().replacement,
+                table.source,
+                "{name}: an unchanged grid must retain the original bytes"
+            );
+            let original = table.clone();
+            let cell = table
+                .cells
+                .as_mut()
+                .expect(name)
+                .iter_mut()
+                .flatten()
+                .find(|cell| cell.as_str() == before)
+                .expect(before);
+            *cell = after.into();
+            let edit = table.grid_source_edit().unwrap();
+            assert_eq!(edit.range, original.source_range, "{name}");
+            assert_eq!(
+                edit.replacement,
+                original.source.replacen(before, after, 1),
+                "{name}"
+            );
+            let mut applied = source.to_owned();
+            let range = char_to_byte(source, edit.range.start).unwrap()
+                ..char_to_byte(source, edit.range.end).unwrap();
+            applied.replace_range(range, &edit.replacement);
+            assert_eq!(applied, source.replacen(before, after, 1), "{name}");
+            let reparsed = arxiv_table(&applied);
+            assert_eq!(reparsed.cells, table.cells, "{name}");
+            assert_eq!(reparsed.column_spec, original.column_spec, "{name}");
+            assert_eq!(reparsed.packages, original.packages, "{name}");
+            assert_eq!(
+                reparsed.render_replacement().unwrap(),
+                edit.replacement,
+                "{name}"
+            );
+        }
+    }
     #[test]
     fn package_environments_open_a_grid_and_preserve_their_headers() {
         for (name, args) in [
@@ -1270,8 +1399,58 @@ C & D\tabularnewline[2pt]
         cells[1][1] = "Changed".into();
         let rendered = table.grid_source_edit().unwrap().replacement;
         assert!(rendered.contains("% first comment\n &"));
-        assert!(rendered.contains("% second comment\n\\\\"));
+        assert_eq!(rendered, source.replacen("C & D", "C & Changed", 1));
         assert_eq!(cell_source("\\% literal"), "\\% literal");
+    }
+
+    #[test]
+    fn omitted_trailing_cells_are_materialized_only_when_edited() {
+        let source =
+            "\\begin{tabular}[t]{ccc}\n A \\\\[2pt]\n B & C \\\\\n D & E & F\n\\end{tabular}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        assert_eq!(
+            table.cells.as_ref().unwrap(),
+            &vec![
+                vec!["A".to_owned(), String::new(), String::new()],
+                vec!["B".to_owned(), "C".to_owned(), String::new()],
+                vec!["D".to_owned(), "E".to_owned(), "F".to_owned()],
+            ]
+        );
+        assert_eq!(table.render_replacement().unwrap(), source);
+        table.cells.as_mut().unwrap()[0][2] = "Last".into();
+        table.cells.as_mut().unwrap()[1][2] = "New".into();
+        let replacement = table.render_replacement().unwrap();
+        assert_eq!(
+            replacement,
+            source
+                .replacen("A \\\\[2pt]", "A  &  & Last\\\\[2pt]", 1)
+                .replacen("B & C \\\\", "B & C  & New\\\\", 1)
+        );
+        let reparsed = tex_table_at(&replacement, 1).unwrap();
+        assert_eq!(reparsed.cells, table.cells);
+        assert_eq!(reparsed.render_replacement().unwrap(), replacement);
+        table.set_column_spec("@{}lcr@{}").unwrap();
+        assert_eq!(
+            table.render_replacement().unwrap(),
+            replacement.replacen("[t]{ccc}", "[t]{@{}lcr@{}}", 1)
+        );
+    }
+
+    #[test]
+    fn implicit_cells_after_comments_and_empty_payloads_keep_valid_delimiters() {
+        for source in [
+            "\\begin{tabular}{ccc}A % keep comment\n\\\\\\end{tabular}",
+            "\\begin{tabular}{ccc}A &   \\\\\\end{tabular}",
+        ] {
+            let mut table = tex_table_at(source, 1).unwrap();
+            assert_eq!(table.render_replacement().unwrap(), source);
+            table.cells.as_mut().unwrap()[0][2] = "Changed".into();
+            let replacement = table.render_replacement().unwrap();
+            assert_eq!(tex_table_at(&replacement, 1).unwrap().cells, table.cells);
+            if source.contains("% keep comment") {
+                assert!(replacement.contains("% keep comment\n &"));
+            }
+        }
     }
 
     #[test]
