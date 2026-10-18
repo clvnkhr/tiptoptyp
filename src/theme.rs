@@ -314,13 +314,35 @@ impl PreparedFontFile {
     }
 
     fn font_data(&self, index: u32, coordinate: Option<f32>) -> Option<egui::FontData> {
+        self.configure_font_data(index, coordinate, || {
+            egui::FontData::from_owned(self.bytes.as_ref().to_vec())
+        })
+    }
+
+    fn configure_font_data(
+        &self,
+        index: u32,
+        coordinate: Option<f32>,
+        create: impl FnOnce() -> egui::FontData,
+    ) -> Option<egui::FontData> {
         self.face(index)?;
-        let mut data = egui::FontData::from_owned(self.bytes.as_ref().to_vec());
+        let mut data = create();
         data.index = index;
         if let Some(coordinate) = coordinate {
             data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", coordinate)]);
         }
         Some(data)
+    }
+
+    fn borrowed_weighted_data(
+        &'static self,
+        requested_weight: u16,
+    ) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
+        let selection = self.selection(requested_weight)?;
+        let data = self.configure_font_data(selection.index, selection.coordinate, || {
+            egui::FontData::from_static(self.bytes.as_ref())
+        })?;
+        Some((data, selection.support))
     }
 
     fn weighted_data(
@@ -417,6 +439,9 @@ struct PreparedCatalogFace {
 
 #[derive(Clone)]
 enum PreparedFontSource {
+    // Only fixed platform defaults are retained for the process. Explicitly
+    // selected files keep the per-configure snapshot below and can be reloaded.
+    System(&'static PreparedFontFile),
     Collection(Arc<PreparedFontFile>),
     ExactFace {
         file: Arc<PreparedFontFile>,
@@ -435,6 +460,7 @@ impl PreparedFontSource {
         requested_weight: u16,
     ) -> Option<(egui::FontData, Option<FontWeightSupport>)> {
         match self {
+            Self::System(file) => file.borrowed_weighted_data(requested_weight),
             Self::Collection(file) => file.weighted_data(requested_weight),
             Self::ExactFace {
                 file,
@@ -508,46 +534,51 @@ where
     })
 }
 
-fn variable_editor_font<F>(files: &mut FontFileCache<'_, F>) -> Option<PreparedFontSource>
-where
-    F: FnMut(&Path) -> io::Result<Vec<u8>>,
-{
-    let candidates: &[&str] = if cfg!(target_os = "macos") {
-        &["/System/Library/Fonts/SFNSMono.ttf"]
-    } else if cfg!(target_os = "windows") {
-        &["C:\\Windows\\Fonts\\CascadiaMono.ttf"]
-    } else {
-        &[
-            "/usr/share/fonts/truetype/noto/NotoSansMono-VariableFont_wdth,wght.ttf",
-            "/usr/share/fonts/truetype/cascadia-code/CascadiaMono.ttf",
-        ]
-    };
-    candidates.iter().find_map(|path| {
-        let file = files.load(Path::new(path))?;
-        matches!(
-            file.selection(FONT_WEIGHT_NORMAL)?.support,
-            Some(FontWeightSupport::Continuous { .. })
-        )
-        .then_some(PreparedFontSource::Collection(file))
+/// Fixed default font files use one bounded process snapshot. Borrow their
+/// retained bytes for every weight and window: owned FontData
+/// would otherwise copy the complete file again for each egui font engine.
+fn variable_editor_font() -> Option<PreparedFontSource> {
+    static FONT: OnceLock<Option<PreparedFontFile>> = OnceLock::new();
+    FONT.get_or_init(|| {
+        let candidates: &[&str] = if cfg!(target_os = "macos") {
+            &["/System/Library/Fonts/SFNSMono.ttf"]
+        } else if cfg!(target_os = "windows") {
+            &["C:\\Windows\\Fonts\\CascadiaMono.ttf"]
+        } else {
+            &[
+                "/usr/share/fonts/truetype/noto/NotoSansMono-VariableFont_wdth,wght.ttf",
+                "/usr/share/fonts/truetype/cascadia-code/CascadiaMono.ttf",
+            ]
+        };
+        candidates.iter().find_map(|path| {
+            let file = PreparedFontFile::from_bytes(std::fs::read(path).ok()?);
+            matches!(
+                file.selection(FONT_WEIGHT_NORMAL)?.support,
+                Some(FontWeightSupport::Continuous { .. })
+            )
+            .then_some(file)
+        })
     })
+    .as_ref()
+    .map(PreparedFontSource::System)
 }
 
-fn default_proportional_font<F>(files: &mut FontFileCache<'_, F>) -> Option<PreparedFontSource>
-where
-    F: FnMut(&Path) -> io::Result<Vec<u8>>,
-{
-    let candidates: &[&str] = if cfg!(target_os = "macos") {
-        &["/System/Library/Fonts/SFNS.ttf"]
-    } else if cfg!(target_os = "windows") {
-        &["C:\\Windows\\Fonts\\SegoeUIVariable.ttf"]
-    } else {
-        &[]
-    };
-    candidates.iter().find_map(|path| {
-        files
-            .load(Path::new(path))
-            .map(PreparedFontSource::Collection)
+fn default_proportional_font() -> Option<PreparedFontSource> {
+    static FONT: OnceLock<Option<PreparedFontFile>> = OnceLock::new();
+    FONT.get_or_init(|| {
+        let candidates: &[&str] = if cfg!(target_os = "macos") {
+            &["/System/Library/Fonts/SFNS.ttf"]
+        } else if cfg!(target_os = "windows") {
+            &["C:\\Windows\\Fonts\\SegoeUIVariable.ttf"]
+        } else {
+            &[]
+        };
+        candidates
+            .iter()
+            .find_map(|path| std::fs::read(path).ok().map(PreparedFontFile::from_bytes))
     })
+    .as_ref()
+    .map(PreparedFontSource::System)
 }
 
 pub(crate) fn terminal_icon_font(size: f32) -> FontId {
@@ -769,7 +800,7 @@ where
     let prepared_editor = if custom_editor_requested {
         prepare_requested_font(editor_font, &mut prepared_files)
     } else {
-        variable_editor_font(&mut prepared_files)
+        variable_editor_font()
     };
     if let Some(prepared_editor) = &prepared_editor {
         for weight in EDITOR_FONT_WEIGHTS {
@@ -887,7 +918,7 @@ where
             prepare_requested_font(ui_font, &mut prepared_files)
         }
     } else {
-        default_proportional_font(&mut prepared_files)
+        default_proportional_font()
     };
     let selected_ui_font = prepared_ui
         .as_ref()
@@ -1874,6 +1905,99 @@ mod tests {
     }
 
     #[test]
+    fn system_default_fonts_borrow_exact_bytes_and_preserve_weight_selection() {
+        let sources = [variable_editor_font(), default_proportional_font()];
+        let again = [variable_editor_font(), default_proportional_font()];
+        for (source, again) in sources.into_iter().zip(again) {
+            let Some(source) = source else {
+                assert!(again.is_none());
+                continue;
+            };
+            let PreparedFontSource::System(file) = &source else {
+                panic!("fixed platform defaults must use retained bytes");
+            };
+            let Some(PreparedFontSource::System(again)) = again else {
+                panic!("the fixed font must remain available");
+            };
+            assert!(std::ptr::eq(*file, again));
+            for weight in [100, 400, 700, 900] {
+                let (owned, expected_support) = file.weighted_data(weight).unwrap();
+                let (borrowed, actual_support) = source.weighted_data(weight).unwrap();
+                assert!(matches!(borrowed.font, std::borrow::Cow::Borrowed(_)));
+                assert!(std::ptr::eq(borrowed.font.as_ptr(), file.bytes.as_ptr()));
+                assert_eq!(borrowed, owned);
+                assert_eq!(actual_support, expected_support);
+            }
+        }
+    }
+
+    #[test]
+    fn system_default_font_bytes_are_shared_by_weights_and_font_engines() {
+        let mut expected = Vec::new();
+        if let Some(PreparedFontSource::System(file)) = variable_editor_font() {
+            for weight in EDITOR_FONT_WEIGHTS {
+                expected.push((format!("tiptoptyp-editor-data-{weight}"), file));
+            }
+        }
+        if let Some(PreparedFontSource::System(file)) = default_proportional_font() {
+            for name in [WEIGHTED_UI_DATA, WEIGHTED_UI_STRONG_DATA] {
+                expected.push((name.to_owned(), file));
+            }
+        }
+        for _ in 0..2 {
+            let context = egui::Context::default();
+            configure_editor_fonts(
+                &context,
+                Default::default(),
+                Default::default(),
+                false,
+                500,
+                450,
+                None,
+            );
+            context
+                .run_ui(Default::default(), |ui| {
+                    ui.label("Shared normal and strong font bytes α + β");
+                    ui.fonts_mut(|fonts| {
+                        for (name, file) in &expected {
+                            let data = &fonts.definitions().font_data[name];
+                            assert!(matches!(data.font, std::borrow::Cow::Borrowed(_)));
+                            assert!(std::ptr::eq(data.font.as_ptr(), file.bytes.as_ptr()));
+                            assert!(
+                                skrifa::FontRef::from_index(data.font.as_ref(), data.index).is_ok()
+                            );
+                        }
+                    });
+                })
+                .drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn explicitly_selected_fonts_reload_changed_files_instead_of_retaining_system_bytes() {
+        let definitions = egui::FontDefinitions::default();
+        let first = &definitions.font_data[&definitions.families[&FontFamily::Monospace][0]];
+        let second = &definitions.font_data[&definitions.families[&FontFamily::Proportional][0]];
+        assert_ne!(first.font, second.font);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("selected-font.ttf");
+        let request = FontRequest {
+            fallback_path: Some(&path),
+            ..Default::default()
+        };
+        for expected in [first, second] {
+            std::fs::write(&path, expected.font.as_ref()).unwrap();
+            let mut reader = |path: &Path| std::fs::read(path);
+            let mut files = FontFileCache::new(&mut reader);
+            let source = prepare_requested_font(request, &mut files).unwrap();
+            assert!(!matches!(source, PreparedFontSource::System(_)));
+            let (data, _) = source.weighted_data(FONT_WEIGHT_NORMAL).unwrap();
+            assert!(matches!(data.font, std::borrow::Cow::Owned(_)));
+            assert_eq!(data.font.as_ref(), expected.font.as_ref());
+        }
+    }
+
+    #[test]
     #[ignore = "opt-in startup component timing; use an optimized build"]
     fn startup_components_probe() {
         use std::time::Instant;
@@ -2125,10 +2249,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn strong_system_ui_role_uses_a_heavier_variable_font_coordinate() {
-        let mut read = |path: &Path| std::fs::read(path);
-        let mut files = FontFileCache::new(&mut read);
-        let font = default_proportional_font(&mut files)
-            .expect("macOS system UI font should be available");
+        let font = default_proportional_font().expect("macOS system UI font should be available");
         let (normal, _) = font
             .weighted_data(FONT_WEIGHT_NORMAL)
             .expect("select normal UI font");
