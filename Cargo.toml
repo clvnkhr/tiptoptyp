@@ -67,6 +67,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 
 [dev-dependencies]
+# Parse architecture-test inputs instead of guessing where test-only code starts.
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 tiptoptyp-core = { path = "core", features = ["test-support"] }
 egui_kittest = "0.36.1"
 

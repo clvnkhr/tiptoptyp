@@ -3,6 +3,154 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use syn::visit::Visit as _;
+
+// Keep original spelling for these conservative source rules. Only syntax nodes
+// gated by exactly cfg(test) are masked; feature/platform code stays checked.
+// In particular a test counter inside a struct cannot hide later production.
+fn production_source(source: &str) -> String {
+    #[derive(Default)]
+    struct TestItems(Vec<std::ops::Range<usize>>);
+
+    fn test_only(attributes: &[syn::Attribute]) -> bool {
+        attributes.iter().any(|attribute| {
+            attribute.path().is_ident("cfg")
+                && attribute
+                    .parse_args::<syn::Path>()
+                    .is_ok_and(|condition| condition.is_ident("test"))
+        })
+    }
+
+    impl TestItems {
+        fn mask(&mut self, node: &impl syn::spanned::Spanned) {
+            self.0.push(node.span().byte_range());
+        }
+    }
+
+    impl<'ast> syn::visit::Visit<'ast> for TestItems {
+        fn visit_item(&mut self, item: &'ast syn::Item) {
+            let attributes = match item {
+                syn::Item::Const(item) => &item.attrs,
+                syn::Item::Enum(item) => &item.attrs,
+                syn::Item::ExternCrate(item) => &item.attrs,
+                syn::Item::Fn(item) => &item.attrs,
+                syn::Item::ForeignMod(item) => &item.attrs,
+                syn::Item::Impl(item) => &item.attrs,
+                syn::Item::Macro(item) => &item.attrs,
+                syn::Item::Mod(item) => &item.attrs,
+                syn::Item::Static(item) => &item.attrs,
+                syn::Item::Struct(item) => &item.attrs,
+                syn::Item::Trait(item) => &item.attrs,
+                syn::Item::TraitAlias(item) => &item.attrs,
+                syn::Item::Type(item) => &item.attrs,
+                syn::Item::Union(item) => &item.attrs,
+                syn::Item::Use(item) => &item.attrs,
+                _ => return syn::visit::visit_item(self, item),
+            };
+            if test_only(attributes) {
+                self.mask(item);
+            } else {
+                syn::visit::visit_item(self, item);
+            }
+        }
+
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            if test_only(&item.attrs) {
+                self.mask(item);
+            } else {
+                syn::visit::visit_impl_item_fn(self, item);
+            }
+        }
+
+        fn visit_field(&mut self, field: &'ast syn::Field) {
+            if test_only(&field.attrs) {
+                self.mask(field);
+            } else {
+                syn::visit::visit_field(self, field);
+            }
+        }
+
+        fn visit_expr_block(&mut self, block: &'ast syn::ExprBlock) {
+            if test_only(&block.attrs) {
+                self.mask(block);
+            } else {
+                syn::visit::visit_expr_block(self, block);
+            }
+        }
+    }
+
+    let syntax = syn::parse_file(source).expect("architecture input must be valid Rust syntax");
+    let mut tests = TestItems::default();
+    tests.visit_file(&syntax);
+    let mut production = source.as_bytes().to_vec();
+    for range in tests.0 {
+        for byte in &mut production[range] {
+            if *byte != b'\n' {
+                *byte = b' ';
+            }
+        }
+    }
+    String::from_utf8(production).expect("masking complete syntax preserves UTF-8")
+}
+
+#[test]
+fn production_scanning_keeps_items_after_inline_counters_and_test_modules() {
+    let source = r###"
+struct Cache {
+    #[cfg(test)]
+    count: usize,
+    current: bool,
+}
+#[cfg(test)]
+mod tests { fn fixture() { let _ = r#"} std::thread ☃ {"#; } }
+impl Cache {
+    #[cfg(test)]
+    fn fixture() { test_only_effect(); }
+    fn actual(&self) { std::process::Command::new("tool"); }
+}
+mod nested {
+    #[cfg(test)] mod tests { fn fixture() { nested_test_effect(); } }
+    fn actual() { std::fs::read("file"); }
+}
+fn after_tests() { let _ = r#"#[cfg(test)] mod tests { text }"#; }
+"###;
+    let production = production_source(source);
+    assert!(!production.contains("count: usize"));
+    for test_effect in ["std::thread", "test_only_effect", "nested_test_effect"] {
+        assert!(
+            !production.contains(test_effect),
+            "test-only {test_effect} remains"
+        );
+    }
+    for runtime_effect in ["std::process", "std::fs", "fn after_tests", "current: bool"] {
+        assert!(
+            production.contains(runtime_effect),
+            "production {runtime_effect} was hidden"
+        );
+    }
+    assert!(production.contains(r##"r#"#[cfg(test)] mod tests { text }"#"##));
+    assert_eq!(production.len(), source.len());
+    assert_eq!(production.lines().count(), source.lines().count());
+}
+
+#[test]
+fn production_scanning_retains_optional_platform_and_feature_implementations() {
+    let source = r#"
+#[cfg(feature = "profiling")]
+mod enabled { fn effect() { std::thread::spawn(|| ()); } }
+#[cfg(target_os = "windows")]
+fn platform() { std::process::Command::new("tool"); }
+#[cfg(any(test, feature = "test-support"))]
+fn shared_fixture() { std::env::var("key"); }
+"#;
+    let production = production_source(source);
+    for effect in ["std::thread", "std::process", "std::env"] {
+        assert!(
+            production.contains(effect),
+            "conditional production {effect} was hidden"
+        );
+    }
+}
 
 #[test]
 fn native_preview_teardown_and_readiness_have_single_owners() {
@@ -116,7 +264,7 @@ fn git_repository_execution_and_codecs_do_not_depend_on_views() {
         root.join("editor/actions.rs"),
     ] {
         let source = fs::read_to_string(&path).unwrap();
-        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let production = production_source(&source);
         for forbidden in [
             "Command::new",
             "fn run_command",
@@ -176,7 +324,7 @@ fn rust_files(root: &Path) -> Vec<PathBuf> {
 fn launch_policy_and_lsp_transport_have_focused_owners() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let screenshot = fs::read_to_string(root.join("screenshot.rs")).unwrap();
-    let production = screenshot.split("#[cfg(test)]\nmod tests").next().unwrap();
+    let production = production_source(&screenshot);
     for forbidden in [
         "LaunchOptions",
         "LaunchMode",
@@ -190,7 +338,7 @@ fn launch_policy_and_lsp_transport_have_focused_owners() {
     }
     for module in ["lsp/transport.rs", "lsp/protocol.rs"] {
         let source = fs::read_to_string(root.join(module)).unwrap();
-        let production = source.split("#[cfg(test)]").next().unwrap();
+        let production = production_source(&source);
         for forbidden in [
             "crate::",
             "super::",
@@ -211,7 +359,7 @@ fn launch_policy_and_lsp_transport_have_focused_owners() {
 fn capability_derivation_cannot_probe_or_render() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let capabilities = fs::read_to_string(root.join("capabilities.rs")).unwrap();
-    let production = capabilities.split("#[cfg(test)]").next().unwrap();
+    let production = production_source(&capabilities);
     for forbidden in [
         "eframe",
         "egui",
@@ -240,7 +388,7 @@ fn build_scheduler_and_application_do_not_decode_engine_output() {
         include_str!("../src/compiler.rs"),
         include_str!("../src/app/build.rs"),
     ] {
-        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let production = production_source(source);
         for forbidden in [
             "parse_typst_short_output",
             "classify_watch_line",
@@ -257,7 +405,7 @@ fn build_scheduler_and_application_do_not_decode_engine_output() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/compiler");
     for path in rust_files(&root) {
         let source = fs::read_to_string(path).unwrap();
-        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let production = production_source(&source);
         for forbidden in [
             "egui",
             "eframe",
@@ -292,7 +440,7 @@ fn window_code_uses_stable_tab_accessors_instead_of_storage_slots() {
             continue;
         }
         let source = fs::read_to_string(&path).unwrap();
-        let production = source.split("#[cfg(test)]").next().unwrap();
+        let production = production_source(&source);
         let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();
         for field in [".tabs.active", ".tabs.preview"] {
             let direct = compact.match_indices(field).any(|(offset, _)| {
@@ -321,7 +469,7 @@ fn window_code_uses_stable_tab_accessors_instead_of_storage_slots() {
 fn tinymist_sync_policy_is_ui_process_and_thread_independent() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = fs::read_to_string(root.join("src/tinymist_sync.rs")).unwrap();
-    let production = source.split("#[cfg(test)]").next().unwrap();
+    let production = production_source(&source);
     for forbidden in [
         "egui",
         "std::process",
@@ -343,7 +491,7 @@ fn tinymist_sync_policy_is_ui_process_and_thread_independent() {
 fn preview_policy_has_one_transition_owner_and_views_consume_status() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let preview = fs::read_to_string(root.join("preview.rs")).unwrap();
-    let production = preview.split("#[cfg(test)]\nmod tests").next().unwrap();
+    let production = production_source(&preview);
     assert!(production.contains("enum PreviewTransitionEvent"));
     assert!(production.contains("enum PreviewEffect"));
     assert!(production.contains("fn status_snapshot("));
@@ -379,7 +527,7 @@ fn preview_policy_has_one_transition_owner_and_views_consume_status() {
 fn project_index_reads_use_the_specialized_bounded_runner() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let runner = fs::read_to_string(root.join("index_jobs.rs")).unwrap();
-    let production = runner.split("#[cfg(test)]").next().unwrap();
+    let production = production_source(&runner);
     assert!(production.contains("const CONCURRENCY: usize = 2"));
     assert!(production.contains("MAX_PENDING_BYTES"));
     assert!(production.contains("analyze_project_cancellable"));
@@ -398,7 +546,7 @@ fn project_index_reads_use_the_specialized_bounded_runner() {
 fn workspace_snapshots_are_shared_and_notifications_replace_frame_polling() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let service = fs::read_to_string(root.join("workspace_service.rs")).unwrap();
-    let production = service.split("#[cfg(test)]").next().unwrap();
+    let production = production_source(&service);
     assert!(production.contains("Arc<WorkspaceSnapshot>"));
     assert!(production.contains("EVENT_QUIET_PERIOD"));
     assert!(production.contains("VERIFICATION_INTERVAL"));
@@ -550,10 +698,7 @@ fn pdf_pixels_are_viewport_requested_and_process_budgeted() {
 
 #[test]
 fn save_handoff_does_not_own_io_ui_or_another_document_identity() {
-    let source = include_str!("../src/save_transaction.rs")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap();
+    let source = production_source(include_str!("../src/save_transaction.rs"));
     for forbidden in [
         "std::fs",
         "std::thread",
@@ -608,7 +753,7 @@ fn focused_ui_modules_cannot_take_the_whole_application_or_run_its_services() {
         "completion_popup.rs",
     ] {
         let source = fs::read_to_string(root.join(name)).unwrap();
-        let production = source.split("#[cfg(test)]").next().unwrap();
+        let production = production_source(&source);
         let compact: String = production.chars().filter(|c| !c.is_whitespace()).collect();
         for forbidden in [
             "usesuper::*",
@@ -672,7 +817,7 @@ fn native_identity_and_focus_have_single_owners() {
         "windowing.rs",
     ] {
         let source = fs::read_to_string(root.join(relative)).unwrap();
-        let production = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+        let production = production_source(&source);
         assert!(
             !production.contains("ViewportCommand::Focus"),
             "{relative} bypasses focus admission"
