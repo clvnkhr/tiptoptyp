@@ -332,3 +332,76 @@ fn a_late_particle_gpu_failure_retires_invisible_sparks_but_preserves_glow() {
         );
     }
 }
+
+#[test]
+fn cpu_only_and_all_off_actions_never_create_a_particle_renderer() {
+    for diff in [false, true] {
+        for glow in [false, true] {
+            let mut harness = fixture(diff);
+            harness
+                .state_mut()
+                .settings
+                .editor_effects
+                .actions
+                .typing
+                .glow = glow;
+            // Remove the renderer warmed by the general particle fixture before
+            // observing these independently configured real editor frames.
+            let gpu_id = egui::Id::new("editor-particle-gpu");
+            harness
+                .ctx
+                .data_mut(|data| data.remove::<editor_particles::Renderer>(gpu_id));
+            harness.step();
+            type_character(&mut harness);
+            assert!(
+                harness
+                    .ctx
+                    .data(|data| data.get_temp::<editor_particles::Renderer>(gpu_id))
+                    .is_none(),
+                "source/diff CPU feedback and fully Off actions must not initialize or consult a GPU backend"
+            );
+            assert_eq!(harness.state().document().source(), "prefix x");
+            // Inspection intentionally creates a read-only renderer handle, so
+            // check its absence before querying the effect trace.
+            assert_eq!(
+                observe(&harness)["feedback"]["burst_count"],
+                u64::from(glow)
+            );
+        }
+    }
+}
+
+#[test]
+fn disabling_the_last_shake_keeps_the_captured_pulse_until_expiry() {
+    for diff in [false, true] {
+        let mut harness = fixture(diff);
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .actions
+            .typing
+            .shake = true;
+        type_character(&mut harness);
+        assert_eq!(
+            observe(&harness)["feedback"]["last_effects"],
+            serde_json::json!(["Shake"])
+        );
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .actions
+            .typing
+            .shake = false;
+        let settings = harness.state().settings.editor_effects;
+        let now = harness.ctx.input(|input| input.time);
+        for (after, expected) in [(1.0 / 60.0, true), (1.0, false)] {
+            let output = harness.ctx.run_ui(egui::RawInput { time: Some(now + after), ..Default::default() }, |ui| {
+                assert_eq!(editor_particles::prepare_shake(ui, source_editor_id(ui.ctx()), settings).is_some(), expected,
+                    "the actual source/diff action captures its feedback flags until the finite envelope expires");
+            });
+            output.drop_without_applying_deltas();
+        }
+    }
+}

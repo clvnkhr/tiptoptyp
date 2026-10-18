@@ -7,7 +7,7 @@ out float v_age;
 out float v_seed;
 out float v_kind;
 flat out float v_style;
-const vec2 corners[6] = vec2[6](vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(-1.,1.),vec2(1.,-1.),vec2(1.,1.));
+const vec2 corners[PARTICLE_VERTEX_COUNT] = vec2[PARTICLE_VERTEX_COUNT](vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(1.,1.));
 void main() {
     float age = max(0., u_time - a_shape.y);
     float life = clamp(1. - age / PARTICLE_LIFETIME, 0., 1.);

@@ -412,8 +412,11 @@ impl EditorApp {
             });
         }
         let particle_settings = self.settings.editor_effects;
-        let typing_intent =
-            editor_particles::capture(ui, editor_id, particle_settings.enabled && !read_only);
+        let typing_intent = editor_particles::capture(
+            ui,
+            editor_id,
+            editor_particles::input_enabled(particle_settings) && !read_only,
+        );
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
         let fold_press_id = source_editor_id(ui.ctx()).with("fold-press-cursor");
         if ui.input(|i| i.pointer.primary_pressed()) {
@@ -513,7 +516,7 @@ impl EditorApp {
             scroll_area
         };
         let scroll_output = scroll_area.show_viewport(ui, |ui, viewport| {
-            let effect_paint = editor_particles::shake::begin(ui);
+            let effect_paint = editor_particles::prepare_shake(ui, editor_id, particle_settings);
             let visible_viewport =
                 Rect::from_min_size(ui.max_rect().min + viewport.min.to_vec2(), viewport.size())
                     .intersect(ui.clip_rect());
@@ -1148,7 +1151,7 @@ impl EditorApp {
                         .request_discard("realign source before presenting resized text");
                 }
             }
-            let effect_paint = effect_paint.finish(ui);
+            let effect_paint = effect_paint.map(|marker| marker.finish(ui));
             reveal::paint_editor(
                 ui,
                 visible_viewport,

@@ -13,6 +13,8 @@ pub(crate) use gpu::Renderer;
 mod feedback;
 #[cfg(test)]
 mod gpu_tests;
+#[cfg(test)]
+mod perf_tests;
 pub(super) mod shake;
 
 const LIMIT: usize = 256;
@@ -207,8 +209,39 @@ pub(super) struct Surface<'a> {
     pub(super) document: DocumentKey,
     pub(super) viewport: Rect,
     pub(super) view: View,
-    pub(super) paint_range: shake::PaintRange,
+    pub(super) paint_range: Option<shake::PaintRange>,
     pub(super) shake_viewport: Rect,
+}
+
+// Input and paint preparation stay quiet when every action is Off. Geometry
+// mutation belongs to egui's paint owner; do not snapshot it for a worker.
+pub(super) fn input_enabled(settings: EditorEffectSettings) -> bool {
+    settings.enabled
+        && Action::ALL
+            .into_iter()
+            .any(|a| settings.actions.get(a).enabled())
+}
+
+pub(super) fn prepare_shake(
+    ui: &Ui,
+    editor: Id,
+    settings: EditorEffectSettings,
+) -> Option<shake::Marker> {
+    if !settings.enabled {
+        return None;
+    }
+    let configured = Action::ALL
+        .into_iter()
+        .any(|a| settings.actions.get(a).shake);
+    // A pulse captures its flags when the action succeeds. Changing the last
+    // Shake preference must not drop that finite, already-running transform.
+    let live = !configured
+        && ui
+            .ctx()
+            .data(|data| data.get_temp::<SharedState>(state_id(editor)))
+            .and_then(|state| state.lock().unwrap().feedback)
+            .is_some_and(|pulse| pulse.sample(ui.input(|input| input.time)).shake != Vec2::ZERO);
+    (configured || live).then(|| shake::begin(ui))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,6 +292,7 @@ struct State {
     base_time: f64,
     gpu_instances: Option<Arc<[gpu::Instance]>>,
     feedback: Option<feedback::Pulse>,
+    renderer: Option<Renderer>,
 }
 impl State {
     fn random(&mut self) -> f32 {
@@ -402,8 +436,7 @@ impl State {
                             packed_kind(particle),
                         ]
                     })
-                    .collect::<Vec<_>>()
-                    .into()
+                    .collect::<Arc<[_]>>()
             })
             .clone()
     }
@@ -548,7 +581,6 @@ pub(super) fn paint(
         });
         return;
     }
-    let renderer = Renderer::for_context(context);
     let identity = Identity::new(surface.document, surface.view);
     let receipt = take_receipt(
         context,
@@ -573,10 +605,20 @@ pub(super) fn paint(
             copied,
         )
     });
-    let action = action.filter(|&action| {
-        let effects = settings.actions.get(action);
-        effects.enabled()
-            && (!renderer.is_unavailable() || effects.shake || effects.flash || effects.glow)
+    let action = action.filter(|&action| settings.actions.get(action).enabled());
+    // Reject an unavailable particle-only backend before allocating a fresh
+    // state on every keystroke. CPU feedback still runs independently.
+    let initial_renderer = (existing.is_none()
+        && action.is_some_and(|a| settings.actions.get(a).particles.is_some()))
+    .then(|| Renderer::for_context(context));
+    let action = action.filter(|&a| {
+        let effects = settings.actions.get(a);
+        !initial_renderer
+            .as_ref()
+            .is_some_and(Renderer::is_unavailable)
+            || effects.shake
+            || effects.flash
+            || effects.glow
     });
     let accepted = action.is_some();
     if existing.is_none() && !accepted {
@@ -584,7 +626,9 @@ pub(super) fn paint(
             .into_iter()
             .any(|action| settings.actions.get(action).particles.is_some())
         {
-            renderer.warm(ui, surface.viewport.intersect(ui.clip_rect()));
+            initial_renderer
+                .unwrap_or_else(|| Renderer::for_context(context))
+                .warm(ui, surface.viewport.intersect(ui.clip_rect()));
         }
         return;
     }
@@ -594,12 +638,31 @@ pub(super) fn paint(
         state
     });
     let mut state = state.lock().unwrap();
-    if renderer.is_unavailable() {
+    // CPU-only feedback never needs a particle backend. An active particle
+    // burst retains the shared renderer, avoiding context-map lookups on each
+    // animation frame while keeping all GL commands on their context owner.
+    let renderer = (!state.particles.is_empty()
+        || action.is_some_and(|a| settings.actions.get(a).particles.is_some()))
+    .then(|| {
+        state
+            .renderer
+            .get_or_insert_with(|| {
+                initial_renderer.unwrap_or_else(|| Renderer::for_context(context))
+            })
+            .clone()
+    });
+    let unavailable = renderer.as_ref().is_some_and(Renderer::is_unavailable);
+    if unavailable {
         // A shader can fail on its first actual paint. Retire invisible particles
         // immediately while keeping independent CPU feedback alive.
         state.particles.clear();
         state.gpu_instances = None;
     }
+    let action = action.filter(|&a| {
+        let effects = settings.actions.get(a);
+        !unavailable || effects.shake || effects.flash || effects.glow
+    });
+    let accepted = action.is_some();
     let frame = context.cumulative_frame_nr();
     let viewport = surface.viewport.intersect(ui.clip_rect());
     let action = action.unwrap_or(state.action);
@@ -638,7 +701,7 @@ pub(super) fn paint(
         frame,
         now,
         caret,
-        if accepted && effects.particles.is_some() && !renderer.is_unavailable() {
+        if accepted && effects.particles.is_some() && !unavailable {
             action.count(settings.density, intent.events.max(1))
         } else {
             0
@@ -660,21 +723,22 @@ pub(super) fn paint(
         context.data_mut(|data| data.remove::<SharedState>(id));
         return;
     }
-    let instances =
-        (!state.particles.is_empty() && !renderer.is_unavailable()).then(|| state.instances());
+    let instances = (!state.particles.is_empty()).then(|| state.instances());
     let time = (now - state.base_time) as f32;
     drop(state);
     let accent = theme::palette(context).accent;
     if let Some(pulse) = pulse {
         let frame = pulse.sample(now);
-        surface.paint_range.apply(
-            ui,
-            frame.shake,
-            surface.shake_viewport.intersect(ui.clip_rect()),
-        );
+        if let Some(paint_range) = surface.paint_range {
+            paint_range.apply(
+                ui,
+                frame.shake,
+                surface.shake_viewport.intersect(ui.clip_rect()),
+            );
+        }
         feedback::paint(ui, viewport, pulse.origin, accent, frame);
     }
-    if let Some(instances) = instances {
+    if let (Some(instances), Some(renderer)) = (instances, renderer) {
         renderer.submit(
             ui,
             viewport,

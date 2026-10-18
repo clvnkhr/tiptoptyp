@@ -4,6 +4,72 @@ use super::*;
 pub(super) const LIFETIME: f64 = 0.48;
 const SHAKE_SECONDS: f64 = 0.22;
 const FLASH_SECONDS: f64 = 0.16;
+const GLOW_SEGMENTS: usize = 32;
+const GLOW_VERTICES: usize = 1 + GLOW_SEGMENTS * 2;
+const GLOW_INDICES: usize = GLOW_SEGMENTS * 9;
+
+struct GlowGeometry {
+    directions: [Vec2; GLOW_SEGMENTS],
+    indices: [u32; GLOW_INDICES],
+}
+
+fn glow_geometry() -> &'static GlowGeometry {
+    static GEOMETRY: std::sync::OnceLock<GlowGeometry> = std::sync::OnceLock::new();
+    GEOMETRY.get_or_init(|| {
+        let directions = std::array::from_fn(|index| {
+            let angle = index as f32 / GLOW_SEGMENTS as f32 * std::f32::consts::TAU;
+            Vec2::angled(angle)
+        });
+        let mut indices = [0; GLOW_INDICES];
+        for (index, triangle) in indices.as_chunks_mut::<9>().0.iter_mut().enumerate() {
+            let index = index as u32;
+            let next = (index + 1) % GLOW_SEGMENTS as u32;
+            let outer = 1 + GLOW_SEGMENTS as u32;
+            triangle.copy_from_slice(&[
+                0,
+                1 + index,
+                1 + next,
+                1 + index,
+                outer + index,
+                outer + next,
+                1 + index,
+                outer + next,
+                1 + next,
+            ]);
+        }
+        GlowGeometry {
+            directions,
+            indices,
+        }
+    })
+}
+
+fn tint(accent: egui::Color32, alpha: f32) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(
+        accent.r(),
+        accent.g(),
+        accent.b(),
+        (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+fn glow_mesh(origin: Pos2, accent: egui::Color32, glow: f32) -> egui::Mesh {
+    // Only positions and three colors vary. Keep trigonometry/topology shared
+    // across frames and allocate each final frame buffer at its exact size.
+    let geometry = glow_geometry();
+    let mut mesh = egui::Mesh {
+        vertices: Vec::with_capacity(GLOW_VERTICES),
+        indices: geometry.indices.to_vec(),
+        ..Default::default()
+    };
+    mesh.colored_vertex(origin, tint(accent, glow * 0.65));
+    for (radius, color) in [(24.0, tint(accent, glow)), (96.0, tint(accent, 0.0))] {
+        for &direction in &geometry.directions {
+            mesh.colored_vertex(origin + direction * radius, color);
+        }
+    }
+    mesh
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct Pulse {
@@ -72,35 +138,11 @@ pub(super) fn paint(ui: &Ui, viewport: Rect, origin: Pos2, accent: egui::Color32
         return;
     }
     let painter = ui.painter().with_clip_rect(viewport);
-    let tint = |alpha: f32| {
-        egui::Color32::from_rgba_unmultiplied(
-            accent.r(),
-            accent.g(),
-            accent.b(),
-            (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
-        )
-    };
     if frame.flash > 0.0 {
-        painter.rect_filled(viewport, 0.0, tint(frame.flash));
+        painter.rect_filled(viewport, 0.0, tint(accent, frame.flash));
     }
     if frame.glow > 0.0 && origin.is_finite() {
-        // Two small radial bands, independent of document length and DPI.
-        const SEGMENTS: usize = 32;
-        let mut mesh = egui::Mesh::default();
-        mesh.colored_vertex(origin, tint(frame.glow * 0.65));
-        for (radius, alpha) in [(24.0, frame.glow), (96.0, 0.0)] {
-            for index in 0..SEGMENTS {
-                let angle = index as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-                mesh.colored_vertex(origin + Vec2::angled(angle) * radius, tint(alpha));
-            }
-        }
-        for index in 0..SEGMENTS as u32 {
-            let next = (index + 1) % SEGMENTS as u32;
-            mesh.add_triangle(0, 1 + index, 1 + next);
-            mesh.add_triangle(1 + index, 33 + index, 33 + next);
-            mesh.add_triangle(1 + index, 33 + next, 1 + next);
-        }
-        painter.add(egui::Shape::mesh(mesh));
+        painter.add(egui::Shape::mesh(glow_mesh(origin, accent, frame.glow)));
     }
 }
 
@@ -226,6 +268,49 @@ mod tests {
             assert_eq!(frame.glow, 0.0);
         }
     }
+    #[test]
+    fn cached_glow_preserves_the_original_mesh_without_frame_buffer_growth() {
+        fn original(origin: Pos2, accent: egui::Color32, glow: f32) -> egui::Mesh {
+            let tint = |alpha: f32| {
+                egui::Color32::from_rgba_unmultiplied(
+                    accent.r(),
+                    accent.g(),
+                    accent.b(),
+                    (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
+                )
+            };
+            let mut mesh = egui::Mesh::default();
+            mesh.colored_vertex(origin, tint(glow * 0.65));
+            for (radius, alpha) in [(24.0, glow), (96.0, 0.0)] {
+                for index in 0..32 {
+                    let angle = index as f32 / 32.0 * std::f32::consts::TAU;
+                    mesh.colored_vertex(origin + Vec2::angled(angle) * radius, tint(alpha));
+                }
+            }
+            for index in 0..32 {
+                let next = (index + 1) % 32;
+                mesh.add_triangle(0, 1 + index, 1 + next);
+                mesh.add_triangle(1 + index, 33 + index, 33 + next);
+                mesh.add_triangle(1 + index, 33 + next, 1 + next);
+            }
+            mesh
+        }
+        let shared_geometry = glow_geometry();
+        for origin in [Pos2::ZERO, egui::pos2(175.25, -3.5)] {
+            for accent in [egui::Color32::RED, egui::Color32::from_rgb(203, 166, 247)] {
+                for glow in [0.0, 0.001, 0.13, 0.42] {
+                    let mesh = glow_mesh(origin, accent, glow);
+                    assert_eq!(mesh, original(origin, accent, glow));
+                    assert_eq!(mesh.vertices.len(), GLOW_VERTICES);
+                    assert_eq!(mesh.vertices.capacity(), GLOW_VERTICES);
+                    assert_eq!(mesh.indices.len(), GLOW_INDICES);
+                    assert_eq!(mesh.indices.capacity(), GLOW_INDICES);
+                    assert!(std::ptr::eq(shared_geometry, glow_geometry()));
+                }
+            }
+        }
+    }
+
     #[test]
     fn overlays_have_constant_work_and_keep_the_editor_clip() {
         let context = egui::Context::default();

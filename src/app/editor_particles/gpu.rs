@@ -10,6 +10,9 @@ use std::sync::{
 };
 
 pub(super) type Instance = [f32; 8];
+// A strip shares the quad's two middle vertices: analytic motion runs four,
+// rather than six, times per particle without changing either triangle.
+pub(super) const VERTICES_PER_INSTANCE: i32 = 4;
 const MAX_INSTANCES: usize = super::LIMIT;
 const VERTEX: &str = include_str!("particles.vert");
 const FRAGMENT: &str = include_str!("particles.frag");
@@ -134,6 +137,54 @@ impl Renderer {
         });
     }
 
+    #[cfg(all(test, target_os = "macos"))]
+    pub(super) fn uniform_writes(&self) -> u64 {
+        self.0
+            .backend
+            .lock()
+            .unwrap()
+            .pipeline
+            .as_ref()
+            .map_or(0, |pipeline| pipeline.uniform_writes)
+    }
+
+    /// Opt-in component probe: the caller owns a private, current GL context.
+    /// The measured region excludes UI construction, locking, initialization,
+    /// allocation, framebuffer readback and instance uploads. Submission time
+    /// still includes driver backpressure; completion additionally waits for GL.
+    #[cfg(all(test, target_os = "macos"))]
+    pub(super) fn measure_resident_batch(
+        &self,
+        gl: &glow::Context,
+        clip: Rect,
+        instances: &Arc<[Instance]>,
+        dark: bool,
+        iterations: usize,
+    ) -> (std::time::Duration, std::time::Duration) {
+        self.initialize(gl);
+        let mut backend = self.0.backend.lock().unwrap();
+        let pipeline = backend.pipeline.as_mut().expect("probe GPU unavailable");
+        let accent = Color32::from_rgb(136, 57, 239);
+        // Both layouts exercise exactly the same warmed, resident batch.
+        pipeline.draw(gl, clip, instances, 0.14, accent, dark);
+        unsafe { gl.finish() };
+        let started = std::time::Instant::now();
+        for frame in 0..iterations {
+            let uploaded = pipeline.draw(
+                gl,
+                clip,
+                instances,
+                0.035 + (frame % 120) as f32 * (0.265 / 120.0),
+                accent,
+                dark,
+            );
+            assert!(!uploaded, "resident animation must not upload instances");
+        }
+        let submission = started.elapsed();
+        unsafe { gl.finish() };
+        (submission, started.elapsed())
+    }
+
     /// Called only by the process owner while its GL context is current.
     /// Taking the pipeline makes teardown idempotent and late callbacks inert.
     pub(crate) fn destroy(&self, gl: &glow::Context) {
@@ -160,6 +211,33 @@ impl Renderer {
     }
 }
 
+/// GL uniforms belong to our private program and survive egui's other passes.
+/// Only time changes during an ordinary resident animation; keep the driver out
+/// of the unchanged viewport/color/theme path. No GL queries are needed.
+#[derive(Default)]
+struct UniformCache {
+    viewport: Option<Rect>,
+    color: Option<[u8; 3]>,
+    dark: Option<bool>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct UniformUpdates {
+    viewport: bool,
+    color: bool,
+    dark: bool,
+}
+
+impl UniformCache {
+    fn update(&mut self, viewport: Rect, color: [u8; 3], dark: bool) -> UniformUpdates {
+        UniformUpdates {
+            viewport: self.viewport.replace(viewport) != Some(viewport),
+            color: self.color.replace(color) != Some(color),
+            dark: self.dark.replace(dark) != Some(dark),
+        }
+    }
+}
+
 struct Pipeline {
     program: glow::Program,
     vao: glow::VertexArray,
@@ -169,6 +247,9 @@ struct Pipeline {
     color: Option<glow::UniformLocation>,
     dark: Option<glow::UniformLocation>,
     uploaded: Option<Arc<[Instance]>>,
+    uniforms: UniformCache,
+    #[cfg(all(test, target_os = "macos"))]
+    uniform_writes: u64,
 }
 impl Pipeline {
     fn new(gl: &glow::Context) -> Result<Self, String> {
@@ -188,7 +269,7 @@ impl Pipeline {
                     gl.shader_source(
                         shader,
                         &format!(
-                            "{prefix}#define PARTICLE_LIFETIME {:.9}\n{source}",
+                            "{prefix}#define PARTICLE_VERTEX_COUNT {VERTICES_PER_INSTANCE}\n#define PARTICLE_LIFETIME {:.9}\n{source}",
                             super::LIFETIME
                         ),
                     );
@@ -259,6 +340,9 @@ impl Pipeline {
                 color: gl.get_uniform_location(program, "u_color"),
                 dark: gl.get_uniform_location(program, "u_dark"),
                 uploaded: None,
+                uniforms: UniformCache::default(),
+                #[cfg(all(test, target_os = "macos"))]
+                uniform_writes: 0,
             })
         }
     }
@@ -276,6 +360,8 @@ impl Pipeline {
             .uploaded
             .as_ref()
             .is_none_or(|old| !Arc::ptr_eq(old, instances));
+        let color = [accent.r(), accent.g(), accent.b()];
+        let uniforms = self.uniforms.update(clip, color, dark);
         unsafe {
             gl.use_program(Some(self.program));
             gl.bind_vertex_array(Some(self.vao));
@@ -293,21 +379,34 @@ impl Pipeline {
                 gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
                 self.uploaded = Some(instances.clone());
             }
-            gl.uniform_4_f32(
-                self.viewport.as_ref(),
-                clip.left(),
-                clip.top(),
-                clip.width(),
-                clip.height(),
-            );
+            if uniforms.viewport {
+                gl.uniform_4_f32(
+                    self.viewport.as_ref(),
+                    clip.left(),
+                    clip.top(),
+                    clip.width(),
+                    clip.height(),
+                );
+            }
             gl.uniform_1_f32(self.time.as_ref(), time);
-            gl.uniform_3_f32(
-                self.color.as_ref(),
-                f32::from(accent.r()) / 255.0,
-                f32::from(accent.g()) / 255.0,
-                f32::from(accent.b()) / 255.0,
-            );
-            gl.uniform_1_f32(self.dark.as_ref(), if dark { 1.0 } else { 0.0 });
+            if uniforms.color {
+                gl.uniform_3_f32(
+                    self.color.as_ref(),
+                    f32::from(color[0]) / 255.0,
+                    f32::from(color[1]) / 255.0,
+                    f32::from(color[2]) / 255.0,
+                );
+            }
+            if uniforms.dark {
+                gl.uniform_1_f32(self.dark.as_ref(), if dark { 1.0 } else { 0.0 });
+            }
+            #[cfg(all(test, target_os = "macos"))]
+            {
+                self.uniform_writes += 1
+                    + u64::from(uniforms.viewport)
+                    + u64::from(uniforms.color)
+                    + u64::from(uniforms.dark);
+            }
             // Multiply on light pages retains dark text. Additive glow on dark
             // pages makes bright sparks instead of darkening an already dark UI.
             // Multiply preserves destination alpha (atop the app), and additive
@@ -322,7 +421,12 @@ impl Pipeline {
                 if dark { glow::ONE } else { glow::ZERO },
                 glow::ONE,
             );
-            gl.draw_arrays_instanced(glow::TRIANGLES, 0, 6, instances.len() as i32);
+            gl.draw_arrays_instanced(
+                glow::TRIANGLE_STRIP,
+                0,
+                VERTICES_PER_INSTANCE,
+                instances.len() as i32,
+            );
             gl.bind_vertex_array(None);
             // egui_glow restores its paint state immediately after the callback.
             // Keep its framebuffer and scissor untouched throughout this pass.
@@ -336,5 +440,75 @@ impl Pipeline {
             gl.delete_vertex_array(self.vao);
             gl.delete_program(self.program);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn particle_quads_share_vertices_within_the_bounded_gpu_budget() {
+        assert_eq!(VERTICES_PER_INSTANCE, 4);
+        assert_eq!(MAX_INSTANCES * VERTICES_PER_INSTANCE as usize, 1_024);
+    }
+
+    #[test]
+    fn resident_uniforms_only_invalidate_for_the_field_that_changes() {
+        let mut cache = UniformCache::default();
+        let clip = Rect::from_min_size(egui::pos2(40.0, 50.0), egui::vec2(300.0, 200.0));
+        let color = [136, 57, 239];
+        assert_eq!(
+            cache.update(clip, color, false),
+            UniformUpdates {
+                viewport: true,
+                color: true,
+                dark: true
+            },
+        );
+        for _ in 0..100 {
+            assert_eq!(
+                cache.update(clip, color, false),
+                UniformUpdates {
+                    viewport: false,
+                    color: false,
+                    dark: false
+                },
+            );
+        }
+        let resized = clip.expand(20.0);
+        assert_eq!(
+            cache.update(resized, color, false),
+            UniformUpdates {
+                viewport: true,
+                color: false,
+                dark: false
+            },
+        );
+        let recolored = [110, 180, 90];
+        assert_eq!(
+            cache.update(resized, recolored, false),
+            UniformUpdates {
+                viewport: false,
+                color: true,
+                dark: false
+            },
+        );
+        assert_eq!(
+            cache.update(resized, recolored, true),
+            UniformUpdates {
+                viewport: false,
+                color: false,
+                dark: true
+            },
+        );
+        assert_eq!(
+            cache.update(clip, color, false),
+            UniformUpdates {
+                viewport: true,
+                color: true,
+                dark: true
+            },
+        );
     }
 }

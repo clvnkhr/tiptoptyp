@@ -110,8 +110,12 @@ impl EditorApp {
             ui.input_mut(|input| crate::auto_pairs::ascii_punctuation(&mut input.events));
         }
         let particle_settings = settings.editor_effects;
-        let typing_intent = editor_particles::capture(ui, source_id, particle_settings.enabled);
-        let effect_paint = editor_particles::shake::begin(ui);
+        let typing_intent = editor_particles::capture(
+            ui,
+            source_id,
+            editor_particles::input_enabled(particle_settings),
+        );
+        let effect_paint = editor_particles::prepare_shake(ui, source_id, particle_settings);
         let mut output = self
             .tabs
             .current_record_mut()
@@ -194,7 +198,7 @@ impl EditorApp {
             ),
             output.viewport.right_bottom(),
         );
-        let effect_paint = effect_paint.finish(ui);
+        let effect_paint = effect_paint.map(|marker| marker.finish(ui));
         reveal::paint_editor(
             ui,
             attention_viewport,

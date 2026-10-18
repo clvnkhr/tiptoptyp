@@ -619,3 +619,219 @@ fn gpu_particle_variants_preserve_translucent_pixels() {
         check_translucent_style(style, false);
     }
 }
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "optimized resident GPU submission/completion probe; no UI or readback in timing"]
+fn gpu_resident_batch_measurement() {
+    use eframe::glow::{self, HasContext as _};
+    let framebuffer = crate::test_framebuffer::Framebuffer::new([720, 380]);
+    let gl = framebuffer.gl();
+    let renderer = Renderer::default();
+    let clip = Rect::from_min_size(Pos2::ZERO, Vec2::new(720.0, 380.0));
+    let iterations = 2_000;
+    unsafe {
+        gl.viewport(0, 0, 720, 380);
+        gl.enable(glow::BLEND);
+        gl.disable(glow::SCISSOR_TEST);
+        gl.disable(glow::DEPTH_TEST);
+        gl.disable(glow::CULL_FACE);
+        gl.clear_color(1.0, 1.0, 1.0, 1.0);
+        gl.clear(glow::COLOR_BUFFER_BIT);
+    }
+    let mut cases = Vec::new();
+    for dark in [false, true] {
+        for style in ParticleStyle::ALL {
+            let source = instances_for_style(style);
+            let batch: Arc<[[f32; 8]]> = (0..super::LIMIT)
+                .map(|index| source[index % source.len()])
+                .collect();
+            renderer.measure_resident_batch(&gl, clip, &batch, dark, 200);
+            let samples: Vec<_> = (0..3)
+                .map(|_| {
+                    let (submission, complete) =
+                        renderer.measure_resident_batch(&gl, clip, &batch, dark, iterations);
+                    serde_json::json!({
+                        "submission_ms": submission.as_secs_f64() * 1_000.0,
+                        "completion_ms": complete.as_secs_f64() * 1_000.0,
+                    })
+                })
+                .collect();
+            cases.push(serde_json::json!({
+                "dark": dark,
+                "style": style.label(),
+                "samples": samples,
+            }));
+        }
+    }
+    println!(
+        "particle_gpu_probe={}",
+        serde_json::json!({
+            "viewport_points": [720, 380],
+            "scale": 1,
+            "instances": super::LIMIT,
+            "warmup_draws_per_case": 200,
+            "iterations_per_sample": iterations,
+            "repeats": 3,
+            "gl_vendor": unsafe { gl.get_parameter_string(glow::VENDOR) },
+            "gl_renderer": unsafe { gl.get_parameter_string(glow::RENDERER) },
+            "gl_version": unsafe { gl.get_parameter_string(glow::VERSION) },
+            "cases": cases,
+        })
+    );
+    renderer.destroy(&gl);
+    unsafe { assert_eq!(gl.get_error(), glow::NO_ERROR) };
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "real Glow uniform-cache reuse and theme/geometry invalidation"]
+fn gpu_uniform_cache_preserves_pixels_and_invalidates_theme_and_clip() {
+    use eframe::glow::{self, HasContext as _};
+    fn frame(
+        framebuffer: &mut crate::test_framebuffer::Framebuffer,
+        context: &egui::Context,
+        renderer: &Renderer,
+        batch: Arc<[[f32; 8]]>,
+        clip: Rect,
+        appearance: (Color32, bool),
+        time: f32,
+    ) -> egui::ColorImage {
+        let (accent, dark) = appearance;
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(360.0, 240.0))),
+                ..Default::default()
+            },
+            |ui| {
+                ui.painter().rect_filled(
+                    ui.max_rect(),
+                    0.0,
+                    Color32::from_gray(if dark { 30 } else { 240 }),
+                );
+                renderer.submit(ui, clip, batch.clone(), time, accent, dark);
+            },
+        );
+        framebuffer.render(context, output, None);
+        framebuffer.read_rgba()
+    }
+
+    let context = egui::Context::default();
+    let renderer = Renderer::default();
+    let mut framebuffer = crate::test_framebuffer::Framebuffer::new([360, 240]);
+    let gl = framebuffer.gl();
+    let batch = instances();
+    let clip = Rect::from_min_max(egui::pos2(64.0, 52.0), egui::pos2(296.0, 188.0));
+    let accent = Color32::from_rgb(136, 57, 239);
+    let original = frame(
+        &mut framebuffer,
+        &context,
+        &renderer,
+        batch.clone(),
+        clip,
+        (accent, false),
+        0.14,
+    );
+    assert_eq!(renderer.uniform_writes(), 4);
+    let repeated = frame(
+        &mut framebuffer,
+        &context,
+        &renderer,
+        batch.clone(),
+        clip,
+        (accent, false),
+        0.14,
+    );
+    assert_eq!(original.pixels, repeated.pixels);
+    assert_eq!(
+        renderer.uniform_writes(),
+        5,
+        "only time needs another GL update"
+    );
+    let later = frame(
+        &mut framebuffer,
+        &context,
+        &renderer,
+        batch.clone(),
+        clip,
+        (accent, false),
+        0.24,
+    );
+    assert_ne!(original.pixels, later.pixels, "time must remain dynamic");
+    assert_eq!(renderer.uniform_writes(), 6);
+    let accent = Color32::from_rgb(110, 180, 90);
+    let recolored = frame(
+        &mut framebuffer,
+        &context,
+        &renderer,
+        batch.clone(),
+        clip,
+        (accent, false),
+        0.24,
+    );
+    assert_ne!(later.pixels, recolored.pixels);
+    assert_eq!(renderer.uniform_writes(), 8, "time and accent must update");
+    let dark = frame(
+        &mut framebuffer,
+        &context,
+        &renderer,
+        batch.clone(),
+        clip,
+        (accent, true),
+        0.24,
+    );
+    assert_ne!(recolored.pixels, dark.pixels);
+    assert_eq!(
+        renderer.uniform_writes(),
+        10,
+        "time and blend theme must update"
+    );
+    let background = frame(
+        &mut framebuffer,
+        &context,
+        &renderer,
+        Arc::from([]),
+        clip,
+        (accent, true),
+        0.24,
+    );
+    assert_eq!(
+        renderer.uniform_writes(),
+        10,
+        "empty batches must do no GPU work"
+    );
+    let clip = Rect::from_min_max(egui::pos2(40.0, 30.0), egui::pos2(130.0, 160.0));
+    let clipped = frame(
+        &mut framebuffer,
+        &context,
+        &renderer,
+        batch,
+        clip,
+        (accent, true),
+        0.24,
+    );
+    assert_eq!(
+        renderer.uniform_writes(),
+        12,
+        "time and geometry must update"
+    );
+    assert_eq!(
+        counter(&renderer, "uploads"),
+        1,
+        "uniform changes must reuse resident instances"
+    );
+    let mut changed = 0;
+    for (index, (before, after)) in background.pixels.iter().zip(&clipped.pixels).enumerate() {
+        if before != after {
+            let position = egui::pos2((index % 360) as f32, (index / 360) as f32);
+            assert!(
+                clip.contains(position),
+                "GPU pixels escaped the updated clip"
+            );
+            changed += 1;
+        }
+    }
+    assert!(changed > 10, "the clipped effect must remain visible");
+    renderer.destroy(&gl);
+    unsafe { assert_eq!(gl.get_error(), glow::NO_ERROR) };
+}
