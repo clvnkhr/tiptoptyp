@@ -76,6 +76,13 @@ def source_point(value, x, y):
     scale=value["paper_scale"]
     paper=value["paper_bounds"]
     pages=value["page_bounds"]
+    # Document edges can include fractional SVG insets or an outer gutter.
+    # Keep the exact signed source offset; do not clamp it to the paper edge.
+    if pages and pages[0] and y < pages[0][1]:
+        return {"x": (x-paper[0])/scale, "page": 0, "local": (y-pages[0][1])/scale}
+    if pages and pages[-1] and y > pages[-1][1] + pages[-1][3]:
+        return {"x": (x-paper[0])/scale, "page": len(pages)-1,
+                "local": (y-pages[-1][1])/scale}
     for index,bounds in enumerate(pages):
         if not bounds:continue
         if bounds[1]-1e-4 <= y <= bounds[1]+bounds[3]+1e-4:
@@ -185,13 +192,40 @@ class PartialPreviewJourneys:
         self.key(115)  # Home: the first document edge.
         self.wait("preview reaches top edge", lambda d: d["preview_page"] == 0)
         deadline = time.monotonic() + 15
+        stable = None
+        quiet_since = None
         while True:
-            before=self.snapshot()
-            native=before["document"]["preview_zoom_overlay"]
-            value=((before.get("renderer") or {}).get("value") or {})
-            if native.get("cached") and not native.get("active") and value.get("scroll",[0,1])[1] < 1:
-                break
-            if time.monotonic() > deadline:
+            before = self.snapshot()
+            native = before["document"]["preview_zoom_overlay"]
+            renderer = before.get("renderer") or {}
+            value = renderer.get("value") or {}
+            scroll = value.get("scroll")
+            now = time.monotonic()
+            quiescent = (
+                native.get("cached") is True
+                and all(native.get(field) is False for field in
+                        ("active", "capturing", "prepared", "deferred"))
+                and all(field in native and native[field] is None
+                        for field in ("pending", "in_flight"))
+                and isinstance(native.get("token"), str) and native["token"]
+                and renderer.get("age_ms", 1000) <= 500 and value.get("ready") is True
+                and isinstance(scroll, list) and len(scroll) == 2
+                and all(type(n) in (int, float) and math.isfinite(n) for n in scroll)
+                and 0 <= scroll[1] < 1)
+            if quiescent:
+                state = (native["token"], native.get("scale"), native.get("view_size"),
+                         scroll, value.get("zoom"), value.get("paper_scale"),
+                         value.get("paper_bounds"))
+                if state != stable:
+                    stable, quiet_since = state, now
+                # Sharp handoff keeps the old image while a 150 ms idle timer
+                # prepares its replacement. Token identity is meaningful only
+                # after that refresh has settled, not merely after zoom ends.
+                elif now - quiet_since >= .25:
+                    break
+            else:
+                stable = quiet_since = None
+            if now > deadline:
                 raise AssertionError("top edge has no idle cached preview")
             time.sleep(.05)
         target=before["targets"]["preview.page"]
@@ -200,8 +234,24 @@ class PartialPreviewJourneys:
         time.sleep(.12)
         after=self.snapshot()
         current=after["document"]["preview_zoom_overlay"]
-        if not current.get("cached") or current.get("token") != native.get("token"):
+        if current.get("cached") is not True or current.get("token") != native.get("token"):
             raise AssertionError("a clamped top-edge wheel discarded idle preview pixels")
+        renderer = after.get("renderer") or {}
+        value = renderer.get("value") or {}
+        age = renderer.get("age_ms")
+        scroll = value.get("scroll")
+        # A background capture can prepare replacement pixels without starting
+        # a gesture; the full-mode native receipt demonstrates this valid state.
+        if (any(current.get(field) is not False for field in ("active", "prepared", "deferred"))
+                or any(field not in current or current[field] is not None
+                       for field in ("pending", "in_flight"))
+                or type(current.get("capturing")) is not bool
+                or type(age) not in (int, float) or not math.isfinite(age) or not 0 <= age <= 500
+                or value.get("ready") is not True
+                or not isinstance(scroll, list) or len(scroll) != 2
+                or any(type(n) not in (int, float) or not math.isfinite(n) for n in scroll)
+                or not 0 <= scroll[1] < 1):
+            raise AssertionError("a clamped top-edge wheel did not retain an idle top-edge preview")
         self.record("partial.cached-edge-wheel",mode=mode,before=native,after=current)
 
     def cursor_wheel_zoom(self, mode):

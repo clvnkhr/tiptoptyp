@@ -210,6 +210,125 @@ class PartialFixtureCleanupContract(unittest.TestCase):
         self.assertEqual((session.active, session.preview, session.backend), (10, 20, "Interactive"))
 
 
+class CachedEdgeWheelContract(unittest.TestCase):
+    def run_journey(self, baseline=None, after=None):
+        from desktop_ui_partial_journeys import PartialPreviewJourneys
+        class Session(PartialPreviewJourneys):
+            def __init__(self):
+                self.now = 0.0
+                self.wheel_at = None
+                self.records = []
+            def click(self, name):
+                assert name == "preview.page"
+            def key(self, code):
+                assert code == 115
+            def wait(self, description, predicate):
+                assert predicate({"preview_page": 0})
+            def snapshot(self):
+                state = {"document": {"preview_zoom_overlay": {
+                    "cached": True, "active": False, "capturing": False,
+                    "prepared": False, "deferred": False, "pending": None,
+                    "in_flight": None, "token": "image:23", "scale": 1,
+                    "view_size": [558, 829]}},
+                    "renderer": {"age_ms": 0, "value": {"ready": True,
+                        "scroll": [0, 0], "zoom": 1}},
+                    "targets": {"preview.page": {"x": 300, "y": 400}}}
+                mutate = after if self.wheel_at is not None else baseline
+                if mutate:
+                    mutate(state, self.now)
+                return state
+            def native(self, command, *args):
+                if command == "wheel":
+                    self.wheel_at = self.now
+            def record(self, name, **details):
+                self.records.append((name, details))
+            def sleep(self, seconds):
+                self.now += seconds
+        session = Session()
+        with patch("desktop_ui_partial_journeys.time.monotonic", side_effect=lambda: session.now), \
+                patch("desktop_ui_partial_journeys.time.sleep", side_effect=session.sleep):
+            session.cached_edge_wheel("partial")
+        return session
+
+    def test_capture_replacement_finishes_before_token_identity_is_baselined(self):
+        def refreshing(state, now):
+            if now < .1:
+                state["document"]["preview_zoom_overlay"].update(
+                    token="image:21", capturing=True)
+        session = self.run_journey(baseline=refreshing)
+        self.assertGreaterEqual(session.wheel_at, .35)
+        self.assertEqual(session.records[0][1]["before"]["token"], "image:23")
+        self.assertEqual(session.records[0][1]["after"]["token"], "image:23")
+
+    def test_busy_or_stale_samples_reset_the_quiet_baseline(self):
+        cases = [{"cached": False}, {"active": True}, {"capturing": True},
+                 {"prepared": True}, {"deferred": True}, {"pending": 7},
+                 {"in_flight": 7}, {"token": None}, {"age_ms": 501},
+                 {"ready": False}, {"scroll": [0, 4]}, {"scale": 1.1},
+                 {"view_size": [600, 829]}]
+        for change in cases:
+            def transient(state, now):
+                if .1 <= now < .2:
+                    native = state["document"]["preview_zoom_overlay"]
+                    renderer = state["renderer"]
+                    if "age_ms" in change:
+                        renderer.update(change)
+                    elif "ready" in change or "scroll" in change:
+                        renderer["value"].update(change)
+                    else:
+                        native.update(change)
+            with self.subTest(change=change):
+                session = self.run_journey(baseline=transient)
+                self.assertGreaterEqual(session.wheel_at, .45)
+
+    def test_actual_cache_loss_or_replacement_after_idle_wheel_still_fails(self):
+        for change in ({"cached": False}, {"token": "replacement:99"}):
+            def lost(state, now):
+                state["document"]["preview_zoom_overlay"].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(
+                    AssertionError, "discarded idle preview pixels"):
+                self.run_journey(after=lost)
+
+    def test_post_wheel_native_gesture_or_missing_state_cannot_pass(self):
+        for change in ({"active": True}, {"prepared": True}, {"deferred": True},
+                       {"pending": 7}, {"in_flight": 7}, {"capturing": None},
+                       {"active": None}):
+            def unfinished(state, now):
+                state["document"]["preview_zoom_overlay"].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(
+                    AssertionError, "did not retain an idle top-edge preview"):
+                self.run_journey(after=unfinished)
+
+    def test_post_wheel_stale_unready_or_unclamped_renderer_cannot_pass(self):
+        cases = [("age_ms", value) for value in (501, -1, True, float("nan"))]
+        cases += [("ready", False), ("scroll", None), ("scroll", [0]),
+                  ("scroll", [0, 200]), ("scroll", [0, -1]),
+                  ("scroll", [0, True]), ("scroll", [0, float("nan")])]
+        for field, value in cases:
+            def invalid(state, now):
+                renderer = state["renderer"]
+                (renderer if field == "age_ms" else renderer["value"])[field] = value
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                    AssertionError, "did not retain an idle top-edge preview"):
+                self.run_journey(after=invalid)
+
+    def test_post_wheel_retains_valid_pixels_during_background_capture(self):
+        # run-gu27t4hv: full mode started a background refresh after the wheel,
+        # while the same token remained usable and the ready renderer stayed at 0.
+        def refreshing(state, now):
+            state["document"]["preview_zoom_overlay"]["capturing"] = True
+        session = self.run_journey(after=refreshing)
+        self.assertEqual(session.records[0][1]["before"]["token"], "image:23")
+        self.assertEqual(session.records[0][1]["after"]["token"], "image:23")
+        self.assertTrue(session.records[0][1]["after"]["capturing"])
+
+    def test_permanently_busy_preview_exhausts_the_bounded_wait(self):
+        def busy(state, now):
+            state["document"]["preview_zoom_overlay"]["capturing"] = True
+        with self.assertRaisesRegex(AssertionError, "no idle cached preview"):
+            self.run_journey(baseline=busy)
+
+
 class PreviewAnchorContract(unittest.TestCase):
     def test_original_source_point_detects_a_shared_center_anchor_error(self):
         from desktop_ui_partial_journeys import source_point,project_source_point
@@ -219,6 +338,44 @@ class PreviewAnchorContract(unittest.TestCase):
         centered={"paper_scale":3,"paper_bounds":[-50,-165,900,1800],"page_bounds":[[-50,-165,900,1800]]}
         self.assertEqual(project_source_point(correct,point),[100,200])
         self.assertEqual(project_source_point(centered,point),[100,195])
+
+
+    def test_recorded_full_preview_fractional_inset_maps_the_exact_visible_top(self):
+        from desktop_ui_partial_journeys import source_point, project_source_point
+        # run-_ov9ukop/event926: the first page's SVG transform starts 0.429px
+        # below the viewport despite scrollTop=0; this is valid leading padding.
+        before = {"paper_scale": .9362416107382551,
+                  "paper_bounds": [0, -1, 558, 38310],
+                  "viewport_bounds": [0, -1, 558, 829],
+                  "page_bounds": [[0, -.5707712769508362, 558, 788.3154362416108]]}
+        point = source_point(before, 0, -1)
+        self.assertEqual(point["page"], 0)
+        self.assertLess(point["local"], 0)
+        self.assertEqual(project_source_point(before, point), [0, -1])
+        scale = 1.2
+        top = -1 - point["local"] * scale
+        correct = {"paper_scale": scale, "paper_bounds": [0, -1, 715, 49102],
+                   "page_bounds": [[0, top, 715, 1010]]}
+        self.assertEqual(project_source_point(correct, point), [0, -1])
+        incorrect = {**correct, "page_bounds": [[0, top + 4, 715, 1010]]}
+        self.assertEqual(project_source_point(incorrect, point), [0, 3])
+
+    def test_outer_page_padding_and_interpage_gap_keep_distinct_coordinates(self):
+        from desktop_ui_partial_journeys import source_point, project_source_point
+        before = {"paper_scale": 2, "paper_bounds": [0, 0, 600, 220],
+                  "page_bounds": [[0, 10, 600, 100], [0, 130, 600, 80]]}
+        for y, expected in ((-5, {"page": 0, "local": -7.5}),
+                            (120, {"before": 0, "after": 1, "fraction": .5}),
+                            (220, {"page": 1, "local": 45})):
+            with self.subTest(y=y):
+                point = source_point(before, 60, y)
+                self.assertEqual(point, {"x": 30, **expected})
+                self.assertEqual(project_source_point(before, point), [60, y])
+        for pages, y in (([], -1), ([None], -1),
+                         ([None, [0, 10, 600, 100]], -1),
+                         ([[0, 10, 600, 100], None], 220)):
+            with self.subTest(pages=pages), self.assertRaises(AssertionError):
+                source_point({**before, "page_bounds": pages}, 0, y)
 
 
 class PartialPreviewCoverageContract(unittest.TestCase):

@@ -134,6 +134,21 @@ test('sharp handoff keeps valid pixels available while refreshing in the backgro
   assert.equal(f.cache.resize(),true,'divider must retain its native owner during refresh');
   f.admit(f.captures()[1]);assert.equal(f.cache.inspect().cached,true,'rejected refresh discarded usable pixels');
 });
+test('clamped top-edge scrolling retains pixels while an idle refresh replaces their token',()=>{
+  const f=fixture();f.current.top=0;f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:1,scale:1.2});f.current.scale=1.2;f.cache.rendered();f.paint();f.tick();
+  const replacement=f.captures()[1];assert.notEqual(replacement.token,token);
+  assert.equal(f.cache.inspect().capturing,true);assert.equal(f.cache.inspect().cached,true);
+  const invalidations=f.messages.filter(message=>message.op==='invalidate').length;
+  f.cache.scrolled();
+  assert.equal(f.cache.inspect().cached,true,'clamped scroll discarded the retained image during capture');
+  assert.equal(f.cache.inspect().capturing,true,'clamped scroll cancelled the idle replacement');
+  f.admit(replacement);f.cache.scrolled();
+  assert.equal(f.cache.inspect().cached,true,'admitting a healthy replacement created a cold-cache gap');
+  assert.equal(f.messages.filter(message=>message.op==='invalidate').length,invalidations);
+  f.cache.native({token:replacement.token,revision:2,scale:1.3});
+  assert.equal(f.cache.inspect().hits,2,'the next zoom must use the admitted replacement token');
+});
 test('refresh failure preserves valid pixels and source changes still flush them',()=>{
   const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
   f.cache.native({token,revision:1,scale:1.2});f.current.scale=1.2;f.cache.rendered();f.paint();f.tick();
