@@ -48,11 +48,37 @@ and `tests`; current-tree searches confirmed the replacement call paths.
   they failed against the old workflow. The meaning of the combined `all`
   journey is unchanged, including intentional standalone/stress exclusions.
 
+## Defects exposed by the native reruns
+
+- The cached edge-wheel journey could sample `capturing=true` and reject a
+  healthy replacement token as if it were an interaction failure. It now waits
+  for 250 ms of quiescent capture state before input; the token-preservation
+  assertion remains. Thirteen invalid-precondition cases protect that admission.
+- The post-wheel check could falsely pass an active/pending gesture or an
+  unready/non-top renderer if its cache token survived. Eighteen negative cases
+  now fail; fresh ready/top geometry and idle gesture state are required. A
+  background capture is allowed because a successful full-mode receipt shows
+  that valid state; retained-pixel/token equality remains mandatory.
+- A later real-app rerun (`run-0hd6r980`) exposed another baseline race:
+  native ownership was idle while the observed JavaScript snapshot still had
+  revision 25 and its two-frame handoff pending. The prior handoff then replaced
+  token 4 with token 6 after the wheel. Baseline admission now requires both
+  owners to be idle; 33 adversarial subcases reproduced the old false pass.
+- The divider anchor oracle rejected legitimate 0.429 px leading-page padding.
+  It now models signed offsets at the actual first/last document edges, keeps
+  the 1.1 px anchor tolerance and still rejects missing page geometry. It does
+  not substitute a center anchor or discard the alignment check.
+- Native Rust and Swift fixtures still called the palette API with four/two
+  arguments. Three JavaScript `TypeError`s were real fixture failures. Calls
+  now supply all five current arguments; Node tests execute the actual extracted
+  calls. The Swift positive sequence passes all four palette/reload stages;
+  omitting load replay deliberately fails after three valid stages.
+
 ## Coverage deliberately retained
 
 - Geometry, parser, session, save, stale-response, worker and allocation tests
   catch edge cases that a happy-path desktop journey cannot establish.
-- The 223 preview JavaScript assertions exercise production navigation,
+- The 226 preview JavaScript assertions exercise production navigation,
   snapshot buffering, bounded work, cache reuse and request ownership.
 - Native compositor/worker fixtures, palette negative cases, partial-render
   phase sampling and pinned-frontend browser protocol tests remain distinct
@@ -72,37 +98,48 @@ not a measured runtime bottleneck.
 | Baseline ignored PDFium worker | Passed `pdfium::tests::native_worker_reuses_documents_rejects_stale_and_survives_errors`. |
 | Baseline ignored PDFium view | Passed `app::pdfium_view::tests::native_view_retains_pixels_during_updates_and_errors`. |
 | Architecture boundary tests | 25 passed in focused run. |
-| Python detector contracts | 156 passed in root rerun. |
-| Preview JavaScript contracts | 223 passed in root rerun; browser/partial native self-checks also passed. |
-| Required checks | Format passed; strict all-target Clippy passed; complete Rust suite 2,286 passed / 63 ignored across 17 targets; xtask 32 passed / 1 ignored. |
+| Python detector contracts | 168 passed after the native followup fixes, including invalid capture, stale renderer and unfinished handoff cases. |
+| Preview JavaScript contracts | 226 passed after the native followup fixes; browser/partial native self-checks passed earlier. |
+| Final required checks | Format and strict all-target Clippy passed; complete Rust suite 2,286 passed / 63 ignored across 17 targets; xtask 32 passed / 1 ignored. Final desktop-test-feature strict Clippy also passed. |
 | Profiling feature and relocated probes | Strict Clippy and the complete profiling suite passed (2,294 tests, 63 ignored). Both relocated probes executed successfully from the debug test binary (execution validation, not performance measurements); the unique allocation regression passed in the normal suite. |
 | Post-change PDFium ignored regressions | Both worker and view tests passed again against the audited binary. |
 | Explicit native-window check | Passed native drag guard, transparency/blur, resize, input, cleanup and sibling isolation contracts on macOS. |
 | Desktop-test feature | Strict all-target Clippy passed; all 8 actual Find-bar tests passed with native observation hooks enabled. |
-| Real-app Find and partial zoom stress journeys | Blocked: macOS locked before launch; Accessibility/input permissions are present, but `desktop=false`, `locked=true`. The optimized audited app is built and preserved. |
-| Native zoom compositor runner | Harness compiled; execution blocked by the locked desktop. Python admission checks are not a native pass. |
+| Real-app Find | Passed `run-3s7exjn7` through native input, with the actual running build/hash verified. |
+| Real-app partial zoom stress | Final stricter run `run-j34fhbt1` passed both observed Tinymist modes: 20 inputs → 20 cache hits/one vector request/one handoff each, six divider drags per mode, focus release, edge wheels and 27 coverage checks. Earlier failures remain retained. |
+| Native partial compositor | Final clean-cadence run `native-partial-cadence` passed all 18 transitions, blocked WebContent, scroll race and dark palette. |
+| Native full compositor | Final clean-cadence run `native-full-cadence` still fails the unchanged eight-second mid-document idle-image check. Four native keys remain responsive during the block and yield one final vector request. Dense full-mode capture readiness/latency remains unresolved; this is not a passed transition run. |
+| Native Swift palette fixture | Four positive color/reload stages passed. The missing-reload-replay negative failed as intended after three valid stages. |
 
-Native results must record the actual running build/backend and remain separate
-from Rust semantics or viewport screenshots. Non-macOS explicit-native rejection
-branches cannot be executed on this Mac. No visual verification or cross-platform
-performance guarantee is claimed by this audit.
-
-Build/readiness metadata and raw logs are preserved locally in
-`.tiptoptyp/test-audit/2026-10-18/` (ignored generated evidence). The prepared app
-is `tiptoptyp Dev 0.1.0 (f375b20964b3-dirty.1792323534)`, optimized with
-`desktop-ui-tests`, SHA-256
+Native results are separate from deterministic Rust semantics. The earlier
+locked-desktop blocker is resolved. The real-app runs above used the same
+preserved optimized `desktop-ui-tests` app:
+`tiptoptyp Dev 0.1.0 (f375b20964b3-dirty.1792323534)`, SHA-256
 `ab45bfa12df65d292edec4d6b80ccf3f6cb95f0f6ed56cec21bd139649951ecf`.
-Host: macOS 14.6.1 ARM64, 1512×982 logical desktop at 2×. No effective preview
-backend was observed in the composed app because the journeys could not launch.
+Host: macOS 14.6.1 ARM64, 1512×982 logical desktop at 2×.
 
-Remaining native commands, after unlocking (run sequentially from the checkout):
+Build receipts, original failures (including all three palette reproductions)
+and followup logs remain in `.tiptoptyp/test-audit/2026-10-18/`. Final per-mode
+receipts/commands are in `native-{partial,full}-cadence/`; both use native probe
+SHA-256 `8d3f2217a596707cdb4e8058d9db350d755a5769243fc72f428e865b5b87a51f`.
+Earlier `native-compositor-fixed/` failures are retained. No speculative production preview fix,
+assertion removal or timeout increase was made. The clean probe observes at
+50 ms cadence and retains its eight-second idle-image timeout.
 
-```sh
-python3 scripts/test-desktop-ui.py --journey find --release --executable .tiptoptyp/test-audit/2026-10-18/tiptoptyp-audit
-python3 scripts/test-desktop-ui.py --journey partial_zoom_stress --release --executable .tiptoptyp/test-audit/2026-10-18/tiptoptyp-audit
-python3 scripts/test-preview-zoom-native.py --binary target/debug/deps/native_preview_zoom-472ff33c3eb31c03 --mode both --transition-regression --scroll-race --dark
-```
+Temporary tracing observed the existing render-completion notification and a
+capture retry; explicit settle was not causal in the traced recovery. An
+indefinite stall or lost wakeup is not established. Diagnostic instrumentation
+was removed. The native fixture is 640×420 with a three-second warmup and actual
+pinned Tinymist; it does not establish physical trackpad or GPU timing.
+
+Four fresh palette PNGs, three earlier native compositor PNGs and three fresh
+final compositor PNGs were inspected.
+These establish fixture pixels only, not composed editor-window geometry.
+Non-macOS explicit-native rejection branches and Intel native execution cannot
+be exercised on this ARM Mac. No cross-platform performance guarantee is claimed.
 
 The unchanged debug-linker `__eh_frame` size warning also occurred in the
-baseline; strict Clippy is clean. Source changes were saved in six focused
-commits (`738c1a3`, `2a689c0`, `985ea2d`, `e2c2c30`, `a8719b3`, `b9039a1`).
+baseline. Initial cleanup commits: `738c1a3`, `2a689c0`, `985ea2d`, `e2c2c30`,
+`a8719b3`, `b9039a1`; native followups: `6dfb28a`, `b919720`, `d2afb70`,
+`bd82575`. Final check statuses are also retained in
+`.tiptoptyp/test-audit/2026-10-18/final-verification.json`.
