@@ -462,7 +462,13 @@ fn tex_grid(
                     value: tex_sample_symbol(expansion).unwrap_or(expansion).into(),
                 });
             }
-        } else if current.is_some() && value.len() + line.len() <= MAX_CELL {
+        } else if current.is_some() {
+            if line.len() > MAX_CELL.saturating_sub(value.len()) {
+                return Err(
+                    "A TeX table sample exceeded the output limit; its expression remains locked"
+                        .into(),
+                );
+            }
             value.push_str(line);
         }
     }
@@ -675,6 +681,27 @@ mod tests {
                 &expected
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn table_samples_tex_log_rejects_oversized_values_before_decoding_a_valid_prefix() {
+        let expected = BTreeMap::from([((0, 0), r"\cmark".into())]);
+        let prefix = r"macro:->{\fontfamily{pzd}\fontencoding{U}\fontseries{m}\fontshape{n}\selectfont\char51}";
+        for suffix in [
+            "x".repeat(MAX_CELL),
+            format!("{}\n{}", "x".repeat(MAX_CELL / 2), "x".repeat(MAX_CELL / 2)),
+        ] {
+            let log = format!("TTT-SAMPLE-BEGIN:0:0\n{prefix}\n{suffix}\nTTT-SAMPLE-END\n");
+            let error = tex_grid(&log, 1, 1, &expected)
+                .expect_err("an oversized suffix must not leave a decodable truncated prefix");
+            assert!(error.contains("output limit"), "{error}");
+        }
+        let complete = "x".repeat(MAX_CELL - "macro:->".len());
+        let log = format!("TTT-SAMPLE-BEGIN:0:0\nmacro:->{complete}\nTTT-SAMPLE-END\n");
+        assert_eq!(
+            tex_grid(&log, 1, 1, &expected).unwrap().value((0, 0)),
+            Some(complete.as_str())
         );
     }
 
