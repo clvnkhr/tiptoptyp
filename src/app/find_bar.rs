@@ -321,6 +321,75 @@ mod tests {
     use super::*;
 
     #[test]
+    fn enter_navigates_actual_find_field_only_and_retains_focus() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(620.0, 160.0))
+            .build_ui_state(
+                |ui, (state, emitted): &mut (FindBarState, Vec<FindBarActions>)| {
+                    let actions = show(
+                        ui,
+                        state,
+                        "alpha beta alpha",
+                        DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0),
+                        true,
+                    );
+                    if actions != FindBarActions::default() {
+                        emitted.push(actions);
+                    }
+                    let _ = ui.button("Other control");
+                },
+                (
+                    FindBarState {
+                        visible: true,
+                        query: "alpha".into(),
+                        focus: true,
+                        ..Default::default()
+                    },
+                    Vec::new(),
+                ),
+            );
+        harness.run();
+        assert!(harness.state().1.is_empty());
+        for shift in [false, true, false] {
+            harness.key_press_modifiers(
+                if shift {
+                    egui::Modifiers::SHIFT
+                } else {
+                    egui::Modifiers::NONE
+                },
+                egui::Key::Enter,
+            );
+            harness.run();
+            let actions = harness
+                .state_mut()
+                .1
+                .pop()
+                .expect("Find emitted navigation");
+            assert_eq!(actions.previous, shift);
+            assert_eq!(actions.next, !shift);
+            assert!(!actions.closed && !actions.replace_one && !actions.replace_all);
+            assert!(harness.state().1.is_empty(), "one action per key press");
+            assert!(
+                harness
+                    .ctx
+                    .memory(|memory| memory.has_focus(query_id(&harness.ctx)))
+            );
+            assert_eq!(harness.state().0.query, "alpha");
+        }
+        harness.get_by_label("Other control").click();
+        harness.run();
+        for modifiers in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+            harness.key_press_modifiers(modifiers, egui::Key::Enter);
+            harness.run();
+            assert!(
+                harness.state().1.is_empty(),
+                "unfocused Find must ignore Enter"
+            );
+        }
+    }
+
+    #[test]
     fn replace_all_has_its_own_accessible_action_and_respects_read_only() {
         use egui_kittest::{
             Harness,

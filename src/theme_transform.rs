@@ -10,8 +10,6 @@
 //! re-check foreground/background pairs against their accessibility target
 //! after transforming a palette.
 
-#[cfg(test)]
-use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 use syntect::highlighting::{Color as SyntectColor, Theme as SyntectTheme};
 
@@ -114,13 +112,6 @@ impl ThemeTransform {
         }
     }
 
-    #[cfg(test)]
-    pub fn is_identity(self) -> bool {
-        !self.invert
-            && self.normalized_hue_shift() == 0.0
-            && self.colors.normalized() == ThemeColorAdjustments::IDENTITY
-    }
-
     /// Transform an unpremultiplied sRGB color while preserving alpha.
     pub fn apply_rgba(self, color: Rgba) -> Rgba {
         let color = if self.invert {
@@ -130,14 +121,6 @@ impl ThemeTransform {
         };
         self.colors
             .apply(rotate_hue(color, self.normalized_hue_shift()))
-    }
-
-    /// Transform an egui color without changing its alpha channel.
-    #[cfg(test)]
-    pub fn apply_color32(self, color: Color32) -> Color32 {
-        let [red, green, blue, alpha] = color.to_srgba_unmultiplied();
-        let transformed = self.apply_rgba(Rgba::from_rgba(red, green, blue, alpha));
-        Color32::from_rgba_unmultiplied(transformed.r, transformed.g, transformed.b, transformed.a)
     }
 
     /// Transform every semantic role used by application chrome and editors.
@@ -431,7 +414,10 @@ mod tests {
         assert_eq!(ThemeTransform::IDENTITY.apply_rgba(color), color);
         assert_eq!(ThemeTransform::new(false, 360.0).apply_rgba(color), color);
         assert_eq!(ThemeTransform::new(false, -720.0).apply_rgba(color), color);
-        assert!(ThemeTransform::new(false, f32::NAN).is_identity());
+        assert_eq!(
+            ThemeTransform::new(false, f32::NAN).apply_rgba(color),
+            color
+        );
         assert_eq!(
             ThemeTransform::new(false, f32::INFINITY).apply_rgba(color),
             color
@@ -494,23 +480,6 @@ mod tests {
         ] {
             assert!(u8::abs_diff(actual, expected) <= 1);
         }
-    }
-
-    #[test]
-    fn color32_mapping_preserves_unmultiplied_alpha() {
-        let original = Color32::from_rgba_unmultiplied(90, 20, 150, 33);
-        let transform = ThemeTransform::new(true, 90.0);
-        let transformed = transform.apply_color32(original);
-        assert_eq!(transformed.a(), 33);
-
-        // Color32 is premultiplied internally, so compare against its own
-        // unmultiplied representation to account for low-alpha quantization.
-        let [red, green, blue, alpha] = original.to_srgba_unmultiplied();
-        let expected = transform.apply_rgba(Rgba::from_rgba(red, green, blue, alpha));
-        assert_eq!(
-            transformed,
-            Color32::from_rgba_unmultiplied(expected.r, expected.g, expected.b, expected.a)
-        );
     }
 
     #[test]

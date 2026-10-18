@@ -179,9 +179,6 @@ impl<C> Document<C> {
     pub fn take_edit(&mut self) -> Option<DocumentSnapshot> {
         self.editor.take_edit()
     }
-    pub fn take_history_reset(&mut self) -> bool {
-        std::mem::take(&mut self.editor.reset_editor_history)
-    }
     pub fn set_history_reset(&mut self, reset: bool) {
         self.editor.reset_editor_history = reset;
     }

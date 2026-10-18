@@ -6605,13 +6605,6 @@ fn ui_scale_is_clamped_to_the_supported_interface_range() {
 }
 
 #[test]
-fn find_enter_navigation_honours_shift() {
-    assert_eq!(find_step_for_enter(true, false), Some(FindStep::Next));
-    assert_eq!(find_step_for_enter(true, true), Some(FindStep::Previous));
-    assert_eq!(find_step_for_enter(false, true), None);
-}
-
-#[test]
 fn preview_status_does_not_report_zero_millisecond_startup_timing() {
     assert_eq!(
         preview_timing_label(DocumentKind::Typst, Duration::ZERO),

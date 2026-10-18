@@ -587,13 +587,6 @@ struct EditorAttention {
     animation: Option<crate::settings::RevealAnimation>,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FindStep {
-    Next,
-    Previous,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewZoomAction {
     In,
@@ -11420,15 +11413,6 @@ fn apply_ui_scale(context: &egui::Context, percent: u16) {
 
 fn ui_scale_factor(percent: u16) -> f32 {
     f32::from(percent.clamp(75, 150)) / f32::from(DEFAULT_UI_SCALE_PERCENT)
-}
-
-#[cfg(test)]
-fn find_step_for_enter(enter_pressed: bool, shift: bool) -> Option<FindStep> {
-    enter_pressed.then_some(if shift {
-        FindStep::Previous
-    } else {
-        FindStep::Next
-    })
 }
 
 fn preview_timing_label(kind: DocumentKind, elapsed: Duration) -> Option<String> {

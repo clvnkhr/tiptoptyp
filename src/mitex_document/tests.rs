@@ -269,8 +269,9 @@ fn toggles_preserve_disk_identity_dirty_work_and_exact_spelling() {
     );
     assert_ne!(document.editor().key().epoch, old.epoch);
     assert_eq!(document.editor().history_availability(), (false, false));
-    assert!(document.take_history_reset());
-    assert!(!document.take_history_reset());
+    assert!(document.editor().reset_editor_history);
+    document.set_history_reset(false);
+    assert!(!document.editor().reset_editor_history);
     assert!(document.take_edit().is_some());
     assert!(document.take_edit().is_none());
     assert!(document.record_save(old_save.committed(99)).is_err());
