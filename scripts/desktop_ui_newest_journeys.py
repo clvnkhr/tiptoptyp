@@ -13,7 +13,15 @@ def arxiv_table_cases():
     """Use the attributed excerpts unchanged; keep native edit expectations literal."""
     directory = Path(__file__).resolve().parents[1] / "tests/fixtures/arxiv-tables"
     cells = {"scipy-roadmap.tex": (1, 1), "scipy-optimizers.tex": (1, 0),
-             "platonic-metrics.tex": None}
+             "platonic-metrics.tex": (3, 5)}
+    dimensions = {"scipy-roadmap.tex": (16, 2), "scipy-optimizers.tex": (13, 14),
+                  "platonic-metrics.tex": (10, 6)}
+    cell_sources = {"platonic-metrics.tex": (
+        r"{\vspace{-0.5em}Unbiased estimator of CKA that corrects for sample bias in "
+        r"HSIC~\cite{song2012feature}.}")}
+    editor_sources = {"platonic-metrics.tex": (
+        r"Unbiased estimator of CKA that corrects for sample bias in "
+        r"HSIC~\cite{song2012feature}.")}
     metadata = json.loads((directory / "provenance.json").read_text())
     if len(metadata) != len(cells) or {entry["file"] for entry in metadata} != set(cells):
         raise AssertionError("native arXiv table fixture inventory changed")
@@ -28,8 +36,17 @@ def arxiv_table_cases():
         before, after = entry["edit_before"], entry["edit_after"]
         if not before or before == after or source.count(before) != 1 or environment.count(before) != 1:
             raise AssertionError("native arXiv edit must name one literal inside its table: " + entry["file"])
+        cell_source = cell_sources.get(entry["file"], before)
+        if environment.count(cell_source) != 1 or cell_source.count(before) != 1:
+            raise AssertionError("native arXiv edit must preserve the complete cell: " + entry["file"])
+        editor_text = editor_sources.get(entry["file"], cell_source)
+        if cell_source.count(editor_text) != 1 or editor_text.count(before) != 1:
+            raise AssertionError("native arXiv editor body must preserve its source wrappers: " + entry["file"])
         cases.append({"file": entry["file"], "source": source, "table": environment,
                       "line": source[:start].count("\n") + 1, "cell": cells[entry["file"]],
+                      "dimensions": dimensions[entry["file"]],
+                      "cell_source": cell_source, "editor_text": editor_text,
+                      "edited_editor_text": editor_text.replace(before, after, 1),
                       "edit_before": before, "edit_after": after})
     return cases
 
@@ -108,6 +125,67 @@ def table_grid_geometry(state, baseline_footer=None, *, require_overflow=True):
             for value, original in zip(geometry, baseline_footer[name])):
         raise AssertionError("table footer moved while the grid scrolled")
     return scroll, footer
+
+
+def assert_table_grid_only(state, *, valid=True):
+    """Require this child frame to expose its grid, never a source fallback."""
+    document, targets = state["document"], state.get("targets", {})
+    apply = targets.get("table.apply")
+    if not document.get("table_editor_open") or not apply or apply.get("age_ms", 501) > 500 \
+            or apply.get("enabled") is not valid:
+        raise AssertionError("table grid has no current validation/footer state")
+    draft = document.get("table_draft")
+    if not draft or draft.get("valid") is not valid \
+            or any(type(draft.get(axis)) is not int or draft[axis] <= 0
+                   for axis in ("rows", "columns")) \
+            or draft["rows"] * draft["columns"] > 4096:
+        raise AssertionError("table grid has no bounded, validated cell metadata")
+    for name in ("table.source", "table.source-mode"):
+        target = targets.get(name)
+        if target and target.get("frame") == apply.get("frame") \
+                and target.get("viewport") == apply.get("viewport") \
+                and target.get("age_ms", 501) <= 500:
+            raise AssertionError("table workbench exposed a source editor: " + name)
+    scroll = state.get("scrolls", {}).get("table.grid")
+    if not scroll or scroll.get("frame") != apply.get("frame"):
+        raise AssertionError("table workbench has no grid in its current child frame")
+
+
+def visible_table_cell(state, name, previous_frame=None):
+    """A partially clipped sliver or an old offscreen target is not clickable evidence."""
+    targets = state.get("targets", {})
+    target, footer = targets.get(name), targets.get("table.apply")
+    grid = state.get("scrolls", {}).get("table.grid")
+    if not state["document"].get("table_editor_open") or not target or not footer or not grid \
+            or target.get("enabled") is not True or target.get("age_ms", 501) > 500 \
+            or footer.get("enabled") is not True or footer.get("age_ms", 501) > 500 \
+            or target.get("frame") != footer.get("frame") \
+            or target.get("frame") != grid.get("frame") \
+            or target.get("viewport") != footer.get("viewport") \
+            or (previous_frame is not None and target.get("frame") == previous_frame):
+        return None
+    if any(type(target.get(key)) not in (int, float) or not math.isfinite(target[key])
+           for key in ("x", "y", "width", "height")) \
+            or target["width"] < 40 or target["height"] < 8:
+        return None
+    return target
+
+
+def table_offer_rejected(state, previous_menu_frame=None):
+    """Only the newly opened source context menu can prove unsupported detection."""
+    if state["document"].get("table_editor_open"):
+        raise AssertionError("unsupported table unexpectedly opened a workbench")
+    targets = state.get("targets", {})
+    marker = targets.get("menu.Select All")
+    if not marker or not marker.get("enabled") or marker.get("age_ms", 501) > 500 \
+            or (previous_menu_frame is not None and marker.get("frame") == previous_menu_frame):
+        return False
+    table = targets.get("menu.Edit Table…")
+    if table and table.get("frame") == marker.get("frame") \
+            and table.get("viewport") == marker.get("viewport") \
+            and table.get("age_ms", 501) <= 500:
+        raise AssertionError("unsupported table was offered as Edit Table")
+    return True
 
 
 def assert_compact_table_rows(state):
@@ -374,13 +452,6 @@ class NewestJourneys:
             time.sleep(0.05)
         raise AssertionError("table widget did not expose the expected fresh state: " + name)
 
-    def wait_table_source_draft(self, source, valid):
-        from desktop_ui_journeys import fingerprint
-        self.wait("table source draft receives complete input", lambda d:
-                  d["table_editor_open"] and (d.get("table_draft") or {}).get("fingerprint") == fingerprint(source)
-                  and (d.get("table_draft") or {}).get("bytes") == len(source.encode("utf-8"))
-                  and (d.get("table_draft") or {}).get("valid") is valid)
-
     def open_table_workbench(self, line=0):
         self.click("editor.source")
         self.key(126, "cmd")
@@ -395,7 +466,61 @@ class NewestJourneys:
         self.wait_target("menu.Edit Table…")
         self.click("menu.Edit Table…")
         self.wait("table workbench opens without replacing the source", lambda d: d["table_editor_open"])
+        self.table_target("table.apply", previous_frame=old.get("table.apply"))
+        assert_table_grid_only(self.snapshot())
         return old
+
+    def reveal_table_cell(self, name, previous_frame=None, *, require_offscreen=False):
+        """Reveal a virtualized column through native input; never widen cells for the test."""
+        state = self.snapshot()
+        initially_offscreen = visible_table_cell(state, name) is None
+        if require_offscreen and not initially_offscreen:
+            raise AssertionError("table cell must begin offscreen for horizontal input coverage: " + name)
+        if initially_offscreen or visible_table_cell(state, name, previous_frame) is None:
+            scroll, _ = table_grid_geometry(state, require_overflow=False)
+            self.native("move", scroll["x"], scroll["y"])
+            self.native("horizontal-wheel", scroll["x"], scroll["y"], 100)
+            last_scroll = time.monotonic()
+        else:
+            last_scroll = None
+        deadline, steps, stable, previous = time.monotonic() + 6, 0, 0, None
+        previous_marker = None
+        while time.monotonic() < deadline:
+            state = self.snapshot()
+            scroll, _ = table_grid_geometry(state, require_overflow=False)
+            target = visible_table_cell(state, name, previous_frame)
+            if target is not None:
+                geometry = tuple(target[key] for key in ("x", "y", "width", "height"))
+                marker = (target["viewport"], target["frame"])
+                if previous_marker is not None and marker[0] == previous_marker[0] \
+                        and marker[1] <= previous_marker[1]:
+                    # Inspection can publish the owner just before its child paints.
+                    # One retained hit rectangle cannot count as several observations.
+                    time.sleep(0.05)
+                    continue
+                if previous_marker is not None and marker[0] == previous_marker[0] \
+                        and previous is not None and all(
+                            abs(a - b) <= 1 for a, b in zip(geometry, previous)):
+                    stable += 1
+                else:
+                    stable, previous = 1, geometry
+                previous_marker = marker
+                if stable >= 3:
+                    if require_offscreen and steps == 0:
+                        raise AssertionError("offscreen table cell appeared without right-wheel input: " + name)
+                    self.record("table.cell_revealed", target=name, horizontal_steps=steps,
+                                was_offscreen=initially_offscreen,
+                                stable_samples=stable, geometry=geometry)
+                    return target
+            else:
+                stable, previous, previous_marker = 0, None, None
+                if steps < 8 and (last_scroll is None or time.monotonic() - last_scroll >= 0.25):
+                    self.native("move", scroll["x"], scroll["y"])
+                    self.native("horizontal-wheel", scroll["x"], scroll["y"], -8)
+                    steps += 1
+                    last_scroll = time.monotonic()
+            time.sleep(0.05)
+        raise AssertionError("table cell did not become stably visible after horizontal input: " + name)
 
     def open_table_fixture(self, path):
         # Go to the full file path so Open selects the TeX file, not its folder.
@@ -409,6 +534,48 @@ class NewestJourneys:
         time.sleep(0.5)
         self.native("ax-press-title", "Open")
         self.wait("private TeX table opens", lambda d: d["path"] == str(path), timeout=15)
+
+    def reject_table_workbench(self, name, source, line=0):
+        from desktop_ui_journeys import fingerprint
+        lines = source.split("\n")
+        if not 0 <= line < len(lines) or len(lines[line]) < 2:
+            raise AssertionError("unsupported table fixture has no intended caret location")
+        expected_cursor = sum(len(row) + 1 for row in lines[:line]) + 2
+        self.click("editor.source")
+        self.key(126, "cmd")
+        for _ in range(line):
+            self.key(125, "none")
+        self.key(124, "none")
+        self.key(124, "none")
+        self.wait_target("editor.caret")
+        self.wait("caret reaches the unsupported table fixture", lambda document:
+                  document.get("cursor") == [expected_cursor, expected_cursor]
+                  and document.get("source_fingerprint") == fingerprint(source))
+        previous = self.snapshot()["targets"].get("menu.Select All")
+        previous_frame = previous.get("frame") if previous else None
+        self.right_click("editor.caret")
+        deadline, stable_samples = time.monotonic() + 6, 0
+        last_marker = None
+        while time.monotonic() < deadline:
+            state = self.snapshot()
+            if table_offer_rejected(state, previous_frame):
+                target = state["targets"]["menu.Select All"]
+                marker = (target["viewport"], target["frame"])
+                if last_marker is not None and marker[0] == last_marker[0] \
+                        and marker[1] <= last_marker[1]:
+                    time.sleep(0.05)
+                    continue
+                stable_samples = (stable_samples + 1 if last_marker is not None
+                                  and marker[0] == last_marker[0] else 1)
+                last_marker = marker
+                if stable_samples >= 3:
+                    self.record("table.unsupported", fixture=name, stable_samples=stable_samples)
+                    self.key(53, "none")
+                    return
+            else:
+                stable_samples, last_marker = 0, None
+            time.sleep(0.05)
+        raise AssertionError("unsupported table has no current rejecting context menu: " + name)
 
     def arxiv_tables(self):
         from desktop_ui_journeys import fingerprint
@@ -428,25 +595,20 @@ class NewestJourneys:
             self.source_is(original)
             for disposition in ("cancel", "apply"):
                 old = self.open_table_workbench(line=case["line"])
-                if case["cell"] is None:
-                    self.table_target("table.source", previous_frame=old.get("table.source"))
-                    self.wait_table_source_draft(case["table"], True)
-                    self.click("table.source")
-                    self.key(0)
-                    edited_table = case["table"].replace(case["edit_before"], case["edit_after"], 1)
-                    self.paste_source(edited_table,
-                                      check=lambda: self.wait_table_source_draft(edited_table, True))
-                else:
-                    # Grid scrolling belongs to the child and may survive reopening.
-                    self.table_target("table.apply", previous_frame=old.get("table.apply"))
-                    self.scroll_table_grid_to_top("arxiv:" + case["file"], disposition,
-                                                  require_overflow=False)
-                    row, column = case["cell"]
-                    target = f"table.cell.{row}.{column}"
-                    self.table_target(target, previous_frame=old.get(target))
-                    self.click(target)
-                    self.key(0)
-                    self.native("text", case["edit_after"])
+                # Grid scrolling belongs to the child and may survive reopening.
+                self.table_target("table.apply", previous_frame=old.get("table.apply"))
+                self.scroll_table_grid_to_top("arxiv:" + case["file"], disposition,
+                                              require_overflow=False)
+                state = self.snapshot()
+                assert_table_grid_only(state)
+                draft = state["document"]["table_draft"]
+                assert (draft["rows"], draft["columns"]) == case["dimensions"]
+                row, column = case["cell"]
+                target = f"table.cell.{row}.{column}"
+                self.reveal_table_cell(target, previous_frame=old.get(target))
+                self.click(target)
+                self.key(0)
+                self.type_table_cell_text(case["edited_editor_text"])
                 self.source_is(original)
                 self.stable_state(lambda d: d["source_fingerprint"] == fingerprint(original), frames=3)
                 self.table_target("table.apply")
@@ -462,11 +624,45 @@ class NewestJourneys:
                     self.key(6)
                     self.source_is(original)
                 self.record("table.arxiv", fixture=case["file"], disposition=disposition,
-                            mode="source" if case["cell"] is None else "grid",
+                            mode="grid",
                             source_fingerprint=fingerprint(original), exact_undo=disposition == "apply")
+            if case["file"] == "scipy-optimizers.tex":
+                self.arxiv_optimizer_last_column(case)
             self.close_scratch(count)
         self.key({"Code": 19, "Split": 20, "Preview": 21}[view_mode])
         self.wait("arXiv table journey restores its original layout", lambda d: d["view_mode"] == view_mode)
+
+    def arxiv_optimizer_last_column(self, case):
+        from desktop_ui_journeys import fingerprint
+        original = case["source"]
+        before, after = "0.19 & 1.0", "0.19 & 1.1"
+        if case["file"] != "scipy-optimizers.tex" or original.count(before) != 1:
+            raise AssertionError("optimizer rightmost edit needs its unique literal cell")
+        self.source_is(original)
+        old = self.open_table_workbench(line=case["line"])
+        self.scroll_table_grid_to_top("arxiv:scipy-optimizers.tex", "rightmost", require_overflow=False)
+        state = self.snapshot()
+        assert_table_grid_only(state)
+        draft = state["document"]["table_draft"]
+        assert (draft["rows"], draft["columns"]) == (13, 14)
+        target = "table.cell.1.13"
+        self.reveal_table_cell(target, previous_frame=old.get(target), require_offscreen=True)
+        self.click(target)
+        self.key(0)
+        self.native("text", "1.1")
+        self.source_is(original)
+        self.stable_state(lambda d: d["source_fingerprint"] == fingerprint(original), frames=3)
+        self.table_target("table.apply")
+        if self.capture_review:
+            self.capture_viewport("table-editor")
+        self.click("table.apply")
+        self.wait("rightmost optimizer grid edit closes once", lambda d: not d["table_editor_open"])
+        self.source_is(original.replace(before, after, 1))
+        self.click("editor.source")
+        self.key(6)
+        self.source_is(original)
+        self.record("table.arxiv_rightmost", fixture=case["file"], cell=[1, 13],
+                    was_offscreen=True, exact_undo=True)
 
     def tables(self):
         from desktop_ui_journeys import fingerprint
@@ -520,38 +716,8 @@ class NewestJourneys:
 
         dynamic = '#let widths = (40%, auto)\n#let rows = ([Alpha], [Beta])\n#table(columns: widths, ..rows)'
         count = self.scratch(dynamic)
-        old = self.open_table_workbench(line=2)
-        self.wait("generated table receives real compiler samples", lambda d:
-                  not d["table_samples"]["pending"] and not d["table_samples"]["failed"]
-                  and d["table_samples"]["grid"] is not None)
-        samples = self.snapshot()["document"]["table_samples"]["grid"]
-        assert (samples["columns"], samples["rows"]) == (2, 1)
-        assert [v["fingerprint"] for v in samples["values"]] == [fingerprint("Alpha"), fingerprint("Beta")]
-        self.table_target("table.sample.0.0")
-        self.click("table.sample.0.0")
-        self.native("text", "must stay locked")
-        self.wait_table_source_draft("table(columns: widths, ..rows)", True)
+        self.reject_table_workbench("typst-generated", dynamic, line=2)
         unchanged(dynamic)
-        if getattr(self, "capture_review", False):
-            self.capture_viewport("table-editor")
-        self.click("table.source-mode")
-        self.table_target("table.source", previous_frame=old.get("table.source"))
-        self.click("table.source")
-        self.key(0)
-        incomplete = "table(columns: widths, ..rows"
-        self.native("text", incomplete)
-        self.wait_table_source_draft(incomplete, False)
-        self.table_target("table.apply", enabled=False)
-        unchanged(dynamic)
-        self.key(0)
-        draft = "table(columns: widths, fill: blue, ..rows)"
-        self.native("text", draft)
-        self.wait_table_source_draft(draft, True)
-        self.table_target("table.apply")
-        changed = dynamic.replace("table(columns: widths, ..rows)", draft)
-        close_draft("apply", changed)
-        self.key(6)
-        self.source_is(dynamic)
         self.close_scratch(count)
 
         computed = '#let price = 60\n#table(columns: 2, [Revenue], [#price])'
@@ -609,19 +775,28 @@ class NewestJourneys:
         self.native("text", "X & Y")
         self.table_target("table.apply", enabled=False)
         unchanged(tex)
-        old_source = self.snapshot()["targets"].get("table.source")
-        self.click("table.source-mode")
-        self.table_target("table.source", previous_frame=old_source["frame"] if old_source else None)
-        self.click("table.source")
+        assert_table_grid_only(self.snapshot(), valid=False)
+        self.click("table.cell.0.0")
         self.key(0)
-        repaired = environment.replace("Alpha", "Repaired")
-        self.native("text", repaired)
-        self.wait_table_source_draft(repaired, True)
+        self.native("text", "Repaired")
         self.table_target("table.apply")
+        repaired = environment.replace("Alpha", "Repaired")
         changed = tex.replace(environment, repaired)
         close_draft("apply", changed)
         self.key(6)
         self.source_is(tex)
+        self.close_scratch(count)
+
+        # Dynamic TeX geometry must stay in the document editor instead of
+        # opening an opaque source editor disguised as a table workbench.
+        environment = r"\begin{tabular}{*{\colcount}{l}}Alpha & Beta\\\end{tabular}"
+        tex = "\\documentclass{article}\n\\newcommand{\\colcount}{2}\n\\begin{document}\n" + environment + "\n\\end{document}\n"
+        path = self.directory / "table-dynamic-columns.tex"
+        path.write_text(tex)
+        count = self.snapshot()["document"]["tabs"]
+        self.open_table_fixture(path)
+        self.reject_table_workbench("tex-dynamic-columns", tex, line=3)
+        unchanged(tex)
         self.close_scratch(count)
 
         # Missing column imports are added only on Apply, with one Undo/Redo.

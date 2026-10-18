@@ -11367,7 +11367,7 @@ fn focused_table_child_keeps_edit_commands_and_find_out_of_the_source() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
-        let source = "#table(..cells)";
+        let source = "#table(columns: 1, [Cell])";
         app.document_mut().replace_unprojected_untitled(source);
         app.begin_table_target(TableTarget::at(source, 2, DocumentKind::Typst).unwrap());
         let key = app.document().key();
@@ -11494,7 +11494,7 @@ fn cmd_w_in_table_child_cancels_its_draft_without_closing_a_document() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
-        let source = "#table(..cells)";
+        let source = "#table(columns: 1, [Cell])";
         app.document_mut().replace_unprojected_untitled(source);
         app.begin_table_target(TableTarget::at(source, 2, DocumentKind::Typst).unwrap());
         let key = app.document().key();

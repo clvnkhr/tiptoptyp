@@ -17,14 +17,7 @@ pub(super) struct TableEditorState {
     write_ratios: bool,
     importing: bool,
     markdown: String,
-    source_requested: bool,
     format_selected: bool,
-}
-
-impl TableEditorState {
-    pub(super) fn take_source_request(&mut self) -> bool {
-        std::mem::take(&mut self.source_requested)
-    }
 }
 
 pub(super) const CELL_HEIGHT: f32 = 36.0;
@@ -177,14 +170,6 @@ pub(super) fn show_table_editor_ui(
         ui.add_enabled_ui(!has_locked, |ui| {
             ui.toggle_value(&mut dialog.ui.importing, "Import Markdown")
         });
-        if dialog.insertion_prefix.is_none() {
-            let source = ui.button("Source");
-            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("table.source-mode", &source);
-            if source.clicked() {
-                dialog.ui.source_requested = true;
-            }
-        }
         if has_locked {
             ui.weak("Sampled cells locked");
         }
@@ -1400,7 +1385,6 @@ mod tests {
                             grid: Some(crate::table_sampling::Grid {
                                 columns: 3,
                                 rows: 1,
-                                instances: 1,
                                 cells: vec![crate::table_sampling::Cell {
                                     position: (0, 1),
                                     span: (1, 1),

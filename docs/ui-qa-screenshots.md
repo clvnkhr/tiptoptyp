@@ -70,6 +70,7 @@ The accepted scenes and their framebuffer targets are:
 | `table-editor-narrow` | `table-editor` | The table workbench at its minimum width |
 | `table-editor-tex` | `table-editor` | Real named TeX/booktabs fixture in the same table workbench |
 | `table-editor-tex-narrow` | `table-editor` | TeX table workbench at its minimum width |
+| `table-editor-tex-merged` | `table-editor` | Real Platonic metrics table with merged headers and editable TeX cells |
 | `tabs` | `main` | Adjacent title-bar tabs with close controls, a dirty active tab, and the first tab selected as preview source |
 | `empty-workspace` | `main` | No document tabs; workspace Explorer and New/Open remain available |
 | `tabs-pdf` | `main` | PDF tab in the editor pane beside the first tab's Typst preview |

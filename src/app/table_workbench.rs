@@ -1,28 +1,17 @@
 //! One draft lifetime and Apply/Cancel pipeline for Typst and TeX tables.
 use super::*;
-use crate::editor_features::{TableSource, TexTable};
+use crate::editor_features::TexTable;
 
 #[derive(Debug, Clone)]
 pub(super) enum TableEditorDialog {
     Typst(Box<TypstTableEditorDialog>),
-    Source(Box<SourceDialog>),
     Tex(Box<TexDialog>),
-}
-#[derive(Debug, Clone)]
-pub(super) struct SourceDialog {
-    pub(super) target: TableSource,
-    draft: String,
-    key: DocumentKey,
-    error: Option<String>,
-    validation: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub(super) struct TexDialog {
     pub(super) table: TexTable,
     original: String,
-    draft: String,
     column_spec: String,
-    pub(super) source_mode: bool,
     key: DocumentKey,
     error: Option<String>,
     validation: Option<String>,
@@ -30,21 +19,39 @@ pub(super) struct TexDialog {
 impl TableEditorDialog {
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn desktop_inspection(&self) -> serde_json::Value {
-        let (draft, valid) = match self {
-            Self::Source(dialog) => (&dialog.draft, dialog.validation.is_none()),
-            Self::Tex(dialog) if dialog.source_mode => (&dialog.draft, dialog.validation.is_none()),
-            _ => return serde_json::Value::Null,
+        let (rows, columns, valid, cells) = match self {
+            Self::Typst(dialog) => (
+                dialog.table.row_count(),
+                dialog.table.columns,
+                true,
+                &dialog.table.cells,
+            ),
+            Self::Tex(dialog) => {
+                let cells = dialog
+                    .table
+                    .cells
+                    .as_ref()
+                    .expect("admitted TeX table has a grid");
+                (
+                    cells.len(),
+                    dialog.table.columns().unwrap_or_default(),
+                    dialog.validation.is_none(),
+                    cells,
+                )
+            }
         };
+        let serialized = serde_json::to_string(cells).unwrap_or_default();
         serde_json::json!({
-            "fingerprint": crate::desktop_test::fingerprint(draft),
-            "bytes": draft.len(),
+            "fingerprint": crate::desktop_test::fingerprint(&serialized),
+            "rows": rows,
+            "columns": columns,
             "valid": valid,
         })
     }
+
     pub(super) fn set_error(&mut self, error: String) {
         match self {
             Self::Typst(dialog) => dialog.error = Some(error),
-            Self::Source(dialog) => dialog.error = Some(error),
             Self::Tex(dialog) => dialog.error = Some(error),
         }
     }
@@ -61,27 +68,11 @@ impl EditorApp {
         ChildViewHost::close(context, "tiptoptyp-table-editor");
         crate::window_host::return_focus(context);
     }
-    pub(super) fn begin_table_target(&mut self, mut target: TableTarget) {
+    pub(super) fn begin_table_target(&mut self, target: TableTarget) {
         if self.table_editor.is_some() {
             return;
         }
         self.table_samples.reset();
-        if let TableTarget::Typst(table) = &target
-            && !table.has_explicit_columns()
-            && table
-                .cells
-                .iter()
-                .flatten()
-                .any(|cell| crate::table_sampling::computed_markup(cell))
-        {
-            target = TableTarget::Source(TableSource {
-                kind: table.kind,
-                source_range: table.source_range.clone(),
-                source: char_range_slice(self.document().source(), table.source_range.clone())
-                    .unwrap_or_default()
-                    .into(),
-            });
-        }
         self.table_edit_events.clear();
         let key = self.document().key();
         self.table_editor = match target {
@@ -89,20 +80,9 @@ impl EditorApp {
                 self.begin_table_editor(table);
                 return;
             }
-            TableTarget::Source(target) => {
-                Some(TableEditorDialog::Source(Box::new(SourceDialog {
-                    draft: target.source.clone(),
-                    target,
-                    key,
-                    error: None,
-                    validation: None,
-                })))
-            }
             TableTarget::Tex(table) => Some(TableEditorDialog::Tex(Box::new(TexDialog {
-                draft: table.source.clone(),
                 original: table.source.clone(),
                 column_spec: table.column_spec.clone(),
-                source_mode: table.cells.is_none(),
                 validation: table.grid_source_edit().err(),
                 table,
                 key,
@@ -134,20 +114,19 @@ pub(super) fn prepare_source_edit(
 ) -> Result<PreparedTableSourceEdit, String> {
     let (expected_key, original, edit) = match dialog {
         TableEditorDialog::Typst(dialog) => return prepare_table_source_edit(source, key, dialog),
-        TableEditorDialog::Source(dialog) => (
-            dialog.key,
-            dialog.target.source.as_str(),
-            dialog.target.source_edit(&dialog.draft),
-        ),
-        TableEditorDialog::Tex(dialog) => (
-            dialog.key,
-            dialog.original.as_str(),
-            if dialog.source_mode {
-                dialog.table.source_edit(&dialog.draft)
-            } else {
-                dialog.table.grid_source_edit()
-            },
-        ),
+        TableEditorDialog::Tex(dialog) => {
+            if let Some(error) = &dialog.validation {
+                return Err(error.clone());
+            }
+            if dialog.column_spec != dialog.table.column_spec {
+                return Err("Finish the column specification before applying the table".into());
+            }
+            (
+                dialog.key,
+                dialog.original.as_str(),
+                dialog.table.grid_source_edit(),
+            )
+        }
     };
     if key != expected_key {
         return Err("The document changed while the table editor was open. Reopen the table to edit the latest source.".into());
@@ -194,80 +173,7 @@ pub(super) fn show(
     settings: &AppSettings,
 ) -> Option<TableEditorUiAction> {
     match dialog {
-        TableEditorDialog::Typst(typst) => {
-            let action = show_table_editor_ui(ui, typst, width, height, settings);
-            if typst.ui.take_source_request() {
-                match typst.table.render_source_draft() {
-                    Ok(draft) => {
-                        let target = TableSource {
-                            kind: typst.table.kind,
-                            source_range: typst.table.source_range.clone(),
-                            source: typst.original_call.clone(),
-                        };
-                        crate::table_sampling::set_source_mode(ui.ctx(), true);
-                        *dialog = TableEditorDialog::Source(Box::new(SourceDialog {
-                            validation: target.source_edit(&draft).err(),
-                            target,
-                            draft,
-                            key: typst.document_key,
-                            error: None,
-                        }));
-                    }
-                    Err(error) => typst.error = Some(error.to_string()),
-                }
-                None
-            } else {
-                action
-            }
-        }
-        TableEditorDialog::Source(dialog) => {
-            let (body, footer_rect) = workbench_regions(ui, height);
-            ui.scope_builder(
-                egui::UiBuilder::new()
-                    .id_salt("table-source-body")
-                    .max_rect(body),
-                |ui| {
-                    ui.set_clip_rect(ui.clip_rect().intersect(body));
-                    let view = crate::table_sampling::view(ui);
-                    let mode_id = crate::table_sampling::mode_key(ui.ctx().viewport_id());
-                    let mut source_mode = ui
-                        .ctx()
-                        .data(|data| data.get_temp::<bool>(mode_id))
-                        .unwrap_or(view.is_none());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.strong(format!("Typst · {}", dialog.target.kind.callee()));
-                        if let Some(grid) = view.as_ref().and_then(|view| view.grid.as_ref()) {
-                            ui.weak(format!("{} × {}", grid.rows, grid.columns));
-                        }
-                        let toggle = ui
-                            .add_enabled_ui(view.is_some(), |ui| {
-                                ui.toggle_value(&mut source_mode, "Source")
-                            })
-                            .inner;
-                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                        crate::desktop_test::observe("table.source-mode", &toggle);
-                        let _ = toggle;
-                    });
-                    ui.ctx()
-                        .data_mut(|data| data.insert_temp(mode_id, source_mode));
-                    ui.separator();
-                    if !source_mode {
-                        table_samples::sampled_grid(ui, ui.available_height());
-                    } else if source_field(
-                        ui,
-                        "table-source",
-                        &mut dialog.draft,
-                        "typ-code",
-                        ui.available_height(),
-                        settings,
-                    ) {
-                        dialog.validation = dialog.target.source_edit(&dialog.draft).err();
-                        dialog.error = None;
-                    }
-                },
-            );
-            footer(ui, footer_rect, &dialog.error, dialog.validation.as_ref())
-        }
+        TableEditorDialog::Typst(typst) => show_table_editor_ui(ui, typst, width, height, settings),
         TableEditorDialog::Tex(dialog) => show_tex(ui, dialog, height, settings),
     }
 }
@@ -288,28 +194,6 @@ fn workbench_regions(ui: &egui::Ui, height: f32) -> (Rect, Rect) {
         ),
         Rect::from_min_max(Pos2::new(available.left(), footer_top), available.max),
     )
-}
-
-fn source_field(
-    ui: &mut egui::Ui,
-    salt: &str,
-    draft: &mut String,
-    extension: &str,
-    height: f32,
-    settings: &AppSettings,
-) -> bool {
-    egui::ScrollArea::both()
-        .id_salt(salt)
-        .max_height(height.max(1.0))
-        .min_scrolled_height(0.0)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let response = code_editor::editor(ui, salt, draft, extension, settings, 12);
-            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-            crate::desktop_test::observe("table.source", &response);
-            response.changed()
-        })
-        .inner
 }
 
 fn footer(
@@ -376,32 +260,11 @@ fn show_tex(
                         rows.first().map_or(0, Vec::len)
                     ));
                 }
-                let mut source_mode = dialog.source_mode;
-                let source_response = ui.toggle_value(&mut source_mode, "Source");
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("table.source-mode", &source_response);
-                if source_response.changed() {
-                    change_tex_mode(ui, dialog, source_mode);
-                }
                 if locked > 0 {
                     ui.weak(format!("{locked} locked"));
                 }
             });
             ui.separator();
-            if dialog.source_mode {
-                if source_field(
-                    ui,
-                    "tex-table-source",
-                    &mut dialog.draft,
-                    "tex",
-                    ui.available_height(),
-                    settings,
-                ) {
-                    dialog.validation = dialog.table.source_edit(&dialog.draft).err();
-                    dialog.error = None;
-                }
-                return;
-            }
             let mut column_spec_changed = false;
             ui.horizontal(|ui| {
                 let label = ui.label("Columns");
@@ -417,56 +280,11 @@ fn show_tex(
                 crate::desktop_test::observe("table.columns", &spec);
                 column_spec_changed = spec.changed();
             });
-            let cells_changed = dialog
-                .table
-                .cells
-                .as_mut()
-                .is_some_and(|rows| tex_grid(ui, rows, settings));
+            let cells_changed = tex_grid(ui, &mut dialog.table, settings);
             refresh_tex_grid_validation(dialog, column_spec_changed || cells_changed);
         },
     );
     footer(ui, footer_rect, &dialog.error, dialog.validation.as_ref())
-}
-
-fn change_tex_mode(ui: &egui::Ui, dialog: &mut TexDialog, source_mode: bool) {
-    if source_mode {
-        match dialog
-            .table
-            .render_source_draft_with_spec(&dialog.column_spec)
-        {
-            Ok(draft) => {
-                dialog.draft = draft;
-                dialog.source_mode = true;
-                dialog.error = None;
-                dialog.validation = dialog.table.source_edit(&dialog.draft).err();
-            }
-            Err(error) => dialog.error = Some(error),
-        }
-    } else if crate::table_sampling::view(ui).is_some_and(|view| !view.locked.is_empty())
-        && dialog
-            .table
-            .render_source_draft_with_spec(&dialog.column_spec)
-            .as_ref()
-            != Ok(&dialog.draft)
-    {
-        dialog.error = Some(
-            "Apply your source changes and reopen the table to refresh its sampled values.".into(),
-        );
-    } else {
-        match dialog.table.source_edit(&dialog.draft).and_then(|_| crate::editor_features::tex_table_at(&dialog.draft, 1).ok_or("Finish the table source".into())) {
-            Ok(mut table) if table.cells.is_some() => {
-                table.source_range = dialog.table.source_range.clone();
-                table.packages.clone_from(&dialog.table.packages);
-                dialog.column_spec.clone_from(&table.column_spec);
-                dialog.table = table;
-                dialog.source_mode = false;
-                dialog.error = None;
-                dialog.validation = dialog.table.grid_source_edit().err();
-            }
-            Ok(_) => dialog.error = Some("This table uses structural commands or custom columns. Keep editing its complete source here.".into()),
-            Err(error) => dialog.error = Some(error),
-        }
-    }
 }
 
 fn visible_tex_rows(viewport: Rect, row_count: usize) -> std::ops::Range<usize> {
@@ -479,10 +297,87 @@ fn visible_tex_rows(viewport: Rect, row_count: usize) -> std::ops::Range<usize> 
     first.min(row_count)..last.saturating_add(1).min(row_count)
 }
 
-fn tex_grid(ui: &mut egui::Ui, rows: &mut [Vec<String>], settings: &AppSettings) -> bool {
+fn tex_grid_cells(
+    table: &TexTable,
+    viewport: Rect,
+    cell_width: f32,
+    focused: Option<(usize, usize)>,
+) -> Vec<(usize, usize)> {
+    use table_editor::ROW_HEADER;
+    let count = table.columns().unwrap_or_default();
+    let rows = table.cells.as_ref().map_or(0, Vec::len);
+    let first = ((viewport.left() - ROW_HEADER) / cell_width)
+        .floor()
+        .max(0.0) as usize;
+    let last = ((viewport.right() - ROW_HEADER) / cell_width)
+        .ceil()
+        .max(0.0) as usize;
+    let mut owners = Vec::new();
+    for r in visible_tex_rows(viewport, rows) {
+        for c in first.min(count)..last.min(count) {
+            owners.push(table.cell_owner((r, c)));
+        }
+    }
+    owners.extend(focused);
+    owners.sort_unstable();
+    owners.dedup();
+    owners
+}
+
+fn tex_cell_rect(
+    origin: Pos2,
+    (row, column): (usize, usize),
+    (rows, columns): (usize, usize),
+    width: f32,
+) -> Rect {
     use table_editor::{CELL_HEIGHT, HEADER_HEIGHT, ROW_HEADER};
-    let count = rows.first().map_or(1, Vec::len).max(1);
-    let cell_width = ((ui.available_width() - ROW_HEADER - 12.0) / count.min(5) as f32).max(128.0);
+    Rect::from_min_size(
+        origin
+            + Vec2::new(
+                ROW_HEADER + column as f32 * width,
+                HEADER_HEIGHT + row as f32 * CELL_HEIGHT,
+            ),
+        Vec2::new(width * columns as f32, CELL_HEIGHT * rows as f32),
+    )
+}
+
+// Expose only a cell's editable body to TextEdit. Editing the borrowed range
+// avoids cloning every visible cell and keeps its TeX wrappers out of selection.
+struct CellContents<'a> {
+    cell: &'a mut String,
+    range: std::ops::Range<usize>,
+}
+
+impl egui::TextBuffer for CellContents<'_> {
+    fn is_mutable(&self) -> bool {
+        true
+    }
+    fn as_str(&self) -> &str {
+        &self.cell[self.range.clone()]
+    }
+    fn type_id(&self) -> std::any::TypeId {
+        std::any::TypeId::of::<CellContents<'static>>()
+    }
+    fn insert_text(&mut self, text: &str, index: egui::text::CharIndex) -> usize {
+        let offset = self.byte_index_from_char_index(index).0;
+        self.cell.insert_str(self.range.start + offset, text);
+        self.range.end += text.len();
+        text.chars().count()
+    }
+    fn delete_char_range(&mut self, range: std::ops::Range<egui::text::CharIndex>) {
+        let start = self.byte_index_from_char_index(range.start).0;
+        let end = self.byte_index_from_char_index(range.end).0;
+        self.cell
+            .replace_range(self.range.start + start..self.range.start + end, "");
+        self.range.end -= end - start;
+    }
+}
+
+fn tex_grid(ui: &mut egui::Ui, table: &mut TexTable, settings: &AppSettings) -> bool {
+    use table_editor::{CELL_HEIGHT, HEADER_HEIGHT, ROW_HEADER};
+    let count = table.columns().unwrap_or(1).max(1);
+    let rows = table.cells.as_ref().map_or(0, Vec::len);
+    let cell_width = ((ui.available_width() - ROW_HEADER - 12.0) / count as f32).max(128.0);
     let width = ROW_HEADER + cell_width * count as f32;
     let cells_id = ui.make_persistent_id("tex-table-cell-editors");
     let focus_id = cells_id.with("focused-cell");
@@ -490,8 +385,9 @@ fn tex_grid(ui: &mut egui::Ui, rows: &mut [Vec<String>], settings: &AppSettings)
         .ctx()
         .data(|data| data.get_temp::<(usize, usize)>(focus_id))
         .filter(|&(r, c)| {
-            r < rows.len()
-                && c < rows[r].len()
+            r < rows
+                && c < count
+                && !table.cell_is_covered((r, c))
                 && ui.memory(|memory| memory.focused() == Some(cells_id.with((r, c))))
         });
     let mut changed = false;
@@ -502,12 +398,9 @@ fn tex_grid(ui: &mut egui::Ui, rows: &mut [Vec<String>], settings: &AppSettings)
         .auto_shrink([false, false])
         .show_viewport(ui, |ui, viewport| {
             let grid_painter = ui.painter().clone();
-            let (_, area) = ui.allocate_space(Vec2::new(
-                width,
-                HEADER_HEIGHT + rows.len() as f32 * CELL_HEIGHT,
-            ));
-            let visual = &ui.visuals().widgets.noninteractive;
-            let stroke = visual.bg_stroke;
+            let (_, area) =
+                ui.allocate_space(Vec2::new(width, HEADER_HEIGHT + rows as f32 * CELL_HEIGHT));
+            let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
             let fill = ui.visuals().faint_bg_color;
             let header_fill = ui.visuals().extreme_bg_color;
             let header = Rect::from_min_size(area.min, Vec2::new(width, HEADER_HEIGHT));
@@ -526,32 +419,18 @@ fn tex_grid(ui: &mut egui::Ui, rows: &mut [Vec<String>], settings: &AppSettings)
                         small.clone(),
                         ui.visuals().weak_text_color(),
                     );
+                    ui.painter()
+                        .rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
                 }
             }
-            for edge in [
-                [header.left_top(), header.right_top()],
-                [header.left_top(), header.left_bottom()],
-                [header.right_top(), header.right_bottom()],
-            ] {
-                ui.painter().line_segment(edge, stroke);
-            }
-            for c in 0..count {
-                let x = area.left() + ROW_HEADER + c as f32 * cell_width;
-                ui.painter().line_segment(
-                    [Pos2::new(x, header.top()), Pos2::new(x, header.bottom())],
-                    stroke,
-                );
-            }
-            let visible = visible_tex_rows(viewport, rows.len());
-            let retained = focused.filter(|&(r, _)| !visible.contains(&r));
-            for r in visible.chain(retained.map(|(r, _)| r)) {
-                let row = Rect::from_min_size(
+            for r in visible_tex_rows(viewport, rows) {
+                let number = Rect::from_min_size(
                     area.min + Vec2::new(0.0, HEADER_HEIGHT + r as f32 * CELL_HEIGHT),
-                    Vec2::new(width, CELL_HEIGHT),
+                    Vec2::new(ROW_HEADER, CELL_HEIGHT),
                 );
-                ui.painter().rect_filled(row, 0.0, fill);
-                let number = Rect::from_min_size(row.min, Vec2::new(ROW_HEADER, CELL_HEIGHT));
                 ui.painter().rect_filled(number, 0.0, header_fill);
+                ui.painter()
+                    .rect_stroke(number, 0.0, stroke, StrokeKind::Inside);
                 ui.painter().text(
                     number.center(),
                     egui::Align2::CENTER_CENTER,
@@ -559,90 +438,81 @@ fn tex_grid(ui: &mut egui::Ui, rows: &mut [Vec<String>], settings: &AppSettings)
                     small.clone(),
                     ui.visuals().weak_text_color(),
                 );
-                ui.painter()
-                    .line_segment([row.left_top(), row.right_top()], stroke);
-                if r + 1 == rows.len() {
-                    ui.painter()
-                        .line_segment([row.left_bottom(), row.right_bottom()], stroke);
+            }
+            for (r, c) in tex_grid_cells(table, viewport, cell_width, focused) {
+                let (rowspan, colspan) = table.cell_span((r, c));
+                let rect = tex_cell_rect(area.min, (r, c), (rowspan, colspan), cell_width);
+                if !ui.is_rect_visible(rect) && focused != Some((r, c)) {
+                    continue;
                 }
-                for c in 0..=count {
-                    let x = row.left()
-                        + if c == 0 {
-                            0.0
-                        } else {
-                            ROW_HEADER + (c - 1) as f32 * cell_width
-                        };
-                    ui.painter().line_segment(
-                        [Pos2::new(x, row.top()), Pos2::new(x, row.bottom())],
-                        stroke,
-                    );
-                }
+                ui.painter().rect_filled(rect, 0.0, fill);
                 ui.painter()
-                    .line_segment([row.right_top(), row.right_bottom()], stroke);
-                for (c, cell) in rows[r].iter_mut().enumerate() {
-                    if retained.is_some_and(|(row, column)| row == r && column != c) {
-                        continue;
-                    }
-                    let rect = Rect::from_min_size(
-                        row.min + Vec2::new(ROW_HEADER + c as f32 * cell_width, 0.0),
-                        Vec2::new(cell_width, CELL_HEIGHT),
-                    );
-                    if !ui.is_rect_visible(rect) && focused != Some((r, c)) {
-                        continue;
-                    }
-                    let id = cells_id.with((r, c));
-                    let inner = rect.shrink2(Vec2::new(6.0, 5.0));
-                    ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(inner), |ui| {
-                        ui.set_clip_rect(ui.clip_rect().intersect(inner));
-                        let mut layouter =
-                            |ui: &egui::Ui, buffer: &dyn egui::TextBuffer, width: f32| {
-                                let mut job = code_editor::highlight_job(
-                                    ui,
-                                    id,
-                                    buffer.as_str(),
-                                    "tex",
-                                    settings,
-                                );
-                                job.wrap.max_width = width;
-                                ui.fonts_mut(|fonts| fonts.layout_job(job))
+                    .rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
+                let content_range = table.cell_content_range((r, c)).unwrap_or_else(|| {
+                    0..table.cells.as_ref().expect("admitted TeX grid")[r][c].len()
+                });
+                let cell = &mut table.cells.as_mut().expect("admitted TeX grid")[r][c];
+                let id = cells_id.with((r, c));
+                let inner = rect.shrink2(Vec2::new(6.0, 5.0));
+                ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(inner), |ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(inner));
+                    let mut layouter = |ui: &egui::Ui,
+                                        buffer: &dyn egui::TextBuffer,
+                                        width: f32| {
+                        let mut job =
+                            code_editor::highlight_job(ui, id, buffer.as_str(), "tex", settings);
+                        job.wrap.max_width = width;
+                        ui.fonts_mut(|fonts| fonts.layout_job(job))
+                    };
+                    egui::ScrollArea::vertical()
+                        .id_salt(("tex-cell-scroll", r, c))
+                        .max_height(inner.height())
+                        .min_scrolled_height(0.0)
+                        .show(ui, |ui| {
+                            if table_samples::locked_cell(ui, (r, c), cell).is_some() {
+                                return;
+                            }
+                            let mut contents = CellContents {
+                                cell,
+                                range: content_range,
                             };
-                        egui::ScrollArea::vertical()
-                            .id_salt(("tex-cell-scroll", r, c))
-                            .max_height(inner.height())
-                            .min_scrolled_height(0.0)
-                            .show(ui, |ui| {
-                                if table_samples::locked_cell(ui, (r, c), cell).is_some() {
-                                    return;
-                                }
-                                let response = ui.add(
-                                    egui::TextEdit::multiline(cell)
-                                        .id(id)
-                                        .code_editor()
-                                        .frame(egui::Frame::NONE)
-                                        .font(theme::editor_font())
-                                        .desired_width(inner.width())
-                                        .desired_rows(1)
-                                        .margin(Vec2::ZERO)
-                                        .layouter(&mut layouter),
-                                );
-                                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                                crate::desktop_test::observe(
-                                    &format!("table.cell.{r}.{c}"),
-                                    &response,
-                                );
-                                if response.has_focus() {
-                                    ui.ctx().data_mut(|data| data.insert_temp(focus_id, (r, c)));
-                                    grid_painter.rect_stroke(
-                                        rect,
-                                        0.0,
-                                        ui.visuals().selection.stroke,
-                                        StrokeKind::Inside,
+                            let response = ui.add(
+                                egui::TextEdit::multiline(&mut contents)
+                                    .id(id)
+                                    .code_editor()
+                                    .frame(egui::Frame::NONE)
+                                    .font(theme::editor_font())
+                                    .desired_width(inner.width())
+                                    .desired_rows(1)
+                                    .margin(Vec2::ZERO)
+                                    .layouter(&mut layouter),
+                            );
+                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                            {
+                                let mut visible = response.clone();
+                                visible.interact_rect = visible
+                                    .interact_rect
+                                    .intersect(ui.clip_rect())
+                                    .intersect(inner);
+                                if visible.interact_rect.is_positive() {
+                                    crate::desktop_test::observe(
+                                        &format!("table.cell.{r}.{c}"),
+                                        &visible,
                                     );
                                 }
-                                changed |= response.changed();
-                            });
-                    });
-                }
+                            }
+                            if response.has_focus() {
+                                ui.ctx().data_mut(|data| data.insert_temp(focus_id, (r, c)));
+                                grid_painter.rect_stroke(
+                                    rect,
+                                    0.0,
+                                    ui.visuals().selection.stroke,
+                                    StrokeKind::Inside,
+                                );
+                            }
+                            changed |= response.changed();
+                        });
+                });
             }
         });
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -680,6 +550,163 @@ mod tests {
         Harness,
         kittest::{NodeT as _, Queryable as _, by},
     };
+    #[test]
+    fn merged_tex_cells_use_one_editor_and_remain_visible_when_the_owner_scrolls_away() {
+        let source = r"\begin{tabular}{lll}\multirow{3}{*}{Header} & \multicolumn{2}{c}{Group}\\ & A & B\\ & C & D\\\end{tabular}";
+        let table = crate::editor_features::tex_table_at(source, 2).unwrap();
+        let viewport = Rect::from_min_size(Pos2::new(0.0, 70.0), Vec2::new(420.0, 50.0));
+        let owners = tex_grid_cells(&table, viewport, 128.0, None);
+        assert!(
+            owners.contains(&(0, 0)),
+            "a visible covered row must retain its merged editor"
+        );
+        assert!(!owners.contains(&(1, 0)) && !owners.contains(&(2, 0)));
+        let dialog = TableEditorDialog::Tex(Box::new(TexDialog {
+            original: table.source.clone(),
+            column_spec: table.column_spec.clone(),
+            table,
+            key: key(),
+            error: None,
+            validation: None,
+        }));
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(620.0, 420.0))
+            .build_ui_state(
+                move |ui, dialog| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    show(ui, dialog, 600.0, 380.0, &AppSettings::default());
+                },
+                dialog,
+            );
+        harness.run();
+        let fields = harness
+            .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fields.len(),
+            6,
+            "merged cells must not create editors at covered positions"
+        );
+        let header = harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("Header"),
+            )
+            .rect();
+        let group = harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("Group"),
+            )
+            .rect();
+        let a = harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("A"),
+            )
+            .rect();
+        let merged = tex_cell_rect(Pos2::ZERO, (0, 0), (3, 1), 128.0);
+        let single = tex_cell_rect(Pos2::ZERO, (1, 1), (1, 1), 128.0);
+        assert_eq!(merged.height(), single.height() * 3.0);
+        assert_eq!(merged.bottom(), single.bottom() + table_editor::CELL_HEIGHT);
+        assert!(
+            header.top() < a.top(),
+            "the merged owner must remain at its first row"
+        );
+        assert!(group.width() > a.width() * 1.8, "{group:?} {a:?}");
+        assert!(harness.query_by_label("Source").is_none());
+    }
+
+    #[test]
+    fn tex_visible_owners_are_bounded_in_both_axes_and_retain_focused_input() {
+        let body = "A & B & C & D & E & F & G & H \\\\\n".repeat(400);
+        let table = crate::editor_features::tex_table_at(
+            &format!("\\begin{{tabular}}{{llllllll}}{body}\\end{{tabular}}"),
+            2,
+        )
+        .unwrap();
+        let viewport = Rect::from_min_size(Pos2::new(500.0, 5000.0), Vec2::new(300.0, 140.0));
+        let owners = tex_grid_cells(&table, viewport, 128.0, Some((0, 0)));
+        assert!(owners.contains(&(0, 0)));
+        assert!(
+            owners.len() <= 28,
+            "offscreen cells should not become widgets: {}",
+            owners.len()
+        );
+        for &(r, c) in owners.iter().filter(|&&p| p != (0, 0)) {
+            assert!((138..=144).contains(&r), "row {r}");
+            assert!((3..=5).contains(&c), "column {c}");
+        }
+    }
+
+    #[test]
+    fn unfinished_column_draft_cannot_be_applied_through_the_commit_boundary() {
+        let source = r"\begin{tabular}{ll}A & B\end{tabular}";
+        let table = crate::editor_features::tex_table_at(source, 2).unwrap();
+        let mut dialog = TexDialog {
+            original: table.source.clone(),
+            column_spec: "p{".into(),
+            table,
+            key: key(),
+            validation: None,
+            error: None,
+        };
+        assert!(
+            prepare_source_edit(
+                source,
+                key(),
+                &TableEditorDialog::Tex(Box::new(dialog.clone()))
+            )
+            .is_err()
+        );
+        refresh_tex_grid_validation(&mut dialog, true);
+        assert!(dialog.validation.is_some());
+        dialog.column_spec = "ll".into();
+        refresh_tex_grid_validation(&mut dialog, true);
+        assert!(
+            prepare_source_edit(source, key(), &TableEditorDialog::Tex(Box::new(dialog))).is_ok()
+        );
+    }
+
+    #[test]
+    fn grid_workbench_never_exposes_a_whole_table_source_mode() {
+        let source = r"\begin{tabular}{ll}Alpha & Beta\\\end{tabular}";
+        let table = crate::editor_features::tex_table_at(source, 2).unwrap();
+        let dialog = TableEditorDialog::Tex(Box::new(TexDialog {
+            original: table.source.clone(),
+            column_spec: table.column_spec.clone(),
+            validation: None,
+            table,
+            key: key(),
+            error: None,
+        }));
+        let mut fonts_ready = false;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(620.0, 420.0))
+            .build_ui_state(
+                move |ui, dialog| {
+                    if !fonts_ready {
+                        theme::configure_test_fonts(ui.ctx());
+                        fonts_ready = true;
+                        return;
+                    }
+                    show(ui, dialog, 600.0, 380.0, &AppSettings::default());
+                },
+                dialog,
+            );
+        harness.run();
+        assert!(
+            harness.query_by_label("Source").is_none(),
+            "table editing must stay in the grid"
+        );
+        assert!(harness.query_by_label("Apply").is_some());
+    }
+
     fn key() -> DocumentKey {
         DocumentKey {
             owner: tiptoptyp_core::document::WindowSessionId::new(1),
@@ -688,105 +715,16 @@ mod tests {
         }
     }
     #[test]
-    fn dynamic_table_source_edits_keep_surrounding_unicode_and_reject_stale_document() {
-        let source = "é #table(columns: sizes, ..rows) fin";
-        let target = crate::editor_features::table_source_at(source, 4).unwrap();
-        let dialog = TableEditorDialog::Source(Box::new(SourceDialog {
-            draft: "table(columns: sizes, ..changed)".into(),
-            target,
-            key: key(),
-            error: None,
-            validation: None,
-        }));
-        let edit = prepare_source_edit(source, key(), &dialog).unwrap();
-        let mut result = source.to_owned();
-        result.replace_range(edit.byte_range, &edit.replacement);
-        assert_eq!(result, "é #table(columns: sizes, ..changed) fin");
-        let mut stale = key();
-        stale.revision += 1;
-        assert!(prepare_source_edit(source, stale, &dialog).is_err());
-        assert!(prepare_source_edit(&source.replace("rows", "other"), key(), &dialog).is_err());
-    }
-    #[test]
-    fn table_samples_dynamic_grid_is_read_only_and_source_is_an_explicit_choice() {
-        let target = TableSource {
-            kind: crate::editor_features::TableKind::Table,
-            source_range: 0..14,
-            source: "table(..rows)".into(),
-        };
-        let dialog = TableEditorDialog::Source(Box::new(SourceDialog {
-            draft: target.source.clone(),
-            target,
-            key: key(),
-            error: None,
-            validation: None,
-        }));
-        let mut ready = false;
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(620.0, 560.0))
-            .build_ui_state(
-                move |ui, dialog| {
-                    if !ready {
-                        theme::configure_test_fonts(ui.ctx());
-                        ready = true;
-                    }
-                    crate::table_sampling::publish(
-                        ui.ctx(),
-                        ui.ctx().viewport_id(),
-                        Arc::new(crate::table_sampling::View {
-                            grid: Some(crate::table_sampling::Grid {
-                                columns: 1,
-                                rows: 1,
-                                instances: 1,
-                                cells: vec![crate::table_sampling::Cell {
-                                    position: (0, 0),
-                                    span: (1, 1),
-                                    value: "Revenue".into(),
-                                }],
-                            }),
-                            ..Default::default()
-                        }),
-                    );
-                    show(ui, dialog, 590.0, 520.0, &AppSettings::default());
-                },
-                dialog,
-            );
-        harness.run();
-        assert_eq!(
-            harness
-                .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
-                .count(),
-            0
-        );
-        harness.get_by_label("Revenue").click();
-        harness.event(egui::Event::Text("overwrite".into()));
-        harness.run();
-        let TableEditorDialog::Source(dialog) = harness.state() else {
-            unreachable!()
-        };
-        assert_eq!(dialog.draft, "table(..rows)");
-        harness.get_by_label("Source").click();
-        harness.run();
-        assert_eq!(
-            harness
-                .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
-                .count(),
-            1
-        );
-        assert!(harness.get_by_label("Apply").rect().bottom() <= 560.0);
-    }
-
-    #[test]
-    fn tex_grid_and_source_modes_share_lossless_apply_and_reject_stale_source() {
+    fn tex_grid_apply_is_lossless_and_rejects_stale_source() {
         let source =
             "Préface \\begin{tabular}{|l|r|} A & B \\\\ \\hline C & D \\\\ \\end{tabular} fin";
         let table =
             crate::editor_features::tex_table_at(source, source.find("A &").unwrap()).unwrap();
         let mut dialog = TexDialog {
             original: table.source.clone(),
-            draft: table.source.clone(),
+
             column_spec: table.column_spec.clone(),
-            source_mode: false,
+
             table,
             key: key(),
             error: None,
@@ -797,19 +735,12 @@ mod tests {
         let edit = prepare_source_edit(source, key(), &grid).unwrap();
         assert!(edit.replacement.contains("Édité"));
         assert!(edit.replacement.contains("\\hline"));
-        dialog.source_mode = true;
-        dialog.draft = dialog.table.render_replacement().unwrap();
-        assert_eq!(
-            prepare_source_edit(source, key(), &TableEditorDialog::Tex(Box::new(dialog))).unwrap(),
-            edit
-        );
         assert!(prepare_source_edit(&source.replace("A &", "X &"), key(), &grid).is_err());
     }
     #[test]
     fn stale_table_menu_cannot_open_another_document_with_identical_source() {
         for (source, kind) in [
             ("#table([A])", DocumentKind::Typst),
-            ("#table(..cells)", DocumentKind::Typst),
             ("\\begin{tabular}{l}A\\end{tabular}", DocumentKind::Tex),
         ] {
             let directory = tempfile::tempdir().unwrap();
@@ -840,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn package_tex_workbenches_edit_cells_and_roundtrip_through_source() {
+    fn package_tex_workbenches_edit_cells_without_a_source_mode() {
         for (name, args) in [
             ("tblr", "[baseline=T]{colspec={Q[l]X[2,r]},hlines,vlines}"),
             ("tabular", "{lS[table-format=2.0]}"),
@@ -855,10 +786,8 @@ mod tests {
             let cursor = source[..source.find(&header).unwrap()].chars().count() + 1;
             let table = crate::editor_features::tex_table_at(&source, cursor).unwrap();
             let dialog = TableEditorDialog::Tex(Box::new(TexDialog {
-                draft: table.source.clone(),
                 original: table.source.clone(),
                 column_spec: table.column_spec.clone(),
-                source_mode: false,
                 validation: None,
                 table,
                 key: key(),
@@ -895,27 +824,10 @@ mod tests {
             harness.run();
             harness.event(egui::Event::Text("!".into()));
             harness.run();
-            harness.get_by_label("Source").click();
-            harness.run();
-            let TableEditorDialog::Tex(dialog) = harness.state() else {
-                unreachable!()
-            };
-            assert!(dialog.source_mode);
-            assert!(dialog.draft.starts_with(&header));
-            assert!(dialog.draft.contains('!'));
-            let draft = dialog.draft.clone();
-            harness.get_by_label("Source").click();
-            harness.run();
-            let TableEditorDialog::Tex(dialog) = harness.state() else {
-                unreachable!()
-            };
-            assert!(!dialog.source_mode, "{:?}", dialog.error);
-            assert_eq!(
-                prepare_source_edit(&source, key(), harness.state())
-                    .unwrap()
-                    .replacement,
-                draft
-            );
+            assert!(harness.query_by_label("Source").is_none());
+            let edit = prepare_source_edit(&source, key(), harness.state()).unwrap();
+            assert!(edit.replacement.starts_with(&header));
+            assert!(edit.replacement.contains('!'));
         }
     }
 
@@ -959,53 +871,23 @@ mod tests {
     }
 
     #[test]
-    fn real_arxiv_complex_table_source_starts_valid() {
-        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
-        let cursor = source[..source.find("Unbiased estimator of CKA").unwrap()]
-            .chars()
-            .count();
-        let directory = tempfile::tempdir().unwrap();
-        let context = egui::Context::default();
-        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
-        app.document_mut().replace_loaded_unprojected(
-            source.into(),
-            directory.path().join("platonic-metrics.tex"),
-            DocumentKind::Tex,
-            None,
-        );
-        app.begin_table_target(TableTarget::at(source, cursor, DocumentKind::Tex).unwrap());
-        let Some(TableEditorDialog::Tex(dialog)) = app.table_editor.as_ref() else {
-            panic!("expected TeX table source workbench");
-        };
-        assert!(dialog.source_mode);
-        assert!(
-            dialog.validation.is_none(),
-            "valid source fallback must be ready to apply: {:?}",
-            dialog.validation
-        );
-    }
-
-    #[test]
     fn real_arxiv_table_workbench_preserves_exact_edits_cancel_and_undo() {
         let provenance: serde_json::Value = serde_json::from_str(include_str!(
             "../../tests/fixtures/arxiv-tables/provenance.json"
         ))
         .unwrap();
-        for (name, fixture, source_mode) in [
+        for (name, fixture) in [
             (
                 "scipy-roadmap.tex",
                 include_str!("../../tests/fixtures/arxiv-tables/scipy-roadmap.tex"),
-                false,
             ),
             (
                 "scipy-optimizers.tex",
                 include_str!("../../tests/fixtures/arxiv-tables/scipy-optimizers.tex"),
-                false,
             ),
             (
                 "platonic-metrics.tex",
                 include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex"),
-                true,
             ),
         ] {
             let metadata = provenance
@@ -1038,7 +920,7 @@ mod tests {
             let TableEditorDialog::Tex(tex) = dialog else {
                 panic!("{name}: expected TeX workbench");
             };
-            assert_eq!(tex.source_mode, source_mode, "{name}");
+            assert!(tex.table.cells.is_some(), "{name}: expected editable grid");
             let no_op = prepare_source_edit(&original, initial_key, dialog).unwrap();
             let mut unchanged = original.clone();
             unchanged.replace_range(no_op.byte_range, &no_op.replacement);
@@ -1058,20 +940,16 @@ mod tests {
             let TableEditorDialog::Tex(tex) = &mut dialog else {
                 unreachable!();
             };
-            if source_mode {
-                tex.draft = tex.draft.replacen(before, after, 1);
-            } else {
-                let cell = tex
-                    .table
-                    .cells
-                    .as_mut()
-                    .unwrap()
-                    .iter_mut()
-                    .flatten()
-                    .find(|cell| cell.contains(before))
-                    .unwrap();
-                *cell = cell.replacen(before, after, 1);
-            }
+            let cell = tex
+                .table
+                .cells
+                .as_mut()
+                .unwrap()
+                .iter_mut()
+                .flatten()
+                .find(|cell| cell.contains(before))
+                .unwrap();
+            *cell = cell.replacen(before, after, 1);
             let mut stale = initial_key;
             stale.revision += 1;
             assert!(
@@ -1156,31 +1034,19 @@ mod tests {
     }
 
     #[test]
-    fn source_and_tex_workbench_actions_stay_labelled_and_pinned_with_long_errors() {
-        let source = "#table(..rows)";
-        let target = crate::editor_features::table_source_at(source, 2).unwrap();
+    fn tex_workbench_actions_stay_labelled_and_pinned_with_long_errors() {
         let table =
             crate::editor_features::tex_table_at("\\begin{tabular}{ll}A & B\\end{tabular}", 2)
                 .unwrap();
-        let dialogs = [
-            TableEditorDialog::Source(Box::new(SourceDialog {
-                draft: target.source.clone(),
-                target,
-                key: key(),
-                error: Some("Table error with details ".repeat(50)),
-                validation: None,
-            })),
-            TableEditorDialog::Tex(Box::new(TexDialog {
-                draft: table.source.clone(),
-                original: table.source.clone(),
-                column_spec: table.column_spec.clone(),
-                source_mode: false,
-                table,
-                key: key(),
-                error: Some("Table error with details ".repeat(50)),
-                validation: None,
-            })),
-        ];
+        let dialogs = [TableEditorDialog::Tex(Box::new(TexDialog {
+            original: table.source.clone(),
+            column_spec: table.column_spec.clone(),
+
+            table,
+            key: key(),
+            error: Some("Table error with details ".repeat(50)),
+            validation: None,
+        }))];
         for dialog in dialogs {
             let mut ready = false;
             let mut harness = Harness::builder()
@@ -1233,10 +1099,8 @@ mod tests {
         );
         let table = crate::editor_features::tex_table_at(&source, 2).unwrap();
         let dialog = TableEditorDialog::Tex(Box::new(TexDialog {
-            draft: table.source.clone(),
             original: table.source.clone(),
             column_spec: table.column_spec.clone(),
-            source_mode: false,
             validation: None,
             table,
             key: key(),
@@ -1274,10 +1138,8 @@ mod tests {
             crate::editor_features::tex_table_at("\\begin{tabular}{ll}A & B\\end{tabular}", 2)
                 .unwrap();
         let mut dialog = TexDialog {
-            draft: table.source.clone(),
             original: table.source.clone(),
             column_spec: "l>{unfinished".into(),
-            source_mode: false,
             validation: None,
             table,
             key: key(),
@@ -1312,10 +1174,8 @@ mod tests {
         );
         let table = crate::editor_features::tex_table_at(&source, 2).unwrap();
         let dialog = TableEditorDialog::Tex(Box::new(TexDialog {
-            draft: table.source.clone(),
             original: table.source.clone(),
             column_spec: table.column_spec.clone(),
-            source_mode: false,
             validation: None,
             table,
             key: key(),
@@ -1406,111 +1266,102 @@ mod tests {
     }
 
     #[test]
-    fn source_workbench_replaces_invalid_draft_with_chunked_native_text() {
-        let original = "#table(columns: widths, ..rows)";
-        let target = crate::editor_features::table_source_at(original, 2).unwrap();
-        let dialog = TableEditorDialog::Source(Box::new(SourceDialog {
-            draft: target.source.clone(),
-            target,
-            key: key(),
-            error: None,
-            validation: None,
-        }));
+    fn cell_contents_edits_unicode_without_touching_wrappers() {
+        use egui::TextBuffer as _;
+        use egui::text::CharIndex;
+        let mut raw = r"\multirow{2}{*}{\textbf{Énergie}}".to_owned();
+        let start = raw.find('É').unwrap();
+        let mut body = CellContents {
+            range: start..start + "Énergie".len(),
+            cell: &mut raw,
+        };
+        assert_eq!(body.as_str(), "Énergie");
+        body.delete_char_range(CharIndex(0)..CharIndex(1));
+        body.insert_text("Σ", CharIndex(0));
+        assert_eq!(body.as_str(), "Σnergie");
+        body.replace_with("温度");
+        assert_eq!(body.as_str(), "温度");
+        assert_eq!(raw, r"\multirow{2}{*}{\textbf{温度}}");
+    }
+
+    #[test]
+    fn merged_tex_grid_exposes_cell_content_and_preserves_formatting_on_edit() {
+        let source = r"\begin{tabular}{ll}\multicolumn{2}{c}{\textbf{Metric}}\\\end{tabular}";
+        let table = crate::editor_features::tex_table_at(source, 1).unwrap();
         let mut fonts_ready = false;
         let mut harness = Harness::builder()
-            .with_size(Vec2::new(620.0, 560.0))
+            .with_size(Vec2::new(860.0, 560.0))
             .build_ui_state(
-                move |ui, state| {
+                move |ui, dialog| {
                     if !fonts_ready {
                         theme::configure_test_fonts(ui.ctx());
                         fonts_ready = true;
                         return;
                     }
-                    crate::child_view::deliver_queued_edit_events(ui.ctx(), &mut state.2);
-                    if let Some(action) =
-                        show(ui, &mut state.0, 590.0, 520.0, &AppSettings::default())
-                    {
-                        state.1 = Some(action);
-                    }
+                    show(ui, dialog, 830.0, 520.0, &AppSettings::default());
                 },
-                (
-                    dialog,
-                    None::<TableEditorUiAction>,
-                    Vec::<egui::Event>::new(),
-                ),
+                TableEditorDialog::Tex(Box::new(TexDialog {
+                    original: table.source.clone(),
+                    column_spec: table.column_spec.clone(),
+                    table,
+                    key: key(),
+                    error: None,
+                    validation: None,
+                })),
             );
         harness.run();
-        harness
-            .get(
-                by().role(egui::accesskit::Role::MultilineTextInput)
-                    .value(&original[1..]),
-            )
-            .click();
+        let field = harness.get(
+            by().role(egui::accesskit::Role::MultilineTextInput)
+                .value("Metric"),
+        );
+        field.click();
         harness.run();
-
-        let select_all = || egui::Event::Key {
+        harness.event(egui::Event::Key {
             key: egui::Key::A,
             physical_key: None,
             pressed: true,
             repeat: false,
             modifiers: Modifiers::COMMAND,
-        };
-        let assert_draft = |harness: &Harness<
-            '_,
-            (
-                TableEditorDialog,
-                Option<TableEditorUiAction>,
-                Vec<egui::Event>,
-            ),
-        >,
-                            expected: &str,
-                            valid: bool| {
-            let TableEditorDialog::Source(dialog) = &harness.state().0 else {
-                unreachable!()
-            };
-            assert_eq!(dialog.draft, expected);
-            assert_eq!(dialog.validation.is_none(), valid);
+        });
+        harness.event(egui::Event::Text("Résumé".into()));
+        harness.run();
+        assert!(
+            harness
+                .query(
+                    by().role(egui::accesskit::Role::MultilineTextInput)
+                        .value("Résumé")
+                )
+                .is_some()
+        );
+        // Incomplete typing must stay inside the same projected body across
+        // frames, without revealing wrappers or shifting the caret into them.
+        harness.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        for (text, expected, valid) in [
+            ("{", "Résumé{", false),
+            ("π", "Résumé{π", false),
+            ("}", "Résumé{π}", true),
+        ] {
+            harness.event(egui::Event::Text(text.into()));
+            harness.run();
+            assert!(
+                harness
+                    .query(
+                        by().role(egui::accesskit::Role::MultilineTextInput)
+                            .value(expected)
+                    )
+                    .is_some()
+            );
             assert_eq!(
                 !harness.get_by_label("Apply").accesskit_node().is_disabled(),
-                valid,
+                valid
             );
-            assert!(
-                harness.state().2.is_empty(),
-                "queued edit must be delivered once"
-            );
-        };
-
-        // Native menu commands may arrive in the same paint as the first
-        // Quartz text chunk. They must run before that text is inserted.
-        let incomplete = "table(columns: widths, ..rows";
-        harness.state_mut().2.push(select_all());
-        harness.event(egui::Event::Text(incomplete[..16].into()));
-        harness.run();
-        harness.event(egui::Event::Text(incomplete[16..].into()));
-        harness.run();
-        assert_draft(&harness, incomplete, false);
-
-        let complete = "table(columns: widths, fill: blue, ..rows)";
-        harness.state_mut().2.push(select_all());
-        harness.event(egui::Event::Text(complete[..16].into()));
-        harness.run();
-        harness.event(egui::Event::Text(complete[16..32].into()));
-        harness.run();
-        harness.event(egui::Event::Text(complete[32..].into()));
-        harness.run();
-        assert_draft(&harness, complete, true);
-        harness.get_by_label("Apply").click();
-        harness.run();
-        assert_eq!(harness.state().1, Some(TableEditorUiAction::Apply));
-        let edit = prepare_source_edit(original, key(), &harness.state().0).unwrap();
-        assert_eq!(edit.replacement, complete);
-        let mut result = original.to_owned();
-        result.replace_range(edit.byte_range, &edit.replacement);
-        assert_eq!(result, format!("#{complete}"));
+        }
+        let edit = prepare_source_edit(source, key(), harness.state()).unwrap();
+        assert_eq!(edit.replacement, source.replace("Metric", "Résumé{π}"));
     }
 
     #[test]
-    fn source_workbench_child_keyboard_pastes_real_tex_after_select_all() {
+    fn grid_cell_child_keyboard_pastes_real_tex_after_select_all() {
         struct State {
             dialog: TableEditorDialog,
             queued: Vec<egui::Event>,
@@ -1525,7 +1376,14 @@ mod tests {
                 .count(),
         )
         .unwrap();
-        let original = table.source.clone();
+        let original = table.cells.as_ref().unwrap()[3][5].clone();
+        let content_range = table.cell_content_range((3, 5)).unwrap();
+        let editor_text = original[content_range].to_owned();
+        let edited_editor_text = editor_text.replacen(
+            "Unbiased estimator of CKA",
+            "Bias-corrected estimator of CKA",
+            1,
+        );
         let edited = original.replacen(
             "Unbiased estimator of CKA",
             "Bias-corrected estimator of CKA",
@@ -1542,7 +1400,7 @@ mod tests {
             let settings = AppSettings::default();
             let shortcuts = settings.effective_shortcuts();
             let mut harness = Harness::builder()
-                .with_size(Vec2::new(700.0, 560.0))
+                .with_size(Vec2::new(1600.0, 560.0))
                 .build_ui_state(
                     move |ui, state: &mut State| {
                         if !fonts_ready {
@@ -1563,14 +1421,13 @@ mod tests {
                             ui.ctx(),
                             &mut state.queued,
                         );
-                        show(ui, &mut state.dialog, 670.0, 520.0, &settings);
+                        show(ui, &mut state.dialog, 1570.0, 520.0, &settings);
                     },
                     State {
                         dialog: TableEditorDialog::Tex(Box::new(TexDialog {
                             original: original.clone(),
-                            draft: original.clone(),
+
                             column_spec: table.column_spec.clone(),
-                            source_mode: true,
                             validation: None,
                             table: table.clone(),
                             key: key(),
@@ -1585,7 +1442,7 @@ mod tests {
             let field = harness
                 .get(
                     by().role(egui::accesskit::Role::MultilineTextInput)
-                        .value(&original),
+                        .value(&editor_text),
                 )
                 .rect();
             // A long source field's geometric center lies below the clipped
@@ -1624,11 +1481,11 @@ mod tests {
                 .as_sorted_char_range();
             assert_eq!(
                 selected.start.0..selected.end.0,
-                0..original.chars().count()
+                0..editor_text.chars().count()
             );
             harness.input_mut().events.extend([
                 egui::Event::ModifiersChanged(modifiers),
-                egui::Event::Paste(edited.clone()),
+                egui::Event::Paste(edited_editor_text.clone()),
             ]);
             harness.step();
             let TableEditorDialog::Tex(dialog) = &harness.state().dialog else {
@@ -1640,9 +1497,9 @@ mod tests {
                 &original
             };
             assert!(
-                dialog.draft == *expected,
-                "Source paste must obey physical/requested ownership: {modifiers:?}, requested={allow_requested_paste}, got {} bytes, expected {}",
-                dialog.draft.len(),
+                dialog.table.cells.as_ref().unwrap()[3][5] == *expected,
+                "Grid cell paste must obey physical/requested ownership: {modifiers:?}, requested={allow_requested_paste}, got {} bytes, expected {}",
+                dialog.table.cells.as_ref().unwrap()[3][5].len(),
                 expected.len(),
             );
             assert!(dialog.validation.is_none());
@@ -1652,46 +1509,5 @@ mod tests {
                 assert!(harness.state().requested_paste_admitted);
             }
         }
-    }
-
-    #[test]
-    fn source_workbench_is_editable_and_apply_cancel_visible_at_minimum_size() {
-        let target = crate::editor_features::table_source_at("#table(..cells)", 2).unwrap();
-        let dialog = TableEditorDialog::Source(Box::new(SourceDialog {
-            draft: target.source.clone(),
-            target,
-            key: key(),
-            error: None,
-            validation: None,
-        }));
-        let mut fonts_ready = false;
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(620.0, 560.0))
-            .build_ui_state(
-                move |ui, state| {
-                    if !fonts_ready {
-                        theme::configure_test_fonts(ui.ctx());
-                        fonts_ready = true;
-                        return;
-                    }
-                    if let Some(action) =
-                        show(ui, &mut state.0, 590.0, 520.0, &AppSettings::default())
-                    {
-                        state.1 = Some(action);
-                    }
-                },
-                (dialog, None::<TableEditorUiAction>),
-            );
-        harness.run();
-        harness
-            .get(
-                by().role(egui::accesskit::Role::MultilineTextInput)
-                    .value("table(..cells)"),
-            )
-            .type_text(" ");
-        harness.run();
-        harness.get_by_label("Cancel").click();
-        harness.run();
-        assert_eq!(harness.state().1, Some(TableEditorUiAction::Cancel));
     }
 }

@@ -1424,7 +1424,7 @@ class MathConversionPreparationContract(unittest.TestCase):
 
 
 class ArxivTableFixtureContract(unittest.TestCase):
-    def test_real_attributed_excerpts_and_unique_edits_match_the_native_modes(self):
+    def test_real_attributed_excerpts_and_unique_edits_use_only_lossless_grids(self):
         import hashlib
         import json
         from desktop_ui_newest_journeys import arxiv_table_cases
@@ -1433,16 +1433,72 @@ class ArxivTableFixtureContract(unittest.TestCase):
         cases = arxiv_table_cases()
         self.assertEqual([(case["file"], case["cell"]) for case in cases], [
             ("scipy-roadmap.tex", (1, 1)), ("scipy-optimizers.tex", (1, 0)),
-            ("platonic-metrics.tex", None)])
+            ("platonic-metrics.tex", (3, 5))])
         for case in cases:
             with self.subTest(fixture=case["file"]):
                 self.assertEqual(case["source"].encode("utf-8"), (directory / case["file"]).read_bytes())
                 self.assertEqual(hashlib.sha256(case["table"].encode("utf-8")).hexdigest(),
                                  metadata[case["file"]]["table_sha256"])
                 self.assertIn(r"\begin{tabular}", case["source"].splitlines()[case["line"] - 1])
+                self.assertEqual(case["table"].count(case["cell_source"]), 1)
+                self.assertEqual(case["cell_source"].count(case["editor_text"]), 1)
+                self.assertEqual(case["editor_text"].replace(case["edit_before"], case["edit_after"], 1),
+                                 case["edited_editor_text"])
+                edited_raw_cell = case["cell_source"].replace(
+                    case["editor_text"], case["edited_editor_text"], 1)
+                self.assertEqual(edited_raw_cell, case["cell_source"].replace(
+                    case["edit_before"], case["edit_after"], 1))
+                self.assertEqual(case["source"].replace(case["cell_source"], edited_raw_cell, 1),
+                                 case["source"].replace(case["edit_before"], case["edit_after"], 1))
                 changed = case["source"].replace(case["edit_before"], case["edit_after"], 1)
                 self.assertNotEqual(changed, case["source"])
                 self.assertEqual(changed.replace(case["edit_after"], case["edit_before"], 1), case["source"])
+
+    def test_platonic_edits_only_the_projected_body_and_preserves_exact_raw_wrappers(self):
+        from desktop_ui_newest_journeys import arxiv_table_cases
+        case = next(case for case in arxiv_table_cases() if case["file"] == "platonic-metrics.tex")
+        body = (r"Unbiased estimator of CKA that corrects for sample bias in "
+                r"HSIC~\cite{song2012feature}.")
+        self.assertEqual(case["editor_text"], body)
+        self.assertEqual(case["cell_source"], r"{\vspace{-0.5em}" + body + "}")
+        self.assertEqual(case["edited_editor_text"], body.replace(
+            "Unbiased estimator of CKA", "Bias-corrected estimator of CKA", 1))
+        self.assertNotIn(r"\vspace", case["edited_editor_text"])
+        self.assertTrue(case["edited_editor_text"].endswith(r"~\cite{song2012feature}."))
+
+    def test_optimizer_last_column_requires_scroll_then_applies_and_undoes_exactly(self):
+        from desktop_ui_newest_journeys import NewestJourneys, arxiv_table_cases
+        from desktop_ui_journeys import fingerprint
+        case = next(case for case in arxiv_table_cases() if case["file"] == "scipy-optimizers.tex")
+        state = GridOnlyTableContract().state()
+        state["document"]["table_draft"].update(rows=13, columns=14)
+        state["document"]["source_fingerprint"] = fingerprint(case["source"])
+        journey, actions, sources, records = NewestJourneys(), [], [], []
+        journey.capture_review = False
+        journey.snapshot = lambda: state
+        journey.source_is = sources.append
+        journey.open_table_workbench = lambda **kwargs: {"table.cell.1.13": 8}
+        journey.scroll_table_grid_to_top = lambda *args, **kwargs: None
+        def reveal(name, previous_frame, require_offscreen):
+            self.assertEqual((name, previous_frame, require_offscreen), ("table.cell.1.13", 8, True))
+            actions.append(("revealed", name))
+        journey.reveal_table_cell = reveal
+        journey.click = lambda name: actions.append(("click", name))
+        journey.key = lambda *args: actions.append(("key", *args))
+        journey.native = lambda *args: actions.append(args)
+        journey.table_target = lambda name: actions.append(("ready", name))
+        journey.stable_state = lambda predicate, frames: self.assertTrue(predicate(state["document"]))
+        journey.wait = lambda description, predicate: self.assertTrue(predicate({"table_editor_open": False}))
+        journey.record = lambda *args, **detail: records.append((args, detail))
+        journey.arxiv_optimizer_last_column(case)
+        original = case["source"]
+        self.assertEqual(sources, [original, original,
+                                  original.replace("0.19 & 1.0", "0.19 & 1.1", 1), original])
+        self.assertEqual(actions, [("revealed", "table.cell.1.13"), ("click", "table.cell.1.13"),
+                                  ("key", 0), ("text", "1.1"), ("ready", "table.apply"),
+                                  ("click", "table.apply"), ("click", "editor.source"), ("key", 6)])
+        self.assertEqual(records[0][1]["cell"], [1, 13])
+        self.assertTrue(records[0][1]["exact_undo"])
 
     def test_registered_lane_runs_without_the_full_synthetic_table_suite(self):
         from desktop_ui_newest_journeys import NEWEST_JOURNEYS, NewestJourneys
@@ -1627,13 +1683,13 @@ class TableDraftContract(unittest.TestCase):
         from desktop_ui_newest_journeys import NewestJourneys
         journey = NewestJourneys()
         def sample(opened, frame, enabled):
-            return {"document": {"table_editor_open": opened}, "targets": {"table.source": {
+            return {"document": {"table_editor_open": opened}, "targets": {"table.cell.0.0": {
                 "enabled": enabled, "age_ms": 0, "frame": frame}}}
         states = iter([sample(False, 10, True), sample(True, 10, True),
                        sample(True, 11, False), sample(True, 12, True)])
         journey.snapshot = lambda: next(states)
         with patch("desktop_ui_newest_journeys.time.sleep"):
-            target = journey.table_target("table.source", previous_frame=10)
+            target = journey.table_target("table.cell.0.0", previous_frame=10)
         self.assertEqual(target["frame"], 12)
         self.assertEqual(list(states), [])
 
@@ -1653,6 +1709,248 @@ class TableDraftContract(unittest.TestCase):
             target = journey.table_target("table.apply", enabled=False)
         self.assertEqual(target["frame"], 12)
         self.assertEqual(list(states), [])
+
+
+class GridOnlyTableContract(unittest.TestCase):
+    def state(self):
+        return {"document": {"table_editor_open": True,
+                    "table_draft": {"rows": 10, "columns": 6, "valid": True}},
+                "targets": {"table.apply": {"enabled": True, "age_ms": 1,
+                    "frame": 12, "viewport": "table-child"}},
+                "scrolls": {"table.grid": {"frame": 12}}}
+
+    def test_grid_requires_current_footer_and_rejects_source_controls_in_the_same_child(self):
+        from copy import deepcopy
+        from desktop_ui_newest_journeys import assert_table_grid_only
+        state = self.state()
+        assert_table_grid_only(state)
+        for target in ("table.source", "table.source-mode"):
+            changed = deepcopy(state)
+            changed["targets"][target] = dict(changed["targets"]["table.apply"])
+            with self.subTest(target=target), self.assertRaisesRegex(AssertionError, "source editor"):
+                assert_table_grid_only(changed)
+            changed["targets"][target]["frame"] = 11
+            assert_table_grid_only(changed)
+        for apply_change in ({"age_ms": 501}, {"enabled": False}):
+            changed = deepcopy(state)
+            changed["targets"]["table.apply"].update(apply_change)
+            with self.subTest(change=apply_change), self.assertRaises(AssertionError):
+                assert_table_grid_only(changed)
+        state["scrolls"]["table.grid"]["frame"] = 11
+        with self.assertRaisesRegex(AssertionError, "no grid"):
+            assert_table_grid_only(state)
+
+    def test_grid_metadata_must_match_validation_and_remain_bounded(self):
+        from copy import deepcopy
+        from desktop_ui_newest_journeys import assert_table_grid_only
+        for change in ({"valid": False}, {"rows": 0}, {"rows": True},
+                       {"columns": None}, {"rows": 4097}, {"rows": 100, "columns": 100}):
+            state = deepcopy(self.state())
+            state["document"]["table_draft"].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(AssertionError, "metadata"):
+                assert_table_grid_only(state)
+
+    def test_invalid_cells_stay_in_the_grid_with_disabled_apply(self):
+        from desktop_ui_newest_journeys import assert_table_grid_only
+        state = self.state()
+        state["targets"]["table.apply"]["enabled"] = False
+        state["document"]["table_draft"]["valid"] = False
+        assert_table_grid_only(state, valid=False)
+
+    def test_cell_reveal_ignores_stale_offscreen_slivers_and_requires_matching_owner(self):
+        from copy import deepcopy
+        from desktop_ui_newest_journeys import visible_table_cell
+        state = self.state()
+        cell = {**state["targets"]["table.apply"], "x": 300, "y": 180,
+                "width": 150, "height": 26}
+        state["targets"]["table.cell.3.5"] = cell
+        self.assertEqual(visible_table_cell(state, "table.cell.3.5"), cell)
+        self.assertIsNone(visible_table_cell(state, "table.cell.3.5", 12))
+        for change in ({"frame": 11}, {"viewport": "root"}, {"enabled": False},
+                       {"age_ms": 501}, {"width": 3}, {"height": 0}, {"x": float("nan")}):
+            altered = deepcopy(state)
+            altered["targets"]["table.cell.3.5"].update(change)
+            with self.subTest(change=change):
+                self.assertIsNone(visible_table_cell(altered, "table.cell.3.5"))
+
+    def test_native_horizontal_input_reveals_a_virtualized_column_before_editing(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        state = CompactTableGeometryContract().state()
+        name = "table.cell.3.5"
+        journey = NewestJourneys()
+        def snapshot():
+            frame = state["scrolls"]["table.grid"]["frame"] + 1
+            state["scrolls"]["table.grid"]["frame"] = frame
+            for target in state["targets"].values():
+                target["frame"] = frame
+            return state
+        journey.snapshot = snapshot
+        actions, records = [], []
+        def native(*args):
+            actions.append(args)
+            if args[0] == "horizontal-wheel" and args[-1] < 0:
+                state["targets"][name] = {**state["targets"]["table.apply"],
+                    "x": 450, "y": 220, "width": 150, "height": 26}
+        journey.native = native
+        journey.record = lambda *args, **detail: records.append((args, detail))
+        clock = iter(index / 10 for index in range(100))
+        with patch("desktop_ui_newest_journeys.time.sleep"), \
+                patch("desktop_ui_newest_journeys.time.monotonic", side_effect=lambda: next(clock)):
+            target = journey.reveal_table_cell(name, require_offscreen=True)
+        self.assertEqual(target["x"], 450)
+        self.assertEqual(actions, [("move", 300, 250), ("horizontal-wheel", 300, 250, 100),
+                                  ("move", 300, 250), ("horizontal-wheel", 300, 250, -8)])
+        self.assertEqual(records[0][1]["stable_samples"], 3)
+        self.assertEqual(records[0][1]["horizontal_steps"], 1)
+        self.assertTrue(records[0][1]["was_offscreen"])
+
+    def test_horizontal_coverage_cannot_pass_with_an_already_visible_cell(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        state = CompactTableGeometryContract().state()
+        name = "table.cell.1.13"
+        state["targets"][name] = {**state["targets"]["table.apply"],
+            "x": 450, "y": 220, "width": 150, "height": 26}
+        journey = NewestJourneys()
+        journey.snapshot = lambda: state
+        journey.native = lambda *args: self.fail("visible cell cannot stand in for scroll coverage")
+        with self.assertRaisesRegex(AssertionError, "must begin offscreen"):
+            journey.reveal_table_cell(name, require_offscreen=True)
+
+    def test_cell_position_stability_cannot_hide_cumulative_scroll_drift(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        states = []
+        name = "table.cell.3.5"
+        for frame, x in enumerate((400, 400, 400.75, 401.5, 401.5, 401.5), start=10):
+            state = CompactTableGeometryContract().state()
+            state["scrolls"]["table.grid"]["frame"] = frame
+            for target in state["targets"].values():
+                target["frame"] = frame
+            state["targets"][name] = {**state["targets"]["table.apply"],
+                "x": x, "y": 220, "width": 150, "height": 26}
+            states.append(state)
+        samples = iter(states)
+        journey = NewestJourneys()
+        journey.snapshot = lambda: next(samples)
+        journey.native = lambda *args: self.fail("visible cells do not need scroll input")
+        journey.record = lambda *args, **details: None
+        with patch("desktop_ui_newest_journeys.time.sleep"):
+            self.assertEqual(journey.reveal_table_cell(name)["x"], 401.5)
+        self.assertEqual(list(samples), [])
+
+    def test_horizontal_reveal_requires_advancing_cell_frames(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        name, states = "table.cell.3.5", []
+        for frame in (10, 10, 10, 10, 11, 12):
+            state = CompactTableGeometryContract().state()
+            state["scrolls"]["table.grid"]["frame"] = frame
+            for target in state["targets"].values():
+                target["frame"] = frame
+            state["targets"][name] = {**state["targets"]["table.apply"],
+                "x": 400, "y": 220, "width": 150, "height": 26}
+            states.append(state)
+        samples = iter(states)
+        journey = NewestJourneys()
+        journey.snapshot = lambda: next(samples)
+        journey.native = lambda *args: self.fail("visible cells do not need scroll input")
+        journey.record = lambda *args, **details: None
+        with patch("desktop_ui_newest_journeys.time.sleep"):
+            journey.reveal_table_cell(name)
+        self.assertEqual(list(samples), [], "one retained cell paint is not three current observations")
+
+    def test_unreachable_table_column_exhausts_a_bounded_native_scroll_budget(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        state = CompactTableGeometryContract().state()
+        journey = NewestJourneys()
+        journey.snapshot = lambda: state
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        clock = iter(index / 10 for index in range(300))
+        with patch("desktop_ui_newest_journeys.time.sleep"), \
+                patch("desktop_ui_newest_journeys.time.monotonic", side_effect=lambda: next(clock)):
+            with self.assertRaisesRegex(AssertionError, "stably visible"):
+                journey.reveal_table_cell("table.cell.3.5")
+        rightward = [args for args in actions if args[0] == "horizontal-wheel" and args[-1] < 0]
+        self.assertEqual(len(rightward), 8)
+
+    def test_negative_detection_requires_three_advancing_menu_frames(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        states = iter({"document": {"table_editor_open": False}, "targets": {
+            "menu.Select All": {"enabled": True, "frame": frame,
+                                "age_ms": 1, "viewport": "popup"}}}
+                      for frame in (5, 12, 12, 12, 13, 14))
+        journey, actions, records = NewestJourneys(), [], []
+        journey.snapshot = lambda: next(states)
+        journey.click = lambda name: actions.append(("click", name))
+        journey.key = lambda *args: actions.append(("key", *args))
+        journey.wait_target = lambda *args: None
+        from desktop_ui_journeys import fingerprint
+        source = "#table(columns: widths, ..rows)"
+        journey.wait = lambda description, predicate: self.assertTrue(predicate({
+            "cursor": [2, 2], "source_fingerprint": fingerprint(source)}))
+        journey.right_click = lambda name: actions.append(("right-click", name))
+        journey.record = lambda *args, **detail: records.append((args, detail))
+        with patch("desktop_ui_newest_journeys.time.sleep"):
+            journey.reject_table_workbench("unsupported", source)
+        self.assertEqual(list(states), [], "repeated observations of one menu paint cannot prove stability")
+        self.assertEqual(records[0][1]["stable_samples"], 3)
+        self.assertEqual(actions[-1], ("key", 53, "none"))
+
+    def test_negative_caret_guard_uses_character_offsets_and_rejects_intercepted_navigation(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        from desktop_ui_journeys import fingerprint
+        source = "// Ω 🧮\n#table(columns: widths, ..rows)"
+        prefix = source.split("#table", 1)[0]
+        expected = len(prefix) + 2
+        self.assertGreater(len(prefix.encode("utf-8")) + 2, expected)
+        for cursor in ([expected, expected], [0, 0],
+                       [len(prefix.encode("utf-8")) + 2] * 2):
+            journey, right_clicks = NewestJourneys(), []
+            journey.click = lambda name: None
+            journey.key = lambda *args: None
+            journey.wait_target = lambda *args: None
+            journey.right_click = lambda name: right_clicks.append(name)
+            def wait(description, predicate):
+                self.assertEqual(description, "caret reaches the unsupported table fixture")
+                if not predicate({"cursor": cursor, "source_fingerprint": fingerprint(source)}):
+                    raise AssertionError("caret location did not reach unsupported table")
+            journey.wait = wait
+            if cursor == [expected, expected]:
+                # Stop immediately after the guard: the next observation opens
+                # the separately tested native popup protocol.
+                journey.snapshot = lambda: {"targets": {}}
+                def stop_after_guard(name):
+                    raise RuntimeError("guard passed")
+                journey.right_click = stop_after_guard
+                with self.assertRaisesRegex(RuntimeError, "guard passed"):
+                    journey.reject_table_workbench("unicode", source, line=1)
+            else:
+                journey.snapshot = lambda: self.fail("wrong caret must stop before menu observation")
+                with self.assertRaisesRegex(AssertionError, "caret location"):
+                    journey.reject_table_workbench("unicode", source, line=1)
+                self.assertEqual(right_clicks, [])
+
+    def test_unsupported_detection_requires_a_current_context_menu(self):
+        from copy import deepcopy
+        from desktop_ui_newest_journeys import table_offer_rejected
+        state = {"document": {"table_editor_open": False}, "targets": {
+            "menu.Select All": {"enabled": True, "frame": 12, "age_ms": 1, "viewport": "menu"}}}
+        self.assertTrue(table_offer_rejected(state, 11))
+        self.assertFalse(table_offer_rejected(state, 12))
+        for change in ({"age_ms": 501}, {"enabled": False}):
+            stale = deepcopy(state)
+            stale["targets"]["menu.Select All"].update(change)
+            self.assertFalse(table_offer_rejected(stale))
+        for enabled in (False, True):
+            offered = deepcopy(state)
+            offered["targets"]["menu.Edit Table…"] = {
+                **offered["targets"]["menu.Select All"], "enabled": enabled}
+            with self.subTest(enabled=enabled), self.assertRaisesRegex(AssertionError, "offered"):
+                table_offer_rejected(offered, 11)
+            offered["targets"]["menu.Edit Table…"]["frame"] = 10
+            self.assertTrue(table_offer_rejected(offered, 11))
+        state["document"]["table_editor_open"] = True
+        with self.assertRaisesRegex(AssertionError, "unexpectedly opened"):
+            table_offer_rejected(state, 11)
 
 
 class SnippetManagerContract(unittest.TestCase):

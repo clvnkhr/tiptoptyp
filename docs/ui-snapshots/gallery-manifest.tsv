@@ -118,3 +118,4 @@ scene	draw-symbol	main	main-draw-symbol	component	-	-
 scene	source-reveal	main	main-source-reveal	targeted	-	-
 scene	diff-reveal	main	main-diff-reveal	targeted	-	-
 scene	pdfium-reveal	main	main-pdfium-reveal	targeted	-	-
+scene	table-editor-tex-merged	table-editor	table-editor-table-editor-tex-merged	targeted	-	-

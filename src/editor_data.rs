@@ -18,7 +18,6 @@ use crate::document::{DocumentKey, DocumentSnapshot};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TableTarget {
     Typst(crate::editor_features::EditableTable),
-    Source(crate::editor_features::TableSource),
     Tex(crate::editor_features::TexTable),
 }
 impl TableTarget {
@@ -28,11 +27,7 @@ impl TableTarget {
         kind: crate::document::DocumentKind,
     ) -> Option<Self> {
         if kind.is_typst() {
-            crate::editor_features::editable_table_at(source, cursor)
-                .map(Self::Typst)
-                .or_else(|| {
-                    crate::editor_features::table_source_at(source, cursor).map(Self::Source)
-                })
+            crate::editor_features::editable_table_at(source, cursor).map(Self::Typst)
         } else if kind == crate::document::DocumentKind::Tex {
             crate::editor_features::tex_table_at(source, cursor).map(Self::Tex)
         } else {
@@ -509,10 +504,6 @@ impl EditorDerivedData {
             let byte = self.char_to_byte(cursor);
             crate::editor_features::editable_table_in_source(&self.parsed_source, byte)
                 .map(TableTarget::Typst)
-                .or_else(|| {
-                    crate::editor_features::table_source_in_source(&self.parsed_source, byte)
-                        .map(TableTarget::Source)
-                })
         } else if kind == crate::document::DocumentKind::Tex {
             crate::editor_features::tex_table_at(&self.source_snapshot, cursor)
                 .map(TableTarget::Tex)
@@ -1348,15 +1339,12 @@ mod tests {
     }
 
     #[test]
-    fn table_query_cache_keeps_language_and_source_fallback_separate() {
+    fn table_query_cache_keeps_language_and_unsupported_geometry_separate() {
         let mut data = EditorDerivedData::default();
         let source = "#table(columns: sizes, ..cells)";
         data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
         data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
-        assert!(matches!(
-            data.cached_table_at_cursor(revision(1)),
-            Some(TableTarget::Source(_))
-        ));
+        assert!(data.cached_table_at_cursor(revision(1)).is_none());
         for _ in 0..100 {
             data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
         }
@@ -1378,6 +1366,118 @@ mod tests {
             1,
             "TeX table queries must not parse Typst syntax"
         );
+    }
+
+    #[test]
+    fn generated_and_inherited_typst_tables_are_not_editable_in_either_route() {
+        for source in [
+            "#let widths = (40%, auto)\n#let rows = ([Alpha], [Beta])\n#table(columns: widths, ..rows)",
+            "#table(columns: 2, [A], /* preserved comment */ [B])",
+            "#table(columns: 2, [A], [B], [incomplete])",
+            "#table([Label], [#price])",
+            "#set table(columns: 2)\n#table([A], [B])",
+            "#set grid(columns: widths)\n#grid([A], [B])",
+            "#{ set table(columns: 2); table([A], [B]) }",
+        ] {
+            let cursor = source
+                .rfind("table(")
+                .or_else(|| source.rfind("grid("))
+                .unwrap();
+            assert!(
+                TableTarget::at(source, cursor, crate::document::DocumentKind::Typst).is_none(),
+                "{source}"
+            );
+            let mut data = EditorDerivedData::default();
+            data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+            for _ in 0..10 {
+                data.prepare_table_at_cursor(cursor, crate::document::DocumentKind::Typst);
+                assert!(
+                    data.cached_table_at_cursor(revision(1)).is_none(),
+                    "{source}"
+                );
+            }
+            assert_eq!(data.syntax_rebuild_count(), 1);
+        }
+    }
+
+    #[test]
+    fn unsupported_nested_typst_table_does_not_edit_its_enclosing_table() {
+        let source = "#let widths = 2\n#table(columns: 1, [#table(columns: widths, [A])])";
+        for cursor in [
+            source.rfind("#table").unwrap(),
+            source.find("widths, [A]").unwrap(),
+        ] {
+            assert!(
+                TableTarget::at(source, cursor, crate::document::DocumentKind::Typst).is_none()
+            );
+            let mut data = EditorDerivedData::default();
+            data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+            data.prepare_table_at_cursor(cursor, crate::document::DocumentKind::Typst);
+            assert!(data.cached_table_at_cursor(revision(1)).is_none());
+        }
+        assert!(
+            TableTarget::at(
+                source,
+                source.find("#table").unwrap(),
+                crate::document::DocumentKind::Typst
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn nested_typst_table_sigil_targets_the_inner_grid() {
+        let source = "#table(columns: 1, [#grid(columns: 1, [Inner])])";
+        let cursor = source.find("#grid").unwrap();
+        let Some(TableTarget::Typst(inner)) =
+            TableTarget::at(source, cursor, crate::document::DocumentKind::Typst)
+        else {
+            panic!("inner grid must be editable")
+        };
+        assert_eq!(inner.kind, crate::editor_features::TableKind::Grid);
+        assert_eq!(inner.source_range.start, cursor + 1);
+        let mut data = EditorDerivedData::default();
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        data.prepare_table_at_cursor(cursor, crate::document::DocumentKind::Typst);
+        assert_eq!(
+            data.cached_table_at_cursor(revision(1)),
+            Some(&TableTarget::Typst(inner))
+        );
+        let Some(TableTarget::Typst(outer)) =
+            TableTarget::at(source, 0, crate::document::DocumentKind::Typst)
+        else {
+            panic!("outer table must remain editable")
+        };
+        assert_eq!(outer.kind, crate::editor_features::TableKind::Table);
+        assert_eq!(outer.source_range.start, 1);
+    }
+
+    #[test]
+    fn concrete_typst_tables_keep_literals_and_computed_cells_in_both_routes() {
+        for source in [
+            "#table([A])",
+            "#set table(fill: red)\n#table([A])",
+            "#set grid(columns: 2)\n#table([A])",
+            "#set table(columns: 1)\n#table([A])",
+            "#[#set table(columns: 2)]\n#table([A])",
+            "#set table(columns: 2)\n#table(columns: 2, [Literal], [#price])",
+            "#grid(columns: (auto, 1fr), [Label], [$price$])",
+        ] {
+            let cursor = source
+                .rfind("table(")
+                .or_else(|| source.rfind("grid("))
+                .unwrap();
+            let expected = TableTarget::at(source, cursor, crate::document::DocumentKind::Typst)
+                .expect(source);
+            let mut data = EditorDerivedData::default();
+            data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+            data.prepare_table_at_cursor(cursor, crate::document::DocumentKind::Typst);
+            assert_eq!(
+                data.cached_table_at_cursor(revision(1)),
+                Some(&expected),
+                "{source}"
+            );
+        }
     }
 
     #[test]

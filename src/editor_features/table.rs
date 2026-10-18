@@ -75,7 +75,7 @@ pub(super) fn parse_cell(
                             options.rowspan = value;
                         }
                     }
-                    // Explicit placement/structural expressions stay source-only.
+                    // Explicit placement and structural expressions need evaluated geometry.
                     "x" | "y" | "body" => return None,
                     _ => options.options.push(PreservedTableOption {
                         name: name.into(),
@@ -512,7 +512,7 @@ impl EditableTable {
     }
 
     /// Stroke source for a simple full edge. A partial/dynamic rule remains
-    /// available in source mode and is never silently converted to a full edge.
+    /// preserved for editing in the main code editor, never widened silently.
     pub(crate) fn boundary_rule(&self, axis: TableAxis, boundary: usize) -> Option<String> {
         self.rules.iter().rev().find_map(|(at, source)| {
             let rule = rule_details(source, self.kind, *at, self.row_count())?;
@@ -563,7 +563,7 @@ impl EditableTable {
             };
             if rule.axis == axis && rule.boundary == Some(boundary) {
                 if !rule.simple {
-                    return Err("This edge has partial or positioned rules. Edit them in table source to retain their options".into());
+                    return Err("This edge has partial or positioned rules. Edit them in the code editor to retain their options".into());
                 }
                 indexes.push(index);
             }
@@ -671,7 +671,7 @@ fn rule_details(source: &str, kind: TableKind, at: usize, rows: usize) -> Option
             _ => result.simple = false,
         }
     }
-    // Keep malformed future helper signatures source-only.
+    // Refuse malformed future helper signatures.
     if call.args().items().count() == 0 && axis == TableAxis::Vertical {
         result.simple = false;
     }
@@ -728,16 +728,27 @@ mod tests {
     }
 
     #[test]
-    fn source_drafts_preserve_dynamic_cells_and_incomplete_options_for_repair() {
+    fn sampling_drafts_preserve_dynamic_cells_and_invalid_options_for_validation() {
         let mut table = editable_table_at("#table(columns: 2, [A], [B])", 2).unwrap();
         table.cells[0][0] = "#let value = 1; #value".into();
         assert!(table.render_replacement().is_err());
         let draft = table.render_source_draft().unwrap();
-        let target = table_source_at(&format!("#{draft}"), 2).unwrap();
-        assert!(target.source_edit(&draft).is_ok());
+        assert!(
+            Source::detached(format!("#{draft}"))
+                .root()
+                .errors_and_warnings()
+                .0
+                .is_empty()
+        );
         table.set_style(None, "fill", Some("rgb("));
         let draft = table.render_source_draft().unwrap();
-        assert!(target.source_edit(&draft).is_err());
+        assert!(
+            !Source::detached(format!("#{draft}"))
+                .root()
+                .errors_and_warnings()
+                .0
+                .is_empty()
+        );
         table.cells[0].push("Outside geometry".into());
         assert!(table.render_source_draft().is_err());
     }
@@ -883,10 +894,9 @@ mod tests {
     }
 
     #[test]
-    fn implicit_rules_with_spans_are_lossless_source_only_instead_of_guessed() {
+    fn implicit_rules_with_spans_are_refused_instead_of_guessed() {
         let source = "#table(columns: 2, table.cell(colspan: 2)[Title], table.hline(), [A], [B])";
         assert!(editable_table_at(source, 2).is_none());
-        assert_eq!(table_source_at(source, 2).unwrap().source, source[1..]);
         // Explicit positions are safe even when occupancy has spans.
         let explicit =
             "#table(columns: 2, table.hline(y: 1), table.cell(colspan: 2)[Title], [A], [B])";
@@ -998,6 +1008,7 @@ mod tests {
             ("", 0, Some("#")),
             ("Hello ", 6, Some("#")),
             ("#let t = ", 9, Some("")),
+            ("#set table(columns: 2)\n#let t = ", 32, Some("")),
             ("#", 1, Some("")),
             ("#block[ ]", 7, Some("#")),
             ("#let t = \"hello\"", 12, None),

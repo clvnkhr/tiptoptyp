@@ -74,6 +74,7 @@ pub enum UiSnapshotScene {
     TableEditorNarrow,
     TableEditorTex,
     TableEditorTexNarrow,
+    TableEditorTexMerged,
     Main,
     DrawSymbol,
     Tabs,
@@ -140,7 +141,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 71] = [
+    pub const ALL: [Self; 72] = [
         Self::Snippets,
         Self::Shortcuts,
         Self::Packages,
@@ -149,6 +150,7 @@ impl UiSnapshotScene {
         Self::TableEditorNarrow,
         Self::TableEditorTex,
         Self::TableEditorTexNarrow,
+        Self::TableEditorTexMerged,
         Self::Main,
         Self::DrawSymbol,
         Self::Tabs,
@@ -224,6 +226,7 @@ impl UiSnapshotScene {
             Self::TableEditorNarrow => "table-editor-narrow",
             Self::TableEditorTex => "table-editor-tex",
             Self::TableEditorTexNarrow => "table-editor-tex-narrow",
+            Self::TableEditorTexMerged => "table-editor-tex-merged",
             Self::Main => "main",
             Self::DrawSymbol => "draw-symbol",
             Self::Icons => "icons",
@@ -303,7 +306,8 @@ impl UiSnapshotScene {
             Self::TableEditor
             | Self::TableEditorNarrow
             | Self::TableEditorTex
-            | Self::TableEditorTexNarrow => "table-editor",
+            | Self::TableEditorTexNarrow
+            | Self::TableEditorTexMerged => "table-editor",
             Self::Main
             | Self::DrawSymbol
             | Self::Tabs
@@ -383,6 +387,7 @@ impl UiSnapshotScene {
             "table-editor-narrow" => Self::TableEditorNarrow,
             "table-editor-tex" => Self::TableEditorTex,
             "table-editor-tex-narrow" => Self::TableEditorTexNarrow,
+            "table-editor-tex-merged" => Self::TableEditorTexMerged,
             "tabs" => Self::Tabs,
             "empty-workspace" => Self::EmptyWorkspace,
             "tabs-pdf" => Self::TabsPdf,
@@ -1740,6 +1745,7 @@ mod tests {
             UiSnapshotScene::TableEditorNarrow,
             UiSnapshotScene::TableEditorTex,
             UiSnapshotScene::TableEditorTexNarrow,
+            UiSnapshotScene::TableEditorTexMerged,
         ] {
             assert_eq!(UiSnapshotScene::parse(scene.as_str()).unwrap(), scene);
             assert_eq!(scene.viewport_target(), "table-editor");
@@ -1753,7 +1759,7 @@ mod tests {
         }
         assert_eq!(
             names.len(),
-            4,
+            5,
             "language/size captures must not overwrite each other"
         );
     }

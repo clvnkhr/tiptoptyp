@@ -1,9 +1,9 @@
 \documentclass{article}
 \usepackage{array,booktabs,longtable,multirow,siunitx}
 \begin{document}
-\section*{Table workbench: structural source mode}
-These tables must open as complete source: no dropping spans, repeated heads,
-custom column types, or opaque table-generation commands.
+\section*{Table workbench: merged cells and row structure}
+Grid edits must retain spans, repeated heads, row formatting and complete
+cell markup. Cancel must preserve every byte; Apply and Undo must be exact.
 
 \begin{tabular}{ll}
 \multicolumn{2}{c}{Spanning heading} \\

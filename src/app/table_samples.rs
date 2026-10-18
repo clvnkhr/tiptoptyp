@@ -23,6 +23,10 @@ impl Job {
             "values":grid.cells.iter().map(|cell| serde_json::json!({"position":cell.position,"fingerprint":crate::desktop_test::fingerprint(&cell.value)})).collect::<Vec<_>>()
         }))})
     }
+    pub(super) fn ready_for_snapshot(&self) -> bool {
+        self.started && !self.view.pending
+    }
+
     pub(super) fn reset(&mut self) {
         self.cancel.store(true, Ordering::Release);
         *self = Self::default();
@@ -62,17 +66,7 @@ impl EditorApp {
                         self.typst_tool.program.clone(),
                     )
                 }
-                Some(TableEditorDialog::Source(dialog)) => (
-                    dialog.target.source_range.clone(),
-                    dialog.target.source.clone(),
-                    Engine::Typst {
-                        command: self.settings.typst.command.clone(),
-                        fonts: self.font_catalog.workspace_directories().to_vec(),
-                        kind: dialog.target.kind.callee().into(),
-                    },
-                    self.typst_tool.program.clone(),
-                ),
-                Some(TableEditorDialog::Tex(dialog)) if !dialog.source_mode => {
+                Some(TableEditorDialog::Tex(dialog)) => {
                     if let Some(rows) = &dialog.table.cells {
                         for (r, row) in rows.iter().enumerate() {
                             for (c, cell) in row.iter().enumerate() {
@@ -211,9 +205,7 @@ impl EditorApp {
                 }
             }
         }
-        if let Some(TableEditorDialog::Tex(dialog)) = &self.table_editor
-            && !dialog.source_mode
-        {
+        if let Some(TableEditorDialog::Tex(dialog)) = &self.table_editor {
             for (&(r, c), source) in &self.table_samples.view.locked {
                 if dialog
                     .table
@@ -233,10 +225,15 @@ impl EditorApp {
         Ok(())
     }
 }
-// A macro may come from an imported preamble or package, so source-local
-// declarations cannot safely decide which cells are computed. Named controls
-// are conservatively sampled; escaped punctuation and literal \verb stay text.
+// Formatting controls retain editable source; imported user macros remain sampled.
 fn tex_computed_markup(cell: &str) -> bool {
+    tex_computed_markup_depth(cell, 0)
+}
+
+fn tex_computed_markup_depth(cell: &str, depth: usize) -> bool {
+    if depth > 16 {
+        return true;
+    }
     let bytes = cell.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -245,6 +242,10 @@ fn tex_computed_markup(cell: &str) -> bool {
                 i += 1;
             }
         } else if bytes[i] == b'\\' {
+            if let Some(end) = crate::editor_math_guides::tex_inline_literal_end(cell, i) {
+                i = end;
+                continue;
+            }
             i += 1;
             let start = i;
             while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
@@ -254,24 +255,430 @@ fn tex_computed_markup(cell: &str) -> bool {
                 i = (i + 1).min(bytes.len());
                 continue;
             }
-            if &cell[start..i] != "verb" {
+            let command = &cell[start..i];
+            if matches!(
+                command,
+                "cite"
+                    | "citep"
+                    | "citet"
+                    | "citealp"
+                    | "citealt"
+                    | "citeauthor"
+                    | "citeyear"
+                    | "citeyearpar"
+                    | "citenum"
+                    | "Citep"
+                    | "Citet"
+                    | "Citealt"
+                    | "Citealp"
+                    | "Citeauthor"
+                    | "autocite"
+                    | "Autocite"
+                    | "parencite"
+                    | "Parencite"
+                    | "textcite"
+                    | "Textcite"
+                    | "footcite"
+                    | "footcitetext"
+                    | "supercite"
+                    | "nocite"
+                    | "ref"
+                    | "pageref"
+                    | "eqref"
+                    | "autoref"
+                    | "Autoref"
+                    | "nameref"
+                    | "Nameref"
+                    | "cref"
+                    | "Cref"
+                    | "cpageref"
+                    | "Cpageref"
+                    | "label"
+                    | "url"
+                    | "href"
+            ) {
+                let Some(end) = tex_key_argument_end(cell, i, depth) else {
+                    return true;
+                };
+                i = end;
+            } else if !tex_literal_control(command) {
                 return true;
-            }
-            if bytes.get(i) == Some(&b'*') {
-                i += 1;
-            }
-            if let Some(&delimiter) = bytes.get(i) {
-                i += 1;
-                while i < bytes.len() && bytes[i] != delimiter && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                i = (i + 1).min(bytes.len());
             }
         } else {
             i += 1;
         }
     }
     false
+}
+
+fn tex_key_argument_end(cell: &str, mut i: usize, depth: usize) -> Option<usize> {
+    let bytes = cell.as_bytes();
+    if bytes.get(i) == Some(&b'*') {
+        i += 1;
+    }
+    loop {
+        while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+            i += 1;
+        }
+        if bytes.get(i) != Some(&b'[') {
+            break;
+        }
+        let Some(end) = tex_group_end(bytes, i, b'[', b']') else {
+            return Some(i);
+        };
+        if tex_computed_markup_depth(&cell[i + 1..end - 1], depth + 1) {
+            return None;
+        }
+        i = end;
+    }
+    Some(if bytes.get(i) == Some(&b'{') {
+        tex_group_end(bytes, i, b'{', b'}').unwrap_or(i)
+    } else {
+        i
+    })
+}
+
+fn tex_group_end(bytes: &[u8], start: usize, open: u8, close: u8) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut braces = 0usize;
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            b'%' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'{' if open != b'{' => braces += 1,
+            b'}' if open != b'{' => braces = braces.saturating_sub(1),
+            value if value == open && braces == 0 => depth += 1,
+            value if value == close && braces == 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn tex_literal_control(command: &str) -> bool {
+    matches!(
+        command,
+        "textbf"
+            | "textit"
+            | "emph"
+            | "textrm"
+            | "textsf"
+            | "texttt"
+            | "textnormal"
+            | "textsc"
+            | "textsl"
+            | "textup"
+            | "textmd"
+            | "textsuperscript"
+            | "textsubscript"
+            | "bfseries"
+            | "mdseries"
+            | "itshape"
+            | "slshape"
+            | "scshape"
+            | "upshape"
+            | "rmfamily"
+            | "sffamily"
+            | "ttfamily"
+            | "normalfont"
+            | "tiny"
+            | "scriptsize"
+            | "footnotesize"
+            | "small"
+            | "normalsize"
+            | "large"
+            | "Large"
+            | "LARGE"
+            | "huge"
+            | "Huge"
+            | "underline"
+            | "overline"
+            | "uline"
+            | "sout"
+            | "text"
+            | "mbox"
+            | "makebox"
+            | "parbox"
+            | "shortstack"
+            | "makecell"
+            | "thead"
+            | "multirow"
+            | "multicolumn"
+            | "rotatebox"
+            | "scalebox"
+            | "resizebox"
+            | "raisebox"
+            | "color"
+            | "textcolor"
+            | "colorbox"
+            | "fcolorbox"
+            | "cellcolor"
+            | "hspace"
+            | "vspace"
+            | "hfill"
+            | "vfill"
+            | "quad"
+            | "qquad"
+            | "enspace"
+            | "thinspace"
+            | "medspace"
+            | "thickspace"
+            | "smallskip"
+            | "medskip"
+            | "bigskip"
+            | "noindent"
+            | "newline"
+            | "linebreak"
+            | "strut"
+            | "rule"
+            | "phantom"
+            | "hphantom"
+            | "vphantom"
+            | "smash"
+            | "centering"
+            | "raggedleft"
+            | "raggedright"
+            | "arraybackslash"
+            | "protect"
+            | "relax"
+            | "footnote"
+            | "footnotemark"
+            | "footnotetext"
+            | "begin"
+            | "end"
+            | "TeX"
+            | "LaTeX"
+            | "ldots"
+            | "cdots"
+            | "dots"
+            | "vdots"
+            | "ddots"
+            | "ldotp"
+            | "cdotp"
+            | "textbackslash"
+            | "textasciitilde"
+            | "textasciicircum"
+            | "textdegree"
+            | "textregistered"
+            | "textcopyright"
+            | "texttrademark"
+            | "textendash"
+            | "textemdash"
+            | "ding"
+            | "textwidth"
+            | "linewidth"
+            | "columnwidth"
+            | "baselineskip"
+            | "dimexpr"
+            | "mathit"
+            | "mathbf"
+            | "mathrm"
+            | "mathsf"
+            | "mathtt"
+            | "mathnormal"
+            | "mathcal"
+            | "mathbb"
+            | "mathfrak"
+            | "boldsymbol"
+            | "bm"
+            | "operatorname"
+            | "mathop"
+            | "mathbin"
+            | "mathrel"
+            | "mathord"
+            | "mathopen"
+            | "mathclose"
+            | "mathpunct"
+            | "ensuremath"
+            | "displaystyle"
+            | "textstyle"
+            | "scriptstyle"
+            | "scriptscriptstyle"
+            | "frac"
+            | "dfrac"
+            | "tfrac"
+            | "sqrt"
+            | "binom"
+            | "dbinom"
+            | "tbinom"
+            | "overset"
+            | "underset"
+            | "stackrel"
+            | "substack"
+            | "hat"
+            | "widehat"
+            | "bar"
+            | "vec"
+            | "dot"
+            | "ddot"
+            | "tilde"
+            | "widetilde"
+            | "check"
+            | "breve"
+            | "acute"
+            | "grave"
+            | "overbrace"
+            | "underbrace"
+            | "left"
+            | "right"
+            | "middle"
+            | "big"
+            | "Big"
+            | "bigg"
+            | "Bigg"
+            | "bigl"
+            | "bigr"
+            | "Bigl"
+            | "Bigr"
+            | "biggl"
+            | "biggr"
+            | "Biggl"
+            | "Biggr"
+            | "sum"
+            | "prod"
+            | "coprod"
+            | "int"
+            | "iint"
+            | "iiint"
+            | "oint"
+            | "lim"
+            | "limsup"
+            | "liminf"
+            | "log"
+            | "ln"
+            | "exp"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "arcsin"
+            | "arccos"
+            | "arctan"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "min"
+            | "max"
+            | "sup"
+            | "inf"
+            | "det"
+            | "dim"
+            | "ker"
+            | "gcd"
+            | "Pr"
+            | "alpha"
+            | "beta"
+            | "gamma"
+            | "delta"
+            | "epsilon"
+            | "varepsilon"
+            | "zeta"
+            | "eta"
+            | "theta"
+            | "vartheta"
+            | "iota"
+            | "kappa"
+            | "varkappa"
+            | "lambda"
+            | "mu"
+            | "nu"
+            | "xi"
+            | "pi"
+            | "varpi"
+            | "rho"
+            | "varrho"
+            | "sigma"
+            | "varsigma"
+            | "tau"
+            | "upsilon"
+            | "phi"
+            | "varphi"
+            | "chi"
+            | "psi"
+            | "omega"
+            | "Gamma"
+            | "Delta"
+            | "Theta"
+            | "Lambda"
+            | "Xi"
+            | "Pi"
+            | "Sigma"
+            | "Upsilon"
+            | "Phi"
+            | "Psi"
+            | "Omega"
+            | "partial"
+            | "nabla"
+            | "infty"
+            | "emptyset"
+            | "varnothing"
+            | "forall"
+            | "exists"
+            | "neg"
+            | "in"
+            | "notin"
+            | "subset"
+            | "subseteq"
+            | "supset"
+            | "supseteq"
+            | "cup"
+            | "cap"
+            | "setminus"
+            | "times"
+            | "cdot"
+            | "pm"
+            | "mp"
+            | "div"
+            | "ast"
+            | "star"
+            | "circ"
+            | "bullet"
+            | "oplus"
+            | "otimes"
+            | "le"
+            | "leq"
+            | "ge"
+            | "geq"
+            | "ne"
+            | "neq"
+            | "approx"
+            | "sim"
+            | "simeq"
+            | "equiv"
+            | "propto"
+            | "to"
+            | "rightarrow"
+            | "leftarrow"
+            | "leftrightarrow"
+            | "Rightarrow"
+            | "Leftarrow"
+            | "Leftrightarrow"
+            | "mapsto"
+            | "langle"
+            | "rangle"
+            | "lvert"
+            | "rvert"
+            | "lVert"
+            | "rVert"
+            | "vert"
+            | "Vert"
+            | "lceil"
+            | "rceil"
+            | "lfloor"
+            | "rfloor"
+            | "limits"
+            | "nolimits"
+    )
 }
 
 pub(super) fn locked_cell(
@@ -308,361 +715,9 @@ pub(super) fn locked_cell(
     Some(response)
 }
 
-fn sampled_visible_rows(viewport: Rect, rows: usize) -> std::ops::Range<usize> {
-    use table_editor::{CELL_HEIGHT, HEADER_HEIGHT};
-    let first = ((viewport.top() - HEADER_HEIGHT) / CELL_HEIGHT)
-        .floor()
-        .max(0.0) as usize;
-    let last = ((viewport.bottom() - HEADER_HEIGHT) / CELL_HEIGHT)
-        .ceil()
-        .max(0.0) as usize;
-    first.min(rows)..last.saturating_add(1).min(rows)
-}
-
-fn sampled_cell_intersects_rows(
-    cell: &crate::table_sampling::Cell,
-    rows: &std::ops::Range<usize>,
-) -> bool {
-    cell.position.0.saturating_add(cell.span.0) > rows.start && cell.position.0 < rows.end
-}
-
-fn sampled_cell_rect(origin: Pos2, cell: &crate::table_sampling::Cell, width: f32) -> Rect {
-    use table_editor::{CELL_HEIGHT, HEADER_HEIGHT, ROW_HEADER};
-    Rect::from_min_size(
-        origin
-            + Vec2::new(
-                ROW_HEADER + cell.position.1 as f32 * width,
-                HEADER_HEIGHT + cell.position.0 as f32 * CELL_HEIGHT,
-            ),
-        Vec2::new(width * cell.span.1 as f32, CELL_HEIGHT * cell.span.0 as f32),
-    )
-}
-
-pub(super) fn sampled_grid(ui: &mut egui::Ui, height: f32) {
-    use table_editor::{CELL_HEIGHT, HEADER_HEIGHT, ROW_HEADER};
-    let Some(view) = crate::table_sampling::view(ui) else {
-        return;
-    };
-    ui.horizontal(|ui| {
-        ui.weak("Sampled values · read-only");
-        if let Some(grid) = &view.grid
-            && grid.instances > 1
-        {
-            ui.weak(format!("1 / {}", grid.instances));
-        }
-    });
-    let Some(grid) = &view.grid else {
-        if view.pending {
-            ui.label("Sampling table values…");
-        } else if let Some(error) = &view.error {
-            egui::ScrollArea::vertical()
-                .id_salt("sampled-table-error")
-                .max_height(height.min(ui.available_height()).max(0.0))
-                .min_scrolled_height(0.0)
-                .show(ui, |ui| {
-                    ui.label(error);
-                });
-        }
-        return;
-    };
-    let columns = grid.columns.max(1);
-    let width = ((ui.available_width() - ROW_HEADER - 12.0) / columns.min(5) as f32).max(128.0);
-    let content_width = ROW_HEADER + width * columns as f32;
-    egui::ScrollArea::both()
-        .id_salt("sampled-table-grid")
-        .max_height(height.min(ui.available_height()).max(0.0))
-        .min_scrolled_height(0.0)
-        .auto_shrink([false, false])
-        .show_viewport(ui, |ui, viewport| {
-            let (_, area) = ui.allocate_space(Vec2::new(
-                content_width,
-                HEADER_HEIGHT + CELL_HEIGHT * grid.rows as f32,
-            ));
-            let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-            let fill = ui.visuals().faint_bg_color;
-            let header_fill = ui.visuals().extreme_bg_color;
-            let small = egui::TextStyle::Small.resolve(ui.style());
-            let header = Rect::from_min_size(area.min, Vec2::new(content_width, HEADER_HEIGHT));
-            ui.painter().rect_filled(header, 0.0, header_fill);
-            for column in 0..columns {
-                let rect = Rect::from_min_size(
-                    area.min + Vec2::new(ROW_HEADER + column as f32 * width, 0.0),
-                    Vec2::new(width, HEADER_HEIGHT),
-                );
-                if ui.is_rect_visible(rect) {
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        table_editor::column_name(column),
-                        small.clone(),
-                        ui.visuals().weak_text_color(),
-                    );
-                    ui.painter()
-                        .line_segment([rect.left_top(), rect.left_bottom()], stroke);
-                }
-            }
-            ui.painter()
-                .line_segment([header.left_top(), header.right_top()], stroke);
-            let rows = sampled_visible_rows(viewport, grid.rows);
-            for row in rows.clone() {
-                let rect = Rect::from_min_size(
-                    area.min + Vec2::new(0.0, HEADER_HEIGHT + row as f32 * CELL_HEIGHT),
-                    Vec2::new(ROW_HEADER, CELL_HEIGHT),
-                );
-                ui.painter().rect_filled(rect, 0.0, header_fill);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    (row + 1).to_string(),
-                    small.clone(),
-                    ui.visuals().weak_text_color(),
-                );
-                ui.painter()
-                    .line_segment([rect.left_top(), rect.right_top()], stroke);
-                if row + 1 == grid.rows {
-                    ui.painter()
-                        .line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
-                }
-            }
-            for cell in grid
-                .cells
-                .iter()
-                .filter(|cell| sampled_cell_intersects_rows(cell, &rows))
-            {
-                let rect = sampled_cell_rect(area.min, cell, width);
-                if !ui.is_rect_visible(rect) {
-                    continue;
-                }
-                ui.painter().rect_filled(rect, 0.0, fill);
-                ui.painter()
-                    .line_segment([rect.left_top(), rect.right_top()], stroke);
-                ui.painter()
-                    .line_segment([rect.left_top(), rect.left_bottom()], stroke);
-                if cell.position.0.saturating_add(cell.span.0) == grid.rows {
-                    ui.painter()
-                        .line_segment([rect.left_bottom(), rect.right_bottom()], stroke);
-                }
-                if cell.position.1.saturating_add(cell.span.1) == columns {
-                    ui.painter()
-                        .line_segment([rect.right_top(), rect.right_bottom()], stroke);
-                }
-                let inner = rect.shrink2(Vec2::new(6.0, 5.0));
-                ui.scope_builder(
-                    egui::UiBuilder::new()
-                        .id_salt(("sampled-table-cell", cell.position))
-                        .max_rect(inner),
-                    |ui| {
-                        ui.set_clip_rect(ui.clip_rect().intersect(inner));
-                        egui::ScrollArea::vertical()
-                            .id_salt("value-scroll")
-                            .max_height(inner.height())
-                            .min_scrolled_height(0.0)
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                let response =
-                                    ui.add(egui::Label::new(&cell.value).selectable(true).wrap());
-                                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                                crate::desktop_test::observe(
-                                    &format!(
-                                        "table.sample.{}.{}",
-                                        cell.position.0, cell.position.1
-                                    ),
-                                    &response,
-                                );
-                                let _ = response;
-                            });
-                    },
-                );
-            }
-            for edge in [
-                [area.left_top(), area.left_bottom()],
-                [area.right_top(), area.right_bottom()],
-            ] {
-                ui.painter().line_segment(edge, stroke);
-            }
-        });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn sampled_text_frame(
-        context: &egui::Context,
-        text: &str,
-        frame: usize,
-        events: Vec<egui::Event>,
-    ) -> Option<(Rect, Rect)> {
-        fn text_rect(shape: &egui::Shape, text: &str) -> Option<Rect> {
-            match shape {
-                egui::Shape::Text(value) if value.galley.job.text == text => {
-                    Some(Rect::from_min_size(value.pos, value.galley.size()))
-                }
-                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| text_rect(shape, text)),
-                _ => None,
-            }
-        }
-        let output = context.run_ui(
-            egui::RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(440.0, 280.0))),
-                time: Some(frame as f64 / 60.0),
-                events,
-                ..Default::default()
-            },
-            |ui| sampled_grid(ui, ui.available_height()),
-        );
-        let shape = output
-            .shapes
-            .iter()
-            .find_map(|shape| text_rect(&shape.shape, text).map(|rect| (rect, shape.clip_rect)));
-        output.drop_without_applying_deltas();
-        shape
-    }
-
-    #[test]
-    fn table_samples_long_cell_scroll_reaches_last_line_without_changing_source() {
-        let context = egui::Context::default();
-        theme::configure_test_fonts(&context);
-        let text = (0..40)
-            .map(|line| format!("Sample line {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let grid = crate::table_sampling::Grid {
-            columns: 1,
-            rows: 1,
-            instances: 1,
-            cells: vec![crate::table_sampling::Cell {
-                position: (0, 0),
-                span: (1, 1),
-                value: text.clone(),
-            }],
-        };
-        let source = BTreeMap::from([((0, 0), "#long_value".to_owned())]);
-        crate::table_sampling::publish(
-            &context,
-            context.viewport_id(),
-            Arc::new(View {
-                locked: source.clone(),
-                grid: Some(grid.clone()),
-                ..Default::default()
-            }),
-        );
-        let _ = sampled_text_frame(&context, &text, 0, Vec::new());
-        let (before, clip) = sampled_text_frame(&context, &text, 1, Vec::new())
-            .expect("the read-only sample must be rendered");
-        assert!(before.bottom() > clip.bottom() + 100.0);
-        let pointer = clip.intersect(before).center();
-        let mut after = before;
-        let mut after_clip = clip;
-        for frame in 2..22 {
-            let mut events = vec![egui::Event::PointerMoved(pointer)];
-            if frame == 2 {
-                events.push(egui::Event::MouseWheel {
-                    unit: egui::MouseWheelUnit::Point,
-                    delta: Vec2::new(0.0, -8_000.0),
-                    phase: egui::TouchPhase::Move,
-                    modifiers: Modifiers::NONE,
-                });
-            }
-            (after, after_clip) = sampled_text_frame(&context, &text, frame, events)
-                .expect("the read-only sample must remain rendered");
-        }
-        assert!(
-            after.bottom() <= after_clip.bottom() + 1.0 && after.bottom() >= after_clip.top(),
-            "the final sampled line must scroll into the cell clip: {after:?}, {after_clip:?}"
-        );
-        let mut unchanged = None;
-        let output = context.run_ui(Default::default(), |ui| {
-            unchanged = crate::table_sampling::view(ui);
-        });
-        output.drop_without_applying_deltas();
-        let unchanged = unchanged.unwrap();
-        assert_eq!(unchanged.locked, source);
-        assert_eq!(unchanged.grid.as_ref(), Some(&grid));
-    }
-
-    #[test]
-    fn table_samples_virtual_rows_keep_one_pitch_and_include_overlapping_spans() {
-        use table_editor::{CELL_HEIGHT, HEADER_HEIGHT, ROW_HEADER};
-        let origin = Pos2::new(11.0, 17.0);
-        let cell = crate::table_sampling::Cell {
-            position: (39, 2),
-            span: (4, 2),
-            value: "Spanning sample".into(),
-        };
-        let rect = sampled_cell_rect(origin, &cell, 128.0);
-        assert_eq!(rect.left(), origin.x + ROW_HEADER + 256.0);
-        assert_eq!(rect.top(), origin.y + HEADER_HEIGHT + 39.0 * CELL_HEIGHT);
-        assert_eq!(rect.height(), 4.0 * CELL_HEIGHT);
-        assert_eq!(rect.width(), 256.0);
-        for offset in [0.0, 7.0, 27.0] {
-            let viewport = Rect::from_min_size(
-                Pos2::new(0.0, HEADER_HEIGHT + 40.0 * CELL_HEIGHT + offset),
-                Vec2::new(400.0, 3.0 * CELL_HEIGHT),
-            );
-            let rows = sampled_visible_rows(viewport, 4_096);
-            assert_eq!(rows.start, 40);
-            assert!(rows.len() <= 5, "only a viewport of rows is materialized");
-            assert!(sampled_cell_intersects_rows(&cell, &rows));
-            let on_screen = sampled_cell_rect(origin - viewport.min.to_vec2(), &cell, 128.0);
-            assert_eq!(on_screen.translate(viewport.min.to_vec2()), rect);
-        }
-        assert!(!sampled_cell_intersects_rows(&cell, &(43..46)));
-        assert!(!sampled_cell_intersects_rows(&cell, &(35..39)));
-        assert!(sampled_visible_rows(Rect::EVERYTHING, 0).is_empty());
-    }
-
-    #[test]
-    fn table_samples_grid_materializes_only_visible_read_only_values() {
-        use egui_kittest::{
-            Harness,
-            kittest::{NodeT as _, Queryable as _, by},
-        };
-        let view = Arc::new(View {
-            grid: Some(crate::table_sampling::Grid {
-                columns: 1,
-                rows: 4_096,
-                instances: 1,
-                cells: (0..4_096)
-                    .map(|row| crate::table_sampling::Cell {
-                        position: (row, 0),
-                        span: (1, 1),
-                        value: format!("Sample row {row}"),
-                    })
-                    .collect(),
-            }),
-            ..Default::default()
-        });
-        let mut ready = false;
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(440.0, 280.0))
-            .build_ui(move |ui| {
-                if !ready {
-                    theme::configure_test_fonts(ui.ctx());
-                    ready = true;
-                }
-                // Layout spacing must not become an extra pitch between grid rows.
-                ui.spacing_mut().item_spacing.y = 27.0;
-                crate::table_sampling::publish(ui.ctx(), ui.ctx().viewport_id(), view.clone());
-                sampled_grid(ui, ui.available_height());
-            });
-        harness.run();
-        let samples = harness
-            .query_all(by().label_contains("Sample row "))
-            .filter_map(|node| node.accesskit_node().value())
-            .collect::<Vec<_>>();
-        assert!(samples.len() >= 2 && samples.len() <= 9, "{samples:?}");
-        assert_eq!(
-            harness
-                .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
-                .count(),
-            0
-        );
-        assert!(harness.get_by_label("Sample row 0").rect().height() < table_editor::CELL_HEIGHT);
-        let first = harness.get_by_label("Sample row 0").rect().top();
-        let second = harness.get_by_label("Sample row 1").rect().top();
-        assert_eq!(second - first, table_editor::CELL_HEIGHT);
-    }
-
     #[test]
     fn table_samples_apply_refuses_programmatic_overwrite_of_computed_cells() {
         let dir = tempfile::tempdir().unwrap();
@@ -691,25 +746,102 @@ mod tests {
         assert_eq!(app.document().source(), source);
     }
     #[test]
-    fn table_samples_inherited_computed_columns_use_read_only_grid() {
+    fn table_samples_literal_arxiv_descriptions_are_editable_but_macro_symbols_are_locked() {
+        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
+        let table =
+            crate::editor_features::tex_table_at(source, source.find("\\begin{tabular}").unwrap())
+                .unwrap();
+        let rows = table.cells.as_ref().unwrap();
+        assert!(!tex_computed_markup(&rows[3][5]));
+        assert!(rows[3][5].contains("Unbiased estimator of CKA"));
+        assert!(tex_computed_markup(&rows[3][1]));
+        assert!(rows[3][1].contains("\\cmark"));
+    }
+
+    #[test]
+    fn table_samples_apply_refuses_overwrite_of_unknown_tex_macro_inside_markup() {
         let dir = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, dir.path().into());
-        let source = "#set table(columns: 2)\n#let price = 60\n#table([Revenue], [#price])";
+        let source = r"\begin{tabular}{ll}Revenue & \textbf{\revenue}\\\end{tabular}";
         app.document_mut().replace_loaded_unprojected(
             source.into(),
-            dir.path().join("sample.typ"),
-            DocumentKind::Typst,
+            dir.path().join("sample.tex"),
+            DocumentKind::Tex,
             None,
         );
-        app.begin_table_target(
-            TableTarget::at(source, source.find("table([").unwrap(), DocumentKind::Typst).unwrap(),
-        );
-        assert!(matches!(
-            app.table_editor,
-            Some(TableEditorDialog::Source(_))
-        ));
+        app.begin_table_target(TableTarget::at(source, 2, DocumentKind::Tex).unwrap());
+        app.table_samples
+            .view
+            .locked
+            .insert((0, 1), r"\textbf{\revenue}".into());
+        assert!(app.validate_table_sample_locks().is_ok());
+        let Some(TableEditorDialog::Tex(dialog)) = &mut app.table_editor else {
+            unreachable!()
+        };
+        dialog.table.cells.as_mut().unwrap()[0][1] = "60".into();
+        assert!(app.validate_table_sample_locks().is_err());
+        assert_eq!(app.document().source(), source);
     }
+
+    #[test]
+    fn table_samples_standard_tex_markup_remains_editable() {
+        for cell in [
+            r"\textbf{Header}",
+            r"\small symmetric",
+            r"\multirow{2}{*}{\textbf{Metric}}",
+            r"\multicolumn{4}{c}{\textbf{Property}}",
+            r"\thead{\multirow{2}{*}{\textbf{Description}}}",
+            r"{\vspace{-0.5em}Unbiased estimator of CKA that corrects for sample bias in HSIC~\cite{song2012feature}.}",
+            r"\rotatebox{90}{\makecell{first\\second}}",
+            r"$\frac{\alpha + \beta}{\sqrt{n}} \leq \infty$",
+            r"See \citet[\emph{especially}][p.~3]{a,b}, \eqref{eq:label} and \label{sec:label}",
+            r"\href{https://example.test/\notavariable}{\emph{Link}}",
+        ] {
+            assert!(
+                !tex_computed_markup(cell),
+                "literal markup must be editable: {cell}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_samples_unknown_tex_macros_stay_locked_inside_standard_markup() {
+        for cell in [
+            r"\revenue",
+            r"\cmark",
+            r"\textbf{\revenue}",
+            r"\thead{\multirow{2}{*}{\cmark}}",
+            r"\href{https://example.test}{\revenue}",
+            r"\cite{key} \revenue",
+        ] {
+            assert!(
+                tex_computed_markup(cell),
+                "computed macro must remain locked: {cell}"
+            );
+        }
+        for cell in [
+            r"\lstinline|\revenue|",
+            r"\mintinline{tex}{\revenue}",
+            r"\cite{\citationkey}",
+            r"\cite[{	extbf{See ]}}]{\citationkey}",
+        ] {
+            assert!(
+                !tex_computed_markup(cell),
+                "literal keys/code are not variables: {cell}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_samples_nested_reference_notes_are_bounded() {
+        let mut cell = String::from("literal");
+        for _ in 0..32 {
+            cell = format!("\\cite[{cell}]{{key}}");
+        }
+        assert!(tex_computed_markup(&cell));
+    }
+
     #[test]
     fn table_samples_macro_detection_handles_imports_comments_literals_and_escapes() {
         assert!(tex_computed_markup(r"Price: \price"));

@@ -32,10 +32,12 @@ pub(crate) struct Grid {
     pub columns: usize,
     pub rows: usize,
     pub cells: Vec<Cell>,
-    pub instances: usize,
 }
 impl Grid {
     pub(crate) fn value(&self, position: CellPosition) -> Option<&str> {
+        if position.0 >= self.rows || position.1 >= self.columns {
+            return None;
+        }
         self.cells
             .iter()
             .find(|c| c.position == position)
@@ -64,16 +66,9 @@ pub(crate) fn view(ui: &egui::Ui) -> Option<Arc<View>> {
     ui.ctx()
         .data(|data| data.get_temp(key(ui.ctx().viewport_id())))
 }
-pub(crate) fn mode_key(viewport: egui::ViewportId) -> egui::Id {
-    egui::Id::new((viewport, "table-sampled-source-mode"))
-}
-pub(crate) fn set_source_mode(context: &egui::Context, source_mode: bool) {
-    context.data_mut(|data| data.insert_temp(mode_key(context.viewport_id()), source_mode));
-}
 pub(crate) fn clear(context: &egui::Context, viewport: egui::ViewportId) {
     context.data_mut(|data| {
         data.remove::<Arc<View>>(key(viewport));
-        data.remove::<bool>(mode_key(viewport));
     });
 }
 
@@ -367,7 +362,6 @@ pub(crate) fn typst_grid(text: &str) -> Result<Grid, String> {
     let mut occupied = vec![false; 4096];
     let mut grid = Grid {
         columns,
-        instances: instances.len(),
         ..Default::default()
     };
     let mut next = 0;
@@ -415,16 +409,24 @@ pub(crate) fn tex_instrument(
     locked: &BTreeMap<CellPosition, String>,
 ) -> Result<String, String> {
     let mut table = table.clone();
-    for (&(r, c), body) in locked {
+    for (&(r, c), expected) in locked {
+        let content = table
+            .cell_content_range((r, c))
+            .ok_or("The TeX cell geometry changed")?;
         let cell = table
             .cells
             .as_mut()
             .and_then(|rows| rows.get_mut(r))
             .and_then(|row| row.get_mut(c))
             .ok_or("The TeX cell geometry changed")?;
-        *cell = format!(
+        if cell != expected {
+            return Err("The TeX cell source changed before sampling".into());
+        }
+        let body = &cell[content.clone()];
+        let instrumented = format!(
             "{{\\csname protected@edef\\endcsname\\TTTPrivateTableSample{{{body}}}\\typeout{{TTT-SAMPLE-BEGIN:{r}:{c}}}\\typeout{{\\meaning\\TTTPrivateTableSample}}\\typeout{{TTT-SAMPLE-END}}{body}}}"
         );
+        cell.replace_range(content, &instrumented);
     }
     table.render_source_draft()
 }
@@ -437,7 +439,6 @@ fn tex_grid(
     let mut grid = Grid {
         columns,
         rows,
-        instances: 1,
         ..Default::default()
     };
     let mut current = None;
@@ -451,14 +452,14 @@ fn tex_grid(
         } else if line == "TTT-SAMPLE-END" {
             if let Some(position) = current.take().filter(|at| expected.contains_key(at)) {
                 grid.cells.retain(|cell| cell.position != position);
+                let expansion = value
+                    .split_once("->")
+                    .map_or(value.as_str(), |(_, v)| v)
+                    .trim();
                 grid.cells.push(Cell {
                     position,
                     span: (1, 1),
-                    value: value
-                        .split_once("->")
-                        .map_or(value.as_str(), |(_, v)| v)
-                        .trim()
-                        .into(),
+                    value: tex_sample_symbol(expansion).unwrap_or(expansion).into(),
                 });
             }
         } else if current.is_some() && value.len() + line.len() <= MAX_CELL {
@@ -474,6 +475,109 @@ fn tex_grid(
     Ok(grid)
 }
 
+// Only decode the two complete Pifont expansions used for table checks/crosses.
+// Other compiler tokens remain visible; this is not a general TeX renderer.
+fn tex_sample_symbol(value: &str) -> Option<&'static str> {
+    fn padding(mut value: &str) -> &str {
+        loop {
+            value = value.trim_matches(|c: char| c.is_ascii_whitespace());
+            if let Some(rest) = value.strip_prefix("{}") {
+                value = rest;
+            } else if let Some(rest) = value.strip_suffix("{}") {
+                value = rest;
+            } else {
+                return value;
+            }
+        }
+    }
+    fn command(input: &mut &str, expected: &str) -> Option<()> {
+        *input = padding(input);
+        for _ in 0..16 {
+            let rest = input.strip_prefix(r"\protect");
+            if let Some(rest) =
+                rest.filter(|rest| !rest.starts_with(|c: char| c.is_ascii_alphabetic()))
+            {
+                *input = padding(rest);
+            } else {
+                let rest = input.strip_prefix(expected)?;
+                if rest.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                    return None;
+                }
+                *input = rest;
+                return Some(());
+            }
+        }
+        None
+    }
+    fn argument(input: &mut &str, expected: &str) -> Option<()> {
+        let rest = input.trim_start_matches(|c: char| c.is_ascii_whitespace());
+        let (value, rest) = rest.strip_prefix('{')?.split_once('}')?;
+        if value != expected {
+            return None;
+        }
+        *input = rest;
+        Some(())
+    }
+
+    if value.len() > MAX_CELL {
+        return None;
+    }
+    let input = padding(value);
+    let (input, starred) = if let Some(math) = input.strip_suffix('$') {
+        (
+            math.trim_end_matches(|c: char| c.is_ascii_whitespace())
+                .strip_suffix(r"$\ast")?,
+            true,
+        )
+    } else {
+        (input, false)
+    };
+    let mut input = padding(input);
+    for _ in 0..16 {
+        if !input.starts_with('{') {
+            break;
+        }
+        let mut depth = 0usize;
+        let closing = input.bytes().position(|byte| {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => depth = depth.saturating_sub(1),
+                _ => (),
+            }
+            depth == 0
+        })?;
+        if closing != input.len() - 1 {
+            return None;
+        }
+        input = padding(&input[1..closing]);
+    }
+    for (name, value) in [
+        (r"\fontfamily", "pzd"),
+        (r"\fontencoding", "U"),
+        (r"\fontseries", "m"),
+        (r"\fontshape", "n"),
+    ] {
+        command(&mut input, name)?;
+        argument(&mut input, value)?;
+    }
+    command(&mut input, r"\selectfont")?;
+    command(&mut input, r"\char")?;
+    input = input.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let (symbol, rest) = if let Some(rest) = input.strip_prefix("51") {
+        ("✓", rest)
+    } else {
+        ("✗", input.strip_prefix("55")?)
+    };
+    if !padding(rest).is_empty() {
+        return None;
+    }
+    Some(match (symbol, starred) {
+        ("✓", true) => "✓∗",
+        ("✗", true) => "✗∗",
+        _ => symbol,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,7 +591,7 @@ mod tests {
             {"func":"cell","x":1,"y":2,"rowspan":2,"body":{"func":"sequence","children":[{"func":"text","text":"A"},{"func":"space"},{"func":"text","text":"B"}]}}
         ]}]);
         let grid = typst_grid(&table.to_string()).unwrap();
-        assert_eq!((grid.columns, grid.rows, grid.instances), (3, 4, 1));
+        assert_eq!((grid.columns, grid.rows), (3, 4));
         assert_eq!(grid.value((0, 0)), Some("Revenue λ"));
         assert_eq!(grid.cells[0].span, (1, 2));
         assert_eq!(grid.value((0, 2)), Some("60"));
@@ -518,6 +622,43 @@ mod tests {
         assert!(!computed_markup("plain *bold* text"));
     }
     #[test]
+    fn table_samples_tex_instrumentation_preserves_structural_cell_wrappers() {
+        for (cell, columns, tail) in [
+            (r"\multicolumn{2}{c}{\revenue}", 2, ""),
+            (r"\multirow{2}{*}{\textbf{\revenue}}", 1, r"\\"),
+            (r"\thead{\multirow{2}{*}{\revenue}}", 1, r"\\"),
+        ] {
+            let source = format!(
+                r"\begin{{tabular}}{{{}}}{cell}\\{tail}\end{{tabular}}",
+                "l".repeat(columns)
+            );
+            let table = crate::editor_features::tex_table_at(&source, 2).unwrap();
+            let locked = BTreeMap::from([((0, 0), cell.to_owned())]);
+            let instrumented = tex_instrument(&table, &locked).unwrap();
+            assert!(
+                instrumented.contains(&format!(
+                    "{cell_prefix}{{\\csname protected@edef",
+                    cell_prefix = cell.split(r"\revenue").next().unwrap()
+                )),
+                "sampling must remain inside its original wrappers: {instrumented}"
+            );
+            let reparsed = crate::editor_features::tex_table_at(&instrumented, 2).unwrap();
+            assert_eq!(reparsed.cell_span((0, 0)), table.cell_span((0, 0)));
+            assert!(instrumented.contains("TTT-SAMPLE-BEGIN:0:0"));
+            assert_eq!(table.source, source);
+        }
+    }
+
+    #[test]
+    fn table_samples_tex_instrumentation_rejects_stale_locked_cells() {
+        let source = r"\begin{tabular}{ll}Label & \revenue\\\end{tabular}";
+        let table = crate::editor_features::tex_table_at(source, 2).unwrap();
+        assert!(tex_instrument(&table, &BTreeMap::from([((0, 1), r"\stale".into())])).is_err());
+        assert!(tex_instrument(&table, &BTreeMap::from([((3, 3), r"\revenue".into())])).is_err());
+        assert_eq!(table.source, source);
+    }
+
+    #[test]
     fn table_samples_tex_log_keeps_whole_expansions_and_requires_all_cells() {
         let expected = BTreeMap::from([((0, 1), r"\revenue".into())]);
         let log = "TTT-SAMPLE-BEGIN:0:1\nmacro:->60 λ\nTTT-SAMPLE-END\n";
@@ -536,6 +677,80 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn table_samples_tex_pifont_expansions_display_as_checks_and_crosses() {
+        let expected = BTreeMap::from([((0, 0), r"\cmark".into()), ((0, 1), r"\xmark".into())]);
+        let expansion = r"{\protect \fontfamily  {pzd}\protect \fontencoding  {U}\protect \fontse
+ries  {m}\protect \fontshape  {n}\protect \selectfont  \char ";
+        let log = format!(
+            "TTT-SAMPLE-BEGIN:0:0\nmacro:->{expansion}51}}\nTTT-SAMPLE-END\nTTT-SAMPLE-BEGIN:0:1\nmacro:->{expansion}55}}\nTTT-SAMPLE-END\n"
+        );
+        let grid = tex_grid(&log, 2, 1, &expected).unwrap();
+        assert_eq!(grid.value((0, 0)), Some("✓"));
+        assert_eq!(grid.value((0, 1)), Some("✗"));
+        assert_eq!(expected[&(0, 0)], r"\cmark");
+    }
+
+    #[test]
+    fn table_samples_tex_log_decodes_exact_pifont_math_asterisk_suffixes() {
+        let expected = BTreeMap::from([
+            ((0, 0), r"\cmark$\ast$".into()),
+            ((0, 1), r"\xmark$\ast$".into()),
+        ]);
+        let expansion = r"{\protect \fontfamily  {pzd}\protect \fontencoding  {U}\protect \fontse
+ries  {m}\protect \fontshape  {n}\protect \selectfont  \char ";
+        let log = format!(
+            "TTT-SAMPLE-BEGIN:0:0\nmacro:->{expansion}51}}$\\ast $\nTTT-SAMPLE-END\nTTT-SAMPLE-BEGIN:0:1\nmacro:->{expansion}55}}$\\ast $\nTTT-SAMPLE-END\n"
+        );
+        let grid = tex_grid(&log, 2, 1, &expected).unwrap();
+        assert_eq!(grid.value((0, 0)), Some("✓∗"));
+        assert_eq!(grid.value((0, 1)), Some("✗∗"));
+        assert_eq!(expected[&(0, 0)], r"\cmark$\ast$");
+    }
+
+    #[test]
+    fn table_samples_tex_symbol_decoder_only_accepts_complete_known_pifont_values() {
+        let check =
+            r"\fontfamily{pzd}\fontencoding{U}\fontseries{m}\fontshape{n}\selectfont\char51";
+        assert_eq!(tex_sample_symbol(check), Some("✓"));
+        assert_eq!(
+            tex_sample_symbol(&format!("{check}{}", r"$\ast $")),
+            Some("✓∗")
+        );
+        assert_eq!(
+            tex_sample_symbol(&format!("{}{}", check.replace("51", "55"), r"$\ast$")),
+            Some("✗∗")
+        );
+        assert_eq!(
+            tex_sample_symbol(&format!("{{{{{check}}}}}{{}}")),
+            Some("✓")
+        );
+        for unsupported in [
+            check.replace("pzd", "cmr"),
+            check.replace("pzd", " pzd "),
+            check.replace("{U}", "{T1}"),
+            check.replace("{m}", "{b}"),
+            check.replace("{n}", "{it}"),
+            check.replace("51", "52"),
+            check.replace("51", "56"),
+            check.replace("51", "5 1"),
+            check.replace("fontfamily", "fontfam ily"),
+            format!("{check}extra"),
+            format!("{check}{}", r"$\star$"),
+            format!("{check}{}", r"$\ast + 1$"),
+            format!("{check}{}", r"$\ast$\write{stream}"),
+            format!("{check}{}", r"\write{stream}"),
+            format!("{{{check}"),
+            format!("{}{}{}", "{".repeat(17), check, "}".repeat(17)),
+            r"\char51".into(),
+            "60 λ".into(),
+            "x".repeat(MAX_CELL + 1),
+        ] {
+            assert_eq!(tex_sample_symbol(&unsupported), None, "{unsupported}");
+        }
+    }
+
     #[test]
     fn table_samples_cancel_before_creating_private_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -715,6 +930,96 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    #[test]
+    #[ignore = "requires TIPTOPTYP_TEST_TECTONIC executable and TeX bundle"]
+    fn table_samples_compile_merged_tex_macro_cells_without_changing_the_document() {
+        let program =
+            std::env::var_os("TIPTOPTYP_TEST_TECTONIC").expect("set TIPTOPTYP_TEST_TECTONIC");
+        let minimal = r"\documentclass{article}
+\usepackage{multirow,makecell,pifont}
+\newcommand{\revenue}{60}
+\newcommand{\xmark}{\ding{55}}
+\begin{document}
+\begin{tabular}{lll}
+\multicolumn{2}{c}{\revenue} & \xmark\\
+\multirow{2}{*}{\textbf{\revenue}} & \xmark$\ast$ & B\\
+ & C & D\\
+\end{tabular}
+\end{document}";
+        for (name, source, values) in [
+            (
+                "merged",
+                minimal,
+                vec![
+                    ((0, 0), "60"),
+                    ((1, 0), "60"),
+                    ((0, 2), "✗"),
+                    ((1, 1), "✗∗"),
+                ],
+            ),
+            (
+                "platonic",
+                include_str!("../tests/fixtures/arxiv-tables/platonic-metrics.tex"),
+                vec![((2, 1), "✓"), ((6, 2), "✓∗")],
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let filename = format!("{name}.tex");
+            fs::write(directory.path().join(&filename), source).unwrap();
+            assert!(
+                source.is_ascii(),
+                "this fixture uses character and byte offsets interchangeably"
+            );
+            let table = crate::editor_features::tex_table_at(
+                source,
+                source.find("\\begin{tabular}").unwrap(),
+            )
+            .unwrap();
+            let rows = table.cells.as_ref().unwrap();
+            let locked: BTreeMap<_, _> = values
+                .iter()
+                .map(|&((r, c), _)| ((r, c), rows[r][c].clone()))
+                .collect();
+            let call = tex_instrument(&table, &locked).unwrap();
+            let grid = sample(
+                Request {
+                    root: directory.path().into(),
+                    source_dir: directory.path().into(),
+                    name: filename.clone(),
+                    source: source.into(),
+                    range: table.source_range.clone(),
+                    call,
+                    program: program.clone().into(),
+                    engine: Engine::Tex {
+                        command: CommandCustomization::for_tool(
+                            crate::toolchain::ToolKind::Tectonic,
+                        ),
+                        standard: false,
+                        only_cached: false,
+                        cells: locked,
+                        columns: table.columns().unwrap(),
+                        rows: rows.len(),
+                    },
+                },
+                &AtomicBool::new(false),
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            for (position, expected) in values {
+                assert_eq!(grid.value(position), Some(expected), "{name}: {position:?}");
+            }
+            assert_eq!(
+                fs::read_to_string(directory.path().join(&filename)).unwrap(),
+                source
+            );
+            assert!(
+                fs::read_dir(directory.path().join(".tiptoptyp"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
     }
 
     #[test]

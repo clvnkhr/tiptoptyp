@@ -1,5 +1,5 @@
-//! Bounded TeX table editing. Unknown column types and structural macros remain
-//! editable as exact source rather than being flattened into a guessed grid.
+//! Bounded, lossless TeX table editing. Only tables with a known grid are
+//! exposed to the editor; unsupported structural expansion is rejected.
 use super::{SourceEdit, byte_range_to_char, char_to_byte};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,20 +78,81 @@ pub(crate) struct TexTable {
     footer: String,
     body_range: std::ops::Range<usize>,
     rows: Vec<RowSource>,
+    spans: Vec<Vec<(usize, usize)>>,
+    owners: Vec<Vec<(usize, usize)>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RowSource {
-    cells: Vec<std::ops::Range<usize>>,
+    cells: Vec<CellSource>,
     end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CellSource {
+    range: std::ops::Range<usize>,
+    column: usize,
+    columns: usize,
+    requested_rows: usize,
+    content_prefix: String,
+    content_suffix: String,
 }
 
 impl TexTable {
     pub(crate) fn columns(&self) -> Option<usize> {
         column_count(&self.column_spec, self.environment.dialect(), 0)
     }
+    /// Logical (rowspan, colspan), matching sampled table geometry. Covered
+    /// coordinates have no independent cell and return (0, 0).
+    pub(crate) fn cell_span(&self, (row, column): (usize, usize)) -> (usize, usize) {
+        self.spans
+            .get(row)
+            .and_then(|spans| spans.get(column))
+            .copied()
+            .unwrap_or((0, 0))
+    }
+    /// Constant-time owner lookup for virtualized rows intersecting a merge.
+    pub(crate) fn cell_owner(&self, position: (usize, usize)) -> (usize, usize) {
+        self.owners
+            .get(position.0)
+            .and_then(|row| row.get(position.1))
+            .copied()
+            .unwrap_or(position)
+    }
+    pub(crate) fn cell_is_covered(&self, position: (usize, usize)) -> bool {
+        self.cell_span(position) == (0, 0)
+    }
+    /// The editable body between the original cell's retained wrappers. This
+    /// remains stable while the user types incomplete TeX inside that body;
+    /// sampling can also wrap it without moving alignment commands into groups.
+    pub(crate) fn cell_content_range(
+        &self,
+        (row, column): (usize, usize),
+    ) -> Option<std::ops::Range<usize>> {
+        if self.cell_is_covered((row, column)) {
+            return None;
+        }
+        let cell = self.cells.as_ref()?.get(row)?.get(column)?;
+        let Some(source) = self
+            .rows
+            .get(row)?
+            .cells
+            .iter()
+            .find(|cell| cell.column == column)
+        else {
+            // TeX allows trailing empty cells to be implicit in the source.
+            return Some(0..cell.len());
+        };
+        let start = source.content_prefix.len();
+        let end = cell.len().checked_sub(source.content_suffix.len())?;
+        (start <= end
+            && cell.starts_with(&source.content_prefix)
+            && cell.ends_with(&source.content_suffix))
+        .then_some(start..end)
+    }
     pub(crate) fn set_column_spec(&mut self, spec: &str) -> Result<(), String> {
-        let columns = column_count(spec, self.environment.dialect(), 0).ok_or("Enter a supported column specification for this table; custom column types can be edited in Source")?;
+        let columns = column_count(spec, self.environment.dialect(), 0)
+            .ok_or("Enter a supported column specification for this table")?;
         if self
             .cells
             .as_ref()
@@ -137,20 +198,18 @@ impl TexTable {
             replacement: draft.to_owned(),
         })
     }
-    /// Serialize the user's current draft, including temporarily incomplete
-    /// cell expressions, so source mode can repair structural edits. Apply
-    /// still goes through source_edit or the validated grid replacement.
+    /// Serialize edited owner cells without normalizing surrounding TeX.
+    /// Apply separately validates the resulting table geometry.
     pub(crate) fn render_source_draft(&self) -> Result<String, String> {
-        let Some(cells) = &self.cells else {
-            return Ok(self.source.clone());
-        };
+        let cells = self
+            .cells
+            .as_ref()
+            .ok_or("The table has no editable grid")?;
         let columns = self
             .columns()
-            .ok_or("Edit this column specification in source mode")?;
+            .ok_or("Enter a supported column specification")?;
         if cells.len() != self.rows.len() || cells.len().saturating_mul(columns) > 4096 {
-            return Err(
-                "Keep the table's row structure; change structural commands in source mode".into(),
-            );
+            return Err("Keep the table's row and column structure".into());
         }
         let body = &self.source[self.body_range.clone()];
         let mut replacement = self.header.clone();
@@ -159,21 +218,31 @@ impl TexTable {
             if cells.len() != columns {
                 return Err(format!("Row {} must have {columns} cells", r + 1));
             }
-            for (cell, range) in cells.iter().zip(&row.cells) {
-                if *cell != cell_source(&body[range.clone()]) {
-                    replacement.push_str(&body[copied..range.start]);
+            for (column, cell) in cells.iter().enumerate() {
+                if self.cell_is_covered((r, column)) && !cell.is_empty() {
+                    return Err("A covered position belongs to its merged cell".into());
+                }
+            }
+            for source in &row.cells {
+                let cell = &cells[source.column];
+                if *cell != cell_source(&body[source.range.clone()]) {
+                    replacement.push_str(&body[copied..source.range.start]);
                     replacement.push_str(cell);
-                    copied = range.end;
+                    copied = source.range.end;
                 }
             }
             // TeX permits the last empty cells to be omitted. Keep that exact
             // spelling unless one of those implicit cells has actually changed.
-            if let Some(last) = cells[row.cells.len()..]
+            let explicit_columns = row
+                .cells
+                .last()
+                .map_or(0, |cell| cell.column + cell.columns);
+            if let Some(last) = cells[explicit_columns..]
                 .iter()
                 .rposition(|cell| !cell.is_empty())
             {
                 replacement.push_str(&body[copied..row.end]);
-                for cell in &cells[row.cells.len()..=row.cells.len() + last] {
+                for cell in &cells[explicit_columns..=explicit_columns + last] {
                     replacement.push_str(" & ");
                     replacement.push_str(cell);
                 }
@@ -184,14 +253,6 @@ impl TexTable {
         replacement.push_str(&self.footer);
         Ok(replacement)
     }
-    /// Preserve a typed custom or incomplete column specification when moving
-    /// to source mode. This draft is never a validated grid replacement.
-    pub(crate) fn render_source_draft_with_spec(&self, spec: &str) -> Result<String, String> {
-        let mut draft = self.render_source_draft()?;
-        draft.replace_range(self.spec_range.clone(), spec);
-        Ok(draft)
-    }
-
     pub(crate) fn render_replacement(&self) -> Result<String, String> {
         let replacement = self.render_source_draft()?;
         let Some(cells) = &self.cells else {
@@ -201,9 +262,13 @@ impl TexTable {
         let candidate =
             tex_table_at(&replacement, 1).ok_or("Finish the table source before applying it")?;
         if candidate.cells.as_ref() != Some(cells)
+            || candidate.spans != self.spans
             || candidate.source_range != (0..replacement.chars().count())
         {
-            return Err("A cell cannot contain a top-level & or row break; use source mode for structural edits".into());
+            return Err(
+                "Keep alignment markers, row breaks and merged-cell geometry outside cell edits"
+                    .into(),
+            );
         }
         Ok(replacement)
     }
@@ -217,6 +282,7 @@ pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable>
     let cursor = char_to_byte(source, char_cursor)?;
     let mut stack: Vec<(String, usize, usize)> = Vec::new();
     let mut found = None;
+    let mut smallest = usize::MAX;
     let mut i = 0;
     while i < source.len() {
         match source.as_bytes()[i] {
@@ -264,11 +330,10 @@ pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable>
                         && let Some(environment) = TexTableEnvironment::from_name(env)
                     {
                         // Inner matched tables are encountered first. Keep
-                        // the smallest containing environment.
-                        if found
-                            .as_ref()
-                            .is_none_or(|old: &TexTable| old.source.len() > end - begin)
-                        {
+                        // the smallest containing environment, even if its
+                        // unsupported geometry prevents opening an editor.
+                        if end - begin < smallest {
+                            smallest = end - begin;
                             found = parse_table(source, begin, args, start, end, environment);
                         }
                     }
@@ -334,22 +399,23 @@ fn parse_table(
         .then_some(columns)
         .flatten()
         .and_then(|columns| split_rows(body, columns));
-    let (cells, rows) = match parsed {
-        Some((cells, rows)) => (Some(cells), rows),
-        None => (None, Vec::new()),
-    };
+    let (cells, rows) = parsed?;
+    let spans = cell_spans(&cells, &rows, columns?);
+    let owners = cell_owners(&spans);
     Some(TexTable {
         source_range: byte_range_to_char(source, begin..end),
         source: source.get(begin..end)?.to_owned(),
         environment,
         packages: packages(source),
         column_spec: spec.to_owned(),
-        cells,
+        cells: Some(cells),
         header: source.get(begin..body_start)?.to_owned(),
         spec_range: (spec_start - begin)..(spec_start - begin + spec.len()),
         footer: source.get(close..end)?.to_owned(),
         body_range: (body_start - begin)..(close - begin),
         rows,
+        spans,
+        owners,
     })
 }
 
@@ -497,9 +563,7 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                 let (name, end) = command(body, i)?;
                 if matches!(
                     name,
-                    "multicolumn"
-                        | "multirow"
-                        | "input"
+                    "input"
                         | "include"
                         | "Block"
                         | "SetCell"
@@ -507,6 +571,20 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                         | "CodeBefore"
                         | "CodeAfter"
                         | "caption"
+                        | "cr"
+                        | "crcr"
+                        | "omit"
+                        | "span"
+                        | "multispan"
+                        | "halign"
+                        | "valign"
+                        | "ialign"
+                        | "noalign"
+                        | "loop"
+                        | "repeat"
+                        | "foreach"
+                        | "@for"
+                        | "@tfor"
                 ) {
                     return None;
                 }
@@ -562,26 +640,243 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
 
 fn row_source(
     body: &str,
-    mut ranges: Vec<std::ops::Range<usize>>,
+    ranges: Vec<std::ops::Range<usize>>,
     end: usize,
     columns: usize,
 ) -> Option<(Vec<String>, RowSource)> {
     if ranges.len() > columns {
         return None;
     }
-    let mut cells = Vec::with_capacity(columns);
-    for (column, range) in ranges.iter_mut().enumerate() {
+    let mut cells = vec![String::new(); columns];
+    let mut sources = Vec::with_capacity(ranges.len());
+    let mut column = 0usize;
+    for (index, mut range) in ranges.into_iter().enumerate() {
         let mut source = &body[range.clone()];
-        if column == 0 {
+        if index == 0 {
             source = row_prefix(source)?.1;
             range.start = range.end - source.len();
         }
         range.start += source.len() - source.trim_start().len();
         range.end = range.start + source.trim().len();
-        cells.push(cell_source(&body[range.clone()]));
+        let value = cell_source(&body[range.clone()]);
+        let (requested_rows, cell_columns, content) = cell_layout(&value, 0)?;
+        if column.checked_add(cell_columns)? > columns {
+            return None;
+        }
+        let content_prefix = value[..content.start].to_owned();
+        let content_suffix = value[content.end..].to_owned();
+        cells[column] = value;
+        sources.push(CellSource {
+            range,
+            column,
+            columns: cell_columns,
+            requested_rows,
+            content_prefix,
+            content_suffix,
+        });
+        column += cell_columns;
     }
-    cells.resize(columns, String::new());
-    Some((cells, RowSource { cells: ranges, end }))
+    Some((
+        cells,
+        RowSource {
+            cells: sources,
+            end,
+        },
+    ))
+}
+
+/// TeX multirow is also used for vertical positioning, with occupied cells in
+/// subsequent source rows. Only merge genuinely empty positions; preserving the
+/// original wrapper must never hide later data from the editable grid.
+fn cell_spans(
+    cells: &[Vec<String>],
+    rows: &[RowSource],
+    columns: usize,
+) -> Vec<Vec<(usize, usize)>> {
+    let mut spans = vec![vec![(1, 1); columns]; cells.len()];
+    for (row, source) in rows.iter().enumerate() {
+        for cell in &source.cells {
+            spans[row][cell.column] = (1, cell.columns);
+            spans[row][cell.column + 1..cell.column + cell.columns].fill((0, 0));
+        }
+    }
+    for (row, source) in rows.iter().enumerate() {
+        for cell in &source.cells {
+            let end = row.saturating_add(cell.requested_rows);
+            if cell.requested_rows <= 1 || end > rows.len() {
+                continue;
+            }
+            let columns = cell.column..cell.column + cell.columns;
+            if (row + 1..end).all(|r| {
+                columns
+                    .clone()
+                    .all(|c| cells[r][c].is_empty() && spans[r][c] == (1, 1))
+            }) {
+                spans[row][cell.column] = (cell.requested_rows, cell.columns);
+                for row_spans in &mut spans[row + 1..end] {
+                    for column in columns.clone() {
+                        row_spans[column] = (0, 0);
+                    }
+                }
+            }
+        }
+    }
+    spans
+}
+
+fn cell_owners(spans: &[Vec<(usize, usize)>]) -> Vec<Vec<(usize, usize)>> {
+    let mut owners: Vec<Vec<_>> = spans
+        .iter()
+        .enumerate()
+        .map(|(row, cells)| (0..cells.len()).map(|column| (row, column)).collect())
+        .collect();
+    for (row, cells) in spans.iter().enumerate() {
+        for (column, &(rows, columns)) in cells.iter().enumerate() {
+            for owner_row in &mut owners[row..row + rows] {
+                owner_row[column..column + columns].fill((row, column));
+            }
+        }
+    }
+    owners
+}
+
+/// Interpret only explicit bounded span wrappers. Other formatting remains
+/// opaque cell text. Full source ranges retain all wrapper arguments verbatim.
+fn cell_layout(source: &str, depth: usize) -> Option<(usize, usize, std::ops::Range<usize>)> {
+    if depth > 16 {
+        return None;
+    }
+    let start = skip_trivia(source, 0);
+    if let Some((inside, end)) = group(source, start, b'{', b'}')
+        && skip_trivia(source, end) == source.len()
+    {
+        return inner_cell_layout(source, inside, depth + 1);
+    }
+    let Some((name, mut end)) = command(source, start) else {
+        return Some((1, 1, 0..source.len()));
+    };
+    match name {
+        "multicolumn" => {
+            let (count, next) = group(source, end, b'{', b'}')?;
+            let columns = count
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|n| (1..=128).contains(n))?;
+            let (spec, next) = group(source, next, b'{', b'}')?;
+            if column_count(spec, ColumnDialect::Array, 0) != Some(1) {
+                return None;
+            }
+            let (inside, next) = group(source, next, b'{', b'}')?;
+            if skip_trivia(source, next) != source.len() {
+                return None;
+            }
+            let (rows, nested_columns, content) = inner_cell_layout(source, inside, depth + 1)?;
+            (nested_columns == 1).then_some((rows, columns, content))
+        }
+        "multirow" => {
+            if let Some((_, next)) = group(source, end, b'[', b']') {
+                end = next;
+            }
+            let (count, next) = group(source, end, b'{', b'}')?;
+            // Negative/fractional counts are vertical positioning directives;
+            // they do not consume physical source rows in the editable model.
+            let count = count.trim().parse::<f64>().ok()?;
+            if !count.is_finite() || count == 0.0 || count.abs() > 4096.0 {
+                return None;
+            }
+            let rows = if count > 0.0 && count.fract() == 0.0 {
+                count as usize
+            } else {
+                1
+            };
+            end = next;
+            if let Some((_, next)) = group(source, end, b'[', b']') {
+                end = next;
+            }
+            let (_, next) = group(source, end, b'{', b'}')?;
+            end = next;
+            if let Some((_, next)) = group(source, end, b'[', b']') {
+                end = next;
+            }
+            let (inside, next) = group(source, end, b'{', b'}')?;
+            if skip_trivia(source, next) != source.len() {
+                return None;
+            }
+            let (_, columns, content) = inner_cell_layout(source, inside, depth + 1)?;
+            Some((rows, columns, content))
+        }
+        "tiny" | "scriptsize" | "footnotesize" | "small" | "normalsize" | "large" | "Large"
+        | "LARGE" | "huge" | "Huge" | "bfseries" | "mdseries" | "itshape" | "slshape"
+        | "scshape" | "upshape" | "rmfamily" | "sffamily" | "ttfamily" | "normalfont" => {
+            let start = skip_trivia(source, end);
+            let (rows, columns, content) = inner_cell_layout(source, &source[start..], depth + 1)?;
+            // Preserve a delimiter after control words. Replacing the `1` in
+            // `\small1` with letters must not produce a new command name.
+            if start < source.len() && content.start > end {
+                Some((rows, columns, content))
+            } else {
+                Some((1, 1, 0..source.len()))
+            }
+        }
+        "vspace" | "hspace" => {
+            if source.as_bytes().get(end) == Some(&b'*') {
+                end += 1;
+            }
+            if let Some((dimension, next)) = group(source, end, b'{', b'}')
+                && static_spacing_dimension(dimension)
+            {
+                let start = skip_trivia(source, next);
+                return inner_cell_layout(source, &source[start..], depth + 1);
+            }
+            Some((1, 1, 0..source.len()))
+        }
+        "thead" | "makecell" | "textbf" | "textit" | "textrm" | "textsf" | "texttt" | "emph"
+        | "underline" => {
+            if let Some((_, next)) = group(source, end, b'[', b']') {
+                end = next;
+            }
+            if let Some((inside, next)) = group(source, end, b'{', b'}')
+                && skip_trivia(source, next) == source.len()
+            {
+                let (rows, columns, content) = inner_cell_layout(source, inside, depth + 1)?;
+                // A multicolumn inside ordinary text formatting is not a legal
+                // alignment primitive. Do not invent covered coordinates.
+                return (columns == 1).then_some((rows, columns, content));
+            }
+            Some((1, 1, 0..source.len()))
+        }
+        _ => Some((1, 1, 0..source.len())),
+    }
+}
+
+/// A literal spacing length is safe to retain outside the editable body.
+/// Expressions and user macros remain visible, without guessing their meaning.
+fn static_spacing_dimension(source: &str) -> bool {
+    let source = source.trim();
+    let number = source.strip_prefix(['+', '-']).unwrap_or(source);
+    let end = number
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit() || *byte == b'.')
+        .count();
+    let digits = &number[..end];
+    !digits.is_empty()
+        && digits.bytes().any(|byte| byte.is_ascii_digit())
+        && digits.bytes().filter(|byte| *byte == b'.').count() <= 1
+        && matches!(
+            number[end..].trim(),
+            "pt" | "pc" | "in" | "bp" | "cm" | "mm" | "dd" | "cc" | "sp" | "em" | "ex"
+        )
+}
+
+fn inner_cell_layout(
+    source: &str,
+    inside: &str,
+    depth: usize,
+) -> Option<(usize, usize, std::ops::Range<usize>)> {
+    let offset = inside.as_ptr() as usize - source.as_ptr() as usize;
+    let (rows, columns, content) = cell_layout(inside, depth)?;
+    Some((rows, columns, offset + content.start..offset + content.end))
 }
 
 /// A comment at a cell's end still needs its newline: otherwise a following
@@ -945,6 +1240,12 @@ mod tests {
                 13,
                 14,
             ),
+            (
+                "platonic-metrics",
+                include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex"),
+                10,
+                6,
+            ),
         ] {
             let table = arxiv_table(source);
             let cells = table.cells.as_ref().expect(name);
@@ -953,16 +1254,6 @@ mod tests {
             assert_eq!(cells.len(), rows, "{name}");
             assert!(cells.iter().all(|row| row.len() == columns), "{name}");
         }
-        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
-        let table = arxiv_table(source);
-        assert_eq!(table.columns(), Some(6));
-        assert!(table.cells.is_none());
-        assert_eq!(table.render_replacement().unwrap(), table.source);
-        let draft = table.source.replace(
-            "Unbiased estimator of CKA",
-            "Bias-corrected estimator of CKA",
-        );
-        assert_eq!(table.source_edit(&draft).unwrap().replacement, draft);
     }
 
     #[test]
@@ -980,6 +1271,12 @@ mod tests {
                 "Version added",
                 "Version introduced",
             ),
+            (
+                "platonic-metrics",
+                include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex"),
+                "Unbiased estimator of CKA",
+                "Bias-corrected estimator of CKA",
+            ),
         ] {
             let mut table = arxiv_table(source);
             assert_eq!(
@@ -994,9 +1291,9 @@ mod tests {
                 .expect(name)
                 .iter_mut()
                 .flatten()
-                .find(|cell| cell.as_str() == before)
+                .find(|cell| cell.contains(before))
                 .expect(before);
-            *cell = after.into();
+            *cell = cell.replacen(before, after, 1);
             let edit = table.grid_source_edit().unwrap();
             assert_eq!(edit.range, original.source_range, "{name}");
             assert_eq!(
@@ -1020,6 +1317,205 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn platonic_merged_headers_preserve_occupied_metric_rows() {
+        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
+        let table = arxiv_table(source);
+        assert_eq!(table.cell_span((0, 0)), (2, 1));
+        assert_eq!(table.cell_span((0, 1)), (1, 4));
+        assert_eq!(table.cell_span((0, 5)), (2, 1));
+        for position in [(0, 2), (0, 3), (0, 4), (1, 0), (1, 5)] {
+            assert!(table.cell_is_covered(position), "{position:?}");
+        }
+        for position in [(0, 2), (0, 3), (0, 4)] {
+            assert_eq!(table.cell_owner(position), (0, 1));
+        }
+        assert_eq!(table.cell_owner((1, 0)), (0, 0));
+        assert_eq!(table.cell_owner((1, 5)), (0, 5));
+        assert_eq!(table.cell_owner((3, 5)), (3, 5));
+        let cells = table.cells.as_ref().unwrap();
+        assert_eq!(cells[0][1], r"\multicolumn{4}{c}{\textbf{Property}}");
+        assert!(cells[0][5].contains("Description"));
+        assert!(cells[1][1].contains("symmetric"));
+        // The author's oversized multirows position text vertically, while
+        // the following physical rows still contain independent metric data.
+        for row in 2..10 {
+            for column in 0..6 {
+                assert_eq!(table.cell_span((row, column)), (1, 1), "{row},{column}");
+            }
+        }
+        assert!(cells[3][0].contains("Unbiased CKA"));
+        assert!(cells[4][0].contains("SVCCA"));
+    }
+
+    #[test]
+    fn multicolumn_edits_follow_logical_columns_and_keep_implicit_tail_cells() {
+        let source = "\\begin{tabular}{ccccc}\n\\multicolumn{2}{|c|}{Héader} & Right \\\\[2pt]\nA & B & C & D & E\\\\\n\\end{tabular}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        assert_eq!(table.cell_span((0, 0)), (1, 2));
+        assert!(table.cell_is_covered((0, 1)));
+        assert_eq!(table.cells.as_ref().unwrap()[0][2], "Right");
+        assert_eq!(table.render_replacement().unwrap(), source);
+        table.cells.as_mut().unwrap()[0][2] = "Changed".into();
+        assert_eq!(
+            table.render_replacement().unwrap(),
+            source.replacen("Right", "Changed", 1)
+        );
+        table.cells.as_mut().unwrap()[0][4] = "Tail".into();
+        let rendered = table.render_replacement().unwrap();
+        assert!(
+            rendered.contains("Changed  &  & Tail\\\\[2pt]"),
+            "{rendered}"
+        );
+        assert_eq!(tex_table_at(&rendered, 1).unwrap().cells, table.cells);
+    }
+
+    #[test]
+    fn merged_positions_and_structural_span_edits_cannot_overwrite_neighbors() {
+        let source =
+            r"\begin{tabular}{ccc}\multicolumn{2}{c}{Header} & Tail\\ A & B & C\\\end{tabular}";
+        let original = tex_table_at(source, 1).unwrap();
+        let mut covered = original.clone();
+        covered.cells.as_mut().unwrap()[0][1] = "Hidden".into();
+        assert!(covered.grid_source_edit().is_err());
+        let mut changed_span = original;
+        changed_span.cells.as_mut().unwrap()[0][0] = r"\multicolumn{1}{c}{Header}".into();
+        assert!(changed_span.grid_source_edit().is_err());
+        for body in [
+            r"\multicolumn{0}{c}{Bad}",
+            r"\multicolumn{4}{c}{Bad}",
+            r"\multicolumn{\count}{c}{Bad}",
+            r"\multicolumn{2}{cc}{Bad}",
+            r"\multicolumn{2}{c}{Bad} & A & B",
+            r"\multicolumn{2}{c}{\multicolumn{2}{c}{Bad}}",
+            r"\multirow{\rows}{*}{Bad} & A & B",
+        ] {
+            let source = format!(r"\begin{{tabular}}{{ccc}}{body}\end{{tabular}}");
+            assert!(tex_table_at(&source, 1).is_none(), "{source}");
+        }
+    }
+
+    #[test]
+    fn multirow_optional_arguments_and_nested_bodies_are_lossless() {
+        let source = r"\begin{tabular}{ccc}\multirow[t]{2}[1]{*}[-0.5em]{\textbf{Héader}} & A & B\\ & C & D\\\end{tabular}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        assert_eq!(table.cell_span((0, 0)), (2, 1));
+        assert!(table.cell_is_covered((1, 0)));
+        let cell = &table.cells.as_ref().unwrap()[0][0];
+        let content = table.cell_content_range((0, 0)).unwrap();
+        assert_eq!(&cell[content.clone()], "Héader");
+        table.cells.as_mut().unwrap()[0][0].replace_range(content, "Updated");
+        assert_eq!(
+            table.render_replacement().unwrap(),
+            source.replacen("Héader", "Updated", 1)
+        );
+        for (position, expected) in [((0, 1), "A"), ((1, 1), "C")] {
+            let cell = &table.cells.as_ref().unwrap()[position.0][position.1];
+            assert_eq!(&cell[table.cell_content_range(position).unwrap()], expected);
+        }
+        assert!(table.cell_content_range((1, 0)).is_none());
+        assert!(table.cell_content_range((99, 0)).is_none());
+    }
+
+    #[test]
+    fn platonic_cell_projection_exposes_content_and_keeps_every_wrapper_on_edit() {
+        let source = include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex");
+        let mut table = arxiv_table(source);
+        for (position, expected) in [
+            ((0, 0), "Metric"),
+            ((0, 1), "Property"),
+            ((0, 5), "Description"),
+            ((1, 1), "symmetric"),
+            ((2, 0), "CKA"),
+            ((3, 0), "Unbiased CKA"),
+        ] {
+            let cell = &table.cells.as_ref().unwrap()[position.0][position.1];
+            assert_eq!(&cell[table.cell_content_range(position).unwrap()], expected);
+        }
+        let position = (3, 5);
+        let range = table.cell_content_range(position).unwrap();
+        let cell = &mut table.cells.as_mut().unwrap()[position.0][position.1];
+        let visible = &cell[range.clone()];
+        assert!(visible.starts_with("Unbiased estimator of CKA"));
+        assert!(!visible.contains("vspace"));
+        let edited = visible.replacen("Unbiased estimator", "Bias-corrected estimator", 1);
+        cell.replace_range(range, &edited);
+        assert_eq!(
+            table.grid_source_edit().unwrap().replacement,
+            table
+                .source
+                .replacen("Unbiased estimator", "Bias-corrected estimator", 1)
+        );
+    }
+
+    #[test]
+    fn cell_projection_keeps_font_and_static_spacing_controls_outside_the_edit() {
+        for cell in [
+            r"\small Héllo",
+            r"{\vspace{-0.5em}Héllo}",
+            r"\multirow[t]{2}[1]{*}[-0.5em]{\vspace*{2pt}\textbf{Héllo}}",
+            r"\footnotesize \itshape {Héllo}",
+            r"\hspace{1cm}Héllo",
+            "\\small% font delimiter\nHéllo",
+        ] {
+            let source = format!(r"\begin{{tabular}}{{l}}{cell}\\\end{{tabular}}");
+            let mut table = tex_table_at(&source, 1).unwrap();
+            let range = table.cell_content_range((0, 0)).unwrap();
+            let value = &mut table.cells.as_mut().unwrap()[0][0];
+            assert_eq!(&value[range.clone()], "Héllo", "{cell}");
+            value.replace_range(range, "Updated");
+            assert_eq!(
+                table.grid_source_edit().unwrap().replacement,
+                source.replacen("Héllo", "Updated", 1),
+                "{cell}"
+            );
+        }
+        // A font declaration without a delimiter cannot safely be detached
+        // from the next token; arbitrary spacing expressions remain visible.
+        for cell in [
+            r"\small1",
+            r"\small",
+            r"\vspace{\baselineskip}Héllo",
+            r"\hspace{2pt plus 1pt}Héllo",
+            r"\textbf{Héllo} and more",
+        ] {
+            let source = format!(r"\begin{{tabular}}{{l}}{cell}\\\end{{tabular}}");
+            let table = tex_table_at(&source, 1).unwrap();
+            let value = &table.cells.as_ref().unwrap()[0][0];
+            assert_eq!(&value[table.cell_content_range((0, 0)).unwrap()], cell);
+        }
+    }
+
+    #[test]
+    fn projected_body_range_stays_stable_while_typing_incomplete_tex() {
+        let source =
+            r"\begin{tabular}{cc}\multicolumn{2}{c}{\textbf{Héader}}\\ A & B\\\end{tabular}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        let content = table.cell_content_range((0, 0)).unwrap();
+        let prefix = table.cells.as_ref().unwrap()[0][0][..content.start].to_owned();
+        let suffix = table.cells.as_ref().unwrap()[0][0][content.end..].to_owned();
+        for draft in ["{", "\\textbf{", "unfinished \\", "{α\\textit{"] {
+            let range = table.cell_content_range((0, 0)).unwrap();
+            table.cells.as_mut().unwrap()[0][0].replace_range(range, draft);
+            let cell = &table.cells.as_ref().unwrap()[0][0];
+            assert_eq!(&cell[table.cell_content_range((0, 0)).unwrap()], draft);
+            assert!(cell.starts_with(&prefix) && cell.ends_with(&suffix));
+            assert!(table.grid_source_edit().is_err(), "{draft}");
+        }
+        let range = table.cell_content_range((0, 0)).unwrap();
+        table.cells.as_mut().unwrap()[0][0].replace_range(range, "Repaired");
+        assert_eq!(
+            table.grid_source_edit().unwrap().replacement,
+            source.replacen("Héader", "Repaired", 1)
+        );
+        // An implicit cell has no wrappers to preserve and remains editable
+        // even while its draft is temporarily incomplete.
+        let mut table = tex_table_at(r"\begin{tabular}{cc}A\\\end{tabular}", 1).unwrap();
+        table.cells.as_mut().unwrap()[0][1] = "{".into();
+        assert_eq!(table.cell_content_range((0, 1)), Some(0..1));
+        assert!(table.grid_source_edit().is_err());
+    }
+
     #[test]
     fn package_environments_open_a_grid_and_preserve_their_headers() {
         for (name, args) in [
@@ -1111,7 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn package_structural_layouts_and_missing_specs_stay_in_source_mode() {
+    fn package_structural_layouts_and_missing_specs_are_rejected() {
         for (name, args, body) in [
             ("tblr", "{colspec={lc},cell{1}{1}={c=2}}", r"Heading & \\"),
             ("tblr", "{colspec={lc}}", r"\SetCell[c=2]{c}Heading & \\"),
@@ -1128,10 +1624,7 @@ mod tests {
             ("longtable", "{lc}", r"\caption{Table} \\ A & B \\"),
         ] {
             let source = format!(r"\begin{{{name}}}{args}{body}\end{{{name}}}");
-            let table = tex_table_at(&source, 1).unwrap();
-            assert!(table.cells.is_none(), "{source}");
-            assert_eq!(table.render_replacement().unwrap(), source);
-            assert_eq!(table.source_edit(&source).unwrap().replacement, source);
+            assert!(tex_table_at(&source, 1).is_none(), "{source}");
         }
     }
 
@@ -1150,10 +1643,10 @@ mod tests {
     #[test]
     fn package_column_expansion_and_key_lists_are_bounded() {
         let source = r"\begin{tblr}{colspec={*{129}{Q[l]}}}A\end{tblr}";
-        assert!(tex_table_at(source, 1).unwrap().cells.is_none());
+        assert!(tex_table_at(source, 1).is_none());
         let options = format!("{},colspec=lc", "hlines,".repeat(4097));
         let source = format!(r"\begin{{tblr}}{{{options}}}A & B\end{{tblr}}");
-        assert!(tex_table_at(&source, 1).unwrap().cells.is_none());
+        assert!(tex_table_at(&source, 1).is_none());
         assert!(
             column_count(
                 "*{2}{S[table-format=2.1]D{.}{,}{2}}",
@@ -1205,26 +1698,17 @@ mod tests {
     }
 
     #[test]
-    fn tex_structural_macros_and_custom_columns_use_exact_source() {
+    fn tex_unknown_structural_macros_and_custom_columns_are_rejected() {
         for body in [
-            "\\multicolumn{2}{c}{Heading} \\\\",
             "A & \\input{data} \\\\",
             "\\caption{Example}\\\\ A & B \\\\",
             "A & B & C \\\\",
         ] {
             let source = format!("\\begin{{longtable}}[l]{{lc}}{body}\\end{{longtable}}");
-            let table = tex_table_at(&source, 1).unwrap();
-            assert!(table.cells.is_none(), "{source}");
-            assert_eq!(
-                table.source_edit(&table.source).unwrap().replacement,
-                source
-            );
+            assert!(tex_table_at(&source, 1).is_none(), "{source}");
         }
         let source = "\\begin{tabular}{Yl}1 & A \\\\ \\end{tabular}";
-        let table = tex_table_at(source, 1).unwrap();
-        assert_eq!(table.columns(), None);
-        assert!(table.cells.is_none());
-        assert_eq!(table.render_replacement().unwrap(), source);
+        assert!(tex_table_at(source, 1).is_none());
     }
     #[test]
     fn tex_detection_ignores_comments_and_verbatim_and_picks_inner_table() {
@@ -1241,6 +1725,37 @@ mod tests {
         let unrelated = "\\begin{tabular}{l}A\\end{tabular}\\begin{broken}\\end{other}";
         assert!(tex_table_at(unrelated, 10).is_some());
     }
+    #[test]
+    fn unsupported_inner_table_does_not_open_its_enclosing_grid() {
+        let source = r"\begin{tabular}{l}{\begin{tabular}{Y}Inner\end{tabular}}\end{tabular}";
+        let cursor = source.find("Inner").unwrap();
+        assert!(tex_table_at(source, cursor).is_none());
+        assert!(tex_table_at(source, 1).is_some());
+    }
+
+    #[test]
+    fn native_alignment_primitives_and_row_generators_do_not_guess_a_grid() {
+        for body in [
+            r"A\cr B\cr",
+            r"\omit A",
+            r"\multispan2 A",
+            r"A\span B",
+            r"\noalign{\vskip1pt}A",
+            r"\foreach\n in {A,B}{\n\\}",
+            r"\loop A\\\repeat",
+            r"\input{rows}",
+        ] {
+            let source = format!(r"\begin{{tabular}}{{l}}{body}\end{{tabular}}");
+            assert!(tex_table_at(&source, 1).is_none(), "{source}");
+        }
+        // Literal cell macros remain source-preserving content; only explicit
+        // geometry-generating primitives are rejected by static detection.
+        let source = r"\begin{tabular}{l}\textbf{A}\\\cmark\\\end{tabular}";
+        let table = tex_table_at(source, 1).unwrap();
+        assert_eq!(table.cells.as_ref().unwrap().len(), 2);
+        assert_eq!(table.render_replacement().unwrap(), source);
+    }
+
     #[test]
     fn unfinished_unrelated_command_does_not_hide_a_complete_table() {
         let source = "\\begin{tabular}{l}A\\end{tabular} unfinished \\";
@@ -1284,36 +1799,6 @@ mod tests {
         }
     }
     #[test]
-    fn source_mode_can_repair_a_structural_cell_edit_without_unsafe_grid_apply() {
-        let original = "\\begin{tabular}{cc}A & B \\\\ \\end{tabular}";
-        let mut table = tex_table_at(original, 1).unwrap();
-        table.cells.as_mut().unwrap()[0][0] = "X & Y".into();
-        assert!(table.render_replacement().is_err());
-        let draft = table.render_source_draft().unwrap();
-        assert!(draft.contains("X & Y & B"));
-        assert!(table.source_edit(&draft).is_ok());
-        table.cells.as_mut().unwrap()[0][0] = "{incomplete".into();
-        let draft = table.render_source_draft().unwrap();
-        assert!(table.source_edit(&draft).is_err());
-    }
-
-    #[test]
-    fn source_mode_retains_custom_or_incomplete_column_drafts_without_grid_apply() {
-        let original = "\\begin{tabular}[t]{lc}A & B \\\\ \\end{tabular}";
-        let table = tex_table_at(original, 1).unwrap();
-        let draft = table
-            .render_source_draft_with_spec("lS[table-format=2.1]")
-            .unwrap();
-        assert!(draft.contains("[t]{lS[table-format=2.1]}"));
-        assert!(table.source_edit(&draft).is_ok());
-        let draft = table
-            .render_source_draft_with_spec("l>{incomplete")
-            .unwrap();
-        assert!(table.source_edit(&draft).is_err());
-        assert_eq!(table.column_spec, "lc");
-    }
-
-    #[test]
     fn repeated_grid_apply_keeps_row_delimiters_and_newlines_stable() {
         for source in [
             r"\begin{tabular}{cc}A & B \\
@@ -1346,15 +1831,13 @@ C & D \\
     }
 
     #[test]
-    fn oversized_rows_keep_allocation_bounded_and_fall_back_to_exact_source() {
+    fn oversized_rows_are_rejected_with_bounded_allocation() {
         let source = format!(
             "\\begin{{tabular}}{{cc}}{}Z\\end{{tabular}}",
             "A & ".repeat(10_000)
         );
-        let (table, allocated) =
-            crate::test_allocations::allocated(|| tex_table_at(&source, 1).unwrap());
-        assert!(table.cells.is_none());
-        assert_eq!(table.render_replacement().unwrap(), source);
+        let (table, allocated) = crate::test_allocations::allocated(|| tex_table_at(&source, 1));
+        assert!(table.is_none());
         // Retaining the source needs a few complete buffer copies; discovering
         // an unsupported row must not allocate a separate String per delimiter.
         assert!(

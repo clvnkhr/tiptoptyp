@@ -14,6 +14,7 @@ pub(super) struct QaSession {
     preview_window_prepared: bool,
     reveal_prepared: bool,
     asset_fixture: Option<tempfile::TempDir>,
+    fixture_workspace_root: Option<PathBuf>,
     auxiliary_prepared: bool,
 }
 
@@ -390,20 +391,35 @@ impl QaSession {
                     app.begin_table_editor(editable_table_at(SOURCE, cursor).unwrap());
                 }
             }
-            UiSnapshotScene::TableEditorTex | UiSnapshotScene::TableEditorTexNarrow => {
+            UiSnapshotScene::TableEditorTex
+            | UiSnapshotScene::TableEditorTexNarrow
+            | UiSnapshotScene::TableEditorTexMerged => {
                 if app.table_editor.is_none() {
-                    const SOURCE: &str = include_str!("../../scripts/fixtures/table-editor.tex");
+                    let source = if scene == UiSnapshotScene::TableEditorTexMerged {
+                        include_str!("../../tests/fixtures/arxiv-tables/platonic-metrics.tex")
+                    } else {
+                        include_str!("../../scripts/fixtures/table-editor.tex")
+                    };
                     let directory = tempfile::tempdir().expect("TeX table QA fixture directory");
-                    let path = directory.path().join("quarterly-review.tex");
-                    fs::write(&path, SOURCE).expect("TeX table QA fixture");
+                    self.fixture_workspace_root
+                        .get_or_insert_with(|| app.workspace_root.clone());
+                    app.workspace_root =
+                        directory.path().canonicalize().expect("TeX table QA root");
+                    let path = app.workspace_root.join("quarterly-review.tex");
+                    fs::write(&path, source).expect("TeX table QA fixture");
                     app.document_mut()
-                        .replace_loaded(SOURCE.into(), path, DocumentKind::Tex, None)
+                        .replace_loaded(source.into(), path, DocumentKind::Tex, None)
                         .expect("ordinary TeX table QA fixture replacement");
                     app.prepare_editor_source_data();
-                    let cursor = SOURCE.find("\\begin{tabular}").unwrap();
-                    let table = crate::editor_features::tex_table_at(SOURCE, cursor).unwrap();
+                    let cursor = source.find("\\begin{tabular}").unwrap();
+                    let table = crate::editor_features::tex_table_at(source, cursor).unwrap();
                     app.begin_table_target(TableTarget::Tex(table));
                     self.asset_fixture = Some(directory);
+                }
+                if scene == UiSnapshotScene::TableEditorTexMerged
+                    && !app.table_samples.ready_for_snapshot()
+                {
+                    app.captures.defer_target("table-editor");
                 }
             }
             UiSnapshotScene::EmptyWorkspace => {
@@ -1014,6 +1030,9 @@ impl QaSession {
         step: &UiCaptureStep,
         context: &egui::Context,
     ) {
+        if let Some(root) = self.fixture_workspace_root.take() {
+            app.workspace_root = root;
+        }
         crate::window_logo::clear_snapshot(context);
         app.restore_preview_window(context);
         app.preview_controls = Default::default();
@@ -1051,6 +1070,12 @@ impl QaSession {
         app.document_workflow.clear_modal();
         app.rename_dialog = None;
         app.table_editor = None;
+        app.table_samples.reset();
+        app.table_edit_events.clear();
+        crate::table_sampling::clear(
+            context,
+            scoped_child_viewport_id(context, "tiptoptyp-table-editor"),
+        );
         app.rename_overlay_had_focus = false;
         app.rename_overlay_suspended = false;
         // Each capture step starts from the canonical Settings page, rather
@@ -1182,6 +1207,48 @@ mod tests {
     }
 
     #[test]
+    fn capture_steps_retire_previous_table_samples_before_preparing_the_next_grid() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let original_root = app.project_root();
+        let mut qa = QaSession::default();
+        app.snapshot_scene = Some(UiSnapshotScene::TableEditor);
+        qa.prepare(&mut app, &context);
+        app.prepare_table_samples(&context);
+        assert!(app.table_samples.ready_for_snapshot());
+        let step = UiCaptureStep {
+            theme: Default::default(),
+            scene: UiSnapshotScene::TableEditorTexMerged,
+        };
+        qa.set_step(&mut app, &step, &context);
+        assert!(
+            !app.table_samples.ready_for_snapshot(),
+            "new captures need their own sample request"
+        );
+        assert!(app.table_editor.is_none());
+        qa.prepare(&mut app, &context);
+        assert!(matches!(app.table_editor, Some(TableEditorDialog::Tex(_))));
+        assert_eq!(app.current_directory().unwrap(), app.project_root());
+        assert!(
+            app.document()
+                .path()
+                .as_ref()
+                .unwrap()
+                .starts_with(app.project_root())
+        );
+        qa.set_step(
+            &mut app,
+            &UiCaptureStep {
+                theme: Default::default(),
+                scene: UiSnapshotScene::Main,
+            },
+            &context,
+        );
+        assert_eq!(app.project_root(), original_root);
+    }
+
+    #[test]
     fn table_snapshot_scenes_prepare_the_real_language_and_keep_the_draft_stable() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -1190,6 +1257,7 @@ mod tests {
             UiSnapshotScene::TableEditorNarrow,
             UiSnapshotScene::TableEditorTex,
             UiSnapshotScene::TableEditorTexNarrow,
+            UiSnapshotScene::TableEditorTexMerged,
         ] {
             let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
             let mut qa = QaSession::default();
@@ -1198,7 +1266,9 @@ mod tests {
             let key = app.document().key();
             let tex = matches!(
                 scene,
-                UiSnapshotScene::TableEditorTex | UiSnapshotScene::TableEditorTexNarrow
+                UiSnapshotScene::TableEditorTex
+                    | UiSnapshotScene::TableEditorTexNarrow
+                    | UiSnapshotScene::TableEditorTexMerged
             );
             assert_eq!(
                 app.document().kind(),
@@ -1217,9 +1287,12 @@ mod tests {
                 let Some(TableEditorDialog::Tex(dialog)) = &app.table_editor else {
                     panic!("TeX scene did not create the grid workbench");
                 };
-                assert!(!dialog.source_mode);
-                assert_eq!(dialog.table.cells.as_ref().unwrap().len(), 4);
-                assert_eq!(dialog.table.columns(), Some(3));
+                let merged = scene == UiSnapshotScene::TableEditorTexMerged;
+                assert_eq!(
+                    dialog.table.cells.as_ref().unwrap().len(),
+                    if merged { 10 } else { 4 }
+                );
+                assert_eq!(dialog.table.columns(), Some(if merged { 6 } else { 3 }));
                 let path = app.document().path().as_ref().unwrap();
                 assert_eq!(fs::read_to_string(path).unwrap(), *app.document().source());
                 assert_eq!(path.extension().unwrap(), "tex");

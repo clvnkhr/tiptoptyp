@@ -369,14 +369,17 @@ if command == "watch-copy" {
             Thread.sleep(forTimeInterval: interval / 2)
         }
     }
-} else if command == "wheel" || command == "zoom-wheel" {
+} else if command == "wheel" || command == "zoom-wheel" || command == "horizontal-wheel" {
     guard args.count == 5,
           let x = Double(args[2]), let y = Double(args[3]),
           let lines = Int32(args[4]), x.isFinite, y.isFinite, lines != 0 else {
         fail("wheel requires finite screen coordinates and a nonzero line delta")
     }
+    let horizontal = command == "horizontal-wheel"
     guard let event = CGEvent(scrollWheelEvent2Source: source, units: .line,
-                              wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0) else {
+                              wheelCount: horizontal ? 2 : 1,
+                              wheel1: horizontal ? 0 : lines,
+                              wheel2: horizontal ? lines : 0, wheel3: 0) else {
         fail("cannot create wheel event")
     }
     event.location = CGPoint(x: x, y: y)

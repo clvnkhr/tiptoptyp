@@ -633,10 +633,8 @@ struct PreservedTableOption {
 }
 
 mod table;
-mod table_source;
 mod tex_table;
 pub(crate) use table::{CellPosition, TableAxis, TableSelection};
-pub(crate) use table_source::{TableSource, table_source_at, table_source_in_source};
 pub(crate) use tex_table::{TexTable, tex_table_at};
 
 /// A conservative, rectangular table/grid model suitable for direct editing.
@@ -721,7 +719,7 @@ impl std::error::Error for TableEditError {}
 /// under a character cursor.
 ///
 /// The parser deliberately refuses spreads, dynamic positional expressions,
-/// computed column counts, unsupported structural helpers, malformed syntax, comments
+/// computed/inherited column counts, unsupported structural helpers, malformed syntax, comments
 /// between arguments, and incomplete final rows. Returning `None` guarantees
 /// that opening and cancelling an editor can never discard unsupported source.
 pub(crate) fn editable_table_at(source: &str, char_cursor: usize) -> Option<EditableTable> {
@@ -746,9 +744,10 @@ pub(crate) fn table_insertion_prefix(source: &str, char_cursor: usize) -> Option
     // Incomplete expressions can leave trailing whitespace under the markup
     // root (e.g. `#let t = |`). Probe a literal call at the insertion point so
     // the parser, rather than whitespace heuristics, decides if a hash is needed.
-    let candidate = format!("{}table(){}", &source[..byte], &source[byte..]);
+    let probe = "table(columns: 1)";
+    let candidate = format!("{}{probe}{}", &source[..byte], &source[byte..]);
     let code = editable_table_at(&candidate, char_cursor + 1)
-        .is_some_and(|table| table.source_range == (char_cursor..char_cursor + 7));
+        .is_some_and(|table| table.source_range == (char_cursor..char_cursor + probe.len()));
     Some(if code { "" } else { "#" })
 }
 
@@ -758,21 +757,23 @@ pub(crate) fn editable_table_in_source(parsed: &Source, cursor: usize) -> Option
         return None;
     }
     let root = LinkedNode::new(parsed.root());
-    find_editable_table(&root, source, cursor).or_else(|| {
-        // The expression node starts after markup's `#`, but the sigil is a
-        // natural right-click target and should open the same table editor.
-        source[cursor..]
-            .starts_with('#')
-            .then(|| find_editable_table(&root, source, cursor + 1))
-            .flatten()
-    })
+    // Markup's sigil belongs to the following call. Resolve it before walking
+    // so a nested `#table` cannot accidentally select an enclosing table.
+    let cursor = if source[cursor..].starts_with('#') {
+        cursor + 1
+    } else {
+        cursor
+    };
+    find_editable_table(&root, source, cursor).flatten()
 }
 
+// The outer Option distinguishes "no table here" from a table whose geometry
+// is unsupported. Never fall back to editing its enclosing table.
 fn find_editable_table(
     node: &LinkedNode<'_>,
     source: &str,
     cursor: usize,
-) -> Option<EditableTable> {
+) -> Option<Option<EditableTable>> {
     if !contains_byte(node.range(), cursor) {
         return None;
     }
@@ -782,7 +783,11 @@ fn find_editable_table(
     {
         return Some(table);
     }
-    parse_editable_table(node, source)
+    let call = node.get().cast::<ast::FuncCall>()?;
+    let ast::Expr::Ident(callee) = call.callee() else {
+        return None;
+    };
+    matches!(callee.as_str(), "table" | "grid").then(|| parse_editable_table(node, source))
 }
 
 fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableTable> {
@@ -846,6 +851,9 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
                 });
             }
             ast::Arg::Pos(_) => {
+                if !columns_were_explicit && table_cell_is_computed(&argument) {
+                    return None;
+                }
                 if flat_cells.len() >= 4096 {
                     return None;
                 }
@@ -880,6 +888,9 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
     {
         return None;
     }
+    if !columns_were_explicit && inherited_table_columns(node, kind) {
+        return None;
+    }
     let (cells, cell_options) = table::place_cells(columns, flat_cells)?;
     for (row, _) in &mut rules {
         if *row == cells.len() {
@@ -909,6 +920,42 @@ fn parse_editable_table(node: &LinkedNode<'_>, source: &str) -> Option<EditableT
         column_widths,
         indentation,
     })
+}
+
+// Reuse the parsed cell AST instead of reparsing every cell on each caret query.
+fn table_cell_is_computed(node: &LinkedNode<'_>) -> bool {
+    matches!(node.kind(), SyntaxKind::Hash | SyntaxKind::MathIdent)
+        || node.children().any(|child| table_cell_is_computed(&child))
+}
+
+fn inherited_table_columns(node: &LinkedNode<'_>, kind: TableKind) -> bool {
+    let mut branch = node;
+    while let Some(parent) = branch.parent() {
+        if matches!(parent.kind(), SyntaxKind::Markup | SyntaxKind::Code) {
+            for sibling in parent
+                .children()
+                .take_while(|child| child.offset() < branch.offset())
+            {
+                let Some(rule) = sibling.get().cast::<ast::SetRule>() else {
+                    continue;
+                };
+                let ast::Expr::Ident(target) = rule.target() else {
+                    continue;
+                };
+                if target.as_str() == kind.callee()
+                    && rule.args().items().any(|argument| {
+                        matches!(argument, ast::Arg::Named(named)
+                            if named.name().as_str() == "columns"
+                                && literal_column_count(named.expr()) != Some(1))
+                    })
+                {
+                    return true;
+                }
+            }
+        }
+        branch = parent;
+    }
+    false
 }
 
 fn literal_column_count(expression: ast::Expr<'_>) -> Option<usize> {
@@ -950,9 +997,6 @@ fn has_descendant_kind(node: &LinkedNode<'_>, kind: SyntaxKind) -> bool {
 }
 
 impl EditableTable {
-    pub(crate) fn has_explicit_columns(&self) -> bool {
-        self.columns_were_explicit
-    }
     pub(crate) fn row_count(&self) -> usize {
         self.cells.len()
     }
@@ -1030,9 +1074,9 @@ impl EditableTable {
         true
     }
 
-    /// Serialize a bounded draft for source-mode repair, preserving incomplete
-    /// option expressions and newly entered dynamic cell markup. Source Apply
-    /// validates the complete call before replacing the original document.
+    /// Serialize a bounded draft while preserving unvalidated option expressions
+    /// and dynamic cell markup. Grid Apply validates the complete call before
+    /// replacing the original document.
     pub(crate) fn render_source_draft(&self) -> Result<String, TableEditError> {
         self.validate_geometry()?;
         let child_indent = format!("{}  ", self.indentation);
