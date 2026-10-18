@@ -12,7 +12,7 @@ let config = WKWebViewConfiguration()
 let adapter = try String(contentsOfFile: CommandLine.arguments[2], encoding: .utf8)
 config.userContentController.addUserScript(WKUserScript(source: adapter, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 // Creation-time appearance differs from the current appearance on reload.
-config.userContentController.addUserScript(WKUserScript(source: "window.tiptoptypSetPalette?.([255,255,255],[0,0,0]);", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+config.userContentController.addUserScript(WKUserScript(source: "window.tiptoptypSetPalette?.([255,255,255],[0,0,0],'1px solid transparent','1px solid transparent',[79,140,255]);", injectionTime: .atDocumentStart, forMainFrameOnly: true))
 let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: config)
 let window = NSWindow(contentRect: view.frame, styleMask: .borderless, backing: .buffered, defer: false)
 window.title = "Tinymist palette QA"
@@ -26,7 +26,7 @@ class Delegate: NSObject, WKNavigationDelegate {
     func apply(_ view: WKWebView) {
         window.title = "Tinymist palette QA — " + names[stage]
         let (bg, fg) = palettes[stage]
-        view.evaluateJavaScript("window.tiptoptypSetPalette?.(\(bg),\(fg));")
+        view.evaluateJavaScript("window.tiptoptypSetPalette?.(\(bg),\(fg),'1px solid transparent','1px solid transparent',[79,140,255]);")
     }
     func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
         // The native app's Finished callback invalidates its queued-palette cache.

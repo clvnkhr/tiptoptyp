@@ -59,6 +59,7 @@ function fixture() {
   return {
     setFocus(value) { focused = value; },
     styles, properties, activeClasses, body, palette: (...args) => window.tiptoptypSetPalette(...args),
+    paletteScript: script => runInNewContext(script, {window}),
     doc, scroll, frames, container, messages, action: value => window.tiptoptypPreviewAction(value),
     revealSource: token => window.tiptoptypRevealSource(token),
     get rescales() { return rescales; }, get clearedAnchors() { return clearedAnchors; },
@@ -73,6 +74,42 @@ function fixture() {
     },
   };
 }
+
+// Execute the JS embedded by native harnesses against the current adapter,
+// rather than mirroring its parameter list in a separate test implementation.
+function nativePaletteScripts(path) {
+  return [...readFileSync(new URL(path, import.meta.url), 'utf8')
+    .matchAll(/window\.tiptoptypSetPalette(?:\?\.)?\([^;\n]*?\);/g)]
+    .map(match => match[0]);
+}
+
+function assertHarnessPalette(script, paper, ink) {
+  const f = fixture();
+  f.event('DOMContentLoaded');
+  assert.doesNotThrow(() => f.paletteScript(script), script);
+  assert.equal(f.properties.get('--tiptoptyp-paper'), `rgb(${paper.join(',')})`);
+  assert.equal(f.properties.get('--tiptoptyp-ink'), `rgb(${ink.join(',')})`);
+  assert.equal(f.properties.get('--tiptoptyp-hover-border'), '1px solid transparent');
+  assert.equal(f.properties.get('--tiptoptyp-focus-border'), '1px solid transparent');
+  const accent = f.properties.get('--tiptoptyp-reveal-accent');
+  assert.match(accent, /^rgb\(\d+,\d+,\d+\)$/);
+  assert.ok(accent.slice(4, -1).split(',').every(channel => Number(channel) <= 255));
+}
+
+test('native palette harness creation and reload scripts execute the production palette contract', () => {
+  const calls = nativePaletteScripts('./test-preview-palette.swift');
+  assert.equal(calls.length, 2, 'cover both creation-time and current-palette replay');
+  assertHarnessPalette(calls[0], [255,255,255], [0,0,0]);
+  assertHarnessPalette(calls[1]
+    .replaceAll(String.raw`\(bg)`, '[24,31,42]')
+    .replaceAll(String.raw`\(fg)`, '[200,210,220]'), [24,31,42], [200,210,220]);
+});
+
+test('native zoom harness dark-ready script executes the production palette contract', () => {
+  const calls = nativePaletteScripts('../tests/native_preview_zoom.rs');
+  assert.equal(calls.length, 1, 'cover the ready callback before it reports loaded');
+  assertHarnessPalette(calls[0], [40,40,40], [235,219,178]);
+});
 
 test('resize bursts rescale once per frame, never rerender or keep idle frames alive', () => {
   const f = fixture();

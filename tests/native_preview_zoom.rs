@@ -170,7 +170,7 @@ fn run() {
             }};
             const ready=()=>{{const doc=document.getElementById('typst-container')?.documents?.[0]?.impl;
                 if(doc?.moduleInitialized){{
-                    if({dark})window.tiptoptypSetPalette([40,40,40],[235,219,178],'1px solid transparent','1px solid transparent');
+                    if({dark})window.tiptoptypSetPalette([40,40,40],[235,219,178],'1px solid transparent','1px solid transparent',[250,189,47]);
                     send({{type:'loaded',partial:doc.partialRendering}});
                 }}
                 else{{if(performance.now()-lastDiagnostic>500){{lastDiagnostic=performance.now();diagnostic('waiting');}}setTimeout(ready,25);}}
