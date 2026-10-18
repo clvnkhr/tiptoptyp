@@ -3553,15 +3553,1697 @@
     ],
     "pixel_scope": "Private CGL/egui framebuffers; no native child-view or whole-desktop composition claim.",
     "native_interaction": {
-      "status": "unavailable",
-      "reason": "Mac locked; Accessibility and input checks true, desktop false and locked true. Neither journey launched; no running build/backend claim.",
+      "status": "passed",
       "commands": [
-        "python3 scripts/test-desktop-ui.py --journey typing_particles --release --capture-review",
-        "python3 scripts/test-desktop-ui.py --journey git_hunks --release --capture-review"
+        "python3 scripts/test-desktop-ui.py --journey typing_particles --executable .tiptoptyp/editor-effects-perf-2026-10-18/native-final-app --capture-review",
+        "python3 scripts/test-desktop-ui.py --journey git_hunks --executable .tiptoptyp/editor-effects-perf-2026-10-18/native-final-app --capture-review"
       ],
-      "evidence": [
-        ".tiptoptyp/desktop-ui-tests/run-_zoo4t_z/result.json",
-        ".tiptoptyp/desktop-ui-tests/run-vucqwyhe/result.json"
+      "build_receipt": {
+        "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-perf-2026-10-18/native-final-app",
+        "profile": {
+          "opt_level": "0",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": false
+        },
+        "features": [
+          "desktop-ui-tests"
+        ],
+        "sha256": "719c8f6784811da434a83e120826093c1bd803f6144f1d51400cc52b1eb111e7",
+        "source_revision": "40bf98cad7d3f02826e54e6fc4495d2105106670",
+        "version": "tiptoptyp Dev 0.1.0 (40bf98cad7d3.1792357951)"
+      },
+      "results": [
+        {
+          "passed": true,
+          "journeys": [
+            "typing_particles"
+          ],
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}]}",
+          "build_profile": "debug",
+          "version": "tiptoptyp Dev 0.1.0 (40bf98cad7d3.1792357951)",
+          "binary_sha256": "719c8f6784811da434a83e120826093c1bd803f6144f1d51400cc52b1eb111e7",
+          "evidence": ".tiptoptyp/desktop-ui-tests/run-uvfhxo_q/result.json"
+        },
+        {
+          "passed": true,
+          "journeys": [
+            "git_hunks"
+          ],
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}]}",
+          "build_profile": "debug",
+          "version": "tiptoptyp Dev 0.1.0 (40bf98cad7d3.1792357951)",
+          "binary_sha256": "719c8f6784811da434a83e120826093c1bd803f6144f1d51400cc52b1eb111e7",
+          "evidence": ".tiptoptyp/desktop-ui-tests/run-9lhlfatw/result.json"
+        }
+      ],
+      "previous_unavailable_attempts": {
+        "status": "unavailable",
+        "reason": "Mac locked; Accessibility and input checks true, desktop false and locked true. Neither journey launched; no running build/backend claim.",
+        "commands": [
+          "python3 scripts/test-desktop-ui.py --journey typing_particles --release --capture-review",
+          "python3 scripts/test-desktop-ui.py --journey git_hunks --release --capture-review"
+        ],
+        "evidence": [
+          ".tiptoptyp/desktop-ui-tests/run-_zoo4t_z/result.json",
+          ".tiptoptyp/desktop-ui-tests/run-vucqwyhe/result.json"
+        ]
+      },
+      "effects_event_counts": {
+        "typing_particles.action_preferences": 28,
+        "typing_particles.active": 21,
+        "typing_particles.feedback": 3,
+        "typing_particles.document_return": 1,
+        "typing_particles.negative": 1,
+        "typing_particles.restored": 1
+      },
+      "particle_action_records": [
+        {
+          "editor_action": "Typing",
+          "style": "Explosion",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Typing": 1
+            },
+            "active_count": 48,
+            "burst_count": 1,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 48,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 1,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 1536,
+              "uploaded_instances": 48,
+              "uploads": 1
+            },
+            "last_action": "Typing",
+            "last_emission_age_ms": 68.13441699999956,
+            "last_style": "Explosion",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Explosion": 48
+            },
+            "max_live": 48,
+            "origin": [
+              351.71875,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Typing",
+          "style": "Shotgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Typing": 2
+            },
+            "active_count": 48,
+            "burst_count": 2,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 96,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 18,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 3072,
+              "uploaded_instances": 48,
+              "uploads": 2
+            },
+            "last_action": "Typing",
+            "last_emission_age_ms": 106.6028750000001,
+            "last_style": "Shotgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Shotgun": 48
+            },
+            "max_live": 48,
+            "origin": [
+              361.0,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Typing",
+          "style": "Flamethrower",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Typing": 3
+            },
+            "active_count": 48,
+            "burst_count": 3,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 144,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 38,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 4608,
+              "uploaded_instances": 48,
+              "uploads": 3
+            },
+            "last_action": "Typing",
+            "last_emission_age_ms": 110.063083,
+            "last_style": "Flamethrower",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Flamethrower": 48
+            },
+            "max_live": 48,
+            "origin": [
+              370.28125,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Typing",
+          "style": "Railgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Typing": 4
+            },
+            "active_count": 48,
+            "burst_count": 4,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 192,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 57,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 6144,
+              "uploaded_instances": 48,
+              "uploads": 4
+            },
+            "last_action": "Typing",
+            "last_emission_age_ms": 104.99733300000003,
+            "last_style": "Railgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Railgun": 48
+            },
+            "max_live": 48,
+            "origin": [
+              379.53125,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Typing",
+          "style": "Plasma",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Typing": 5
+            },
+            "active_count": 48,
+            "burst_count": 5,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 240,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 75,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 7680,
+              "uploaded_instances": 48,
+              "uploads": 5
+            },
+            "last_action": "Typing",
+            "last_emission_age_ms": 102.46112500000493,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Plasma": 48
+            },
+            "max_live": 48,
+            "origin": [
+              388.8125,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Typing",
+          "style": "Plasma",
+          "dark": false,
+          "observation": {
+            "action_bursts": {
+              "Typing": 6
+            },
+            "active_count": 48,
+            "burst_count": 6,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 288,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 89,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 9216,
+              "uploaded_instances": 48,
+              "uploads": 6
+            },
+            "last_action": "Typing",
+            "last_emission_age_ms": 40.665208000000064,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Plasma": 48
+            },
+            "max_live": 48,
+            "origin": [
+              398.09375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Typing",
+          "style": "Plasma",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Typing": 7
+            },
+            "active_count": 48,
+            "burst_count": 7,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 336,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 102,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 10752,
+              "uploaded_instances": 48,
+              "uploads": 7
+            },
+            "last_action": "Typing",
+            "last_emission_age_ms": 64.61566699999821,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Plasma": 48
+            },
+            "max_live": 48,
+            "origin": [
+              407.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Comment",
+          "style": "Shotgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 1,
+              "Typing": 7
+            },
+            "active_count": 48,
+            "burst_count": 8,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 384,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 119,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 12288,
+              "uploaded_instances": 48,
+              "uploads": 8
+            },
+            "last_action": "Comment",
+            "last_emission_age_ms": 107.91562500000396,
+            "last_style": "Shotgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Shotgun": 48
+            },
+            "max_live": 48,
+            "origin": [
+              435.1875,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Comment",
+          "style": "Shotgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 2,
+              "Typing": 7
+            },
+            "active_count": 48,
+            "burst_count": 9,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 432,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 138,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 13824,
+              "uploaded_instances": 48,
+              "uploads": 9
+            },
+            "last_action": "Comment",
+            "last_emission_age_ms": 109.31462500001032,
+            "last_style": "Shotgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Shotgun": 48
+            },
+            "max_live": 48,
+            "origin": [
+              407.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Copy",
+          "style": "Railgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 2,
+              "Copy": 1,
+              "Typing": 7
+            },
+            "active_count": 24,
+            "burst_count": 10,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 456,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 156,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 14592,
+              "uploaded_instances": 24,
+              "uploads": 10
+            },
+            "last_action": "Copy",
+            "last_emission_age_ms": 106.5509579999997,
+            "last_style": "Railgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Railgun": 24
+            },
+            "max_live": 48,
+            "origin": [
+              259.0,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Copy",
+          "style": "Railgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 2,
+              "Copy": 2,
+              "Typing": 7
+            },
+            "active_count": 24,
+            "burst_count": 11,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 480,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 185,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 15360,
+              "uploaded_instances": 24,
+              "uploads": 11
+            },
+            "last_action": "Copy",
+            "last_emission_age_ms": 276.0012920000037,
+            "last_style": "Railgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Railgun": 24
+            },
+            "max_live": 48,
+            "origin": [
+              259.0,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Comment",
+          "style": "Shotgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 3,
+              "Copy": 2,
+              "Typing": 7
+            },
+            "active_count": 48,
+            "burst_count": 12,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 528,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 208,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 16896,
+              "uploaded_instances": 48,
+              "uploads": 12
+            },
+            "last_action": "Comment",
+            "last_emission_age_ms": 193.18116700000587,
+            "last_style": "Shotgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Shotgun": 48
+            },
+            "max_live": 48,
+            "origin": [
+              286.5,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Comment",
+          "style": "Shotgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Typing": 7
+            },
+            "active_count": 48,
+            "burst_count": 13,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 576,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 228,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 18432,
+              "uploaded_instances": 48,
+              "uploads": 13
+            },
+            "last_action": "Comment",
+            "last_emission_age_ms": 103.25649999998632,
+            "last_style": "Shotgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Shotgun": 48
+            },
+            "max_live": 48,
+            "origin": [
+              259.0,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Paste",
+          "style": "Plasma",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Paste": 1,
+              "Typing": 7
+            },
+            "active_count": 96,
+            "burst_count": 14,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 672,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 244,
+              "error": null,
+              "last_draw_instances": 96,
+              "ready": true,
+              "uploaded_bytes_total": 21504,
+              "uploaded_instances": 96,
+              "uploads": 14
+            },
+            "last_action": "Paste",
+            "last_emission_age_ms": 66.10591600002635,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Plasma": 96
+            },
+            "max_live": 96,
+            "origin": [
+              472.28125,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Cut",
+          "style": "Flamethrower",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Paste": 1,
+              "Typing": 7
+            },
+            "active_count": 96,
+            "burst_count": 15,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 768,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 264,
+              "error": null,
+              "last_draw_instances": 96,
+              "ready": true,
+              "uploaded_bytes_total": 24576,
+              "uploaded_instances": 96,
+              "uploads": 15
+            },
+            "last_action": "Cut",
+            "last_emission_age_ms": 110.90175000001068,
+            "last_style": "Flamethrower",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Flamethrower": 96
+            },
+            "max_live": 96,
+            "origin": [
+              407.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Undo",
+          "style": "Explosion",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Paste": 1,
+              "Typing": 7,
+              "Undo": 1
+            },
+            "active_count": 48,
+            "burst_count": 16,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 816,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 284,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 26112,
+              "uploaded_instances": 48,
+              "uploads": 16
+            },
+            "last_action": "Undo",
+            "last_emission_age_ms": 108.46320799998921,
+            "last_style": "Explosion",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Explosion": 48
+            },
+            "max_live": 96,
+            "origin": [
+              472.28125,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Redo",
+          "style": "Shotgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 1
+            },
+            "active_count": 48,
+            "burst_count": 17,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 864,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 303,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 27648,
+              "uploaded_instances": 48,
+              "uploads": 17
+            },
+            "last_action": "Redo",
+            "last_emission_age_ms": 105.8512920000112,
+            "last_style": "Shotgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Shotgun": 48
+            },
+            "max_live": 96,
+            "origin": [
+              407.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Indent",
+          "style": "Flamethrower",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Indent": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 1
+            },
+            "active_count": 24,
+            "burst_count": 18,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 888,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 321,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 28416,
+              "uploaded_instances": 24,
+              "uploads": 18
+            },
+            "last_action": "Indent",
+            "last_emission_age_ms": 108.99091600001043,
+            "last_style": "Flamethrower",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Flamethrower": 24
+            },
+            "max_live": 96,
+            "origin": [
+              425.90625,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Undo",
+          "style": "Explosion",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Indent": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 2
+            },
+            "active_count": 48,
+            "burst_count": 19,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 936,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 339,
+              "error": null,
+              "last_draw_instances": 48,
+              "ready": true,
+              "uploaded_bytes_total": 29952,
+              "uploaded_instances": 48,
+              "uploads": 19
+            },
+            "last_action": "Undo",
+            "last_emission_age_ms": 93.18408300001124,
+            "last_style": "Explosion",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Explosion": 48
+            },
+            "max_live": 96,
+            "origin": [
+              407.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Newline",
+          "style": "Railgun",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Indent": 1,
+              "Newline": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 2
+            },
+            "active_count": 24,
+            "burst_count": 20,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 960,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 356,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 30720,
+              "uploaded_instances": 24,
+              "uploads": 20
+            },
+            "last_action": "Newline",
+            "last_emission_age_ms": 103.80633299999431,
+            "last_style": "Railgun",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Railgun": 24
+            },
+            "max_live": 96,
+            "origin": [
+              259.0,
+              198.25
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Delete",
+          "style": "Plasma",
+          "dark": true,
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Delete": 1,
+              "Indent": 1,
+              "Newline": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 2
+            },
+            "active_count": 24,
+            "burst_count": 21,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 984,
+            "feedback": {
+              "action_bursts": {},
+              "active_effects": [],
+              "burst_count": 0,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": null,
+              "last_effects": [],
+              "last_emission_age_ms": null,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 376,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 31488,
+              "uploaded_instances": 24,
+              "uploads": 21
+            },
+            "last_action": "Delete",
+            "last_emission_age_ms": 91.62266699999577,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {
+              "Plasma": 24
+            },
+            "max_live": 96,
+            "origin": [
+              416.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        }
+      ],
+      "cpu_feedback_records": [
+        {
+          "editor_action": "Typing",
+          "effect": "Shake",
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Delete": 1,
+              "Indent": 1,
+              "Newline": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 2
+            },
+            "active_count": 0,
+            "burst_count": 21,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 984,
+            "feedback": {
+              "action_bursts": {
+                "Typing": 1
+              },
+              "active_effects": [
+                "Shake"
+              ],
+              "burst_count": 1,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.0,
+              "last_action": "Typing",
+              "last_effects": [
+                "Shake"
+              ],
+              "last_emission_age_ms": 16.570000000001528,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                2.1549530029296875,
+                1.6938073635101318
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 389,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 31488,
+              "uploaded_instances": 24,
+              "uploads": 21
+            },
+            "last_action": "Delete",
+            "last_emission_age_ms": 10111.223499999995,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {},
+            "max_live": 96,
+            "origin": [
+              416.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Indent",
+          "effect": "Flash",
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Delete": 1,
+              "Indent": 1,
+              "Newline": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 2
+            },
+            "active_count": 0,
+            "burst_count": 21,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 984,
+            "feedback": {
+              "action_bursts": {
+                "Indent": 1,
+                "Typing": 1
+              },
+              "active_effects": [
+                "Flash"
+              ],
+              "burst_count": 2,
+              "flash_alpha": 0.026825184002518654,
+              "glow_alpha": 0.0,
+              "last_action": "Indent",
+              "last_effects": [
+                "Flash"
+              ],
+              "last_emission_age_ms": 94.48641600002361,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 389,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 31488,
+              "uploaded_instances": 24,
+              "uploads": 21
+            },
+            "last_action": "Delete",
+            "last_emission_age_ms": 19102.633958000013,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {},
+            "max_live": 96,
+            "origin": [
+              416.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        },
+        {
+          "editor_action": "Newline",
+          "effect": "Glow",
+          "observation": {
+            "action_bursts": {
+              "Comment": 4,
+              "Copy": 2,
+              "Cut": 1,
+              "Delete": 1,
+              "Indent": 1,
+              "Newline": 1,
+              "Paste": 1,
+              "Redo": 1,
+              "Typing": 7,
+              "Undo": 2
+            },
+            "active_count": 0,
+            "burst_count": 21,
+            "clip": [
+              238.0,
+              30.0,
+              829.5,
+              859.0
+            ],
+            "emitted_count": 984,
+            "feedback": {
+              "action_bursts": {
+                "Indent": 1,
+                "Newline": 1,
+                "Typing": 1
+              },
+              "active_effects": [
+                "Glow"
+              ],
+              "burst_count": 3,
+              "flash_alpha": 0.0,
+              "glow_alpha": 0.41999998688697815,
+              "last_action": "Newline",
+              "last_effects": [
+                "Glow"
+              ],
+              "last_emission_age_ms": 0.0,
+              "lifetime_ms": 480,
+              "shake_offset": [
+                0.0,
+                0.0
+              ]
+            },
+            "gpu": {
+              "backend": "instanced-glow",
+              "draws": 389,
+              "error": null,
+              "last_draw_instances": 24,
+              "ready": true,
+              "uploaded_bytes_total": 31488,
+              "uploaded_instances": 24,
+              "uploads": 21
+            },
+            "last_action": "Delete",
+            "last_emission_age_ms": 27785.68691699999,
+            "last_style": "Plasma",
+            "lifetime_ms": 640,
+            "live_styles": {},
+            "max_live": 96,
+            "origin": [
+              416.375,
+              180.75
+            ],
+            "pool_limit": 256
+          }
+        }
+      ],
+      "observed_ready_preview_backends": [
+        "PDFium",
+        "Tinymist",
+        "Tinymist partial"
+      ],
+      "observed_diff_line_states": [
+        [
+          180,
+          180
+        ],
+        [
+          180,
+          181
+        ],
+        [
+          180,
+          182
+        ]
+      ],
+      "native_checks": "All ten keyboard actions, all five styles, light/dark, exact GPU burst/upload sequence, CPU-only feedback without extra GPU work, finite expiry, focus and master-Off negatives, restored defaults. Whole-document diff scrolling/editing/navigation, Find/popups, double-click/open, dividers and actual PDFium/Tinymist readiness.",
+      "limits": "Debug interaction checks do not measure optimized latency, idle repaint cadence or whole-desktop composition. Native Medium density reached 96 live particles; maximum-256 shader work is separately covered by the CGL probes. Effects inside the diff editor remain deterministic-test coverage.",
+      "fresh_capture_manifest": [
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358010495-0001-main.png",
+          "sha256": "e5f8e17d9036a1d7efa0ddb40c22bfa2ca33a9f08b40fbff411d42fc4e14d457"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358018764-0002-settings.png",
+          "sha256": "13232325d8abbbf5197ee3113e62abf2bdc6ed79c325b9ca88e8f8f63dbea847"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358023650-0003-main.png",
+          "sha256": "8d08c5fea60cd293c09f61c4e1b59ca0a58dff4af8d0348dc15ae2aa462d6b11"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358031849-0004-main.png",
+          "sha256": "b545788363d7cd7fd236ac301054d74026b43c6cb0a145540050acd6334d4bcf"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358040165-0005-main.png",
+          "sha256": "938fa2735afa438577187b6fa785f29ba0ef9e87eaf0cab77fc7564ec6fcaf85"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358048499-0006-main.png",
+          "sha256": "e6f1938dfe8004a2fee799ab909a81a8075a47b0b5257146942fdbaa6212fb59"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358056834-0007-main.png",
+          "sha256": "3b4cecc9887c750c817daeaf9591a5fa564b3da6a3345859298fd9cbcb0387a0"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358065934-0008-main.png",
+          "sha256": "fa1bf619f94efc323fa53c8364d5b19fddf02b06106f974fb964064b3706bbc6"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358075019-0009-main.png",
+          "sha256": "b1ca70d0b30c11d358ce911c08bdf4a4a55a965d293072e9655f725ef586e872"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358111801-0010-main.png",
+          "sha256": "c3ca272e2b79bb77785ab47c9d90063dcdb056d1a9fb1533251c451e9f959443"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358115983-0011-main.png",
+          "sha256": "87753208c1baffb965b7e955f777b2652b3296a492c396f1504622951bc8c355"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358121030-0012-main.png",
+          "sha256": "29a64cd1ed69687ebbba37e18db7c983d602907039ca0352b649a15d60c5b667"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358126949-0013-main.png",
+          "sha256": "403eae483c0d7257ca82f2a52ffecb70364cffcf193779b78e2753b7bdcdfc0e"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358132555-0014-main.png",
+          "sha256": "86aa930b38d68af8cdd0bca3fc40d14030d48d6fe81e545c3de11ea9fe50eee9"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358136729-0015-main.png",
+          "sha256": "86c14f7291822f2333ddbdee8fd41db9ff92c5300d2a6d4ff434766cf36eba45"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358141494-0016-main.png",
+          "sha256": "98385231cef6b5cdff79a977edd88f754d6bff68f4f3da63c87c8a122e231780"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358147950-0017-main.png",
+          "sha256": "fbbc774dcde0a6f5c13f40d6574dcddbb94bc356142ba8e0d82cdba1c50432fd"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358152083-0018-main.png",
+          "sha256": "b542cff8221dedf5081340971a31b3dd56b40233d42a2a658320b0dda9b6013f"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358156213-0019-main.png",
+          "sha256": "ba8fb4f8cfce673ef860afc2e85249ec637ec7e5035140d81dfe85f922a2ab31"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358161051-0020-main.png",
+          "sha256": "13fe1daf7f571f0b2ae5b9421d50edfae42ab26708b4d5082a91c11077450837"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358165204-0021-main.png",
+          "sha256": "e05fc0297dd62ccbed4ede871dd606ffa9d26f8fac6a322b8f0cdc6cc8db5e87"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358170000-0022-main.png",
+          "sha256": "98f2637fcfd9a07fae77a6303339139667f2b960a42ede9f32e157e7479670ba"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358174095-0023-main.png",
+          "sha256": "d1a8430039f513a38eb58e431b41041c8cfb655f8ce273e37f1247ce3b23c5cd"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358184179-0024-main.png",
+          "sha256": "70f4e643e23812bc35ce83462b3b25d5ed8f128caf3f30dbcb3cd72d0c22d487"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358193116-0025-main.png",
+          "sha256": "d09fc72b8d037f1529c923e641794cd729e3057e4d77a99610a4144c581080a7"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358201848-0026-main.png",
+          "sha256": "fcd60132ffd18a7aac87ceec1f958554937dc6cef47700d426d157428f3641bf"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358351603-0004-main.png",
+          "sha256": "bf2590353bdf101442a47796a656671474e2e42469291247b0020984ed508f3e"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358293953-0001-main.png",
+          "sha256": "7c0fff75997e241bfb98c434f285161346d221078c9679db1e6dc5fbf91c7e20"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358338871-0003-main.png",
+          "sha256": "7aea768da29637228badf017dbac48337ef2e60305a2989f2b29de8929f53409"
+        },
+        {
+          "file": ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358333036-0002-main.png",
+          "sha256": "636b6c21cec0422bd2954ca6ef43f1c90e546fd590d1a70b09f75d4159ca39f5"
+        }
+      ],
+      "inspected_review_sheets": [
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/native-effects-review-1.png",
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/native-effects-review-2.png",
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/native-effects-review-3.png",
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/native-effects-review-4.png"
+      ],
+      "inspected_diff_frames": [
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358351603-0004-main.png",
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358293953-0001-main.png",
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358338871-0003-main.png",
+        ".tiptoptyp/screenshots/agent-review/effects-native-2026-10-18/1792358333036-0002-main.png"
       ]
     },
     "regression_reproductions": [
@@ -3577,7 +5259,7 @@
     "Component timing on one Apple M2 Max does not establish cross-platform or end-to-end frame latency.",
     "Cold shader startup and allocation profiles were not measured.",
     "The stripped baseline CPU sample lacks application symbols and is not evidence of named hot stacks or native GUI CPU time.",
-    "Native typing_particles and git_hunks journeys remain blocked by the locked desktop."
+    "Debug interaction checks do not measure optimized latency, idle repaint cadence or whole-desktop composition. Native Medium density reached 96 live particles; maximum-256 shader work is separately covered by the CGL probes. Effects inside the diff editor remain deterministic-test coverage."
   ],
   "local_raw_evidence": ".tiptoptyp/editor-effects-perf-2026-10-18"
 }

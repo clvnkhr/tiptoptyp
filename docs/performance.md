@@ -352,9 +352,18 @@ Formatting, strict Clippy (default, profiling and desktop-test features),
 uniform-invalidation and framebuffer checks passed. All 20 particle PNGs and
 both feedback PNGs match the baseline pixel-for-pixel; the fresh light/dark
 feedback and five-style contact sheet were inspected. These private framebuffers
-do not establish native window composition. The `typing_particles` and
-`git_hunks` native journeys stopped at preflight because the Mac was locked;
-they did not launch and are unavailable, not passes.
+do not establish native window composition. After the Mac was unlocked, both
+`typing_particles` and `git_hunks` native journeys passed against the preserved
+current debug build (`719c8f6784811da434a83e120826093c1bd803f6144f1d51400cc52b1eb111e7`).
+The effects journey exercised all ten actions and five styles: 21 bursts and
+21 uploads supported 389 GPU draws. Particle-Off Shake, Flash and Glow added no
+GPU draws/uploads; expiry, focus isolation, master-Off and restoration passed.
+The diff journey passed editing, scrolling, navigation, Find/popups and divider
+checks with actual ready PDFium and Tinymist backends. Fresh captures from both
+journeys were inspected. These debug interaction checks do not establish
+optimized latency, idle repaint cadence or composed native-child pixels; effects
+inside the diff editor remain deterministic-test coverage. The earlier locked
+preflight attempts remain recorded separately.
 
 [Recorded measurements and validation](performance-results/editor-effects-performance-2026-10-18.json)
 include raw samples, source/binary hashes, exact commands and limitations. Full
