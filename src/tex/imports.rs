@@ -40,6 +40,7 @@ impl Requirements {
                 "rowcolors" | "textcolor" | "colorbox" | "fcolorbox" | "definecolor" => "xcolor",
                 "hdashline" | "cdashline" => "arydshln",
                 "multirow" => "multirow",
+                "makecell" | "thead" => "makecell",
                 "includegraphics" | "resizebox" | "rotatebox" | "scalebox" => "graphicx",
                 "href" | "hyperref" | "autoref" => "hyperref",
                 "url" | "nolinkurl" => "url",
@@ -793,7 +794,7 @@ mod tests {
             ("m{2cm}l", vec!["array"]),
             ("*{2}{S[table-format=2.1]}", vec!["siunitx"]),
             ("D{.}{.}{2}l", vec!["dcolumn"]),
-            (">{\\textbf{S}}l", vec!["array"]),
+            (">{\\textbf{S}}ll", vec!["array"]),
             ("l:r", vec!["arydshln"]),
         ] {
             let body = format!("\\begin{{tabular}}{{{spec}}}A & B\\end{{tabular}}");
@@ -805,6 +806,26 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn tex_imports_add_makecell_for_table_cell_wrappers_once() {
+        for cell in [r"\thead{\textbf{Header}}", r"\makecell{First\\Second}"] {
+            assert_eq!(
+                Requirements::fragment(cell).packages,
+                BTreeSet::from(["makecell".into()])
+            );
+            let body = format!(r"\begin{{tabular}}{{l}}{cell}\\\end{{tabular}}");
+            let table = crate::editor_features::tex_table_at(&body, 1).unwrap();
+            let required = Requirements::table(&table, &body);
+            let edit = insert(&document(""), &body, required.clone());
+            assert_eq!(edit.added, ["makecell"]);
+            let imported = document("").replace(
+                "\\begin{document}",
+                "\\usepackage{makecell}\n\\begin{document}",
+            );
+            assert!(insert(&imported, &body, required).added.is_empty());
+        }
+    }
+
     #[test]
     fn tex_imports_add_tabularray_libraries_once_and_keep_existing_libraries() {
         let body = "\\begin{tblr}{colspec={lS[table-format=2.0]}}\\toprule A & 60\\\\\\bottomrule\\end{tblr}";
