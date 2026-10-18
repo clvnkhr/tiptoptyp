@@ -31,6 +31,18 @@ from desktop_ui_newest_journeys import NEWEST_JOURNEYS
 
 ROOT = Path(__file__).resolve().parent.parent
 
+JOURNEY_NAMES = (
+    "all", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
+    *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find",
+    "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview",
+    "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
+    "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding",
+    "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing",
+    "partial_preview", "partial_zoom_stress", "partial_cache_edges", "controls",
+    "settings_search", "editor_preferences", "typing_particles", "background",
+    "background_fades", "context_menu",
+)
+
 
 def height(document):
     rect = document.get("panel_rect")
@@ -900,7 +912,7 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journey", choices=["all", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find", "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview", "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "partial_preview", "partial_zoom_stress", "partial_cache_edges", "controls", "settings_search", "editor_preferences", "typing_particles", "background", "background_fades", "context_menu"], default="all")
+    parser.add_argument("--journey", choices=JOURNEY_NAMES, default="all")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--executable", type=Path, help="reuse a preserved build for paired benchmarks; record its version and binary hash")
     parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")

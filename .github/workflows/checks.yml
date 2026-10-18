@@ -63,7 +63,7 @@ jobs:
       - name: Application and core tests
         run: cargo +1.98.1 test --locked --no-fail-fast
       - name: Desktop journey detector contracts
-        run: python3 scripts/test_desktop_ui_contract.py
+        run: python3 -m unittest discover -s scripts -p 'test_*contract.py'
       - name: Compile desktop inspection and test its geometry
         if: runner.os == 'macOS'
         run: cargo +1.98.1 test --locked --features desktop-ui-tests --bin tiptoptyp desktop_test::tests
