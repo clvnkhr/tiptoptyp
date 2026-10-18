@@ -1,0 +1,2175 @@
+{
+  "date": "2026-10-18",
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "baseline": {
+    "revision": "82595500b2a8f3455ffd21152bd657d12f048c46",
+    "profile": "release",
+    "features": [
+      "desktop-ui-tests"
+    ],
+    "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/before-app",
+    "bytes": 63872272,
+    "sha256": "648a5c06dfd1d14978b59a73fb7741fee2c77c7718218be769b57d08b0f7e402",
+    "version": "tiptoptyp Dev 0.1.0 (82595500b2a8.1792311459)",
+    "source_diff": ""
+  },
+  "final_development_build": {
+    "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/after-app",
+    "sha256": "9d8240c519cf26405e9d540659c02fe588dbd9cb84e7361d25f6d074ae513676",
+    "bytes": 63955104,
+    "profile": "release",
+    "features": [
+      "desktop-ui-tests"
+    ],
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "version": "tiptoptyp Dev 0.1.0 (82595500b2a8-dirty.1792313471)",
+    "source_revision": "82595500b2a8f3455ffd21152bd657d12f048c46",
+    "source_diff_sha256": "c920b017a0225b1e3bc1d593b38c09d314b9e7fee1299ab50583fd2b54b1a75a"
+  },
+  "production_build": {
+    "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/production-app",
+    "bytes": 45741664,
+    "sha256": "59cd68a4ba7ce89e4d84334dbe742812d51a9624204ea4ed6133839a8d1c3709",
+    "profile": "release",
+    "features": [
+      "production"
+    ],
+    "version": "tiptoptyp 0.1.0 (82595500b2a8-dirty.1792313799)",
+    "architectures": [
+      "arm64"
+    ]
+  },
+  "font_components": {
+    "created_utc": "2026-10-18T08:50:36.143692+00:00",
+    "probe": "theme::tests::startup_components_probe",
+    "command_arguments": [
+      "--ignored",
+      "--exact",
+      "theme::tests::startup_components_probe",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "metric": "font configuration and first headless text frame, not native startup or presentation",
+    "fixture": {
+      "label": "Startup window: Latin text \u03b1 + \u03b2",
+      "ui_weight": 400,
+      "code_weight": 400,
+      "custom_fonts": false,
+      "headless_pixels_per_point": 1
+    },
+    "cache": "fresh test process each observation; filesystem caches not flushed; first launch per binary retained as warmup",
+    "warmup_pairs": 1,
+    "measured_pairs": 7,
+    "order": "before/after in even rounds; after/before in odd rounds",
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+    "measurement_runner_sha256": "05a4aa37a1f9188003b9f2f799d8286d62d324945b35e26d81da08b542c79688",
+    "current_source_revision": "82595500b2a8f3455ffd21152bd657d12f048c46",
+    "current_theme_source_sha256": "a138659613a6da3d58231f11146fe00775243fac306c93abedfa09a25342c0ae",
+    "build_contract": "both preserved test executables use release + desktop-ui-tests; build metadata is supplied by parent run",
+    "limitations": [
+      "No other builds or measured workloads may run concurrently.",
+      "Peak RSS includes the full test process and is supplementary, not a direct allocation count.",
+      "This is warm-filesystem startup of the headless font component, not cold-filesystem or GUI latency."
+    ],
+    "binaries": [
+      {
+        "name": "before",
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/before-tests",
+        "sha256": "fa88870a7b1ee5a69d5616eb20a8e957f1c745c8f5e4356eeecb9fa911da8bd5",
+        "bytes": 74028352,
+        "runs": [
+          {
+            "fonts_ms": 16.388417,
+            "first_text_frame_ms": 8.186792,
+            "generic_constructor_ms": 0.025916,
+            "total_process_ms": 689.3781659891829,
+            "maximum_rss_bytes": 138821632,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/0-0.log",
+            "round": 0,
+            "warmup": true
+          },
+          {
+            "fonts_ms": 14.671916,
+            "first_text_frame_ms": 5.196708,
+            "generic_constructor_ms": 0.001875,
+            "total_process_ms": 31.740958045702428,
+            "maximum_rss_bytes": 136413184,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/1-0.log",
+            "round": 1,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 13.647292,
+            "first_text_frame_ms": 4.651959,
+            "generic_constructor_ms": 0.001917,
+            "total_process_ms": 29.156874981708825,
+            "maximum_rss_bytes": 130891776,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/2-0.log",
+            "round": 2,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 14.029291,
+            "first_text_frame_ms": 5.17825,
+            "generic_constructor_ms": 0.001708,
+            "total_process_ms": 30.734583968296647,
+            "maximum_rss_bytes": 147161088,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/3-0.log",
+            "round": 3,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 13.687041,
+            "first_text_frame_ms": 4.884083,
+            "generic_constructor_ms": 0.002083,
+            "total_process_ms": 30.27112496783957,
+            "maximum_rss_bytes": 147505152,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/4-0.log",
+            "round": 4,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 14.212834,
+            "first_text_frame_ms": 5.08725,
+            "generic_constructor_ms": 0.001792,
+            "total_process_ms": 31.393999990541488,
+            "maximum_rss_bytes": 139313152,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/5-0.log",
+            "round": 5,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 13.847,
+            "first_text_frame_ms": 4.636583,
+            "generic_constructor_ms": 0.001708,
+            "total_process_ms": 29.363416018895805,
+            "maximum_rss_bytes": 130531328,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/6-0.log",
+            "round": 6,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 12.641625,
+            "first_text_frame_ms": 4.946459,
+            "generic_constructor_ms": 0.00175,
+            "total_process_ms": 29.319999972358346,
+            "maximum_rss_bytes": 136724480,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/7-0.log",
+            "round": 7,
+            "warmup": false
+          }
+        ],
+        "median_excluding_first": {
+          "fonts_ms": 13.847,
+          "first_text_frame_ms": 4.946459,
+          "generic_constructor_ms": 0.001792,
+          "total_process_ms": 30.27112496783957,
+          "maximum_rss_bytes": 136724480
+        }
+      },
+      {
+        "name": "after",
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/after-tests",
+        "sha256": "c1a2f3d831e3e0ac7ae3d0adedd7660f425469fccad9d10531762d6386c875be",
+        "bytes": 74557792,
+        "runs": [
+          {
+            "fonts_ms": 13.614209,
+            "first_text_frame_ms": 5.923917,
+            "generic_constructor_ms": 0.036791,
+            "total_process_ms": 664.7568340413272,
+            "maximum_rss_bytes": 109428736,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/0-1.log",
+            "round": 0,
+            "warmup": true
+          },
+          {
+            "fonts_ms": 13.05625,
+            "first_text_frame_ms": 4.060375,
+            "generic_constructor_ms": 0.002666,
+            "total_process_ms": 28.659709030762315,
+            "maximum_rss_bytes": 110280704,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/1-1.log",
+            "round": 1,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 12.724667,
+            "first_text_frame_ms": 3.138709,
+            "generic_constructor_ms": 0.0022500000000000003,
+            "total_process_ms": 26.15820901701227,
+            "maximum_rss_bytes": 109838336,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/2-1.log",
+            "round": 2,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 12.204167,
+            "first_text_frame_ms": 3.260916,
+            "generic_constructor_ms": 0.002375,
+            "total_process_ms": 26.297624979633838,
+            "maximum_rss_bytes": 109969408,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/3-1.log",
+            "round": 3,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 11.617084,
+            "first_text_frame_ms": 3.37075,
+            "generic_constructor_ms": 0.002541,
+            "total_process_ms": 26.568291999865323,
+            "maximum_rss_bytes": 110182400,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/4-1.log",
+            "round": 4,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 14.37575,
+            "first_text_frame_ms": 3.152917,
+            "generic_constructor_ms": 0.0028330000000000004,
+            "total_process_ms": 28.927208040840924,
+            "maximum_rss_bytes": 110231552,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/5-1.log",
+            "round": 5,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 11.545584,
+            "first_text_frame_ms": 3.255875,
+            "generic_constructor_ms": 0.0023330000000000004,
+            "total_process_ms": 25.77845798805356,
+            "maximum_rss_bytes": 110051328,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/6-1.log",
+            "round": 6,
+            "warmup": false
+          },
+          {
+            "fonts_ms": 11.57875,
+            "first_text_frame_ms": 3.215084,
+            "generic_constructor_ms": 0.0022500000000000003,
+            "total_process_ms": 25.212999957147986,
+            "maximum_rss_bytes": 110051328,
+            "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/font-components/7-1.log",
+            "round": 7,
+            "warmup": false
+          }
+        ],
+        "median_excluding_first": {
+          "fonts_ms": 12.204167,
+          "first_text_frame_ms": 3.255875,
+          "generic_constructor_ms": 0.002375,
+          "total_process_ms": 26.297624979633838,
+          "maximum_rss_bytes": 110051328
+        }
+      }
+    ],
+    "relative_change_percent": {
+      "fonts_ms": -11.864179966779808,
+      "first_text_frame_ms": -34.17766123200455,
+      "total_process_ms": -13.126370402247122,
+      "maximum_rss_bytes": -19.50868783702816
+    },
+    "complete": true
+  },
+  "explorer_filter": {
+    "architecture": "aarch64",
+    "cold_median_us": 1135.333,
+    "cold_us": [
+      1234.834,
+      1113.041,
+      1114.625,
+      1090.0,
+      1081.5,
+      1129.792,
+      1077.709,
+      1148.334,
+      1105.0,
+      1103.833,
+      1124.5829999999999,
+      2759.208,
+      2991.708,
+      2890.625,
+      2642.709,
+      1175.75,
+      1124.833,
+      1182.292,
+      1131.625,
+      1138.834,
+      1151.041,
+      1138.4170000000001,
+      1093.125,
+      1136.625,
+      1135.333,
+      1136.208,
+      1105.709,
+      1134.75,
+      1230.667,
+      1238.75,
+      1179.875,
+      1156.4579999999999,
+      1134.0829999999999,
+      1203.1660000000002,
+      1088.708,
+      1120.4170000000001,
+      1101.125,
+      1127.292,
+      1112.75,
+      1203.583
+    ],
+    "fixture": "eight branches, depth16,32 sibling files per directory,one matching leaf per branch",
+    "measured_samples": 40,
+    "nodes": 4232,
+    "opened_directories": 128,
+    "operating_system": "macos",
+    "optimized": true,
+    "query": "needle",
+    "reference_median_us": 12781.5,
+    "reference_us": [
+      12768.875,
+      12171.75,
+      12516.916,
+      12237.042,
+      12815.458999999999,
+      12711.125,
+      13163.457999999999,
+      12726.125,
+      12894.584,
+      12544.541,
+      12249.042,
+      24658.916999999998,
+      27543.833,
+      32106.292,
+      18348.875,
+      13150.584,
+      12384.582999999999,
+      12283.667,
+      13034.708,
+      12657.625,
+      13140.917,
+      13117.916000000001,
+      13278.042,
+      13116.083,
+      12845.166,
+      12950.25,
+      12953.875,
+      12303.5,
+      13035.458,
+      12747.291,
+      12781.5,
+      12852.0,
+      12610.5,
+      12508.542,
+      12469.832999999999,
+      13073.916,
+      12695.708,
+      12731.5,
+      12486.125,
+      12671.0
+    ],
+    "visible_rows": 136,
+    "warm_median_us": 427.417,
+    "warm_us": [
+      426.25,
+      426.125,
+      420.0,
+      408.958,
+      405.5,
+      416.416,
+      409.042,
+      501.04200000000003,
+      475.41700000000003,
+      420.541,
+      427.417,
+      968.416,
+      1034.875,
+      1005.0,
+      1007.8750000000001,
+      431.667,
+      424.166,
+      490.25,
+      460.667,
+      439.875,
+      443.0,
+      465.45799999999997,
+      424.70799999999997,
+      463.66700000000003,
+      425.375,
+      440.041,
+      456.458,
+      443.83299999999997,
+      508.91700000000003,
+      447.25,
+      426.04200000000003,
+      426.83299999999997,
+      405.291,
+      412.45799999999997,
+      408.83299999999997,
+      435.0,
+      412.25,
+      419.041,
+      413.292,
+      427.209
+    ],
+    "warmup_samples": 7,
+    "binary": {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/after-tests",
+      "sha256": "c1a2f3d831e3e0ac7ae3d0adedd7660f425469fccad9d10531762d6386c875be",
+      "bytes": 74557792
+    },
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "command": [
+      "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/after-tests",
+      "--ignored",
+      "--exact",
+      "explorer::workspace_filter_tests::explorer_filter_cost_measurement",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/explorer-filter-measurement.log",
+    "metric": "algorithmic filtering plus visible-row traversal; excludes widgets, native painting, desktop startup and GPU",
+    "complete": true
+  },
+  "native_startup": {
+    "empty": {
+      "desktop": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "ui_scale_percent": 100,
+      "metric": "process spawn to first fresh editor-state snapshot; excludes preview readiness and screen presentation",
+      "cache": "fresh process and fresh settings/workspace; filesystem caches are not flushed",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "fixture": "empty",
+      "sampled": false,
+      "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+      "build_contract": "release with desktop-ui-tests; caller must build both binaries with matching flags",
+      "cargo_lock_sha256": "a8233d89a0a22212a1ab1664db46a891b70f13857906059916f9be34ebded588",
+      "revision": "82595500b2a8f3455ffd21152bd657d12f048c46",
+      "binaries": [
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/before-app",
+          "sha256": "648a5c06dfd1d14978b59a73fb7741fee2c77c7718218be769b57d08b0f7e402",
+          "version": "tiptoptyp Dev 0.1.0 (82595500b2a8.1792311459)",
+          "runs": [
+            {
+              "milliseconds": 545.4651250038296,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 442.8480420028791,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 419.99895800836384,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 428.26879100175574,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 429.385082970839,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 399.9388749944046,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 337.7154999761842,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 450.08312503341585,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            }
+          ],
+          "median_ms_excluding_first": 428.26879100175574
+        },
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/after-app",
+          "sha256": "9d8240c519cf26405e9d540659c02fe588dbd9cb84e7361d25f6d074ae513676",
+          "version": "tiptoptyp Dev 0.1.0 (82595500b2a8-dirty.1792313471)",
+          "runs": [
+            {
+              "milliseconds": 440.5180410249159,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 439.9765420239419,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 437.64449999434873,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 425.8652499993332,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 412.2000830247998,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 399.805125023704,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 440.4335420113057,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            },
+            {
+              "milliseconds": 428.64654102595523,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 446
+            }
+          ],
+          "median_ms_excluding_first": 428.64654102595523
+        }
+      ]
+    },
+    "typ": {
+      "desktop": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "ui_scale_percent": 100,
+      "metric": "process spawn to first fresh editor-state snapshot; excludes preview readiness and screen presentation",
+      "cache": "fresh process and fresh settings/workspace; filesystem caches are not flushed",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "fixture": "typ",
+      "sampled": false,
+      "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+      "build_contract": "release with desktop-ui-tests; caller must build both binaries with matching flags",
+      "cargo_lock_sha256": "a8233d89a0a22212a1ab1664db46a891b70f13857906059916f9be34ebded588",
+      "revision": "82595500b2a8f3455ffd21152bd657d12f048c46",
+      "binaries": [
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/before-app",
+          "sha256": "648a5c06dfd1d14978b59a73fb7741fee2c77c7718218be769b57d08b0f7e402",
+          "version": "tiptoptyp Dev 0.1.0 (82595500b2a8.1792311459)",
+          "runs": [
+            {
+              "milliseconds": 364.177290990483,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 416.01908300071955,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 415.6770000117831,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 424.18924998492,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 393.9979170099832,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 437.3199580004439,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            }
+          ],
+          "median_ms_excluding_first": 416.01908300071955
+        },
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/after-app",
+          "sha256": "9d8240c519cf26405e9d540659c02fe588dbd9cb84e7361d25f6d074ae513676",
+          "version": "tiptoptyp Dev 0.1.0 (82595500b2a8-dirty.1792313471)",
+          "runs": [
+            {
+              "milliseconds": 408.1593749579042,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 429.55395800527185,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 406.4685829798691,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 413.22083299746737,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 411.2480420153588,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            },
+            {
+              "milliseconds": 348.02912501618266,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "Tinymist partial",
+              "source_bytes": 33
+            }
+          ],
+          "median_ms_excluding_first": 411.2480420153588
+        }
+      ]
+    },
+    "tex": {
+      "desktop": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "ui_scale_percent": 100,
+      "metric": "process spawn to first fresh editor-state snapshot; excludes preview readiness and screen presentation",
+      "cache": "fresh process and fresh settings/workspace; filesystem caches are not flushed",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "fixture": "tex",
+      "sampled": false,
+      "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+      "build_contract": "release with desktop-ui-tests; caller must build both binaries with matching flags",
+      "cargo_lock_sha256": "a8233d89a0a22212a1ab1664db46a891b70f13857906059916f9be34ebded588",
+      "revision": "82595500b2a8f3455ffd21152bd657d12f048c46",
+      "binaries": [
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/before-app",
+          "sha256": "648a5c06dfd1d14978b59a73fb7741fee2c77c7718218be769b57d08b0f7e402",
+          "version": "tiptoptyp Dev 0.1.0 (82595500b2a8.1792311459)",
+          "runs": [
+            {
+              "milliseconds": 385.3193750255741,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 380.275875038933,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 447.5778750493191,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 405.38779203779995,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 410.66858399426565,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 370.41837495053187,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            }
+          ],
+          "median_ms_excluding_first": 405.38779203779995
+        },
+        {
+          "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/after-app",
+          "sha256": "9d8240c519cf26405e9d540659c02fe588dbd9cb84e7361d25f6d074ae513676",
+          "version": "tiptoptyp Dev 0.1.0 (82595500b2a8-dirty.1792313471)",
+          "runs": [
+            {
+              "milliseconds": 348.364416975528,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 407.2898749727756,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 350.31108296243474,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 391.89149998128414,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 359.89079205319285,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            },
+            {
+              "milliseconds": 391.85199997154996,
+              "frame": 0,
+              "native_size": [
+                1400.0,
+                900.0
+              ],
+              "dark": false,
+              "backend": "PDFium",
+              "source_bytes": 65
+            }
+          ],
+          "median_ms_excluding_first": 391.85199997154996
+        }
+      ]
+    }
+  },
+  "packaged_resource_size": {
+    "measured_utc": "2026-10-18T08:45:45.703508+00:00",
+    "environment": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "command": "cargo test --manifest-path xtask/Cargo.toml --locked staged_universal_payload_probe -- --ignored --nocapture",
+    "result": "pass",
+    "verification": "27 actual generated resources decoded by production codec; native helpers/libraries checked for exact architecture and code signature; tool versions executed on both architectures (Intel via Rosetta); every shared font/model compared against source hash. All27decodedsize/SHA256 match originalgziparchives; compressedfileSHA256 rechecked separately.",
+    "scope": "Matched native payload/shared-asset resource bytes only. Main executable/runtime decoder growth, notices, filesystemallocation and universal appbundle total excluded; complete production app runtime check is separate.",
+    "scope_totals": {
+      "aarch64-apple-darwin": {
+        "payloads": 7,
+        "decoded_bytes": 185505600,
+        "gzip_bytes": 87593281,
+        "zstd19_bytes": 66685330
+      },
+      "shared": {
+        "payloads": 13,
+        "decoded_bytes": 17830923,
+        "gzip_bytes": 13679369,
+        "zstd19_bytes": 13191678
+      },
+      "x86_64-apple-darwin": {
+        "payloads": 7,
+        "decoded_bytes": 197920704,
+        "gzip_bytes": 92563192,
+        "zstd19_bytes": 70684480
+      }
+    },
+    "totals": {
+      "decoded_bytes": 401257227,
+      "gzip_bytes": 193835842,
+      "zstd19_bytes": 150561488,
+      "saved_bytes": 43274354,
+      "resource_reduction_percent": 22.32525912312956
+    },
+    "payloads": [
+      {
+        "scope": "aarch64-apple-darwin",
+        "name": "typst",
+        "decoded_bytes": 45047632,
+        "decoded_sha256": "a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f",
+        "gzip_bytes": 21751803,
+        "zstd19_bytes": 16279603,
+        "zstd19_sha256": "9bc706748d633947dd2d85c52a9812bf69d5e37fdd9b6cbd0b7749941144006d",
+        "saved_bytes": 5472200
+      },
+      {
+        "scope": "aarch64-apple-darwin",
+        "name": "tinymist",
+        "decoded_bytes": 58697344,
+        "decoded_sha256": "9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6",
+        "gzip_bytes": 27978716,
+        "zstd19_bytes": 19950148,
+        "zstd19_sha256": "e1f683d7484c13afa5cd35a24601c08dc13cda95653e135f765cea20da957dc0",
+        "saved_bytes": 8028568
+      },
+      {
+        "scope": "aarch64-apple-darwin",
+        "name": "tectonic",
+        "decoded_bytes": 50439584,
+        "decoded_sha256": "4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f",
+        "gzip_bytes": 20258925,
+        "zstd19_bytes": 15044576,
+        "zstd19_sha256": "fd4af4c83d16cdd4ee7cbd862c32bcdfb03e1df19efd95e377966b15b45a309a",
+        "saved_bytes": 5214349
+      },
+      {
+        "scope": "aarch64-apple-darwin",
+        "name": "texlab",
+        "decoded_bytes": 13880656,
+        "decoded_sha256": "d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619",
+        "gzip_bytes": 9830927,
+        "zstd19_bytes": 9167112,
+        "zstd19_sha256": "4b9e49688fe85d61a8f772cb7b009a68341cf68178327a7a8ae2a86e896b69c4",
+        "saved_bytes": 663815
+      },
+      {
+        "scope": "aarch64-apple-darwin",
+        "name": "badness",
+        "decoded_bytes": 8615376,
+        "decoded_sha256": "7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401",
+        "gzip_bytes": 3464151,
+        "zstd19_bytes": 2726741,
+        "zstd19_sha256": "91fbc2372773d7a348836e3b8f6686a548b9c5783172eb7436289e11e3eec89f",
+        "saved_bytes": 737410
+      },
+      {
+        "scope": "aarch64-apple-darwin",
+        "name": "tex-fmt",
+        "decoded_bytes": 2832256,
+        "decoded_sha256": "49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e",
+        "gzip_bytes": 1236451,
+        "zstd19_bytes": 977735,
+        "zstd19_sha256": "33a0f0b2de246ecc3dd2ff3849914a418a12799a40d1df331f47646b1d270fa2",
+        "saved_bytes": 258716
+      },
+      {
+        "scope": "aarch64-apple-darwin",
+        "name": "libpdfium.dylib",
+        "decoded_bytes": 5992752,
+        "decoded_sha256": "11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b",
+        "gzip_bytes": 3072308,
+        "zstd19_bytes": 2539415,
+        "zstd19_sha256": "c4d8006679f1f1864c45f0d2c41d29ed15184f996aaa15bd26a366ec9a3c5aaf",
+        "saved_bytes": 532893
+      },
+      {
+        "scope": "x86_64-apple-darwin",
+        "name": "typst",
+        "decoded_bytes": 47962320,
+        "decoded_sha256": "c8a444a7ef284d9a4bda5fc39f7d1fd5c7553dbfdc34729c755e6b744c94691f",
+        "gzip_bytes": 23054530,
+        "zstd19_bytes": 17337806,
+        "zstd19_sha256": "73dec07e000d3260b1481b32c5319d1f041ca8e519af92965c9c53756e56cdeb",
+        "saved_bytes": 5716724
+      },
+      {
+        "scope": "x86_64-apple-darwin",
+        "name": "tinymist",
+        "decoded_bytes": 65119360,
+        "decoded_sha256": "87c300e1b8554ec20acd4f5459de82fbc5bc94ddb29650c5c3db22dbb1e4285e",
+        "gzip_bytes": 30181487,
+        "zstd19_bytes": 21641388,
+        "zstd19_sha256": "4455ed7de737e4453457d242ec3bb0d8a57334e5fbde5b771be7277f4824c4b0",
+        "saved_bytes": 8540099
+      },
+      {
+        "scope": "x86_64-apple-darwin",
+        "name": "tectonic",
+        "decoded_bytes": 52011376,
+        "decoded_sha256": "3f12d3d91e24904d03b3d461d394e0c7eead87a561540a9b399c1a99ae1b64b4",
+        "gzip_bytes": 20871868,
+        "zstd19_bytes": 15511381,
+        "zstd19_sha256": "0c9fa72fc7578bd11e72a30363cba175bf788f5b387421e4d2962fd7dd0cdf69",
+        "saved_bytes": 5360487
+      },
+      {
+        "scope": "x86_64-apple-darwin",
+        "name": "texlab",
+        "decoded_bytes": 14188736,
+        "decoded_sha256": "37f89808a0188a8ba9b8ad2d4bb9a12c38552200ab4b0a8577c67b69324118ba",
+        "gzip_bytes": 10048884,
+        "zstd19_bytes": 9344513,
+        "zstd19_sha256": "f85a30ab5e108cc0e0d15c0c1050d049e4e385211d69bbd026272c211289db2e",
+        "saved_bytes": 704371
+      },
+      {
+        "scope": "x86_64-apple-darwin",
+        "name": "badness",
+        "decoded_bytes": 9392912,
+        "decoded_sha256": "a335544a0f58c5de0070ce73cce692cae550f734b387462370c4daa4782c6a47",
+        "gzip_bytes": 3807160,
+        "zstd19_bytes": 3024517,
+        "zstd19_sha256": "cb2de895813c9c9a4eb6108a849da8ff6ca22ec4ea9ca07d1935285c691ddc07",
+        "saved_bytes": 782643
+      },
+      {
+        "scope": "x86_64-apple-darwin",
+        "name": "tex-fmt",
+        "decoded_bytes": 3078800,
+        "decoded_sha256": "2721c9ffcd6fc59c71034bd048b591d4f9b32c78fb0d8acc58e6b97de44df5f3",
+        "gzip_bytes": 1343020,
+        "zstd19_bytes": 1077432,
+        "zstd19_sha256": "b300532ec1163022182b4932a812c0b50daa0bde3ad4a5b45a68eeeb880df8dc",
+        "saved_bytes": 265588
+      },
+      {
+        "scope": "x86_64-apple-darwin",
+        "name": "libpdfium.dylib",
+        "decoded_bytes": 6167200,
+        "decoded_sha256": "ad423a6b4fdd30f81f4848edff9afcfed90643238c3ece3ac839aa404b250adb",
+        "gzip_bytes": 3256243,
+        "zstd19_bytes": 2747443,
+        "zstd19_sha256": "235200b76cbad30a2cb95d33e6004b7444a9c4ce7439ac7d4b612f8dbb43633b",
+        "saved_bytes": 508800
+      },
+      {
+        "scope": "shared",
+        "name": "noto-sans.ttf",
+        "decoded_bytes": 2049096,
+        "decoded_sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
+        "gzip_bytes": 1195694,
+        "zstd19_bytes": 1008293,
+        "zstd19_sha256": "b20cd0d201023f4a75247a2d3e4429ee7cbcd0e321d0486f6fd439ff20e891a8",
+        "saved_bytes": 187401
+      },
+      {
+        "scope": "shared",
+        "name": "noto-emoji.ttf",
+        "decoded_bytes": 1982596,
+        "decoded_sha256": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551",
+        "gzip_bytes": 1231160,
+        "zstd19_bytes": 1151030,
+        "zstd19_sha256": "b28a35e4aa4a6010abca935cf51ad8fdef8da01a7e7d8250ce1930f15eff0d71",
+        "saved_bytes": 80130
+      },
+      {
+        "scope": "shared",
+        "name": "noto-symbols.ttf",
+        "decoded_bytes": 372684,
+        "decoded_sha256": "f7e7e04b4a24b6c78893d50cbfd2b2f6cae49617ab047bfef668d252adb128f7",
+        "gzip_bytes": 208991,
+        "zstd19_bytes": 192927,
+        "zstd19_sha256": "18298704ed0b5a1e0475af391d9b414a29273b036fe302042589bdbc83cddc0c",
+        "saved_bytes": 16064
+      },
+      {
+        "scope": "shared",
+        "name": "noto-math.ttf",
+        "decoded_bytes": 1015396,
+        "decoded_sha256": "3f495fe933c06786e4d5f6d86b8ee70b6753a68ee3b9d87528726de0f6e2c47d",
+        "gzip_bytes": 485045,
+        "zstd19_bytes": 424880,
+        "zstd19_sha256": "5b02ca089730bbed6aba7cf93bea8e81134190874e06892aaa32b1a76a52e331",
+        "saved_bytes": 60165
+      },
+      {
+        "scope": "shared",
+        "name": "noto-symbols2.ttf",
+        "decoded_bytes": 1233128,
+        "decoded_sha256": "7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21",
+        "gzip_bytes": 537635,
+        "zstd19_bytes": 465847,
+        "zstd19_sha256": "006e400f67b8c6f18c8cebde61cf89dc7bc98b4a6a237564e3fe17b44971b5ca",
+        "saved_bytes": 71788
+      },
+      {
+        "scope": "shared",
+        "name": "noto-hebrew.ttf",
+        "decoded_bytes": 112640,
+        "decoded_sha256": "7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88",
+        "gzip_bytes": 71111,
+        "zstd19_bytes": 66945,
+        "zstd19_sha256": "1f7edf9542745113a59430f90d94139bd42514ce912a7c11dfd51ebeead2357c",
+        "saved_bytes": 4166
+      },
+      {
+        "scope": "shared",
+        "name": "hack-regular.ttf",
+        "decoded_bytes": 309408,
+        "decoded_sha256": "15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125",
+        "gzip_bytes": 148329,
+        "zstd19_bytes": 132274,
+        "zstd19_sha256": "60fcef4eaaddc1b18d8e2cff50ea9aa22b2fcdd58fc9d286e043e7a06113e56c",
+        "saved_bytes": 16055
+      },
+      {
+        "scope": "shared",
+        "name": "hack-bold.ttf",
+        "decoded_bytes": 317628,
+        "decoded_sha256": "5bbf531eff7f8a0c2559c9a0656718e2828a012a9b1f60b5f54006d59a4de8d4",
+        "gzip_bytes": 152600,
+        "zstd19_bytes": 135050,
+        "zstd19_sha256": "31e97fdc2d707b5b770a689e1a1cb6ab72f6744d1c75d2713136a2f161eee762",
+        "saved_bytes": 17550
+      },
+      {
+        "scope": "shared",
+        "name": "hack-italic.ttf",
+        "decoded_bytes": 316156,
+        "decoded_sha256": "096fb67a2b85f3c866e9cb3e965b27c2c10b977315f4d3d7f095674be35091c1",
+        "gzip_bytes": 155869,
+        "zstd19_bytes": 138468,
+        "zstd19_sha256": "c8e667354a98f77595a6e3a85759d0adaa748244a726a29eb633e028fbad6877",
+        "saved_bytes": 17401
+      },
+      {
+        "scope": "shared",
+        "name": "hack-bold-italic.ttf",
+        "decoded_bytes": 322288,
+        "decoded_sha256": "64f74a079700b7dfe128551a1e28875d5ba980971e55f5e0f0596e37bdc6a6bc",
+        "gzip_bytes": 158457,
+        "zstd19_bytes": 141162,
+        "zstd19_sha256": "f9975fc7cd444b55d9ff35f0b5f6524f44511ac00e974ae40ef3a5fd5c25774d",
+        "saved_bytes": 17295
+      },
+      {
+        "scope": "shared",
+        "name": "file-icons.ttf",
+        "decoded_bytes": 47720,
+        "decoded_sha256": "7a0efd8dfb59a7f5a8c5a00bb34192f5a8a4ac147b36ccc508a9cf3e2868345f",
+        "gzip_bytes": 36944,
+        "zstd19_bytes": 36152,
+        "zstd19_sha256": "ca4a38859c810fd03aaa5508ee80205efa0b15b5b411e5f7bba2f4f741210a97",
+        "saved_bytes": 792
+      },
+      {
+        "scope": "shared",
+        "name": "detypify.onnx",
+        "decoded_bytes": 4617963,
+        "decoded_sha256": "efb7ba853905d4532e83409b0ab82462b9b7b19af2048927f092368abb2d49e0",
+        "gzip_bytes": 4259670,
+        "zstd19_bytes": 4256838,
+        "zstd19_sha256": "f8b20f22a2b5e71fb8ff702f7b87d5cb7bfea56a2c850f28c73ea879a0cbaf6f",
+        "saved_bytes": 2832
+      },
+      {
+        "scope": "shared",
+        "name": "detexify-samples.bin",
+        "decoded_bytes": 5134220,
+        "decoded_sha256": "c0a4cd2dd107a104d2dc628ecb0c96411de3f4423cc6ff13f7a14337b443e49e",
+        "gzip_bytes": 5037864,
+        "zstd19_bytes": 5041812,
+        "zstd19_sha256": "a4d47b35628b2003b82e8e013b30cfc48d14cdd78d1d587bc4f211b2c45e3a10",
+        "saved_bytes": -3948
+      }
+    ]
+  },
+  "payload_decode": {
+    "environment": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "profile": "isolatedCargo release,optlevel3,ThinLTO,codegenunits1,striptrue; exactsamegzipbaseline+nativezstdinputsinonesameexecutable;flate2zlib-rs backend matches actualapp",
+    "binary_sha256": "f07ac6597a11b1631277660286a2bbddbf38acabf785f8bde4d0f00d8c67312a",
+    "codec_source_sha256": "34d4d90f438710a618f6bbdf305735a9fc360a1ed2f2b38a1a3ae9177ccac781",
+    "results": [
+      {
+        "gzip": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/gzip-baseline/shared-assets/shared/noto-sans.ttf.gz",
+        "zstd": "/private/tmp/tiptoptyp-codec-probe/noto-sans.ttf.zst",
+        "decoded_bytes": 2049096,
+        "sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
+        "samples": 7,
+        "gzip_ms": [
+          13.404834,
+          11.329374999999999,
+          10.991292,
+          10.477125000000001,
+          10.58725,
+          10.648583,
+          10.4755
+        ],
+        "zstd_ms": [
+          10.205,
+          9.521583999999999,
+          8.772541,
+          8.362625,
+          8.32725,
+          8.572791,
+          8.585417
+        ],
+        "scope": "resident compressed input, actual optimized flate2/native-zstd decoder and SHA256, one warmup, interleaved trials, no native GUI or filesystem or whole-launch timing",
+        "gzip_bytes": 1195694,
+        "zstd_bytes": 1008293,
+        "gzip_median_ms": 10.648583,
+        "zstd_median_ms": 8.585417,
+        "zstd_over_gzip_median": 0.8062497141638469
+      },
+      {
+        "gzip": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/gzip-baseline/shared-assets/shared/noto-emoji.ttf.gz",
+        "zstd": "/private/tmp/tiptoptyp-codec-probe/noto-emoji.ttf.zst",
+        "decoded_bytes": 1982596,
+        "sha256": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551",
+        "samples": 7,
+        "gzip_ms": [
+          10.652750000000001,
+          10.5625,
+          10.669792000000001,
+          10.726042,
+          10.669875000000001,
+          10.325792,
+          10.810875
+        ],
+        "zstd_ms": [
+          8.22875,
+          8.251667000000001,
+          8.466,
+          8.370417,
+          8.374917,
+          8.524334,
+          8.554666000000001
+        ],
+        "scope": "resident compressed input, actual optimized flate2/native-zstd decoder and SHA256, one warmup, interleaved trials, no native GUI or filesystem or whole-launch timing",
+        "gzip_bytes": 1231160,
+        "zstd_bytes": 1150398,
+        "gzip_median_ms": 10.669792000000001,
+        "zstd_median_ms": 8.374917,
+        "zstd_over_gzip_median": 0.7849184876331234
+      },
+      {
+        "gzip": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/gzip-baseline/shared-assets/shared/detypify.onnx.gz",
+        "zstd": "/private/tmp/tiptoptyp-codec-probe/detypify.onnx.zst",
+        "decoded_bytes": 4617963,
+        "sha256": "efb7ba853905d4532e83409b0ab82462b9b7b19af2048927f092368abb2d49e0",
+        "samples": 7,
+        "gzip_ms": [
+          25.477666,
+          25.246166,
+          25.647083000000002,
+          25.799083,
+          25.339917,
+          25.618,
+          25.44
+        ],
+        "zstd_ms": [
+          17.395833,
+          17.175708,
+          17.058417,
+          17.821334,
+          17.800083,
+          17.535584,
+          17.418125
+        ],
+        "scope": "resident compressed input, actual optimized flate2/native-zstd decoder and SHA256, one warmup, interleaved trials, no native GUI or filesystem or whole-launch timing",
+        "gzip_bytes": 4259670,
+        "zstd_bytes": 4256832,
+        "gzip_median_ms": 25.477666,
+        "zstd_median_ms": 17.418125,
+        "zstd_over_gzip_median": 0.6836625066048044
+      },
+      {
+        "gzip": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/gzip-baseline/shared-assets/shared/detexify-samples.bin.gz",
+        "zstd": "/private/tmp/tiptoptyp-codec-probe/detexify-samples.bin.zst",
+        "decoded_bytes": 5134220,
+        "sha256": "c0a4cd2dd107a104d2dc628ecb0c96411de3f4423cc6ff13f7a14337b443e49e",
+        "samples": 7,
+        "gzip_ms": [
+          28.322584000000003,
+          28.13,
+          29.066374999999997,
+          28.944667,
+          28.252333,
+          27.846542,
+          28.091792
+        ],
+        "zstd_ms": [
+          15.945708,
+          15.951792,
+          16.251083,
+          16.15075,
+          15.517042,
+          16.163916,
+          15.710583999999999
+        ],
+        "scope": "resident compressed input, actual optimized flate2/native-zstd decoder and SHA256, one warmup, interleaved trials, no native GUI or filesystem or whole-launch timing",
+        "gzip_bytes": 5037864,
+        "zstd_bytes": 5041762,
+        "gzip_median_ms": 28.252333,
+        "zstd_median_ms": 15.951792,
+        "zstd_over_gzip_median": 0.5646185750394489
+      },
+      {
+        "gzip": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/gzip-baseline/payloads/aarch64-apple-darwin/libpdfium.dylib.gz",
+        "zstd": "/private/tmp/tiptoptyp-codec-probe/libpdfium.dylib.zst",
+        "decoded_bytes": 5992752,
+        "sha256": "11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b",
+        "samples": 7,
+        "gzip_ms": [
+          28.317458,
+          28.753791,
+          28.694416,
+          29.294042,
+          28.088749999999997,
+          29.2755,
+          28.198375000000002
+        ],
+        "zstd_ms": [
+          24.341792,
+          24.248792,
+          23.961750000000002,
+          25.350082999999998,
+          25.049958,
+          25.384041999999997,
+          23.980791
+        ],
+        "scope": "resident compressed input, actual optimized flate2/native-zstd decoder and SHA256, one warmup, interleaved trials, no native GUI or filesystem or whole-launch timing",
+        "gzip_bytes": 3072308,
+        "zstd_bytes": 2539804,
+        "gzip_median_ms": 28.694416,
+        "zstd_median_ms": 24.341792,
+        "zstd_over_gzip_median": 0.8483111139115012
+      },
+      {
+        "gzip": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/gzip-baseline/payloads/aarch64-apple-darwin/typst.gz",
+        "zstd": "/private/tmp/tiptoptyp-codec-probe/typst.zst",
+        "decoded_bytes": 45047632,
+        "sha256": "a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f",
+        "samples": 7,
+        "gzip_ms": [
+          209.452041,
+          210.334667,
+          210.552333,
+          214.266875,
+          209.510584,
+          209.186375,
+          213.488667
+        ],
+        "zstd_ms": [
+          175.2775,
+          181.90241600000002,
+          177.462542,
+          174.216959,
+          176.916792,
+          178.48883400000003,
+          176.127917
+        ],
+        "scope": "resident compressed input, actual optimized flate2/native-zstd decoder and SHA256, one warmup, interleaved trials, no native GUI or filesystem or whole-launch timing",
+        "gzip_bytes": 21751803,
+        "zstd_bytes": 16272713,
+        "gzip_median_ms": 210.334667,
+        "zstd_median_ms": 176.916792,
+        "zstd_over_gzip_median": 0.8411204606609142
+      },
+      {
+        "gzip": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/gzip-baseline/payloads/aarch64-apple-darwin/tinymist.gz",
+        "zstd": "/private/tmp/tiptoptyp-codec-probe/tinymist.zst",
+        "decoded_bytes": 58697344,
+        "sha256": "9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6",
+        "samples": 7,
+        "gzip_ms": [
+          276.01075000000003,
+          274.581291,
+          275.770625,
+          274.06712500000003,
+          277.118666,
+          274.04725,
+          275.784083
+        ],
+        "zstd_ms": [
+          228.285292,
+          228.909334,
+          229.672042,
+          226.904,
+          229.172,
+          225.761667,
+          226.641833
+        ],
+        "scope": "resident compressed input, actual optimized flate2/native-zstd decoder and SHA256, one warmup, interleaved trials, no native GUI or filesystem or whole-launch timing",
+        "gzip_bytes": 27978716,
+        "zstd_bytes": 19946981,
+        "gzip_median_ms": 275.770625,
+        "zstd_median_ms": 228.285292,
+        "zstd_over_gzip_median": 0.8278085891127817
+      }
+    ]
+  },
+  "payload_decode_metadata": {
+    "captured_utc": "2026-10-18T08:41:34.062537+00:00",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "profile": {
+      "optimization": 3,
+      "lto": "thin",
+      "codegen_units": 1,
+      "strip": true
+    },
+    "flate2_backend_features": "[\"any_impl\", \"any_zlib\", \"default\", \"miniz_oxide\", \"runtime_detection\", \"rust_backend\", \"zlib-rs\"]",
+    "probe_flate2_backend_features": "[\"any_impl\", \"any_zlib\", \"default\", \"miniz_oxide\", \"runtime_detection\", \"rust_backend\", \"zlib-rs\"]",
+    "integrated_decoder_function_matches_measured_source_ignoring_whitespace_and_optional_trailing_commas": true,
+    "scope": "Seven representative original gzip payloads versus Zstandard19 of identical decoded SHA256 and bytes. Resident compressed memory and actual decoded output hash, seven alternating trials after equal warmup. Excludes process/native GUI/filesystem/cache publication/whole startup. Compression size CLI audit encodeseconds were recorded during other builds and are not a performance benchmark.",
+    "files": {
+      "tiptoptyp-size-zstd9-vs19-audit.json": "fbeccbde7a990b3edacabd3cebd82b9dbfde1b0379af10e71bd64fe2bf7dcbbe",
+      "detypify.onnx.zst": "2096498b2abba07fd57200db49f46fc69371364004eb220e4d1fe9491a8f5c1e",
+      "noto-sans.ttf.zst": "c516f139bbf2e1edb777b59cbba697dbefd2d24d5f44c86900523e1c6b39e582",
+      "tiptoptyp_payload_codec_native.rs": "34d4d90f438710a618f6bbdf305735a9fc360a1ed2f2b38a1a3ae9177ccac781",
+      "results.json": "1bf2efa6c5fdac445354b5fd1420ec5f39534b60721588e3bc199e5eb943c3cf",
+      "detexify-samples.bin.zst": "74de8fab0ca66809543c72a40e226d9f21004ff4cd8dd050e0199c771afe2929",
+      "tiptoptyp_payload_codec.rs": "f214ab8152bbe1bf256481d333d82549c2b1abbc295b40060d1387ecf2cc71af",
+      "integrated-payload-codec.rs": "d8afb13e810a0c07bf2e45620d22e1bb50f34520a49e0af899d38993792ca159",
+      "native-probe": "f07ac6597a11b1631277660286a2bbddbf38acabf785f8bde4d0f00d8c67312a",
+      "libpdfium.dylib.zst": "4e9be566e89b5efaf9a9587e74f258d44d836ba1d34be444e60c33f3ea89fe12",
+      "tinymist.zst": "c406aa96491495d5c953e02108d08f6f9517ec9854f28b77dddd2097c87b986f",
+      "probe-Cargo.lock": "37c09f037a23d0dae2d3ca180454d90badfb36595597a60fe2eaac4edb364eb8",
+      "noto-emoji.ttf.zst": "78e295c8eeb8bc5dac0e591bc11f327a6d2a1edf644e7b7dcdc005de857d6bf6",
+      "typst.zst": "6c2768280db0f9f2a0e8f9529f26d9f7c8036d27de7f54ed222523575700a0f5",
+      "baseline-flate2-fingerprint.json": "b9dfe75f1dbf1335690c86ac054de5ecedd51edce479eba7cff1129747f7a1ae",
+      "tiptoptyp-size-zstd9-audit.json": "1203fbccdd80759bd715dd0387677fb231313c99577c5b77c754b99ce1df52ff",
+      "probe-Cargo.toml": "d20decda4332218828e209dd2efa3d3e8f3844bcc9fb7d2b13c946254a958dfb",
+      "probe-flate2-fingerprint.json": "41c670fa5c871dd116201c22e2ade4f0360c817d9c53f41fae1f379d0c3411bc",
+      "tiptoptyp_payload_probe_native.rs": "0b9c205532cd6567ddbdd5e63bccace389c6f4b01b982b30d57203f0bcbcdec8",
+      "native-results.json": "2776a9c2e81b3a82781c428ef75cfb8d7fd4ed53551a369de030d2e26873b441",
+      "tiptoptyp_payload_probe.rs": "a5968e0ffa2b961c11b726d01ac76756b07786bd2ecb9026f6120ab80323b33f"
+    }
+  },
+  "production_runtime": {
+    "started_utc": "2026-10-18T09:01:21.444594+00:00",
+    "scope": "Actual native production executable with staged Zstandard resources in a temporary bundle-like directory; no installation, no GUI, no sealed-app signature claim or Intel-app execution claim.",
+    "timing_scope": "Process startup plus requested CLI initialization; first use has an empty app payload cache; OS filesystem cache is uncontrolled; native codesign checks occur after measured CLI calls.",
+    "architecture": "arm64",
+    "macos": "14.6.1",
+    "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/optimisation-2026-10-18/binaries/production-app",
+    "binary_sha256": "59cd68a4ba7ce89e4d84334dbe742812d51a9624204ea4ed6133839a8d1c3709",
+    "binary_architectures": [
+      "arm64"
+    ],
+    "helper_sha256": "04428cdf8068f16831e2ec628f5b0bf6ad98a225cedc5f460a78d6339f4a6d13",
+    "wrapper_sha256": "d79b91ed2290507f87422a7712dfe943b7a06f25e81cf130c294d0ac6e91f4eb",
+    "manifest_sha256": {
+      "toolchain/payloads/aarch64-apple-darwin/manifest.tsv": "fd939b79d97ab81e81b47ef8f80a9c136b2e1aac199f27d4bfe5016c28967b36",
+      "toolchain/payloads/x86_64-apple-darwin/manifest.tsv": "7f2ca8c8dcc5ffc78fce7fe44f64e50d42eeb9f2cfa7450592e8b27f1afa71a9",
+      "toolchain/shared-assets/shared/manifest.tsv": "b5a410955807984937ad2d2f7da2fb6605fc492b1b47cc8d9298af50da56a901"
+    },
+    "resources": {
+      "toolchain/payloads/aarch64-apple-darwin/typst.zst": {
+        "compressed_bytes": 16279603,
+        "mtime_ns": 1792312977562142767,
+        "compressed_sha256": "9bc706748d633947dd2d85c52a9812bf69d5e37fdd9b6cbd0b7749941144006d",
+        "decoded_bytes": 45047632,
+        "decoded_sha256": "a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f"
+      },
+      "toolchain/payloads/aarch64-apple-darwin/tinymist.zst": {
+        "compressed_bytes": 19950148,
+        "mtime_ns": 1792312995765279811,
+        "compressed_sha256": "e1f683d7484c13afa5cd35a24601c08dc13cda95653e135f765cea20da957dc0",
+        "decoded_bytes": 58697344,
+        "decoded_sha256": "9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6"
+      },
+      "toolchain/payloads/aarch64-apple-darwin/tectonic.zst": {
+        "compressed_bytes": 15044576,
+        "mtime_ns": 1792313007330851355,
+        "compressed_sha256": "fd4af4c83d16cdd4ee7cbd862c32bcdfb03e1df19efd95e377966b15b45a309a",
+        "decoded_bytes": 50439584,
+        "decoded_sha256": "4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f"
+      },
+      "toolchain/payloads/aarch64-apple-darwin/texlab.zst": {
+        "compressed_bytes": 9167112,
+        "mtime_ns": 1792313009774280627,
+        "compressed_sha256": "4b9e49688fe85d61a8f772cb7b009a68341cf68178327a7a8ae2a86e896b69c4",
+        "decoded_bytes": 13880656,
+        "decoded_sha256": "d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619"
+      },
+      "toolchain/payloads/aarch64-apple-darwin/badness.zst": {
+        "compressed_bytes": 2726741,
+        "mtime_ns": 1792313011553243027,
+        "compressed_sha256": "91fbc2372773d7a348836e3b8f6686a548b9c5783172eb7436289e11e3eec89f",
+        "decoded_bytes": 8615376,
+        "decoded_sha256": "7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401"
+      },
+      "toolchain/payloads/aarch64-apple-darwin/tex-fmt.zst": {
+        "compressed_bytes": 977735,
+        "mtime_ns": 1792313012136422901,
+        "compressed_sha256": "33a0f0b2de246ecc3dd2ff3849914a418a12799a40d1df331f47646b1d270fa2",
+        "decoded_bytes": 2832256,
+        "decoded_sha256": "49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e"
+      },
+      "toolchain/payloads/aarch64-apple-darwin/libpdfium.dylib.zst": {
+        "compressed_bytes": 2539415,
+        "mtime_ns": 1792313013267252780,
+        "compressed_sha256": "c4d8006679f1f1864c45f0d2c41d29ed15184f996aaa15bd26a366ec9a3c5aaf",
+        "decoded_bytes": 5992752,
+        "decoded_sha256": "11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b"
+      },
+      "toolchain/payloads/x86_64-apple-darwin/typst.zst": {
+        "compressed_bytes": 17337806,
+        "mtime_ns": 1792313026924235869,
+        "compressed_sha256": "73dec07e000d3260b1481b32c5319d1f041ca8e519af92965c9c53756e56cdeb",
+        "decoded_bytes": 47962320,
+        "decoded_sha256": "c8a444a7ef284d9a4bda5fc39f7d1fd5c7553dbfdc34729c755e6b744c94691f"
+      },
+      "toolchain/payloads/x86_64-apple-darwin/tinymist.zst": {
+        "compressed_bytes": 21641388,
+        "mtime_ns": 1792313045828996696,
+        "compressed_sha256": "4455ed7de737e4453457d242ec3bb0d8a57334e5fbde5b771be7277f4824c4b0",
+        "decoded_bytes": 65119360,
+        "decoded_sha256": "87c300e1b8554ec20acd4f5459de82fbc5bc94ddb29650c5c3db22dbb1e4285e"
+      },
+      "toolchain/payloads/x86_64-apple-darwin/tectonic.zst": {
+        "compressed_bytes": 15511381,
+        "mtime_ns": 1792313058763107981,
+        "compressed_sha256": "0c9fa72fc7578bd11e72a30363cba175bf788f5b387421e4d2962fd7dd0cdf69",
+        "decoded_bytes": 52011376,
+        "decoded_sha256": "3f12d3d91e24904d03b3d461d394e0c7eead87a561540a9b399c1a99ae1b64b4"
+      },
+      "toolchain/payloads/x86_64-apple-darwin/texlab.zst": {
+        "compressed_bytes": 9344513,
+        "mtime_ns": 1792313061246963752,
+        "compressed_sha256": "f85a30ab5e108cc0e0d15c0c1050d049e4e385211d69bbd026272c211289db2e",
+        "decoded_bytes": 14188736,
+        "decoded_sha256": "37f89808a0188a8ba9b8ad2d4bb9a12c38552200ab4b0a8577c67b69324118ba"
+      },
+      "toolchain/payloads/x86_64-apple-darwin/badness.zst": {
+        "compressed_bytes": 3024517,
+        "mtime_ns": 1792313063330621498,
+        "compressed_sha256": "cb2de895813c9c9a4eb6108a849da8ff6ca22ec4ea9ca07d1935285c691ddc07",
+        "decoded_bytes": 9392912,
+        "decoded_sha256": "a335544a0f58c5de0070ce73cce692cae550f734b387462370c4daa4782c6a47"
+      },
+      "toolchain/payloads/x86_64-apple-darwin/tex-fmt.zst": {
+        "compressed_bytes": 1077432,
+        "mtime_ns": 1792313063911503995,
+        "compressed_sha256": "b300532ec1163022182b4932a812c0b50daa0bde3ad4a5b45a68eeeb880df8dc",
+        "decoded_bytes": 3078800,
+        "decoded_sha256": "2721c9ffcd6fc59c71034bd048b591d4f9b32c78fb0d8acc58e6b97de44df5f3"
+      },
+      "toolchain/payloads/x86_64-apple-darwin/libpdfium.dylib.zst": {
+        "compressed_bytes": 2747443,
+        "mtime_ns": 1792313065020961352,
+        "compressed_sha256": "235200b76cbad30a2cb95d33e6004b7444a9c4ce7439ac7d4b612f8dbb43633b",
+        "decoded_bytes": 6167200,
+        "decoded_sha256": "ad423a6b4fdd30f81f4848edff9afcfed90643238c3ece3ac839aa404b250adb"
+      },
+      "toolchain/shared-assets/shared/noto-sans.ttf.zst": {
+        "compressed_bytes": 1008293,
+        "mtime_ns": 1792313065291317955,
+        "compressed_sha256": "b20cd0d201023f4a75247a2d3e4429ee7cbcd0e321d0486f6fd439ff20e891a8",
+        "decoded_bytes": 2049096,
+        "decoded_sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d"
+      },
+      "toolchain/shared-assets/shared/noto-emoji.ttf.zst": {
+        "compressed_bytes": 1151030,
+        "mtime_ns": 1792313065554045384,
+        "compressed_sha256": "b28a35e4aa4a6010abca935cf51ad8fdef8da01a7e7d8250ce1930f15eff0d71",
+        "decoded_bytes": 1982596,
+        "decoded_sha256": "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551"
+      },
+      "toolchain/shared-assets/shared/noto-symbols.ttf.zst": {
+        "compressed_bytes": 192927,
+        "mtime_ns": 1792313065602284891,
+        "compressed_sha256": "18298704ed0b5a1e0475af391d9b414a29273b036fe302042589bdbc83cddc0c",
+        "decoded_bytes": 372684,
+        "decoded_sha256": "f7e7e04b4a24b6c78893d50cbfd2b2f6cae49617ab047bfef668d252adb128f7"
+      },
+      "toolchain/shared-assets/shared/noto-math.ttf.zst": {
+        "compressed_bytes": 424880,
+        "mtime_ns": 1792313065728952975,
+        "compressed_sha256": "5b02ca089730bbed6aba7cf93bea8e81134190874e06892aaa32b1a76a52e331",
+        "decoded_bytes": 1015396,
+        "decoded_sha256": "3f495fe933c06786e4d5f6d86b8ee70b6753a68ee3b9d87528726de0f6e2c47d"
+      },
+      "toolchain/shared-assets/shared/noto-symbols2.ttf.zst": {
+        "compressed_bytes": 465847,
+        "mtime_ns": 1792313065915082036,
+        "compressed_sha256": "006e400f67b8c6f18c8cebde61cf89dc7bc98b4a6a237564e3fe17b44971b5ca",
+        "decoded_bytes": 1233128,
+        "decoded_sha256": "7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21"
+      },
+      "toolchain/shared-assets/shared/noto-hebrew.ttf.zst": {
+        "compressed_bytes": 66945,
+        "mtime_ns": 1792313065931820469,
+        "compressed_sha256": "1f7edf9542745113a59430f90d94139bd42514ce912a7c11dfd51ebeead2357c",
+        "decoded_bytes": 112640,
+        "decoded_sha256": "7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88"
+      },
+      "toolchain/shared-assets/shared/hack-regular.ttf.zst": {
+        "compressed_bytes": 132274,
+        "mtime_ns": 1792313065973712970,
+        "compressed_sha256": "60fcef4eaaddc1b18d8e2cff50ea9aa22b2fcdd58fc9d286e043e7a06113e56c",
+        "decoded_bytes": 309408,
+        "decoded_sha256": "15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125"
+      },
+      "toolchain/shared-assets/shared/hack-bold.ttf.zst": {
+        "compressed_bytes": 135050,
+        "mtime_ns": 1792313066015606553,
+        "compressed_sha256": "31e97fdc2d707b5b770a689e1a1cb6ab72f6744d1c75d2713136a2f161eee762",
+        "decoded_bytes": 317628,
+        "decoded_sha256": "5bbf531eff7f8a0c2559c9a0656718e2828a012a9b1f60b5f54006d59a4de8d4"
+      },
+      "toolchain/shared-assets/shared/hack-italic.ttf.zst": {
+        "compressed_bytes": 138468,
+        "mtime_ns": 1792313066056933636,
+        "compressed_sha256": "c8e667354a98f77595a6e3a85759d0adaa748244a726a29eb633e028fbad6877",
+        "decoded_bytes": 316156,
+        "decoded_sha256": "096fb67a2b85f3c866e9cb3e965b27c2c10b977315f4d3d7f095674be35091c1"
+      },
+      "toolchain/shared-assets/shared/hack-bold-italic.ttf.zst": {
+        "compressed_bytes": 141162,
+        "mtime_ns": 1792313066099452845,
+        "compressed_sha256": "f9975fc7cd444b55d9ff35f0b5f6524f44511ac00e974ae40ef3a5fd5c25774d",
+        "decoded_bytes": 322288,
+        "decoded_sha256": "64f74a079700b7dfe128551a1e28875d5ba980971e55f5e0f0596e37bdc6a6bc"
+      },
+      "toolchain/shared-assets/shared/file-icons.ttf.zst": {
+        "compressed_bytes": 36152,
+        "mtime_ns": 1792313066103994183,
+        "compressed_sha256": "ca4a38859c810fd03aaa5508ee80205efa0b15b5b411e5f7bba2f4f741210a97",
+        "decoded_bytes": 47720,
+        "decoded_sha256": "7a0efd8dfb59a7f5a8c5a00bb34192f5a8a4ac147b36ccc508a9cf3e2868345f"
+      },
+      "toolchain/shared-assets/shared/detypify.onnx.zst": {
+        "compressed_bytes": 4256838,
+        "mtime_ns": 1792313066440421144,
+        "compressed_sha256": "f8b20f22a2b5e71fb8ff702f7b87d5cb7bfea56a2c850f28c73ea879a0cbaf6f",
+        "decoded_bytes": 4617963,
+        "decoded_sha256": "efb7ba853905d4532e83409b0ab82462b9b7b19af2048927f092368abb2d49e0"
+      },
+      "toolchain/shared-assets/shared/detexify-samples.bin.zst": {
+        "compressed_bytes": 5041812,
+        "mtime_ns": 1792313066818512771,
+        "compressed_sha256": "a4d47b35628b2003b82e8e013b30cfc48d14cdd78d1d587bc4f211b2c45e3a10",
+        "decoded_bytes": 5134220,
+        "decoded_sha256": "c0a4cd2dd107a104d2dc628ecb0c96411de3f4423cc6ff13f7a14337b443e49e"
+      }
+    },
+    "runs": {
+      "tools_first_use": {
+        "seconds": 3.117225,
+        "stdout": "Bundled tools initialized successfully",
+        "cache_files": {
+          "aarch64-apple-darwin/9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6/tinymist": {
+            "bytes": 58697344,
+            "mtime_ns": 1792314082984468969,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619/texlab": {
+            "bytes": 13880656,
+            "mtime_ns": 1792314084426528241,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f/tectonic": {
+            "bytes": 50439584,
+            "mtime_ns": 1792314083852058959,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e/tex-fmt": {
+            "bytes": 2832256,
+            "mtime_ns": 1792314084952810225,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f/typst": {
+            "bytes": 45047632,
+            "mtime_ns": 1792314082223276084,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401/badness": {
+            "bytes": 8615376,
+            "mtime_ns": 1792314084731622504,
+            "mode": 448
+          }
+        },
+        "cache_bytes": 179512848
+      },
+      "tools_cache_hit": {
+        "seconds": 0.549509,
+        "stdout": "Bundled tools initialized successfully",
+        "cache_files": {
+          "aarch64-apple-darwin/9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6/tinymist": {
+            "bytes": 58697344,
+            "mtime_ns": 1792314082984468969,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619/texlab": {
+            "bytes": 13880656,
+            "mtime_ns": 1792314084426528241,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f/tectonic": {
+            "bytes": 50439584,
+            "mtime_ns": 1792314083852058959,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e/tex-fmt": {
+            "bytes": 2832256,
+            "mtime_ns": 1792314084952810225,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f/typst": {
+            "bytes": 45047632,
+            "mtime_ns": 1792314082223276084,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401/badness": {
+            "bytes": 8615376,
+            "mtime_ns": 1792314084731622504,
+            "mode": 448
+          }
+        },
+        "cache_bytes": 179512848
+      },
+      "runtime_first_use": {
+        "seconds": 0.343955,
+        "stdout": "PDF runtime initialized successfully",
+        "cache_files": {
+          "shared/096fb67a2b85f3c866e9cb3e965b27c2c10b977315f4d3d7f095674be35091c1/hack-italic.ttf": {
+            "bytes": 316156,
+            "mtime_ns": 1792314085933958454,
+            "mode": 384
+          },
+          "shared/7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21/noto-symbols2.ttf": {
+            "bytes": 1233128,
+            "mtime_ns": 1792314085908639387,
+            "mode": 384
+          },
+          "shared/5bbf531eff7f8a0c2559c9a0656718e2828a012a9b1f60b5f54006d59a4de8d4/hack-bold.ttf": {
+            "bytes": 317628,
+            "mtime_ns": 1792314085926875155,
+            "mode": 384
+          },
+          "shared/de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551/noto-emoji.ttf": {
+            "bytes": 1982596,
+            "mtime_ns": 1792314085880367651,
+            "mode": 384
+          },
+          "shared/64f74a079700b7dfe128551a1e28875d5ba980971e55f5e0f0596e37bdc6a6bc/hack-bold-italic.ttf": {
+            "bytes": 322288,
+            "mtime_ns": 1792314085941003544,
+            "mode": 384
+          },
+          "shared/bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d/noto-sans.ttf": {
+            "bytes": 2049096,
+            "mtime_ns": 1792314085864447426,
+            "mode": 384
+          },
+          "shared/15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125/hack-regular.ttf": {
+            "bytes": 309408,
+            "mtime_ns": 1792314085920605274,
+            "mode": 384
+          },
+          "shared/f7e7e04b4a24b6c78893d50cbfd2b2f6cae49617ab047bfef668d252adb128f7/noto-symbols.ttf": {
+            "bytes": 372684,
+            "mtime_ns": 1792314085888529201,
+            "mode": 384
+          },
+          "shared/3f495fe933c06786e4d5f6d86b8ee70b6753a68ee3b9d87528726de0f6e2c47d/noto-math.ttf": {
+            "bytes": 1015396,
+            "mtime_ns": 1792314085898062002,
+            "mode": 384
+          },
+          "shared/7a0efd8dfb59a7f5a8c5a00bb34192f5a8a4ac147b36ccc508a9cf3e2868345f/file-icons.ttf": {
+            "bytes": 47720,
+            "mtime_ns": 1792314085946653175,
+            "mode": 384
+          },
+          "shared/7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88/noto-hebrew.ttf": {
+            "bytes": 112640,
+            "mtime_ns": 1792314085914910769,
+            "mode": 384
+          },
+          "aarch64-apple-darwin/11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b/libpdfium.dylib": {
+            "bytes": 5992752,
+            "mtime_ns": 1792314085979107083,
+            "mode": 384
+          },
+          "aarch64-apple-darwin/9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6/tinymist": {
+            "bytes": 58697344,
+            "mtime_ns": 1792314082984468969,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619/texlab": {
+            "bytes": 13880656,
+            "mtime_ns": 1792314084426528241,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f/tectonic": {
+            "bytes": 50439584,
+            "mtime_ns": 1792314083852058959,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e/tex-fmt": {
+            "bytes": 2832256,
+            "mtime_ns": 1792314084952810225,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f/typst": {
+            "bytes": 45047632,
+            "mtime_ns": 1792314082223276084,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401/badness": {
+            "bytes": 8615376,
+            "mtime_ns": 1792314084731622504,
+            "mode": 448
+          }
+        },
+        "cache_bytes": 193584340
+      },
+      "runtime_cache_hit": {
+        "seconds": 0.053013,
+        "stdout": "PDF runtime initialized successfully",
+        "cache_files": {
+          "shared/096fb67a2b85f3c866e9cb3e965b27c2c10b977315f4d3d7f095674be35091c1/hack-italic.ttf": {
+            "bytes": 316156,
+            "mtime_ns": 1792314085933958454,
+            "mode": 384
+          },
+          "shared/7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21/noto-symbols2.ttf": {
+            "bytes": 1233128,
+            "mtime_ns": 1792314085908639387,
+            "mode": 384
+          },
+          "shared/5bbf531eff7f8a0c2559c9a0656718e2828a012a9b1f60b5f54006d59a4de8d4/hack-bold.ttf": {
+            "bytes": 317628,
+            "mtime_ns": 1792314085926875155,
+            "mode": 384
+          },
+          "shared/de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551/noto-emoji.ttf": {
+            "bytes": 1982596,
+            "mtime_ns": 1792314085880367651,
+            "mode": 384
+          },
+          "shared/64f74a079700b7dfe128551a1e28875d5ba980971e55f5e0f0596e37bdc6a6bc/hack-bold-italic.ttf": {
+            "bytes": 322288,
+            "mtime_ns": 1792314085941003544,
+            "mode": 384
+          },
+          "shared/bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d/noto-sans.ttf": {
+            "bytes": 2049096,
+            "mtime_ns": 1792314085864447426,
+            "mode": 384
+          },
+          "shared/15f55cc0c85a2988d2b4b3a8cdb5d77fdfbaf319e1bb5309d725db9818fb7125/hack-regular.ttf": {
+            "bytes": 309408,
+            "mtime_ns": 1792314085920605274,
+            "mode": 384
+          },
+          "shared/f7e7e04b4a24b6c78893d50cbfd2b2f6cae49617ab047bfef668d252adb128f7/noto-symbols.ttf": {
+            "bytes": 372684,
+            "mtime_ns": 1792314085888529201,
+            "mode": 384
+          },
+          "shared/3f495fe933c06786e4d5f6d86b8ee70b6753a68ee3b9d87528726de0f6e2c47d/noto-math.ttf": {
+            "bytes": 1015396,
+            "mtime_ns": 1792314085898062002,
+            "mode": 384
+          },
+          "shared/7a0efd8dfb59a7f5a8c5a00bb34192f5a8a4ac147b36ccc508a9cf3e2868345f/file-icons.ttf": {
+            "bytes": 47720,
+            "mtime_ns": 1792314085946653175,
+            "mode": 384
+          },
+          "shared/7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88/noto-hebrew.ttf": {
+            "bytes": 112640,
+            "mtime_ns": 1792314085914910769,
+            "mode": 384
+          },
+          "aarch64-apple-darwin/11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b/libpdfium.dylib": {
+            "bytes": 5992752,
+            "mtime_ns": 1792314085979107083,
+            "mode": 384
+          },
+          "aarch64-apple-darwin/9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6/tinymist": {
+            "bytes": 58697344,
+            "mtime_ns": 1792314082984468969,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619/texlab": {
+            "bytes": 13880656,
+            "mtime_ns": 1792314084426528241,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f/tectonic": {
+            "bytes": 50439584,
+            "mtime_ns": 1792314083852058959,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e/tex-fmt": {
+            "bytes": 2832256,
+            "mtime_ns": 1792314084952810225,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f/typst": {
+            "bytes": 45047632,
+            "mtime_ns": 1792314082223276084,
+            "mode": 448
+          },
+          "aarch64-apple-darwin/7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401/badness": {
+            "bytes": 8615376,
+            "mtime_ns": 1792314084731622504,
+            "mode": 448
+          }
+        },
+        "cache_bytes": 193584340
+      }
+    },
+    "app_version": "tiptoptyp 0.1.0 (82595500b2a8-dirty.1792313799)",
+    "linked_native_libraries": [
+      "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore (compatibility version 1.2.0, current version 1.11.0)",
+      "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics (compatibility version 64.0.0, current version 1889.2.7)",
+      "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 3208.0.0)",
+      "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices (compatibility version 1.0.0, current version 1226.0.0)",
+      "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (compatibility version 45.0.0, current version 2575.30.19)",
+      "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit (compatibility version 1.0.0, current version 620.1.16)",
+      "/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)",
+      "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)",
+      "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (compatibility version 300.0.0, current version 3208.0.0)",
+      "/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)",
+      "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices (compatibility version 1.0.0, current version 65.0.0)",
+      "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (compatibility version 1.2.0, current version 1.5.0)",
+      "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon (compatibility version 2.0.0, current version 170.0.0)",
+      "/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)",
+      "/System/Library/Frameworks/ColorSync.framework/Versions/A/ColorSync (compatibility version 1.0.0, current version 3775.0.0)"
+    ],
+    "native_cached_signatures_verified": [
+      "aarch64-apple-darwin/11b604088b93894b0be43ae6897de68cac63cd16e2dd65510c50fead8e5a5a3b/libpdfium.dylib",
+      "aarch64-apple-darwin/9da7e0e08d00c8a2b739d4c2e594bfd0e267c1d16174aa41b88508607fb9e2a6/tinymist",
+      "aarch64-apple-darwin/d6fdb5b40cab618a3a86e30a2a0f35a08057edb601f9b943c34a4f3c2e9bc619/texlab",
+      "aarch64-apple-darwin/4b74d7fe2a5e0aae2c30d9ae69c6a3fa5cbf5684270b4dafdfad1262b5f9791f/tectonic",
+      "aarch64-apple-darwin/49ea873fd39121e262c713341539cfcf2f7a82028bd2903e0d6cbf5c9bb3399e/tex-fmt",
+      "aarch64-apple-darwin/a4b1138cfa485cab3af03a5e4dd49703df4e613f058f3966d07ceee6af53b07f/typst",
+      "aarch64-apple-darwin/7e2c726f26aed76da4624a9d53de9fb08f2c430b67f8063baeb25705a36a7401/badness"
+    ],
+    "result": "passed",
+    "verification_summary": {
+      "cache_files": 18,
+      "native_tools": 6,
+      "native_pdfium_libraries": 1,
+      "shared_fonts": 11,
+      "handwriting_models_expanded": 0,
+      "cache_identity_size_sha256_modes": true,
+      "cache_hit_file_metadata_unchanged": true,
+      "native_payload_signatures_verified": 7,
+      "production_executable_unchanged": true,
+      "compressed_resources_unchanged": 27,
+      "external_zstd_dynamic_dependency": false
+    },
+    "timing_limitations": [
+      "Single verification run per phase; not a before/after startup performance comparison.",
+      "The wrapper hashes the compressed archives before CLI execution; first use means an empty application payload cache, not a cold operating-system filesystem cache.",
+      "The runtime-first-use phase follows tool initialization in the same scratch HOME; PDFium/fonts are new at that point while the six tool cache files already exist.",
+      "The temporary scratch executable and private HOME were removed after verification; original binary and staged resources were retained unchanged."
+    ]
+  },
+  "checks": {
+    "rust_tests": {
+      "passed": 2283,
+      "ignored": 63,
+      "failed": 0
+    },
+    "profiling_rust_tests": {
+      "passed": 2290,
+      "ignored": 63,
+      "failed": 0,
+      "note": "Before final Files visibility relocation; that change and its new semantic test passed the final default suite."
+    },
+    "xtask_tests": {
+      "passed": 32,
+      "ignored": 1,
+      "failed": 0
+    },
+    "explicit_universal_payload_probe": "passed",
+    "fmt_all": "passed",
+    "fmt_xtask": "passed",
+    "clippy_all_targets": "passed",
+    "clippy_all_targets_profiling": "passed",
+    "git_diff_check": "passed"
+  },
+  "native_journeys": [
+    {
+      "journey": "explorer_scroll",
+      "passed": true,
+      "binary_sha256": "9d8240c519cf26405e9d540659c02fe588dbd9cb84e7361d25f6d074ae513676",
+      "version": "tiptoptyp Dev 0.1.0 (82595500b2a8-dirty.1792313471)",
+      "result_file": ".tiptoptyp/desktop-ui-tests/run-4w_xar08/result.json",
+      "result_sha256": "ca02d8cdcb5f8969a5ea8b5f25db0d80666b8d78f26e9537d2133640e52ea022",
+      "evidence": "Native input and semantic state; framebuffers separately inspected."
+    },
+    {
+      "journey": "settings_search",
+      "passed": true,
+      "binary_sha256": "9d8240c519cf26405e9d540659c02fe588dbd9cb84e7361d25f6d074ae513676",
+      "version": "tiptoptyp Dev 0.1.0 (82595500b2a8-dirty.1792313471)",
+      "result_file": ".tiptoptyp/desktop-ui-tests/run-7akiomp_/result.json",
+      "result_sha256": "871f01ba56867794598535847a87e49570499fe423b53cef32bf21f773487b4f",
+      "evidence": "Native input and semantic state; framebuffers separately inspected."
+    },
+    {
+      "journey": "explorer_toggle",
+      "passed": true,
+      "binary_sha256": "9d8240c519cf26405e9d540659c02fe588dbd9cb84e7361d25f6d074ae513676",
+      "version": "tiptoptyp Dev 0.1.0 (82595500b2a8-dirty.1792313471)",
+      "result_file": ".tiptoptyp/desktop-ui-tests/run-h4wyg85v/result.json",
+      "result_sha256": "14d14a2cd0d01b898ce1eaca5bfa7e04700656aedb5cbca62376ed46b42d72a3",
+      "evidence": "Native input and semantic state; framebuffers separately inspected."
+    }
+  ],
+  "inspected_framebuffers": [
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/optimisation-2026-10-18/1792313807214-0002-main.png",
+      "sha256": "a721da45e2786290842336643b74e13fa4f6078aa408f75e90330ff9a6ca7458",
+      "scope": "Fresh viewport framebuffer; inspected text, layout and clipping. Does not composite native child preview."
+    },
+    {
+      "path": ".tiptoptyp/screenshots/agent-review/optimisation-2026-10-18/1792313860402-0002-settings.png",
+      "sha256": "49a516c3e8c27e3c920144b137f32c3a33f5025c761e37dad673add8ab4e8294",
+      "scope": "Fresh viewport framebuffer; inspected text, layout and clipping. Does not composite native child preview."
+    }
+  ],
+  "limitations": [
+    "Component measurements do not measure whole-app FPS or preview readiness.",
+    "Native startup is warm-filesystem, fresh-process/editor-state readiness, not screen presentation. Variability prevents a reliable overall startup speedup claim.",
+    "No concurrent builds during matched performance measurements. Native behavioral journeys ran separately from performance measurements; a production build was allowed concurrently with those semantic interaction checks.",
+    "Only the ARM production app ran; both architectures of the packaged helper tools were separately executed, with Intel via Rosetta. No sealed universal app or Intel host launch claim.",
+    "The 41.27 MiB saving is packaged resources only; matched thin ARM development executable grew 82,832 bytes.",
+    "No new per-frame timers, workers or idle repaints. Cache invalidation and bounded decoder work have deterministic regression coverage."
+  ]
+}

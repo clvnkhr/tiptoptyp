@@ -941,3 +941,88 @@ remained visible within aligned/clipped panel boundaries. Those PNGs are not
 whole-desktop compositor evidence. The debug native interaction pass and driver
 roundtrip observations do not establish optimized CPU latency, presentation
 rate or end-to-end resize latency.
+
+## Startup, Explorer filtering and packaged resources (18 October 2026)
+
+Fixed platform fonts now share retained immutable bytes across weights and font
+engines. Custom font selections still take reloadable file snapshots. Explorer
+search classifies each filesystem snapshot once per normalized query, then reuses
+its matching paths; collapsed Files sections skip classification, and closing or
+replacing a workspace releases the retained snapshot immediately.
+
+On macOS 14.6.1 arm64, Rust 1.98.1, matched release builds with
+`desktop-ui-tests`, one warmup and seven counterbalanced fresh-process pairs:
+font setup fell from **13.85 to 12.20 ms**, the first headless text frame from
+**4.95 to 3.26 ms**, and median process peak RSS from **130.4 to 105.0 MiB**.
+These are warm-filesystem component measurements; the RSS includes the whole
+test process. Fonts, face indices and weight coordinates remain byte-identical.
+The unchanged `theme::tests::startup_components_probe` reproduces this workload.
+
+The optimized Explorer probe uses 4,232 nodes, 136 visible rows and one matching
+leaf in each of eight deep branches. After seven warmups, 40 counterbalanced
+samples measured **12.78 ms** for the original recursive filtering/tree traversal,
+**1.14 ms** for a fresh classification and **0.43 ms** for cached traversal.
+This measures filtering and row traversal rather than painting or whole-app FPS.
+Run it with:
+
+```sh
+cargo test --release --bin tiptoptyp explorer_filter_cost_measurement -- --ignored --nocapture --test-threads=1
+```
+
+Bundled helpers, PDFium, fonts and handwriting models now use Zstandard level 19.
+The actual universal packer produced **150,561,488 bytes**, versus
+**193,835,842 bytes** for the corresponding gzip resources: **41.27 MiB / 22.33%**
+less. All 27 decoded payload sizes and SHA-256 hashes match the originals; no
+functionality or font/model data was removed. This is resource size, excluding
+the app executable, notices and filesystem allocation. Packaging does more
+compression work; first-use expansion remains lazy and cache hits reuse the same
+content-addressed files.
+
+Seven matched optimized decode-and-hash trials after equal warmup showed
+**15–44%** lower medians on the seven representative payloads. For example,
+PDFium fell from **28.69 to 24.34 ms**, Typst from **210.33 to 176.92 ms**, and
+Tinymist from **275.77 to 228.29 ms**. These resident-input measurements exclude
+filesystem publication and process startup. The initially evaluated pure Rust
+decoder was slower and was rejected; the shipped decoder is statically linked,
+limits its window to 8 MiB, and verifies output limits, frame completion and SHA.
+
+The explicit `staged_universal_payload_probe` exercises the actual packer and
+verifier. It verified every resource and both native architectures/signatures,
+ran ARM and Intel tool versions (Intel through Rosetta), and matched all shared
+fonts/models to their sources. It does not prove that a final universal app
+bundle was launched on an Intel Mac.
+
+Whole native startup was measured separately, without concurrent builds, with
+fresh settings/workspaces, a 1,400-point requested window, the default light
+theme, 100% UI scale on a 2× display, equal release flags, and counterbalanced
+launch order. The metric is process spawn to the first fresh editor-state
+snapshot, excluding preview readiness and screen presentation. After one warmup,
+seven empty-session pairs measured **428.27 → 428.65 ms**; five Typst pairs
+**416.02 → 411.25 ms**; five TeX pairs **405.39 → 391.85 ms**. These observations
+show no clear startup regression, but their variability does **not** establish
+a reliable whole-app startup improvement. Filesystem caches were not flushed.
+Editor state reported Tinymist partial for Typst and PDFium for TeX;
+preview-ready latency was not measured.
+
+The matched thin ARM development app grew **82,832 bytes**
+(63,872,272 → 63,955,104) with the native decoder and other changes. This is
+separate from the resource savings above; no universal executable-size or
+whole-bundle total is inferred from a thin development build.
+
+Final verification passed 2,283 Rust tests, 32 xtask tests, formatting and strict
+Clippy (including profiling). The profiling suite also passed before the final
+Files visibility relocation, which was then covered by a new semantic test and
+the complete default suite. Native `explorer_scroll`, `explorer_toggle` and
+`settings_search` journeys passed against the preserved final development build.
+Fresh Explorer and Settings framebuffers were inspected for text, layout and
+clipping; these do not composite native child previews. The actual ARM production
+binary passed empty-cache and cache-hit tool/runtime initialization, verified all
+18 expanded files and their private permissions, retained both models lazily,
+and left the executable and all 27 archives unchanged. Its decoder has no extra
+dynamic-library dependency.
+
+[Recorded measurements and validation](performance-results/startup-explorer-package-2026-10-18.json)
+include raw samples, binary/source hashes and environment metadata. Full local
+logs and preserved binaries are under
+`.tiptoptyp/profiles/optimisation-2026-10-18/`. The measurement adds no runtime
+profiling overhead, workers, timers or idle repaints.
