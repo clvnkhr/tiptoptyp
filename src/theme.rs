@@ -1574,6 +1574,8 @@ pub fn configure_styles(context: &egui::Context) {
         style.interaction.selectable_labels = false;
         style.spacing.item_spacing = METRICS.spacing.global_item;
         style.spacing.button_padding = METRICS.spacing.global_button_padding;
+        style.spacing.scroll.bar_outer_margin = 3.0;
+        style.spacing.scroll.floating_width = 4.0;
         style.visuals.menu_corner_radius = egui::CornerRadius::same(RADIUS.card);
         style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
         style

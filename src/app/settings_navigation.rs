@@ -52,8 +52,7 @@ pub(super) fn scrolling_rail(ui: &mut egui::Ui, selected: &mut SettingsSection) 
         let scroll = &mut ui.spacing_mut().scroll;
         scroll.floating = true;
         scroll.floating_allocated_width = 0.0;
-        scroll.bar_width = 3.0;
-        scroll.floating_width = 2.0;
+        scroll.bar_width = scroll.floating_width;
         scroll.content_margin = egui::Margin::ZERO;
         egui::ScrollArea::vertical()
             .id_salt("settings-category-rail")

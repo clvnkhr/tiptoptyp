@@ -1614,9 +1614,11 @@ fn paint(
         }
     }
     if grid.scroll_total > grid.rows.len() {
+        let scroll = ui.spacing().scroll;
+        let right = outer.right() - scroll.bar_outer_margin;
         let track = Rect::from_min_max(
-            Pos2::new(outer.right() - 4.0, rect.top()),
-            Pos2::new(outer.right() - 1.0, rect.bottom()),
+            Pos2::new(right - scroll.floating_width, rect.top()),
+            Pos2::new(right, rect.bottom()),
         );
         let total = grid.scroll_total as f32;
         let top = track.top() + track.height() * grid.scroll_offset as f32 / total;
