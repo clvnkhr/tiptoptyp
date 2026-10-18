@@ -632,8 +632,10 @@ struct PreservedTableOption {
     source: String,
 }
 
+mod math_table;
 mod table;
 mod tex_table;
+pub(crate) use math_table::{MathTable, MathTableKind, math_table_at, math_table_in_source};
 pub(crate) use table::{CellPosition, TableAxis, TableSelection};
 pub(crate) use tex_table::{TexTable, tex_table_at};
 

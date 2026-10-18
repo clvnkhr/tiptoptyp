@@ -19,6 +19,7 @@ use crate::document::{DocumentKey, DocumentSnapshot};
 pub(crate) enum TableTarget {
     Typst(crate::editor_features::EditableTable),
     Tex(crate::editor_features::TexTable),
+    TypstMath(crate::editor_features::MathTable),
 }
 impl TableTarget {
     pub(crate) fn at(
@@ -27,7 +28,11 @@ impl TableTarget {
         kind: crate::document::DocumentKind,
     ) -> Option<Self> {
         if kind.is_typst() {
-            crate::editor_features::editable_table_at(source, cursor).map(Self::Typst)
+            crate::editor_features::math_table_at(source, cursor)
+                .map(Self::TypstMath)
+                .or_else(|| {
+                    crate::editor_features::editable_table_at(source, cursor).map(Self::Typst)
+                })
         } else if kind == crate::document::DocumentKind::Tex {
             crate::editor_features::tex_table_at(source, cursor).map(Self::Tex)
         } else {
@@ -502,8 +507,12 @@ impl EditorDerivedData {
         self.table_at_cursor = if kind.is_typst() {
             self.prepare_syntax();
             let byte = self.char_to_byte(cursor);
-            crate::editor_features::editable_table_in_source(&self.parsed_source, byte)
-                .map(TableTarget::Typst)
+            crate::editor_features::math_table_in_source(&self.parsed_source, byte)
+                .map(TableTarget::TypstMath)
+                .or_else(|| {
+                    crate::editor_features::editable_table_in_source(&self.parsed_source, byte)
+                        .map(TableTarget::Typst)
+                })
         } else if kind == crate::document::DocumentKind::Tex {
             crate::editor_features::tex_table_at(&self.source_snapshot, cursor)
                 .map(TableTarget::Tex)
@@ -1336,6 +1345,35 @@ mod tests {
         data.prepare_table_at_cursor(4, crate::document::DocumentKind::Typst);
         assert!(data.cached_table_at_cursor(revision(2)).is_none());
         assert_eq!(data.syntax_rebuild_count(), 2);
+    }
+
+    #[test]
+    fn math_table_target_reuses_syntax_and_selects_the_nested_grid() {
+        let source = "#table(columns: 1, [$mat(x, alpha; beta, 0)$])";
+        let cursor = source[..source.find("alpha").unwrap()].chars().count();
+        let mut data = EditorDerivedData::default();
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        data.prepare_table_at_cursor(cursor, crate::document::DocumentKind::Typst);
+        assert!(matches!(
+            data.cached_table_at_cursor(revision(1)),
+            Some(TableTarget::TypstMath(_))
+        ));
+        assert_eq!(
+            TableTarget::at(source, cursor, crate::document::DocumentKind::Typst).as_ref(),
+            data.cached_table_at_cursor(revision(1))
+        );
+        let cached = data.cached_table_at_cursor(revision(1)).unwrap() as *const _;
+        for _ in 0..128 {
+            data.prepare_table_at_cursor(cursor, crate::document::DocumentKind::Typst);
+            assert_eq!(
+                cached,
+                data.cached_table_at_cursor(revision(1)).unwrap() as *const _
+            );
+        }
+        assert_eq!(data.syntax_rebuild_count(), 1);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(2), "$mat(..rows)$"));
+        data.prepare_table_at_cursor(5, crate::document::DocumentKind::Typst);
+        assert!(data.cached_table_at_cursor(revision(2)).is_none());
     }
 
     #[test]

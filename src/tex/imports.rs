@@ -29,6 +29,8 @@ impl Requirements {
                     | "gather*" | "gathered" | "multline" | "multline*" | "split" | "equation*"
                     | "matrix" | "pmatrix" | "bmatrix" | "Bmatrix" | "vmatrix" | "Vmatrix"
                     | "smallmatrix" | "cases" => "amsmath",
+                    "matrix*" | "pmatrix*" | "bmatrix*" | "Bmatrix*" | "vmatrix*" | "Vmatrix*"
+                    | "dcases" | "rcases" | "drcases" => "mathtools",
                     _ => "",
                 };
                 result.package(package);
@@ -110,6 +112,11 @@ impl Requirements {
         {
             return Self::default();
         }
+        // Handwriting metadata describes where a provider found a symbol;
+        // an optional package must not override an existing kernel command.
+        if symbol_packages().get(text).is_some_and(Option::is_none) {
+            return Self::default();
+        }
         if let Some(package) = package {
             let mut result = Self::default();
             result.package(package);
@@ -123,7 +130,7 @@ impl Requirements {
     }
     pub(crate) fn table(table: &crate::editor_features::TexTable, source: &str) -> Self {
         let mut result = Self::commands(source);
-        let spec = &table.column_spec;
+        let spec = table.column_spec_for_imports();
         // Ignore widths/options/modifier bodies: letters in a dimension or a
         // command are not column types. Repetitions contain another column spec.
         fn columns(spec: &str, result: &mut Requirements, depth: usize) {
@@ -180,26 +187,35 @@ impl Requirements {
 
 // Shared by both handwriting engines, snippets and generated source. Core
 // commands win when multiple providers share a command name.
-fn symbol_package(text: &str) -> Option<&'static str> {
+fn symbol_packages() -> &'static std::collections::BTreeMap<String, Option<String>> {
     static PACKAGES: std::sync::OnceLock<std::collections::BTreeMap<String, Option<String>>> =
         std::sync::OnceLock::new();
-    PACKAGES
-        .get_or_init(|| {
-            let symbols: Vec<crate::handwriting::Symbol> = serde_json::from_str(include_str!(
-                "../../assets/handwriting/detexify-symbols.json"
-            ))
-            .expect("symbol package catalogue");
-            let mut packages = std::collections::BTreeMap::new();
-            for symbol in symbols {
-                if let Some(tex) = symbol.tex {
-                    let entry = packages.entry(tex).or_insert(symbol.package.clone());
-                    if symbol.package.is_none() {
-                        *entry = None;
-                    }
+    PACKAGES.get_or_init(|| {
+        let symbols: Vec<crate::handwriting::Symbol> = serde_json::from_str(include_str!(
+            "../../assets/handwriting/detexify-symbols.json"
+        ))
+        .expect("symbol package catalogue");
+        let mut packages = std::collections::BTreeMap::new();
+        for symbol in symbols {
+            if let Some(tex) = symbol.tex {
+                let package = symbol.package.filter(|package| package != "latex2e");
+                let entry = packages.entry(tex).or_insert(package.clone());
+                if package.is_none() {
+                    *entry = None;
                 }
             }
-            packages
-        })
+        }
+        // fontmath.ltx in the LaTeX kernel defines these commands. The
+        // Detexify catalogue lists them under amssymb without a core duplicate.
+        // Source: latex-project.org/help/documentation/source2e.pdf, math symbols.
+        for command in [r"\geq", r"\leq", r"\neq", r"\gg", r"\ll"] {
+            packages.insert(command.into(), None);
+        }
+        packages
+    })
+}
+fn symbol_package(text: &str) -> Option<&'static str> {
+    symbol_packages()
         .get(text)
         .and_then(|package| package.as_deref())
 }
@@ -356,7 +372,7 @@ fn plan(source: &str, required: &Requirements) -> Result<Option<Import>, String>
     if packages.contains("xltabular") {
         packages.extend(["longtable".into(), "tabularx".into()]);
     }
-    if packages.contains("mathtools") {
+    if packages.contains("mathtools") || required.packages.contains("mathtools") {
         packages.insert("amsmath".into());
     }
     if packages.contains("hyperref") {
@@ -656,6 +672,48 @@ mod tests {
         .unwrap()
     }
     #[test]
+    fn mathematical_grid_imports_use_amsmath_or_mathtools_without_duplicates() {
+        for (environment, expected, arguments, body) in [
+            ("array", "", "{lc}", "x & y"),
+            ("pmatrix", "amsmath", "", r"\alpha & \beta"),
+            ("smallmatrix", "amsmath", "", "x & y"),
+            ("cases", "amsmath", "", r"x & \text{otherwise}"),
+            ("aligned", "amsmath", "[t]", "x &= y"),
+            ("gathered", "amsmath", "[b]", "x = y"),
+            ("pmatrix*", "mathtools", "[r]", r"x & \text{value}"),
+            ("dcases", "mathtools", "", r"x & \text{otherwise}"),
+            ("rcases", "mathtools", "", "x & y"),
+            ("drcases", "mathtools", "", "x & y"),
+        ] {
+            let source = format!(r"\begin{{{environment}}}{arguments}{body}\end{{{environment}}}");
+            let table = crate::editor_features::tex_table_at(&source, 1).expect(environment);
+            let edit = insert(&document(""), &source, Requirements::table(&table, &source));
+            let expected: Vec<String> = (!expected.is_empty())
+                .then(|| expected.into())
+                .into_iter()
+                .collect();
+            assert_eq!(edit.added, expected, "{environment}");
+            assert!(
+                plan(&edit.replacement, &Requirements::table(&table, &source))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let source = r"\begin{array}{>{\displaystyle}lc}x&y\end{array}";
+        let table = crate::editor_features::tex_table_at(source, 1).unwrap();
+        assert_eq!(
+            insert(&document(""), source, Requirements::table(&table, source)).added,
+            ["array"]
+        );
+        let source = r"\begin{pmatrix*}[>{\displaystyle}r]x&y\end{pmatrix*}";
+        let table = crate::editor_features::tex_table_at(source, 1).unwrap();
+        assert_eq!(
+            insert(&document(""), source, Requirements::table(&table, source)).added,
+            ["array", "mathtools"]
+        );
+    }
+
+    #[test]
     fn tex_imports_are_idempotent_preserve_options_comments_unicode_and_cursor() {
         let source = "\\documentclass{article}\r\n\\usepackage[dvipsnames]{xcolor} % keep this\r\n\\begin{document}\r\nPréface α\r\n\\end{document}\r\n";
         let text = "\\rowcolor{red} α";
@@ -852,6 +910,62 @@ mod tests {
                 > edit.replacement.find("\\usepackage{longtable}").unwrap()
         );
     }
+    #[test]
+    fn tex_core_math_commands_override_optional_provider_metadata() {
+        for command in [
+            r"\geq", r"\leq", r"\neq", r"\gg", r"\ll", r"\angle", r"\hbar",
+        ] {
+            assert!(
+                Requirements::fragment(command).packages.is_empty(),
+                "{command}"
+            );
+            assert!(
+                Requirements::symbol(command, None).packages.is_empty(),
+                "{command}"
+            );
+            assert!(
+                Requirements::symbol(command, Some("amssymb"))
+                    .packages
+                    .is_empty(),
+                "{command}"
+            );
+        }
+        // Real extension symbols and LaTeX's package-required placeholders still
+        // require their providers; merely being defined by the kernel is not enough.
+        for (command, package) in [
+            (r"\geqq", "amssymb"),
+            (r"\leqslant", "amssymb"),
+            (r"\Box", "wasysym"),
+        ] {
+            assert_eq!(
+                Requirements::symbol(command, Some(package)).packages,
+                BTreeSet::from([package.into()])
+            );
+            assert!(symbol_package(command).is_some());
+        }
+    }
+    #[test]
+    fn editing_math_cases_with_core_relations_does_not_change_the_preamble() {
+        let source = "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\\[f(u)=\\begin{cases}\nu^2 & u \\geq 0\\\\\n0 & u<0\n\\end{cases}\\]\n\\end{document}\n";
+        let mut table =
+            crate::editor_features::tex_table_at(source, source.find("u^2").unwrap()).unwrap();
+        table.cells.as_mut().unwrap()[0][0] = "u^3".into();
+        let edit = table.grid_source_edit().unwrap();
+        let required = Requirements::table(&table, &edit.replacement);
+        let edit = prepare_edit(
+            source,
+            edit.range.clone(),
+            &edit.replacement,
+            edit.range.start + edit.replacement.chars().count(),
+            &required,
+        )
+        .unwrap();
+        assert!(edit.added.is_empty());
+        let mut applied = source.to_owned();
+        applied.replace_range(edit.byte_range, &edit.replacement);
+        assert_eq!(applied, source.replacen("u^2", "u^3", 1));
+    }
+
     #[test]
     fn tex_imports_use_symbol_provider_metadata_and_core_commands_need_nothing() {
         assert_eq!(

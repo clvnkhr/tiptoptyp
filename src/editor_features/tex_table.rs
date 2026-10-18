@@ -15,6 +15,26 @@ pub(crate) enum TexTableEnvironment {
     Tblr,
     LongTblr,
     TallTblr,
+    Array,
+    Matrix,
+    Pmatrix,
+    Bmatrix,
+    BraceMatrix,
+    Vmatrix,
+    DoubleVmatrix,
+    SmallMatrix,
+    MatrixStar,
+    PmatrixStar,
+    BmatrixStar,
+    BraceMatrixStar,
+    VmatrixStar,
+    DoubleVmatrixStar,
+    Cases,
+    DCases,
+    RCases,
+    DRCases,
+    Aligned,
+    Gathered,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +58,26 @@ impl TexTableEnvironment {
             Self::Tblr => "tblr",
             Self::LongTblr => "longtblr",
             Self::TallTblr => "talltblr",
+            Self::Array => "array",
+            Self::Matrix => "matrix",
+            Self::Pmatrix => "pmatrix",
+            Self::Bmatrix => "bmatrix",
+            Self::BraceMatrix => "Bmatrix",
+            Self::Vmatrix => "vmatrix",
+            Self::DoubleVmatrix => "Vmatrix",
+            Self::SmallMatrix => "smallmatrix",
+            Self::MatrixStar => "matrix*",
+            Self::PmatrixStar => "pmatrix*",
+            Self::BmatrixStar => "bmatrix*",
+            Self::BraceMatrixStar => "Bmatrix*",
+            Self::VmatrixStar => "vmatrix*",
+            Self::DoubleVmatrixStar => "Vmatrix*",
+            Self::Cases => "cases",
+            Self::DCases => "dcases",
+            Self::RCases => "rcases",
+            Self::DRCases => "drcases",
+            Self::Aligned => "aligned",
+            Self::Gathered => "gathered",
         }
     }
     fn from_name(name: &str) -> Option<Self> {
@@ -53,8 +93,81 @@ impl TexTableEnvironment {
             "tblr" => Some(Self::Tblr),
             "longtblr" => Some(Self::LongTblr),
             "talltblr" => Some(Self::TallTblr),
+            "array" => Some(Self::Array),
+            "matrix" => Some(Self::Matrix),
+            "pmatrix" => Some(Self::Pmatrix),
+            "bmatrix" => Some(Self::Bmatrix),
+            "Bmatrix" => Some(Self::BraceMatrix),
+            "vmatrix" => Some(Self::Vmatrix),
+            "Vmatrix" => Some(Self::DoubleVmatrix),
+            "smallmatrix" => Some(Self::SmallMatrix),
+            "matrix*" => Some(Self::MatrixStar),
+            "pmatrix*" => Some(Self::PmatrixStar),
+            "bmatrix*" => Some(Self::BmatrixStar),
+            "Bmatrix*" => Some(Self::BraceMatrixStar),
+            "vmatrix*" => Some(Self::VmatrixStar),
+            "Vmatrix*" => Some(Self::DoubleVmatrixStar),
+            "cases" => Some(Self::Cases),
+            "dcases" => Some(Self::DCases),
+            "rcases" => Some(Self::RCases),
+            "drcases" => Some(Self::DRCases),
+            "aligned" => Some(Self::Aligned),
+            "gathered" => Some(Self::Gathered),
             _ => None,
         }
+    }
+    fn is_math(self) -> bool {
+        !matches!(
+            self,
+            Self::Tabular
+                | Self::TabularStar
+                | Self::TabularX
+                | Self::Tabulary
+                | Self::LongTable
+                | Self::XlTabular
+                | Self::NiceTabular
+                | Self::NiceTabularStar
+                | Self::Tblr
+                | Self::LongTblr
+                | Self::TallTblr
+        )
+    }
+    fn has_column_spec(self) -> bool {
+        !self.is_math() || self == Self::Array
+    }
+    fn is_star_matrix(self) -> bool {
+        matches!(
+            self,
+            Self::MatrixStar
+                | Self::PmatrixStar
+                | Self::BmatrixStar
+                | Self::BraceMatrixStar
+                | Self::VmatrixStar
+                | Self::DoubleVmatrixStar
+        )
+    }
+    fn uses_max_matrix_columns(self) -> bool {
+        matches!(
+            self,
+            Self::Matrix
+                | Self::Pmatrix
+                | Self::Bmatrix
+                | Self::BraceMatrix
+                | Self::Vmatrix
+                | Self::DoubleVmatrix
+        ) || self.is_star_matrix()
+    }
+    fn fixed_columns(self) -> Option<usize> {
+        match self {
+            Self::Cases | Self::DCases | Self::RCases | Self::DRCases => Some(2),
+            Self::Gathered => Some(1),
+            _ => None,
+        }
+    }
+    fn valid_columns(self, columns: usize) -> bool {
+        (1..=128).contains(&columns)
+            && self.fixed_columns().is_none_or(|fixed| columns == fixed)
+            && (self != Self::Aligned || columns.is_multiple_of(2))
     }
     fn dialect(self) -> ColumnDialect {
         match self {
@@ -74,7 +187,8 @@ pub(crate) struct TexTable {
     pub(crate) column_spec: String,
     pub(crate) cells: Option<Vec<Vec<String>>>,
     header: String,
-    spec_range: std::ops::Range<usize>,
+    spec_range: Option<std::ops::Range<usize>>,
+    grid_columns: usize,
     footer: String,
     body_range: std::ops::Range<usize>,
     rows: Vec<RowSource>,
@@ -100,7 +214,226 @@ struct CellSource {
 
 impl TexTable {
     pub(crate) fn columns(&self) -> Option<usize> {
-        column_count(&self.column_spec, self.environment.dialect(), 0)
+        if self.has_column_spec() {
+            column_count(&self.column_spec, self.environment.dialect(), 0)
+        } else {
+            Some(self.grid_columns)
+        }
+    }
+    pub(crate) fn is_math(&self) -> bool {
+        self.environment.is_math()
+    }
+    pub(crate) fn has_column_spec(&self) -> bool {
+        self.environment.has_column_spec()
+    }
+    pub(crate) fn column_spec_for_imports(&self) -> &str {
+        if self.has_column_spec() {
+            &self.column_spec
+        } else if self.environment.is_star_matrix() {
+            command(&self.header, 0)
+                .and_then(|(_, end)| group(&self.header, end, b'{', b'}'))
+                .and_then(|(_, end)| group(&self.header, end, b'[', b']'))
+                .map_or("", |(alignment, _)| alignment)
+        } else {
+            ""
+        }
+    }
+    pub(crate) fn fixed_math_columns(&self) -> Option<usize> {
+        self.environment.fixed_columns()
+    }
+    pub(crate) fn math_column_step(&self) -> usize {
+        if self.environment == TexTableEnvironment::Aligned {
+            2
+        } else {
+            1
+        }
+    }
+    pub(crate) fn math_environment_names() -> &'static [&'static str] {
+        &[
+            "array",
+            "matrix",
+            "pmatrix",
+            "bmatrix",
+            "Bmatrix",
+            "vmatrix",
+            "Vmatrix",
+            "smallmatrix",
+            "matrix*",
+            "pmatrix*",
+            "bmatrix*",
+            "Bmatrix*",
+            "vmatrix*",
+            "Vmatrix*",
+            "cases",
+            "dcases",
+            "rcases",
+            "drcases",
+            "aligned",
+            "gathered",
+        ]
+    }
+    /// Change the mathematical enclosure without entering or leaving its outer
+    /// math wrapper. Existing body bytes and supported optional arguments stay
+    /// exact; options with a different meaning are rejected rather than lost.
+    pub(crate) fn set_math_environment(&mut self, name: &str) -> Result<(), String> {
+        let environment = TexTableEnvironment::from_name(name)
+            .filter(|environment| environment.is_math())
+            .ok_or("Choose a supported mathematical grid environment")?;
+        if !self.is_math() {
+            return Err("Only mathematical grids can change their math enclosure".into());
+        }
+        if environment == self.environment {
+            return Ok(());
+        }
+        let columns = self
+            .columns()
+            .ok_or("Finish the column specification first")?;
+        if environment.uses_max_matrix_columns()
+            && columns > 10
+            && !self.environment.uses_max_matrix_columns()
+        {
+            return Err("AMS matrices default to 10 columns. Keep a wider grid as an array".into());
+        }
+        if !environment.valid_columns(columns) {
+            return Err(math_dimension_error(environment));
+        }
+        let current = self.render_replacement()?;
+        let table =
+            tex_table_at(&current, 1).ok_or("Finish the grid before changing its enclosure")?;
+        let (_, opening_end) = command(&table.header, 0).ok_or("Invalid grid opening")?;
+        let (opening_name, arguments) =
+            group(&table.header, opening_end, b'{', b'}').ok_or("Invalid grid opening")?;
+        let opening_range =
+            (opening_name.as_ptr() as usize - table.header.as_ptr() as usize)..arguments - 1;
+        let rest = &table.header[arguments..];
+        if group(rest, 0, b'[', b']').is_some() {
+            let compatible = (table.environment.is_star_matrix() && environment.is_star_matrix())
+                || (matches!(
+                    table.environment,
+                    TexTableEnvironment::Array
+                        | TexTableEnvironment::Aligned
+                        | TexTableEnvironment::Gathered
+                ) && matches!(
+                    environment,
+                    TexTableEnvironment::Array
+                        | TexTableEnvironment::Aligned
+                        | TexTableEnvironment::Gathered
+                ));
+            if !compatible {
+                return Err("This grid has positioning or alignment options; keep an environment with the same option type".into());
+            }
+        }
+        let mut header = table.header.clone();
+        if let Some(spec_range) = &table.spec_range {
+            if !environment.has_column_spec() {
+                if !table
+                    .column_spec
+                    .chars()
+                    .all(|c| c.is_whitespace() || matches!(c, 'l' | 'c' | 'r'))
+                {
+                    return Err("This array has column rules or formatting. Keep array, or simplify its columns to l, c and r before converting".into());
+                }
+                // Retain comments and trivia before and after the braces.
+                header.replace_range(spec_range.start - 1..spec_range.end + 1, "");
+            }
+        } else if environment.has_column_spec() {
+            header.push_str(&format!("{{{}}}", "c".repeat(columns)));
+        }
+        header.replace_range(opening_range, name);
+        let mut footer = table.footer.clone();
+        let (_, args) = command(&footer, 0).ok_or("Invalid grid ending")?;
+        let (closing_name, end) = group(&footer, args, b'{', b'}').ok_or("Invalid grid ending")?;
+        let range = (closing_name.as_ptr() as usize - footer.as_ptr() as usize)..end - 1;
+        footer.replace_range(range, name);
+        let candidate = format!("{header}{}{footer}", &current[table.body_range.clone()]);
+        if tex_table_at(&candidate, 1).is_none_or(|candidate| candidate.cells != table.cells) {
+            return Err("The new environment would reinterpret the first formula as an option. Keep this enclosure or group the formula first".into());
+        }
+        self.replace_math_source(&candidate)
+    }
+    /// Explicit resize; cell typing remains lossless and does not use this
+    /// formatter. Refuse layout directives that cannot safely move with a row.
+    pub(crate) fn resize_math_grid(&mut self, rows: usize, columns: usize) -> Result<(), String> {
+        if !self.is_math() {
+            return Err("Resize is available for mathematical grids".into());
+        }
+        if rows == 0
+            || rows.saturating_mul(columns) > 4096
+            || !self.environment.valid_columns(columns)
+        {
+            return Err(math_dimension_error(self.environment));
+        }
+        let old_columns = self
+            .columns()
+            .ok_or("Finish the column specification first")?;
+        if self.environment.uses_max_matrix_columns() && columns > 10 && columns > old_columns {
+            return Err("AMS matrices default to 10 columns. Use array for a wider grid".into());
+        }
+        if self.cells.as_ref().is_some_and(|cells| cells.len() == rows) && old_columns == columns {
+            return Ok(());
+        }
+        let current = self.render_replacement()?;
+        let table = tex_table_at(&current, 1).ok_or("Finish the grid before resizing it")?;
+        let body = &current[table.body_range.clone()];
+        let mut copied = 0;
+        for row in &table.rows {
+            for cell in &row.cells {
+                if cell.columns != 1
+                    || cell.requested_rows != 1
+                    || !simple_math_gap(&body[copied..cell.range.start])
+                {
+                    return Err("This grid has row rules, comments or merged cells. Edit its dimensions in the source to preserve them".into());
+                }
+                copied = cell.range.end;
+            }
+        }
+        if !simple_math_gap(&body[copied..]) {
+            return Err("This grid has row rules, comments or spacing options. Edit its dimensions in the source to preserve them".into());
+        }
+        let mut header = table.header.clone();
+        if table.has_column_spec() && columns != old_columns {
+            let mut alignments: Vec<char> = table
+                .column_spec
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            if !alignments.iter().all(|c| matches!(c, 'l' | 'c' | 'r')) {
+                return Err("Keep this array's column count, or simplify its column specification to l, c and r before resizing".into());
+            }
+            alignments.resize(columns, 'c');
+            header.replace_range(
+                table.spec_range.clone().expect("array spec"),
+                &alignments.into_iter().collect::<String>(),
+            );
+        }
+        let mut cells = table
+            .cells
+            .clone()
+            .ok_or("The grid has no editable cells")?;
+        cells.resize_with(rows, || vec![String::new(); columns]);
+        for row in &mut cells {
+            row.resize(columns, String::new());
+        }
+        let candidate = format!(
+            "{header}\n{} \\\\\n{}",
+            cells
+                .iter()
+                .map(|row| row.join(" & "))
+                .collect::<Vec<_>>()
+                .join(" \\\\\n"),
+            table.footer
+        );
+        self.replace_math_source(&candidate)
+    }
+    fn replace_math_source(&mut self, source: &str) -> Result<(), String> {
+        let mut replacement = tex_table_at(source, 1)
+            .ok_or("The mathematical grid could not be represented safely")?;
+        if !replacement.is_math() || replacement.source_range != (0..source.chars().count()) {
+            return Err("Keep one complete mathematical grid".into());
+        }
+        replacement.source_range = self.source_range.clone();
+        *self = replacement;
+        Ok(())
     }
     /// Logical (rowspan, colspan), matching sampled table geometry. Covered
     /// coordinates have no independent cell and return (0, 0).
@@ -151,6 +484,9 @@ impl TexTable {
         .then_some(start..end)
     }
     pub(crate) fn set_column_spec(&mut self, spec: &str) -> Result<(), String> {
+        let spec_range = self.spec_range.clone().ok_or(
+            "This matrix infers its columns from the cells and has no column specification",
+        )?;
         let columns = column_count(spec, self.environment.dialect(), 0)
             .ok_or("Enter a supported column specification for this table")?;
         if self
@@ -163,7 +499,7 @@ impl TexTable {
             );
         }
         let mut header = self.header.clone();
-        header.replace_range(self.spec_range.clone(), spec);
+        header.replace_range(spec_range.clone(), spec);
         // Validate the complete header so a brace or alignment injection cannot
         // write outside the column specification.
         let wrapper = format!("{header}{}", self.footer);
@@ -173,7 +509,7 @@ impl TexTable {
             return Err("Enter one column specification without surrounding braces".into());
         }
         self.header = header;
-        self.spec_range.end = self.spec_range.start + spec.len();
+        self.spec_range = Some(spec_range.start..spec_range.start + spec.len());
         self.column_spec = spec.to_owned();
         Ok(())
     }
@@ -316,6 +652,9 @@ pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable>
                             .map_or(source.len(), |offset| end + offset + closing.len());
                         continue;
                     }
+                    if stack.len() >= 128 {
+                        break;
+                    }
                     stack.push((env.to_owned(), start, end));
                 } else {
                     let Some((opening, begin, args)) = stack.pop() else {
@@ -353,6 +692,9 @@ fn parse_table(
     end: usize,
     environment: TexTableEnvironment,
 ) -> Option<TexTable> {
+    if environment.is_math() && !environment.has_column_spec() {
+        return parse_math_table(source, begin, args, close, end, environment);
+    }
     // xltabular's position is before its width. The other width-taking
     // environments put position after width. NiceTabular additionally accepts
     // package options after the column specification.
@@ -374,7 +716,9 @@ fn parse_table(
     }
     let mut outer_simple = true;
     if let Some((options, next)) = group(source, args, b'[', b']') {
-        outer_simple = simple_package_options(options, environment);
+        outer_simple = simple_package_options(options, environment)
+            && (environment != TexTableEnvironment::Array
+                || matches!(options.trim(), "t" | "c" | "b"));
         args = next;
     }
     let (inner, mut body_start) = group(source, args, b'{', b'}')?;
@@ -410,13 +754,179 @@ fn parse_table(
         column_spec: spec.to_owned(),
         cells: Some(cells),
         header: source.get(begin..body_start)?.to_owned(),
-        spec_range: (spec_start - begin)..(spec_start - begin + spec.len()),
+        spec_range: Some((spec_start - begin)..(spec_start - begin + spec.len())),
+        grid_columns: columns?,
         footer: source.get(close..end)?.to_owned(),
         body_range: (body_start - begin)..(close - begin),
         rows,
         spans,
         owners,
     })
+}
+
+fn math_dimension_error(environment: TexTableEnvironment) -> String {
+    match environment.fixed_columns() {
+        Some(2) => "Cases need exactly two columns: expression and condition".into(),
+        Some(1) => "Gathered equations need exactly one column".into(),
+        _ if environment == TexTableEnvironment::Aligned =>
+            "Aligned equations need an even number of columns (left/right pairs), up to 128, and at most 4,096 cells".into(),
+        _ => "Use 1–128 columns and at most 4,096 mathematical cells".into(),
+    }
+}
+fn simple_math_gap(gap: &str) -> bool {
+    gap.bytes()
+        .all(|byte| byte.is_ascii_whitespace() || matches!(byte, b'&' | b'\\'))
+}
+fn parse_math_table(
+    source: &str,
+    begin: usize,
+    mut body_start: usize,
+    close: usize,
+    end: usize,
+    environment: TexTableEnvironment,
+) -> Option<TexTable> {
+    if environment.is_star_matrix() {
+        if let Some((alignment, next)) = group(source, body_start, b'[', b']') {
+            if column_count(alignment, ColumnDialect::Array, 0) != Some(1) {
+                return None;
+            }
+            body_start = next;
+        }
+    } else if matches!(
+        environment,
+        TexTableEnvironment::Aligned | TexTableEnvironment::Gathered
+    ) && let Some((position, next)) = group(source, body_start, b'[', b']')
+    {
+        if !matches!(position.trim(), "t" | "c" | "b") {
+            return None;
+        }
+        body_start = next;
+    }
+    let body = source.get(body_start..close)?;
+    let inferred = inferred_math_columns(body)?;
+    let columns = match environment {
+        TexTableEnvironment::Aligned => inferred.next_multiple_of(2),
+        _ => environment.fixed_columns().unwrap_or(inferred),
+    };
+    if !environment.valid_columns(columns) {
+        return None;
+    }
+    let (cells, rows) = split_rows(body, columns)?;
+    let spans = cell_spans(&cells, &rows, columns);
+    let owners = cell_owners(&spans);
+    Some(TexTable {
+        source_range: byte_range_to_char(source, begin..end),
+        source: source.get(begin..end)?.to_owned(),
+        environment,
+        packages: packages(source),
+        column_spec: String::new(),
+        cells: Some(cells),
+        header: source.get(begin..body_start)?.to_owned(),
+        spec_range: None,
+        grid_columns: columns,
+        footer: source.get(close..end)?.to_owned(),
+        body_range: (body_start - begin)..(close - begin),
+        rows,
+        spans,
+        owners,
+    })
+}
+/// One bounded scan determines inferred widths, then the ordinary lossless row
+/// parser builds the grid. Nested environments own their separators, including
+/// nested matrices that are not enclosed in a TeX brace group.
+fn inferred_math_columns(body: &str) -> Option<usize> {
+    let mut columns = 1usize;
+    let mut maximum = 1usize;
+    let mut rows = 1usize;
+    let mut depth = 0usize;
+    let mut math = false;
+    let mut i = 0;
+    while i < body.len() {
+        match body.as_bytes()[i] {
+            b'%' => i = skip_comment(body, i),
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                i += 1;
+            }
+            b'$' => {
+                math = !math;
+                i += 1;
+            }
+            b'&' if depth == 0 && !math => {
+                columns += 1;
+                maximum = maximum.max(columns);
+                if maximum > 128 || maximum.saturating_mul(rows) > 4096 {
+                    return None;
+                }
+                i += 1;
+            }
+            b'\\' => {
+                let (name, end) = command(body, i)?;
+                if name == "verb" {
+                    i = skip_verb(body, end);
+                } else if name == "begin" {
+                    i = skip_environment(body, i)?;
+                } else if depth == 0 && !math && matches!(name, "\\" | "tabularnewline") {
+                    rows += 1;
+                    // A trailing terminator does not add a logical row.
+                    if rows > 4097 {
+                        return None;
+                    }
+                    columns = 1;
+                    i = end;
+                    if body.as_bytes().get(i) == Some(&b'*') {
+                        i += 1;
+                    }
+                    if let Some((_, next)) = group(body, i, b'[', b']') {
+                        i = next;
+                    }
+                } else {
+                    i = end;
+                }
+            }
+            _ => i = next_char(body, i),
+        }
+    }
+    (depth == 0 && !math).then_some(maximum)
+}
+fn skip_environment(source: &str, start: usize) -> Option<usize> {
+    let (name, args) = command(source, start)?;
+    if name != "begin" {
+        return None;
+    }
+    let (name, mut i) = group(source, args, b'{', b'}')?;
+    let mut stack = vec![name];
+    while i < source.len() {
+        match source.as_bytes()[i] {
+            b'%' => i = skip_comment(source, i),
+            b'\\' => {
+                let (command_name, end) = command(source, i)?;
+                i = end;
+                if command_name == "verb" {
+                    i = skip_verb(source, i);
+                } else if matches!(command_name, "begin" | "end") {
+                    let (name, next) = group(source, i, b'{', b'}')?;
+                    i = next;
+                    if command_name == "begin" {
+                        if stack.len() >= 128 {
+                            return None;
+                        }
+                        stack.push(name);
+                    } else if stack.pop()? != name {
+                        return None;
+                    } else if stack.is_empty() {
+                        return Some(i);
+                    }
+                }
+            }
+            _ => i = next_char(source, i),
+        }
+    }
+    None
 }
 
 /// Key/value specifications can contain nested commas, comments and escaped
@@ -592,7 +1102,11 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                     i = skip_verb(body, end);
                     continue;
                 }
-                if depth == 0 && name == "begin" {
+                if name == "begin" {
+                    i = skip_environment(body, i)?;
+                    continue;
+                }
+                if name == "end" {
                     return None;
                 }
                 if depth == 0 && !math && matches!(name, "\\" | "tabularnewline") {
@@ -1223,6 +1737,211 @@ mod tests {
             .count()
             + 1;
         tex_table_at(source, cursor).unwrap()
+    }
+
+    #[test]
+    fn mathematical_grids_are_lossless_and_have_real_cell_dimensions() {
+        for name in TexTable::math_environment_names() {
+            let (options, body, columns) = match *name {
+                "array" => (
+                    "[t]{rcl}",
+                    r"a_{ij} & = & \frac{1}{2}\\[2pt] b & = & \alpha",
+                    3,
+                ),
+                "aligned" => ("[b]", r"f(x) & = \frac{1}{2}\\ g(x) & = \alpha", 2),
+                "gathered" => ("[t]", r"f(x)=\frac{1}{2}\\g(x)=\alpha", 1),
+                name if name.ends_with('*') => ("[r]", r"-1 & \frac{1}{2}\\[2pt] \alpha & 4", 2),
+                "cases" | "dcases" | "rcases" | "drcases" => {
+                    ("", r"x^2 & \text{if $x>0$},\\ 0 & \text{otherwise}.", 2)
+                }
+                _ => ("", r"a_{ij} & \frac{1}{2}\\[2pt]\alpha & 4", 2),
+            };
+            let source = format!(
+                "é \\[\\begin{{{name}}}{options}\n % keep prefix\n{body}\n\\end{{{name}}}\\] after"
+            );
+            let cursor = source[..source.find(body).unwrap()].chars().count();
+            let mut table = tex_table_at(&source, cursor).expect(name);
+            assert!(table.is_math(), "{name}");
+            assert_eq!(table.has_column_spec(), *name == "array", "{name}");
+            assert_eq!(table.columns(), Some(columns), "{name}");
+            assert_eq!(table.cells.as_ref().unwrap().len(), 2, "{name}");
+            assert_eq!(
+                table.grid_source_edit().unwrap().replacement,
+                table.source,
+                "{name}"
+            );
+            let original = table.source.clone();
+            let old = table.cells.as_ref().unwrap()[0][0].clone();
+            table.cells.as_mut().unwrap()[0][0] = r"\beta_{ij}".into();
+            assert_eq!(
+                table.render_replacement().unwrap(),
+                original.replacen(&old, r"\beta_{ij}", 1),
+                "{name}"
+            );
+            if *name != "array" {
+                assert!(table.column_spec.is_empty());
+                assert!(table.set_column_spec("cc").is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn nested_math_grids_own_their_alignment_and_target_the_innermost_grid() {
+        let source =
+            r"\begin{pmatrix}\begin{matrix}a & b\\c & d\end{matrix} & z\\u & v\end{pmatrix}";
+        let outer = tex_table_at(source, 1).unwrap();
+        assert_eq!(outer.columns(), Some(2));
+        assert_eq!(outer.cells.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            outer.cells.as_ref().unwrap()[0][0],
+            r"\begin{matrix}a & b\\c & d\end{matrix}"
+        );
+        assert_eq!(outer.render_replacement().unwrap(), source);
+        let inner = tex_table_at(source, source.find("a & b").unwrap()).unwrap();
+        assert_eq!(inner.environment, TexTableEnvironment::Matrix);
+        assert_eq!(inner.cells.as_ref().unwrap()[0], ["a", "b"]);
+        let outer = r"\begin{tabular}{c}$\begin{bmatrix}a&b\\c&d\end{bmatrix}$\end{tabular}";
+        assert_eq!(tex_table_at(outer, 1).unwrap().columns(), Some(1));
+    }
+
+    #[test]
+    fn inferred_math_cells_preserve_implicit_tails_and_reject_alignment_injection() {
+        let source = r"\begin{pmatrix}a & b & c\\d\end{pmatrix}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        assert_eq!(table.cells.as_ref().unwrap()[1], ["d", "", ""]);
+        table.cells.as_mut().unwrap()[1][2] = r"\frac{x}{y}".into();
+        let changed = table.render_replacement().unwrap();
+        assert_eq!(tex_table_at(&changed, 1).unwrap().cells, table.cells);
+        assert!(!changed.contains("{ccc}"));
+        for injection in [r"a & b", r"a\\b", r"a\end{pmatrix} outside"] {
+            let mut bad = table.clone();
+            bad.cells.as_mut().unwrap()[0][0] = injection.into();
+            assert!(bad.grid_source_edit().is_err(), "{injection}");
+        }
+    }
+
+    #[test]
+    fn math_grid_resize_retains_formulas_and_never_writes_an_array_spec_into_matrices() {
+        for name in [
+            "array", "pmatrix", "pmatrix*", "aligned", "gathered", "cases",
+        ] {
+            let spec = if name == "array" {
+                "{lr}"
+            } else if name.ends_with('*') {
+                "[r]"
+            } else {
+                ""
+            };
+            let body = if name == "gathered" {
+                r"\alpha\\\beta"
+            } else {
+                r"\alpha & \frac{1}{2}\\\beta & x^2"
+            };
+            let source = format!(r"\begin{{{name}}}{spec}{body}\end{{{name}}}");
+            let mut table = tex_table_at(&source, 1).unwrap();
+            let columns = table.columns().unwrap();
+            table.resize_math_grid(2, columns).unwrap();
+            assert_eq!(table.render_replacement().unwrap(), source);
+            let new_columns = match name {
+                "gathered" => 1,
+                "cases" => 2,
+                _ => 4,
+            };
+            table.resize_math_grid(3, new_columns).unwrap();
+            assert_eq!(table.cells.as_ref().unwrap().len(), 3, "{name}");
+            assert_eq!(table.columns(), Some(new_columns), "{name}");
+            assert_eq!(table.cells.as_ref().unwrap()[0][0], r"\alpha");
+            let rendered = table.grid_source_edit().unwrap().replacement;
+            assert_eq!(tex_table_at(&rendered, 1).unwrap().cells, table.cells);
+            if name == "array" {
+                assert!(rendered.contains("{lrcc}"));
+            } else {
+                assert!(!rendered.contains("{cccc}"));
+            }
+            table
+                .resize_math_grid(1, if name == "gathered" { 1 } else { 2 })
+                .unwrap();
+            assert_eq!(table.cells.as_ref().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn math_grid_dimension_and_layout_errors_leave_the_draft_unchanged() {
+        for (source, rows, columns) in [
+            (r"\begin{cases}x&y\end{cases}", 3, 3),
+            (r"\begin{gathered}x\\y\end{gathered}", 3, 2),
+            (r"\begin{aligned}x&y\end{aligned}", 3, 3),
+            (r"\begin{pmatrix}x&y\end{pmatrix}", 1, 11),
+            (r"\begin{array}{|cc|}x&y\end{array}", 2, 3),
+            (r"\begin{pmatrix}x&y\\[2pt]z&w\end{pmatrix}", 3, 2),
+            ("\\begin{pmatrix}% do not lose me\nx&y\\end{pmatrix}", 2, 2),
+            (r"\begin{pmatrix}x&y\end{pmatrix}", usize::MAX, 128),
+        ] {
+            let mut table = tex_table_at(source, 1).unwrap();
+            let old = table.clone();
+            assert!(table.resize_math_grid(rows, columns).is_err(), "{source}");
+            assert_eq!(table, old, "{source}");
+        }
+        let mut table =
+            tex_table_at("\\begin{matrix}a % cell comment\n & b\\end{matrix}", 1).unwrap();
+        table.resize_math_grid(2, 2).unwrap();
+        assert!(
+            table
+                .render_replacement()
+                .unwrap()
+                .contains("% cell comment\n &")
+        );
+    }
+
+    #[test]
+    fn math_enclosure_conversion_preserves_math_wrappers_options_and_comments() {
+        let source = "prefix $\\begin {pmatrix} a & b\\\\ c & d\\end % keep\n{pmatrix}$ suffix";
+        let cursor = source.find(" a &").unwrap();
+        let mut table = tex_table_at(source, cursor).unwrap();
+        table.set_math_environment("bmatrix").unwrap();
+        let edit = table.grid_source_edit().unwrap();
+        let range = source.find("\\begin").unwrap()..source.rfind('$').unwrap();
+        assert_eq!(
+            edit.replacement,
+            source[range.clone()].replace("pmatrix", "bmatrix")
+        );
+        assert_eq!(edit.range, byte_range_to_char(source, range));
+        let source = "\\begin{array} % retain header\n{lr}a&b\\end{array}";
+        let mut table = tex_table_at(source, 1).unwrap();
+        table.set_math_environment("Bmatrix").unwrap();
+        assert!(
+            table
+                .render_replacement()
+                .unwrap()
+                .contains("% retain header\na&b")
+        );
+        table.set_math_environment("array").unwrap();
+        assert!(table.render_replacement().unwrap().contains("{cc}"));
+        let mut table = tex_table_at(r"\begin{pmatrix*}[r]a&b\end{pmatrix*}", 1).unwrap();
+        table.set_math_environment("bmatrix*").unwrap();
+        assert!(table.render_replacement().unwrap().contains("[r]"));
+        let old = table.clone();
+        assert!(table.set_math_environment("bmatrix").is_err());
+        assert_eq!(table, old);
+        let mut table = tex_table_at(r"\begin{matrix}[r]a & b\end{matrix}", 1).unwrap();
+        let old = table.clone();
+        assert!(table.set_math_environment("pmatrix*").is_err());
+        assert_eq!(table, old);
+    }
+
+    #[test]
+    fn malformed_math_options_nested_grids_and_oversized_widths_are_rejected() {
+        for source in [
+            r"\begin{pmatrix*}[cc]a&b\end{pmatrix*}",
+            r"\begin{aligned}[z]a&b\end{aligned}",
+            r"\begin{cases}a&b&c\end{cases}",
+            r"\begin{gathered}a&b\end{gathered}",
+            r"\begin{pmatrix}\begin{matrix}a&b\end{other}\end{pmatrix}",
+        ] {
+            assert!(tex_table_at(source, 1).is_none(), "{source}");
+        }
+        let source = format!(r"\begin{{matrix}}{}\end{{matrix}}", "a&".repeat(128));
+        assert!(tex_table_at(&source, 1).is_none());
     }
 
     #[test]

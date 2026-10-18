@@ -21,6 +21,7 @@ python3 scripts/test-desktop-ui.py --journey problems_focus
 python3 scripts/test-desktop-ui.py --journey preview_find
 python3 scripts/test-desktop-ui.py --journey tables
 python3 scripts/test-desktop-ui.py --journey arxiv_tables
+python3 scripts/test-desktop-ui.py --journey math_grids --capture-review
 python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey command_palette --capture-review
 python3 scripts/test-desktop-ui.py --journey preview_jump --capture-review
@@ -116,6 +117,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | preview_find | Both effective backends: preview Cmd+F opens and focuses the query without another click, subsequent Cmd+F and typing stay in that field, the source and preview palette stay unchanged; header dragging follows the full pointer displacement and holds a stationary pointer for at least 0.4 seconds and eight fresh frames without drift; a popped-out viewer also opens its hidden controls with Cmd+F |
 | tables | Real Typst and named TeX workbenches: cell Cmd+A/typing changes only the draft, Cancel preserves source, Apply updates once with original column widths/rules or TeX placement/row height, and Undo/Redo restores exact source; whole-generated Typst and dynamic-column TeX tables are absent from a fresh source context menu; invalid drafts disable Apply and are repaired in the same grid cell. Both languages also exercise a compact minimum-size 36-row grid with long keyboard-edited cell text, real wheel scrolling and fixed Apply/Cancel footer; Typst verifies Tab moves to the next cell. Optional fresh table framebuffer for separate visual inspection |
 | arxiv_tables | Opens private copies of three attributed arXiv TeX excerpts through native Open and detects each table with the source context menu. Edits grid cells in both SciPy tables and the merged/format-rich Platonic metric table; the latter retains its complete cell wrappers and citation. Cancel preserves the complete original; Apply changes only the chosen literal, including all surrounding whitespace, rules, macros and preamble, and one Undo restores the exact file. Optional fresh table framebuffers for separate visual inspection |
+| math_grids | Opens private copies of the checked-in TeX and Typst math fixtures. Edits array, pmatrix, cases, mat and vec grids through the native context menu. Formula fields remain editable, keep math syntax without extra wrappers, and do not start compiler sampling. Cancel preserves the file; Apply changes only the chosen formula and one Undo restores the exact source. A matrix row-count control adds a third zero-filled row and applies/undoes exact math syntax |
 | preview_jump | Right-click source → Reveal in Preview and preview → Reveal in Source in TeX/PDFium and both Tinymist modes, including a detached Tinymist preview; original clicked positions survive moving to the menu, right-click alone does not navigate, source focus returns after inverse navigation, a visible destination pulse is centered on the mapped page/caret and retires without reappearing; native Settings edits apply a 1500ms/150% effect, source and preview Off controls independently suppress only their cue while navigation/focus still work, both settings restore afterwards, and source files stay unchanged |
 | command_palette | Cmd+Shift+P focuses palette search; an unmatched query cannot execute, mixed/lowercase queries return identical actions, Up/Down select exactly one enabled row, Enter and a row click each toggle wrapping once, and Escape/outside clicks preserve source and pending commands. A private real terminal retains keyboard ownership through cancellation and command execution, Comfy Preview toggles exactly once from that terminal, and palette Find targets its query instead of source Find. Native Settings ignores the document palette shortcut. The standalone journey also closes the final clean tab, creates exactly one empty document through palette New, then reopens the unchanged launch fixture; aggregate runs preserve existing tabs. Optional fresh popup framebuffer for separate visual inspection |
 | terminal_find | Focused terminal Cmd+F searches a real isolated shell, including three case-insensitive matches separated by hundreds of scrolled-off lines; Cmd+G/Shift+Cmd+G and Enter/Shift+Enter step exactly once and wrap, button navigation reveals the match; Cmd+A changes only the query; grid Escape leaves search open, grid Cmd+F refocuses it, focused Cmd+F/Escape and one close click hide it; queries and matches stay separate between two shell panes; source stays unchanged |
@@ -357,6 +359,22 @@ whole-file Apply and Undo. Exact full-file fingerprints prove that an edit chang
 literal and preserves the rest of the excerpt. The fixture contracts also verify
 the attributed table hashes. This lane can run without the larger synthetic
 `tables` journey and does not require resolved bibliography or appendix references.
+
+The `math_grids` journey opens private copies of
+`scripts/fixtures/math-grid-editor.tex` and `.typ`. It checks six mathematical
+grids: TeX `array`, `pmatrix` and `cases`, and Typst `mat`, `vec` and `cases`.
+For each, the source context menu must offer the grid editor at a formula,
+and its kind, dimensions and complete cell fingerprints must match. Ordinary
+symbols, Greek names and fraction commands remain editable; they must not be
+mistaken for computed prose cells or trigger compiler samples. Each draft is
+cancelled once, then applied and undone. The draft fingerprint checks the raw
+formula without added math delimiters, quotations or content wrappers; exact
+whole-file checks also retain alignment options, matrix delimiters, whitespace,
+imports and surrounding equations. The Typst matrix also grows from two to three
+rows through its native row-count control; the new zero cells and complete
+structural source edit are checked before one exact Undo. Optional fresh child framebuffers can be
+inspected separately. The TeX fixture includes more matrix and alignment forms
+for manual inspection beyond the six native cases.
 
 The compact-grid cases first require the native Table editor to own focus,
 resize it to its 620×420-point minimum, and observe three stable native size

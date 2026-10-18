@@ -6,7 +6,7 @@ from pathlib import Path
 import shlex
 import time
 
-NEWEST_JOURNEYS = ("problems_focus", "preview_find", "tables", "arxiv_tables")
+NEWEST_JOURNEYS = ("problems_focus", "preview_find", "tables", "arxiv_tables", "math_grids")
 
 
 def arxiv_table_cases():

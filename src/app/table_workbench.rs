@@ -1,11 +1,12 @@
 //! One draft lifetime and Apply/Cancel pipeline for Typst and TeX tables.
 use super::*;
-use crate::editor_features::TexTable;
+use crate::editor_features::{MathTable, MathTableKind, TexTable};
 
 #[derive(Debug, Clone)]
 pub(super) enum TableEditorDialog {
     Typst(Box<TypstTableEditorDialog>),
     Tex(Box<TexDialog>),
+    Math(Box<MathDialog>),
 }
 #[derive(Debug, Clone)]
 pub(super) struct TexDialog {
@@ -16,7 +17,23 @@ pub(super) struct TexDialog {
     error: Option<String>,
     validation: Option<String>,
 }
+#[derive(Debug, Clone)]
+pub(super) struct MathDialog {
+    pub(super) table: MathTable,
+    original: String,
+    key: DocumentKey,
+    error: Option<String>,
+    validation: Option<String>,
+}
 impl TableEditorDialog {
+    pub(super) fn is_math(&self) -> bool {
+        match self {
+            Self::Math(_) => true,
+            Self::Tex(dialog) => dialog.table.is_math(),
+            Self::Typst(_) => false,
+        }
+    }
+
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn desktop_inspection(&self) -> serde_json::Value {
         let (rows, columns, valid, cells) = match self {
@@ -24,6 +41,12 @@ impl TableEditorDialog {
                 dialog.table.row_count(),
                 dialog.table.columns,
                 true,
+                &dialog.table.cells,
+            ),
+            Self::Math(dialog) => (
+                dialog.table.row_count(),
+                dialog.table.columns,
+                dialog.validation.is_none(),
                 &dialog.table.cells,
             ),
             Self::Tex(dialog) => {
@@ -46,6 +69,16 @@ impl TableEditorDialog {
             "rows": rows,
             "columns": columns,
             "valid": valid,
+            "math": self.is_math(),
+            "kind": match self {
+                Self::Typst(dialog) => dialog.table.kind.callee(),
+                Self::Tex(dialog) => dialog.table.environment.name(),
+                Self::Math(dialog) => match dialog.table.kind {
+                    MathTableKind::Matrix => "mat",
+                    MathTableKind::Vector => "vec",
+                    MathTableKind::Cases => "cases",
+                },
+            },
         })
     }
 
@@ -53,6 +86,7 @@ impl TableEditorDialog {
         match self {
             Self::Typst(dialog) => dialog.error = Some(error),
             Self::Tex(dialog) => dialog.error = Some(error),
+            Self::Math(dialog) => dialog.error = Some(error),
         }
     }
 }
@@ -80,6 +114,13 @@ impl EditorApp {
                 self.begin_table_editor(table);
                 return;
             }
+            TableTarget::TypstMath(table) => Some(TableEditorDialog::Math(Box::new(MathDialog {
+                original: table.source.clone(),
+                validation: table.source_edit().err().map(|error| error.to_string()),
+                table,
+                key,
+                error: None,
+            }))),
             TableTarget::Tex(table) => Some(TableEditorDialog::Tex(Box::new(TexDialog {
                 original: table.source.clone(),
                 column_spec: table.column_spec.clone(),
@@ -114,6 +155,19 @@ pub(super) fn prepare_source_edit(
 ) -> Result<PreparedTableSourceEdit, String> {
     let (expected_key, original, edit) = match dialog {
         TableEditorDialog::Typst(dialog) => return prepare_table_source_edit(source, key, dialog),
+        TableEditorDialog::Math(dialog) => {
+            if let Some(error) = &dialog.validation {
+                return Err(error.clone());
+            }
+            (
+                dialog.key,
+                dialog.original.as_str(),
+                dialog
+                    .table
+                    .source_edit()
+                    .map_err(|error| error.to_string()),
+            )
+        }
         TableEditorDialog::Tex(dialog) => {
             if let Some(error) = &dialog.validation {
                 return Err(error.clone());
@@ -175,6 +229,7 @@ pub(super) fn show(
     match dialog {
         TableEditorDialog::Typst(typst) => show_table_editor_ui(ui, typst, width, height, settings),
         TableEditorDialog::Tex(dialog) => show_tex(ui, dialog, height, settings),
+        TableEditorDialog::Math(dialog) => show_math(ui, dialog, height, settings),
     }
 }
 
@@ -251,14 +306,58 @@ fn show_tex(
         |ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(body));
             let locked = crate::table_sampling::view(ui).map_or(0, |view| view.locked.len());
+            let mut structural_error = None;
             ui.horizontal_wrapped(|ui| {
-                ui.strong(format!("TeX · {}", dialog.table.environment.name()));
-                if let Some(rows) = &dialog.table.cells {
-                    ui.weak(format!(
-                        "{} × {}",
-                        rows.len(),
-                        rows.first().map_or(0, Vec::len)
-                    ));
+                if dialog.table.is_math() {
+                    ui.strong("TeX");
+                    let mut environment = dialog.table.environment.name();
+                    ui.add_enabled_ui(locked == 0, |ui| {
+                        egui::ComboBox::from_id_salt("tex-math-environment")
+                            .selected_text(environment)
+                            .width(112.0)
+                            .show_ui(ui, |ui| {
+                                for &name in TexTable::math_environment_names() {
+                                    ui.selectable_value(&mut environment, name, name);
+                                }
+                            });
+                    });
+                    if environment != dialog.table.environment.name() {
+                        if let Err(error) = dialog.table.set_math_environment(environment) {
+                            structural_error = Some(error);
+                        } else {
+                            dialog.column_spec = dialog.table.column_spec.clone();
+                            dialog.validation = dialog.table.grid_source_edit().err();
+                            dialog.error = None;
+                        }
+                    }
+                    let mut rows = dialog.table.cells.as_ref().map_or(1, Vec::len);
+                    let mut columns = dialog.table.columns().unwrap_or(1);
+                    if math_dimensions(
+                        ui,
+                        &mut rows,
+                        &mut columns,
+                        128,
+                        dialog.table.fixed_math_columns().is_some(),
+                        dialog.table.math_column_step(),
+                        locked == 0,
+                    ) {
+                        if let Err(error) = dialog.table.resize_math_grid(rows, columns) {
+                            structural_error = Some(error);
+                        } else {
+                            dialog.column_spec = dialog.table.column_spec.clone();
+                            dialog.validation = dialog.table.grid_source_edit().err();
+                            dialog.error = None;
+                        }
+                    }
+                } else {
+                    ui.strong(format!("TeX · {}", dialog.table.environment.name()));
+                    if let Some(rows) = &dialog.table.cells {
+                        ui.weak(format!(
+                            "{} × {}",
+                            rows.len(),
+                            rows.first().map_or(0, Vec::len)
+                        ));
+                    }
                 }
                 if locked > 0 {
                     ui.weak(format!("{locked} locked"));
@@ -266,25 +365,289 @@ fn show_tex(
             });
             ui.separator();
             let mut column_spec_changed = false;
-            ui.horizontal(|ui| {
-                let label = ui.label("Columns");
-                let spec = ui
-                    .add_enabled(
-                        locked == 0,
-                        egui::TextEdit::singleline(&mut dialog.column_spec)
-                            .code_editor()
-                            .desired_width(ui.available_width()),
-                    )
-                    .labelled_by(label.id);
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("table.columns", &spec);
-                column_spec_changed = spec.changed();
-            });
+            if dialog.table.has_column_spec() {
+                ui.horizontal(|ui| {
+                    let label = ui.label("Columns");
+                    let spec = ui
+                        .add_enabled(
+                            locked == 0,
+                            egui::TextEdit::singleline(&mut dialog.column_spec)
+                                .code_editor()
+                                .desired_width(ui.available_width()),
+                        )
+                        .labelled_by(label.id);
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("table.columns", &spec);
+                    column_spec_changed = spec.changed();
+                });
+            }
             let cells_changed = tex_grid(ui, &mut dialog.table, settings);
             refresh_tex_grid_validation(dialog, column_spec_changed || cells_changed);
+            if let Some(error) = structural_error {
+                dialog.error = Some(error);
+            }
         },
     );
     footer(ui, footer_rect, &dialog.error, dialog.validation.as_ref())
+}
+
+fn math_dimensions(
+    ui: &mut egui::Ui,
+    rows: &mut usize,
+    columns: &mut usize,
+    max_columns: usize,
+    fixed_columns: bool,
+    column_step: usize,
+    enabled: bool,
+) -> bool {
+    let mut changed = false;
+    ui.add_enabled_ui(enabled, |ui| {
+        let row_label = ui.label("Rows");
+        let row = ui
+            .add(egui::DragValue::new(rows).range(1..=4096 / (*columns).max(1)))
+            .labelled_by(row_label.id);
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("table.rows", &row);
+        changed |= row.changed();
+        let column_label = ui.label("Columns");
+        let column = ui
+            .add_enabled(
+                !fixed_columns,
+                egui::DragValue::new(columns)
+                    .range(1..=max_columns.min(4096 / (*rows).max(1)))
+                    .speed(column_step as f64),
+            )
+            .labelled_by(column_label.id);
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("table.math_columns", &column);
+        changed |= column.changed();
+    });
+    changed
+}
+
+fn resize_typst_math(table: &MathTable, rows: usize, columns: usize) -> Result<MathTable, String> {
+    table.source_edit().map_err(|error| error.to_string())?;
+    if rows == 0 || columns == 0 || columns > 128 || rows.saturating_mul(columns) > 4096 {
+        return Err("The math editor supports up to 4,096 cells and 128 columns".into());
+    }
+    let mut next = table.clone();
+    for _ in next.row_count()..rows {
+        next.add_row();
+    }
+    for _ in rows..next.row_count() {
+        next.remove_row();
+    }
+    for _ in next.columns..columns {
+        next.add_column();
+    }
+    for _ in columns..next.columns {
+        next.remove_column();
+    }
+    if next.row_count() != rows || next.columns != columns {
+        return Err("These dimensions are not supported by this math grid".into());
+    }
+    next.source_edit().map_err(|error| error.to_string())?;
+    Ok(next)
+}
+
+const MATH_DELIMITERS: &[(&str, &str)] = &[
+    ("Default", ""),
+    ("( )", "("),
+    ("[ ]", "["),
+    ("{ }", "{"),
+    ("| |", "|"),
+    ("‖ ‖", "‖"),
+    ("None", "none"),
+];
+
+fn show_math(
+    ui: &mut egui::Ui,
+    dialog: &mut MathDialog,
+    height: f32,
+    settings: &AppSettings,
+) -> Option<TableEditorUiAction> {
+    let (body, footer_rect) = workbench_regions(ui, height);
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id_salt("typst-math-body")
+            .max_rect(body),
+        |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(body));
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(format!("Typst · {}", dialog.table.kind.label()));
+                let mut rows = dialog.table.row_count();
+                let mut columns = dialog.table.columns;
+                let maximum = 128;
+                if math_dimensions(
+                    ui,
+                    &mut rows,
+                    &mut columns,
+                    maximum,
+                    dialog.table.kind == MathTableKind::Vector,
+                    1,
+                    true,
+                ) {
+                    match resize_typst_math(&dialog.table, rows, columns) {
+                        Ok(next) => {
+                            dialog.table = next;
+                            dialog.error = None;
+                        }
+                        Err(error) => dialog.error = Some(error),
+                    }
+                }
+                if dialog.table.kind != MathTableKind::Cases {
+                    let delimiter = dialog.table.delimiter().unwrap_or_default();
+                    let label = MATH_DELIMITERS
+                        .iter()
+                        .find(|(_, value)| *value == delimiter)
+                        .map_or("Custom", |(label, _)| *label);
+                    egui::ComboBox::from_id_salt("math-delimiters")
+                        .selected_text(label)
+                        .width(72.0)
+                        .show_ui(ui, |ui| {
+                            for &(label, value) in MATH_DELIMITERS {
+                                if ui.selectable_label(value == delimiter, label).clicked() {
+                                    match dialog.table.set_delimiter(value) {
+                                        Ok(()) => dialog.error = None,
+                                        Err(error) => dialog.error = Some(error.to_string()),
+                                    }
+                                }
+                            }
+                        });
+                }
+            });
+            ui.separator();
+            if code_grid(ui, &mut dialog.table, settings) {
+                dialog.validation = dialog
+                    .table
+                    .source_edit()
+                    .err()
+                    .map(|error| error.to_string());
+                dialog.error = None;
+            }
+        },
+    );
+    footer(ui, footer_rect, &dialog.error, dialog.validation.as_ref())
+}
+
+trait CodeGridDraft {
+    fn columns_count(&self) -> usize;
+    fn cells(&self) -> &[Vec<String>];
+    fn cells_mut(&mut self) -> &mut [Vec<String>];
+    fn language(&self) -> &'static str;
+    fn is_math(&self) -> bool;
+    fn cell_span(&self, _: (usize, usize)) -> (usize, usize) {
+        (1, 1)
+    }
+    fn cell_owner(&self, position: (usize, usize)) -> (usize, usize) {
+        position
+    }
+    fn cell_is_covered(&self, position: (usize, usize)) -> bool {
+        self.cell_span(position) == (0, 0)
+    }
+    fn content_range(&self, (row, column): (usize, usize)) -> Option<std::ops::Range<usize>> {
+        Some(0..self.cells().get(row)?.get(column)?.len())
+    }
+    fn column_label(&self, column: usize) -> String {
+        if self.is_math() {
+            (column + 1).to_string()
+        } else {
+            table_editor::column_name(column)
+        }
+    }
+}
+impl CodeGridDraft for TexTable {
+    fn columns_count(&self) -> usize {
+        self.columns().unwrap_or(1).max(1)
+    }
+    fn cells(&self) -> &[Vec<String>] {
+        self.cells.as_deref().expect("admitted TeX grid")
+    }
+    fn cells_mut(&mut self) -> &mut [Vec<String>] {
+        self.cells.as_deref_mut().expect("admitted TeX grid")
+    }
+    fn language(&self) -> &'static str {
+        "tex"
+    }
+    fn is_math(&self) -> bool {
+        TexTable::is_math(self)
+    }
+    fn cell_span(&self, position: (usize, usize)) -> (usize, usize) {
+        TexTable::cell_span(self, position)
+    }
+    fn cell_owner(&self, position: (usize, usize)) -> (usize, usize) {
+        TexTable::cell_owner(self, position)
+    }
+    fn content_range(&self, position: (usize, usize)) -> Option<std::ops::Range<usize>> {
+        self.cell_content_range(position)
+    }
+    fn column_label(&self, column: usize) -> String {
+        if self.fixed_math_columns() == Some(2) {
+            if column == 0 {
+                "Value".into()
+            } else {
+                "Condition".into()
+            }
+        } else if self.is_math() {
+            (column + 1).to_string()
+        } else {
+            table_editor::column_name(column)
+        }
+    }
+}
+impl CodeGridDraft for MathTable {
+    fn columns_count(&self) -> usize {
+        self.columns
+    }
+    fn cells(&self) -> &[Vec<String>] {
+        &self.cells
+    }
+    fn cells_mut(&mut self) -> &mut [Vec<String>] {
+        &mut self.cells
+    }
+    fn language(&self) -> &'static str {
+        "typ"
+    }
+    fn is_math(&self) -> bool {
+        true
+    }
+    fn column_label(&self, column: usize) -> String {
+        match self.kind {
+            MathTableKind::Cases if column == 0 => "Value".into(),
+            MathTableKind::Cases => "Condition".into(),
+            MathTableKind::Vector => "Entry".into(),
+            MathTableKind::Matrix => (column + 1).to_string(),
+        }
+    }
+}
+
+fn math_cell_highlight(
+    ui: &egui::Ui,
+    id: egui::Id,
+    source: &str,
+    language: &str,
+    math: bool,
+    settings: &AppSettings,
+) -> egui::text::LayoutJob {
+    if !math {
+        return code_editor::highlight_job(ui, id, source, language, settings);
+    }
+    let wrapped = format!("${source}$");
+    let mut job = code_editor::highlight_job(ui, id, &wrapped, language, settings);
+    job.text = source.to_owned();
+    job.sections.retain_mut(|section| {
+        let start = section.byte_range.start.max(egui::text::ByteIndex(1));
+        let end = section
+            .byte_range
+            .end
+            .min(egui::text::ByteIndex(source.len() + 1));
+        if start >= end {
+            return false;
+        }
+        section.byte_range = start - 1..end - 1;
+        true
+    });
+    job
 }
 
 fn visible_tex_rows(viewport: Rect, row_count: usize) -> std::ops::Range<usize> {
@@ -298,14 +661,14 @@ fn visible_tex_rows(viewport: Rect, row_count: usize) -> std::ops::Range<usize> 
 }
 
 fn tex_grid_cells(
-    table: &TexTable,
+    table: &impl CodeGridDraft,
     viewport: Rect,
     cell_width: f32,
     focused: Option<(usize, usize)>,
 ) -> Vec<(usize, usize)> {
     use table_editor::ROW_HEADER;
-    let count = table.columns().unwrap_or_default();
-    let rows = table.cells.as_ref().map_or(0, Vec::len);
+    let count = table.columns_count();
+    let rows = table.cells().len();
     let first = ((viewport.left() - ROW_HEADER) / cell_width)
         .floor()
         .max(0.0) as usize;
@@ -374,14 +737,20 @@ impl egui::TextBuffer for CellContents<'_> {
 }
 
 fn tex_grid(ui: &mut egui::Ui, table: &mut TexTable, settings: &AppSettings) -> bool {
+    code_grid(ui, table, settings)
+}
+
+fn code_grid(ui: &mut egui::Ui, table: &mut impl CodeGridDraft, settings: &AppSettings) -> bool {
     use table_editor::{CELL_HEIGHT, HEADER_HEIGHT, ROW_HEADER};
-    let count = table.columns().unwrap_or(1).max(1);
-    let rows = table.cells.as_ref().map_or(0, Vec::len);
+    let count = table.columns_count();
+    let rows = table.cells().len();
+    let language = table.language();
+    let math = table.is_math();
     let cell_width = ((ui.available_width() - ROW_HEADER - 12.0) / count as f32).max(128.0);
     let width = ROW_HEADER + cell_width * count as f32;
     let cells_id = ui.make_persistent_id("tex-table-cell-editors");
     let focus_id = cells_id.with("focused-cell");
-    let focused = ui
+    let mut focused = ui
         .ctx()
         .data(|data| data.get_temp::<(usize, usize)>(focus_id))
         .filter(|&(r, c)| {
@@ -390,6 +759,38 @@ fn tex_grid(ui: &mut egui::Ui, table: &mut TexTable, settings: &AppSettings) -> 
                 && !table.cell_is_covered((r, c))
                 && ui.memory(|memory| memory.focused() == Some(cells_id.with((r, c))))
         });
+    let mut navigated = false;
+    if math && let Some((r, c)) = focused {
+        let direction = ui.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab) {
+                -1
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::Tab) {
+                1
+            } else {
+                0
+            }
+        });
+        if direction != 0 {
+            let total = rows * count;
+            let locked = crate::table_sampling::view(ui);
+            for step in 1..=total {
+                let index = ((r * count + c) as isize + direction * step as isize)
+                    .rem_euclid(total as isize) as usize;
+                let next = (index / count, index % count);
+                if !table.cell_is_covered(next)
+                    && !locked
+                        .as_ref()
+                        .is_some_and(|view| view.locked.contains_key(&next))
+                {
+                    focused = Some(next);
+                    navigated = true;
+                    ui.memory_mut(|memory| memory.request_focus(cells_id.with(next)));
+                    ui.ctx().data_mut(|data| data.insert_temp(focus_id, next));
+                    break;
+                }
+            }
+        }
+    }
     let mut changed = false;
     let output = egui::ScrollArea::both()
         .id_salt("tex-table-cells")
@@ -415,7 +816,7 @@ fn tex_grid(ui: &mut egui::Ui, table: &mut TexTable, settings: &AppSettings) -> 
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        table_editor::column_name(c),
+                        table.column_label(c),
                         small.clone(),
                         ui.visuals().weak_text_color(),
                     );
@@ -448,10 +849,13 @@ fn tex_grid(ui: &mut egui::Ui, table: &mut TexTable, settings: &AppSettings) -> 
                 ui.painter().rect_filled(rect, 0.0, fill);
                 ui.painter()
                     .rect_stroke(rect, 0.0, stroke, StrokeKind::Inside);
-                let content_range = table.cell_content_range((r, c)).unwrap_or_else(|| {
-                    0..table.cells.as_ref().expect("admitted TeX grid")[r][c].len()
-                });
-                let cell = &mut table.cells.as_mut().expect("admitted TeX grid")[r][c];
+                if navigated && focused == Some((r, c)) {
+                    ui.scroll_to_rect(rect, Some(Align::Center));
+                }
+                let content_range = table
+                    .content_range((r, c))
+                    .unwrap_or_else(|| 0..table.cells()[r][c].len());
+                let cell = &mut table.cells_mut()[r][c];
                 let id = cells_id.with((r, c));
                 let inner = rect.shrink2(Vec2::new(6.0, 5.0));
                 ui.scope_builder(egui::UiBuilder::new().id_salt(id).max_rect(inner), |ui| {
@@ -460,7 +864,7 @@ fn tex_grid(ui: &mut egui::Ui, table: &mut TexTable, settings: &AppSettings) -> 
                                         buffer: &dyn egui::TextBuffer,
                                         width: f32| {
                         let mut job =
-                            code_editor::highlight_job(ui, id, buffer.as_str(), "tex", settings);
+                            math_cell_highlight(ui, id, buffer.as_str(), language, math, settings);
                         job.wrap.max_width = width;
                         ui.fonts_mut(|fonts| fonts.layout_job(job))
                     };
@@ -1511,3 +1915,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "math_workbench_tests.rs"]
+mod math_tests;

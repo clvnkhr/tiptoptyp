@@ -305,9 +305,14 @@ impl EditorApp {
         let mut requested_action = None;
         let captures = self.captures.clone();
         let size = table_window_size(self.snapshot_scene);
+        let math = dialog.is_math();
         let spec = ChildViewSpec::persistent(
             "tiptoptyp-table-editor",
-            "tiptoptyp Table editor",
+            if math {
+                "tiptoptyp Math editor"
+            } else {
+                "tiptoptyp Table editor"
+            },
             size,
             [620.0, 420.0],
             "table-editor",
@@ -336,7 +341,11 @@ impl EditorApp {
                         #[cfg(target_os = "macos")]
                         theme::reserve_window_controls(ui);
                         crate::window_logo::show(ui, &captures);
-                        ui.strong("Table workbench");
+                        ui.strong(if math {
+                            "Math workbench"
+                        } else {
+                            "Table workbench"
+                        });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.weak("Unsaved draft");
                         });

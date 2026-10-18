@@ -1506,6 +1506,58 @@ class ArxivTableFixtureContract(unittest.TestCase):
         self.assertTrue(callable(NewestJourneys.arxiv_tables))
 
 
+
+class MathGridJourneyContract(unittest.TestCase):
+    def state_and_case(self):
+        from desktop_ui_math_grid_journeys import math_grid_fixtures, math_grid_fingerprint
+        case = math_grid_fixtures()[1]["cases"][0]
+        state = CompactTableGeometryContract().state()
+        state["document"].update(
+            table_draft={"rows": 2, "columns": 2, "valid": True, "math": True,
+                         "kind": "mat", "fingerprint": math_grid_fingerprint(case["cells"])},
+            table_samples={"pending": False, "failed": False, "locked": []})
+        return state, case
+
+    def test_fixture_lane_is_registered_and_uses_exact_edits_in_both_languages(self):
+        from desktop_ui_math_grid_journeys import math_grid_fixtures, MathGridJourneys
+        from desktop_ui_newest_journeys import NEWEST_JOURNEYS
+        self.assertIn("math_grids", NEWEST_JOURNEYS)
+        self.assertTrue(callable(runner.Journey.math_grids))
+        self.assertTrue(callable(MathGridJourneys.math_grids))
+        fixtures = math_grid_fixtures()
+        self.assertEqual([fixture["filename"] for fixture in fixtures],
+                         ["math-grid-editor.tex", "math-grid-editor.typ"])
+        self.assertEqual([[case["kind"] for case in fixture["cases"]] for fixture in fixtures],
+                         [["array", "pmatrix", "cases"], ["mat", "vec", "cases"]])
+        for fixture in fixtures:
+            for case in fixture["cases"]:
+                with self.subTest(fixture=fixture["filename"], kind=case["kind"]):
+                    self.assertNotEqual(case["applied"], fixture["source"])
+                    self.assertTrue(fixture["source"].splitlines()[case["line"]].lstrip()
+                                    .startswith(case["cells"][0][0]))
+
+    def test_metadata_and_raw_formula_fingerprint_must_identify_the_math_grid(self):
+        from desktop_ui_math_grid_journeys import assert_math_grid, math_grid_fingerprint
+        state, case = self.state_and_case()
+        assert_math_grid(state, case)
+        wrong_cells = [row.copy() for row in case["cells"]]
+        wrong_cells[0][0] = "$x$"
+        for change in ({"math": False}, {"kind": "table"}, {"rows": 3},
+                       {"fingerprint": math_grid_fingerprint(wrong_cells)}):
+            state, case = self.state_and_case()
+            state["document"]["table_draft"].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(AssertionError, "metadata/formulas"):
+                assert_math_grid(state, case)
+
+    def test_formula_sampling_or_readonly_locks_cannot_pass_as_math_editing(self):
+        from desktop_ui_math_grid_journeys import assert_math_grid
+        for change in ({"pending": True}, {"failed": True}, {"locked": [[0, 0]]}):
+            state, case = self.state_and_case()
+            state["document"]["table_samples"].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(AssertionError, "sampled or locked"):
+                assert_math_grid(state, case)
+
+
 class TableJourneyRecordingContract(unittest.TestCase):
     def test_record_details_cannot_collide_with_the_event_action_argument(self):
         import ast

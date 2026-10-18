@@ -1,0 +1,43 @@
+\documentclass{article}
+\usepackage{amsmath,mathtools}
+\begin{document}
+\section*{Math grid editor}
+\[
+\begin{array}[t]{rcl}
+  \frac{\alpha+1}{n} & = & b_n \\
+  \sum_{k=1}^{n} k & = & \frac{n(n+1)}{2}
+\end{array}
+\]
+\[
+\begin{pmatrix}
+  x_{11} & x_{12} \\
+  x_{21} & x_{22}
+\end{pmatrix}
+\]
+\[
+f(u)=\begin{cases}
+  u^2 & \text{if } u \geq 0 \\
+  -u & \text{otherwise}
+\end{cases}
+\]
+% Additional supported matrix and alignment forms for manual inspection.
+\[
+\begin{matrix}1 & 2\\3 & 4\end{matrix}
+\quad\begin{bmatrix}1 & 0\\0 & 1\end{bmatrix}
+\quad\begin{Bmatrix}a & b\\c & d\end{Bmatrix}
+\quad\begin{vmatrix}a & b\\c & d\end{vmatrix}
+\quad\begin{Vmatrix}a & b\\c & d\end{Vmatrix}
+\]
+Inline $\left(\begin{smallmatrix}1 & 0\\0 & 1\end{smallmatrix}\right)$.
+\[
+\begin{pmatrix*}[r]1 & -12\\123 & 4\end{pmatrix*}
+\quad\begin{dcases}t^2 & t>0\\0 & t\leq0\end{dcases}
+\]
+\[
+\begin{aligned}[t]
+  a+b &= c \\
+  d+e &= f
+\end{aligned}
+\quad\begin{gathered}a=b+c\\d=e+f\end{gathered}
+\]
+\end{document}

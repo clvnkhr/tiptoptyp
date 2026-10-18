@@ -142,6 +142,44 @@ Package syntax follows the maintainers' references for
 [siunitx](https://ctan.org/pkg/siunitx) and
 [array/dcolumn](https://ctan.org/pkg/latex-tools).
 
+## Mathematical grids
+
+**Edit Table…** also opens literal mathematical grids at the cursor. TeX supports
+`array`, `matrix`, `pmatrix`, `bmatrix`, `Bmatrix`, `vmatrix`, `Vmatrix`,
+`smallmatrix`, the starred mathtools matrix variants, `cases`, `dcases`, `rcases`,
+`drcases`, `aligned` and `gathered`. Typst supports math-mode `mat`, `vec` and
+`cases`, including nested calls. The innermost grid under the cursor is selected.
+
+The compact math workbench edits formulas directly with syntax highlighting.
+Do not add outer dollar signs or quote formula cells. Rows and columns use
+numeric indices; cases show Value/Condition headings. Tab and Shift+Tab move
+between formula cells. Apply/Cancel stay pinned while large grids scroll, and
+only visible cell widgets are created. Normal source locking and one-step Undo
+apply to these drafts as well.
+
+Use Rows/Columns to resize, the TeX environment selector to change enclosures,
+and the Typst delimiter selector for parentheses, brackets, braces, single or
+double bars, or none. Vectors keep one column, TeX cases keep two, gathered
+keeps one, and aligned requires paired columns. Arrays retain an editable
+column specification; inferred matrices never acquire a fake `{cc}` argument.
+AMS matrices normally allow ten columns; use an array for larger new grids.
+Missing TeX packages are managed by the existing import manager.
+
+No-op Apply and individual cell edits preserve comments, spacing, options,
+row separators, outer math delimiters and surrounding text. Intentional dimension
+changes may reformat the grid body. Complex TeX row directives that cannot be
+moved safely refuse resizing, while cell editing remains available. Typst
+augmentation dividers cannot be shrunk outside the new matrix dimensions.
+Generated/spread geometry and code-mode `#math.mat` array arguments are not
+exposed as an editable math grid. Standard mathematical names remain editable;
+custom TeX macros retain the table editor's existing sampled-cell protection.
+
+Syntax follows the [Typst math references](https://typst.app/docs/reference/math/),
+[AMS guide](https://mirrors.ctan.org/macros/latex/required/amsmath/amsldoc.pdf) and
+[mathtools guide](https://mirrors.ctan.org/macros/latex/contrib/mathtools/mathtools.pdf).
+The checked-in math-grid fixtures and `math_grids` native journey cover direct
+formula edits, Cancel, exact Apply/Undo, and matrix resizing in both languages.
+
 ## Markdown
 
 Import Markdown accepts one pasted GFM table with a header separator. The import
@@ -244,3 +282,19 @@ original source. Fresh light/dark workbench framebuffers were inspected, and the
 The checked-in grid review records build hashes and native evidence separately
 from viewport pixels. Visible-cell work remains bounded; no idle polling or
 additional sampling worker was introduced.
+
+On 18 October 2026, the mathematical-grid extension passed 2,309 Rust tests,
+32 xtask tests, 129 native-harness contract tests, formatting and strict Clippy.
+The `math_grids` journey passed six TeX/Typst grids with Cancel, exact
+Apply/Undo and matrix resizing; `arxiv_tables` also passed for the existing
+merged-cell editor. Fresh 620×420-point TeX/Typst math framebuffers were inspected
+in Light and Dark, including fitting controls, formula colours and the pinned
+footer. These are child viewport framebuffers, not composed desktop images.
+
+Actual compilers accepted 70 generated TeX grids and every offered Typst
+delimiter, plus resized matrices, vectors and cases. Native evidence and
+reviewed PNGs are retained under `.tiptoptyp/desktop-ui-tests/` and
+`.tiptoptyp/screenshots/agent-review/math-grids/`. The implementation introduces
+no dependencies, background polling, additional workers or idle repaint loop;
+source targeting is revision/caret cached, and a semantic regression bounds
+widget creation on a 400-row grid.
