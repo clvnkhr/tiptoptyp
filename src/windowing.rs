@@ -62,6 +62,12 @@ fn root_capture_needs_warmup(previous: UiSnapshotScene, next: UiSnapshotScene) -
     previous.viewport_target() != "main" && next.viewport_target() == "main"
 }
 
+fn finish_capture_pass(context: &egui::Context, close_requested: bool) {
+    if close_requested {
+        context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+    }
+}
+
 /// Application shell which keeps the eframe root editor and all additional
 /// document viewports in the same process and on the same event loop.
 pub(crate) struct AppShell {
@@ -144,34 +150,29 @@ impl AppShell {
         }
     }
 
-    fn advance_capture_batch(&mut self, context: &egui::Context) {
+    fn advance_capture_batch(&mut self, context: &egui::Context) -> bool {
         let Some(mut batch) = self.capture_batch.take() else {
-            return;
+            return false;
         };
         let Some(result) = self.captures.take_result(batch.active_request) else {
             self.capture_batch = Some(batch);
-            return;
+            return false;
         };
 
         if let Some(error) = result.error {
             self.primary
                 .borrow_mut()
                 .show_window_notice(format!("UI screenshot batch failed: {error}"));
-            if batch.close_when_finished {
-                context.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            return;
+            return batch.close_when_finished;
         }
 
         let Some(next) = batch.remaining.pop_front() else {
-            if batch.close_when_finished {
-                context.send_viewport_cmd(egui::ViewportCommand::Close);
-            } else {
+            if !batch.close_when_finished {
                 self.primary
                     .borrow_mut()
                     .show_window_notice("UI screenshot batch completed".to_owned());
             }
-            return;
+            return batch.close_when_finished;
         };
         if root_capture_needs_warmup(batch.active_scene, next.scene) {
             self.captures
@@ -187,6 +188,7 @@ impl AppShell {
         batch.active_scene = next.scene;
         self.capture_batch = Some(batch);
         context.request_repaint();
+        false
     }
 
     fn active_editor_mut(&self) -> RefMut<'_, EditorApp> {
@@ -801,7 +803,7 @@ impl eframe::App for AppShell {
         crate::performance::tick(ui.ctx(), || !self.captures.has_pending());
         let context = ui.ctx().clone();
         let profile_close_requested = crate::performance::take_no_window_request();
-        self.advance_capture_batch(&context);
+        let capture_close_requested = self.advance_capture_batch(&context);
         let primary_close_requested = context.input(|input| input.viewport().close_requested())
             || crate::window_host::close_requested(&context, egui::ViewportId::ROOT);
         if self.primary_visible {
@@ -842,6 +844,9 @@ impl eframe::App for AppShell {
         self.show_secondary_windows(&context);
         self.poll_process_close(&context);
         self.update_native_menu(&context);
+        // Capture completion owns shutdown only after every child viewport has
+        // finished painting, at the same boundary as a standalone screenshot.
+        finish_capture_pass(&context, capture_close_requested);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1576,6 +1581,100 @@ mod tests {
         }
 
         fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn capture_batch_terminal_result_waits_until_the_end_of_the_root_pass() {
+        for (failed, close_when_finished) in [(false, true), (true, true), (false, false)] {
+            let directory = tempfile::tempdir().unwrap();
+            let context = egui::Context::default();
+            let primary = EditorApp::dormant_for_tests(&context, directory.path().into());
+            let shared_settings = primary.settings_snapshot();
+            let (_, open_requests) = crate::open_requests::channel();
+            let (_, native_menu_commands) = crate::native_menu::channel();
+            let mut config =
+                crate::screenshot::CaptureConfig::for_working_directory(directory.path());
+            config.settle_frames = 0;
+            config.close_after_captures = true;
+            if failed {
+                config.output_directory = directory.path().join("blocked-output");
+                std::fs::write(&config.output_directory, "not a directory").unwrap();
+            }
+            let captures = CaptureController::new(config);
+            let step = UiCaptureStep {
+                theme: Default::default(),
+                scene: UiSnapshotScene::TableEditorTexMerged,
+            };
+            let request = captures.queue_step(&step).unwrap();
+            let mut output = context.run_ui(Default::default(), |ui| {
+                captures.end_viewport(ui.ctx(), "table-editor");
+            });
+            let user_data = output.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .find_map(|command| match command {
+                    egui::ViewportCommand::Screenshot(data) => Some(data.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            output.textures_delta.clear();
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::Screenshot {
+                viewport_id: egui::ViewportId::ROOT,
+                user_data,
+                image: std::sync::Arc::new(egui::ColorImage::filled([1, 1], egui::Color32::WHITE)),
+            });
+            let mut received = context.run_ui(input, |ui| {
+                captures.begin_viewport(ui.ctx(), "table-editor")
+            });
+            received.textures_delta.clear();
+            let mut shell = AppShell {
+                particle_renderer: crate::app::ParticleRenderer::for_context(&context),
+                primary: DocumentHost::new(primary),
+                closing: Default::default(),
+                secondary: Vec::new(),
+                active: ActiveSession::Primary,
+                next_session_id: FIRST_SECONDARY_SESSION_ID,
+                pending_windows: VecDeque::new(),
+                open_requests,
+                native_menu_commands,
+                captures,
+                capture_batch: Some(CaptureBatch {
+                    remaining: VecDeque::new(),
+                    active_request: request,
+                    active_scene: step.scene,
+                    close_when_finished,
+                }),
+                shared_settings,
+                launch_mode: LaunchMode::DeterministicCapture,
+                primary_visible: true,
+                quit_requested: false,
+            };
+            let mut close_requested = false;
+            let mut output = context.run_ui(Default::default(), |ui| {
+                close_requested = shell.advance_capture_batch(ui.ctx());
+            });
+            output.textures_delta.clear();
+            assert!(shell.capture_batch.is_none());
+            assert_eq!(close_requested, close_when_finished);
+            assert!(
+                !output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::Close),
+                "terminal capture intent must wait until child painting has finished; failed={failed}"
+            );
+            let mut output = context.run_ui(Default::default(), |ui| {
+                finish_capture_pass(ui.ctx(), close_requested);
+            });
+            output.textures_delta.clear();
+            assert_eq!(
+                output.viewport_output[&egui::ViewportId::ROOT]
+                    .commands
+                    .contains(&egui::ViewportCommand::Close),
+                close_when_finished,
+                "success and failure share the final root close boundary"
+            );
+        }
     }
 
     #[test]
