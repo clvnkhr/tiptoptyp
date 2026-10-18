@@ -231,7 +231,10 @@ class CachedEdgeWheelContract(unittest.TestCase):
                     "in_flight": None, "token": "image:23", "scale": 1,
                     "view_size": [558, 829]}},
                     "renderer": {"age_ms": 0, "value": {"ready": True,
-                        "scroll": [0, 0], "zoom": 1}},
+                        "scroll": [0, 0], "zoom": 1, "zoom_snapshot": {
+                            "enabled": True, "cached": True, "active": False,
+                            "capturing": False, "admitting": False,
+                            "handoff_pending": False, "request": None, "frame_ready": True}}},
                     "targets": {"preview.page": {"x": 300, "y": 400}}}
                 mutate = after if self.wheel_at is not None else baseline
                 if mutate:
@@ -281,6 +284,48 @@ class CachedEdgeWheelContract(unittest.TestCase):
                 session = self.run_journey(baseline=transient)
                 self.assertGreaterEqual(session.wheel_at, .45)
 
+    def test_native_idle_does_not_hide_the_prior_javascript_handoff(self):
+        # run-0hd6r980/event892: native was idle but the last JS observation
+        # still owned revision 25 and had its two-frame handoff pending.
+        def finishing(state, now):
+            if now < .4:
+                state["renderer"]["value"]["zoom_snapshot"].update(
+                    active=True, handoff_pending=True, request={"revision": 25})
+        session = self.run_journey(baseline=finishing)
+        self.assertGreaterEqual(session.wheel_at, .65)
+
+    def test_baseline_requires_explicit_quiet_javascript_snapshot(self):
+        invalid = {"enabled": False, "cached": False, "active": True,
+                   "capturing": True, "admitting": True, "handoff_pending": True,
+                   "request": {"revision": 25}, "frame_ready": False}
+        for missing in (False, True):
+            for field, value in invalid.items():
+                def transient(state, now):
+                    if .1 <= now < .2:
+                        snapshot = state["renderer"]["value"]["zoom_snapshot"]
+                        if missing:
+                            snapshot.pop(field)
+                        else:
+                            snapshot[field] = value
+                with self.subTest(missing=missing, field=field):
+                    self.assertGreaterEqual(self.run_journey(baseline=transient).wheel_at, .45)
+
+    def test_post_wheel_requires_explicit_idle_javascript_owner(self):
+        invalid = {"enabled": False, "cached": False, "active": True,
+                   "capturing": None, "admitting": True, "handoff_pending": True,
+                   "request": {"revision": 25}, "frame_ready": None}
+        for missing in (False, True):
+            for field, value in invalid.items():
+                def unfinished(state, now):
+                    snapshot = state["renderer"]["value"]["zoom_snapshot"]
+                    if missing:
+                        snapshot.pop(field)
+                    else:
+                        snapshot[field] = value
+                with self.subTest(missing=missing, field=field), self.assertRaisesRegex(
+                        AssertionError, "did not retain an idle top-edge preview"):
+                    self.run_journey(after=unfinished)
+
     def test_actual_cache_loss_or_replacement_after_idle_wheel_still_fails(self):
         for change in ({"cached": False}, {"token": "replacement:99"}):
             def lost(state, now):
@@ -317,6 +362,7 @@ class CachedEdgeWheelContract(unittest.TestCase):
         # while the same token remained usable and the ready renderer stayed at 0.
         def refreshing(state, now):
             state["document"]["preview_zoom_overlay"]["capturing"] = True
+            state["renderer"]["value"]["zoom_snapshot"]["frame_ready"] = False
         session = self.run_journey(after=refreshing)
         self.assertEqual(session.records[0][1]["before"]["token"], "image:23")
         self.assertEqual(session.records[0][1]["after"]["token"], "image:23")

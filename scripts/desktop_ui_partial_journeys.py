@@ -103,6 +103,19 @@ def project_source_point(value, point):
     return [value["paper_bounds"][0]+point["x"]*value["paper_scale"],y]
 
 
+def _zoom_snapshot_idle(value, *, allow_capture=False):
+    snapshot = value.get("zoom_snapshot")
+    if not isinstance(snapshot, dict):
+        return False
+    return (snapshot.get("enabled") is True and snapshot.get("cached") is True
+            and all(snapshot.get(field) is False
+                    for field in ("active", "admitting", "handoff_pending"))
+            and "request" in snapshot and snapshot["request"] is None
+            and type(snapshot.get("capturing")) is bool
+            and type(snapshot.get("frame_ready")) is bool
+            and (allow_capture or (not snapshot["capturing"] and snapshot["frame_ready"])))
+
+
 class PartialPreviewJourneys:
     def partial_preview_default(self):
         # Called only for this journey's fresh isolated app profile. The `all`
@@ -209,6 +222,9 @@ class PartialPreviewJourneys:
                         for field in ("pending", "in_flight"))
                 and isinstance(native.get("token"), str) and native["token"]
                 and renderer.get("age_ms", 1000) <= 500 and value.get("ready") is True
+                # Native completion can precede the last observed JS two-frame
+                # handoff. Both owners must be quiet before fixing the token.
+                and _zoom_snapshot_idle(value)
                 and isinstance(scroll, list) and len(scroll) == 2
                 and all(type(n) in (int, float) and math.isfinite(n) for n in scroll)
                 and 0 <= scroll[1] < 1)
@@ -248,6 +264,7 @@ class PartialPreviewJourneys:
                 or type(current.get("capturing")) is not bool
                 or type(age) not in (int, float) or not math.isfinite(age) or not 0 <= age <= 500
                 or value.get("ready") is not True
+                or not _zoom_snapshot_idle(value, allow_capture=True)
                 or not isinstance(scroll, list) or len(scroll) != 2
                 or any(type(n) not in (int, float) or not math.isfinite(n) for n in scroll)
                 or not 0 <= scroll[1] < 1):
