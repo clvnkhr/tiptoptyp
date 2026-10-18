@@ -257,6 +257,111 @@ rejects the profiling directory instead of silently producing no data.
 An existing `app-state/` directory is also rejected, so earlier preferences
 cannot leak into a new profiling session.
 
+## Editor action effects CPU probe
+
+```sh
+cargo test --release --bin tiptoptyp editor_effect_cpu_cost_probe -- --ignored --nocapture --test-threads=1
+```
+
+This bounded probe measures the production effects submission path with cached
+1,000- and 20,000-line editor galleys. It reports Off, enabled idle, particles,
+shake, flash, glow and all effects together. Fixtures use an 800 × 640 point
+viewport, a 760 × 600 effects clip, default egui dark visuals, monospace 14,
+scale 1, High particle density, 20 warmup frames and 180 measured frames. The
+logical clock runs at 120 Hz with one accepted typing action every three frames;
+particle styles cycle through all five choices. Exact emission counts and the
+256-particle bound are checked without wall-time assertions.
+
+Only effects marker creation/finish and `editor_particles::paint` are timed.
+The source buffer, cached galley and editor widget are prepared outside those
+scopes. Results include CPU state bookkeeping and paint/callback submission;
+they exclude text layout, CPU tessellation, graphics-driver calls, GPU execution,
+native compositing and end-to-end input latency. This headless probe does not
+establish a separate render thread or GPU timing. Report p50/p95 distributions
+rather than subtracting tiny independently measured means.
+
+Preserve the test executable and its source/build provenance for each revision,
+then run three or more interleaved before/after rounds with the same optimized
+profile and no concurrent builds. Retain complete output, fixture metadata,
+compiler and host details under the ignored `.tiptoptyp/profiles/` directory.
+The `typing_particles` desktop journey separately exercises actual keyboard
+inputs, per-action choices, particles-Off feedback, focus isolation and expiry.
+For a native CPU profile, attach the sampler to that journey's owned app PID
+and retain its binary hash, settings and workload phases; do not mix idle samples
+with the active burst phases or infer GPU cost from application CPU samples.
+
+## Editor effects audit (18 October 2026)
+
+Particle motion, drag, rotation and ageing run analytically in GPU shaders.
+The UI admits actions, expires bounded state and submits graphics commands;
+shake, flash and glow make small paint-only updates on egui's owner thread.
+Moving that paint data or its current GL context to an arbitrary worker would
+require synchronization or copies. No simulation worker, extra timer or idle
+repaint loop was added.
+
+The resident particle batch remains capped at 256 particles / 8 KiB. Each quad
+now shares four vertices instead of six (1,024 versus 1,536 vertex invocations
+at the cap), and resident frames update only time instead of all four uniforms.
+Viewport, accent and appearance changes invalidate their uniforms independently.
+CPU-only feedback and all-Off actions avoid particle initialization; live bursts
+retain their renderer. Glow shares cached directions and indices, eliminating
+per-frame trigonometry. Its vertex and index buffers reserve their exact capacities.
+
+The audit also found that the whole-document diff changed spacing between its
+two layout calls, invalidating the entire text layout twice per repaint. Both
+calls now use the same style. Changed backgrounds and line numbers visit visible
+rows with four points of shake overscan. Empty clips remain safe, font-atlas
+recreation retires cached galleys, and a captured shake finishes when preferences
+change.
+
+Three interleaved optimized before/after rounds on Apple M2 Max, macOS 14.6.1,
+Rust 1.98.1, with the same fixtures, profile, warmup and no concurrent builds:
+
+| Component, 20,000 lines | Before | After |
+| --- | ---: | ---: |
+| All effects CPU submission, median | 2.710 µs | 1.207 µs |
+| Glow CPU submission, median | 2.209 µs | 0.708 µs |
+| Cached whole-diff paint, top | 120.126 ms | 1.172 ms |
+| Cached whole-diff paint, middle | 120.093 ms | 1.174 ms |
+
+The diff generated 40,000 changed backgrounds per frame before; it now generates
+54 at the top or 58 in the middle. These are component timings: effects exclude
+text layout, tessellation, GL execution and presentation; diff paint excludes
+edit-triggered relayout, tessellation and GPU work. Shake's measured 40 ns
+increase is near one timer tick; no every-case CPU improvement is claimed.
+
+Additional opt-in probes:
+
+```sh
+cargo test --release --bin tiptoptyp full_diff_visible_paint_cost_probe -- --ignored --nocapture --test-threads=1
+cargo test --release --bin tiptoptyp gpu_resident_batch_measurement -- --ignored --nocapture --test-threads=1
+```
+
+The GPU probe submits warmed resident 256-particle batches, 2,000 draws per
+sample, for all five styles and both appearances. It records CPU submission
+and inclusive batch completion separately; completion includes submission and
+the final wait, and is not isolated GPU execution time. Primary submission
+medians improved in all cases. Nine completion cases improved; light Explosion
+was slower (18.444 → 21.017 ms). Additional paired runs with an identical complete
+baseline GPU warmup before each target reversed that case (24.923 → 21.403 ms).
+Both datasets are retained: start/context variation is an inference, and the
+vertex reduction does not establish an FPS gain.
+
+Formatting, strict Clippy (default, profiling and desktop-test features),
+2,311 default tests, 2,319 profiling tests and 32 xtask tests passed. Actual CGL
+uniform-invalidation and framebuffer checks passed. All 20 particle PNGs and
+both feedback PNGs match the baseline pixel-for-pixel; the fresh light/dark
+feedback and five-style contact sheet were inspected. These private framebuffers
+do not establish native window composition. The `typing_particles` and
+`git_hunks` native journeys stopped at preflight because the Mac was locked;
+they did not launch and are unavailable, not passes.
+
+[Recorded measurements and validation](performance-results/editor-effects-performance-2026-10-18.json)
+include raw samples, source/binary hashes, exact commands and limitations. Full
+logs, preserved optimized test binaries and supplemental comparisons remain in
+`.tiptoptyp/editor-effects-perf-2026-10-18/`. Cold shader startup, whole-app input
+latency and cross-platform performance are not established by these probes.
+
 ## Headless scaling probes
 
 ```sh
