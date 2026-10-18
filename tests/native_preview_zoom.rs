@@ -1048,6 +1048,7 @@ fn live_transition_regression(
         observation: Option<Value>,
         handoff: Option<Value>,
         request_id: u64,
+        next_observation: Instant,
         blocked: bool,
         observation_timeout: Duration,
         capture_timings: &'a mut CaptureTimings,
@@ -1072,6 +1073,11 @@ fn live_transition_regression(
             }
         }
         fn observe(&mut self, label: &str) -> Result<Value, String> {
+            // Leave WebContent time to run its capture timers between expensive
+            // geometry observations, while continuing native capture/IPC work.
+            while Instant::now() < self.next_observation {
+                self.tick();
+            }
             self.observation = None;
             self.request_id += 1;
             self.web
@@ -1088,7 +1094,9 @@ fn live_transition_regression(
                     && value["label"] == label
                     && value["request_id"].as_u64() == Some(self.request_id)
                 {
-                    return Ok(value.clone());
+                    let observation = value.clone();
+                    self.next_observation = Instant::now() + Duration::from_millis(50);
+                    return Ok(observation);
                 }
                 if Instant::now() > deadline {
                     return Err(format!("timed out observing {label}"));
@@ -1164,6 +1172,7 @@ fn live_transition_regression(
         observation: None,
         handoff: None,
         request_id: 0,
+        next_observation: Instant::now(),
         blocked: false,
         observation_timeout: Duration::from_secs(if dense_full_mode { 15 } else { 4 }),
         capture_timings,
@@ -1179,6 +1188,7 @@ fn live_transition_regression(
             "passed":failures.is_empty(),
             "input":"injected CaptureState zoom operations and owned WebView bounds; not physical pinch",
             "scope":"native image availability and cached-to-sharp geometry; excludes GPU presentation",
+            "observation_cadence_ms":50,
             "viewport_start":[640,420],"mid_document_page":18,"mid_document_fraction":0.15,
             "steps":steps,"failures":failures
         });
