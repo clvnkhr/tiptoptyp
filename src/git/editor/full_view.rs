@@ -12,6 +12,9 @@ use eframe::egui::{
 };
 use std::{ops::Range, sync::Arc};
 
+// Keep a small overscan for the editor's bounded paint-only screen shake.
+const PAINT_GUARD: f32 = 4.0;
+
 pub(crate) enum Action {
     Close,
     Previous,
@@ -44,6 +47,7 @@ struct LayoutCache {
     extension: String,
     width: f32,
     style: Arc<Style>,
+    font_epoch: Arc<Galley>,
     settings: AppSettings,
     scale: f32,
     mitex_dollars: bool,
@@ -207,6 +211,21 @@ fn align(mut old: Galley, mut new: Galley, pairs: &[Pair]) -> Layout {
         new_rows,
     }
 }
+// Pair tops are sorted by align(). Include the row crossing the top edge,
+// without scanning the preceding document or constructing offscreen shapes.
+fn visible_pairs(layout: &Layout, origin: Pos2, clip: Rect) -> Range<usize> {
+    if !origin.is_finite() || !clip.is_finite() || !clip.is_positive() {
+        return 0..0;
+    }
+    let end = layout
+        .tops
+        .partition_point(|top| origin.y + *top <= clip.bottom());
+    let start = layout.tops[..end]
+        .partition_point(|top| origin.y + *top < clip.top())
+        .saturating_sub(1);
+    start..end
+}
+
 fn layout(
     ui: &Ui,
     id: Id,
@@ -219,13 +238,18 @@ fn layout(
     let (width, mitex_dollars) = dimensions;
     diff.refresh(current);
     let style = ui.style().clone();
+    // Retained galleys contain glyph UVs into the current font atlas. Even
+    // unchanged definitions/metrics can receive a rebuilt atlas. The empty
+    // cached job provides its epoch without adding glyphs or touching source.
+    let font_epoch = ui.fonts_mut(|fonts| fonts.layout_job(LayoutJob::default()));
     let scale = ui.ctx().pixels_per_point();
     let cache_id = id.with("full-diff-layout");
     if let Some(cache) = ui
         .ctx()
         .data(|data| data.get_temp::<Arc<LayoutCache>>(cache_id))
         .filter(|c| {
-            c.new == current
+            Arc::ptr_eq(&c.font_epoch, &font_epoch)
+                && c.new == current
                 && c.old == diff.before
                 && c.extension == extension
                 && c.width == width
@@ -287,6 +311,7 @@ fn layout(
                 extension: extension.into(),
                 width,
                 style,
+                font_epoch,
                 settings: settings.clone(),
                 scale,
                 mitex_dollars,
@@ -385,19 +410,23 @@ pub(crate) fn show(
         .id_salt("full-document-diff")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Both the initial layout and TextEdit's layouter must see the same
+            // style. Changing this only in horizontal_top invalidated the full
+            // Style cache twice per frame, including idle animation frames.
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.set_min_width(available.x);
             let gap = theme::SPACE.small;
             let minimum_column = (available.x - gap) / 2.0;
-            let digits = (diff
-                .before
-                .lines()
-                .count()
-                .max(source.as_str().lines().count())
-                + 1)
-            .to_string();
             let font = theme::editor_font();
             let muted = ui.visuals().weak_text_color();
             let gutter = if settings.line_numbers {
+                let digits = (diff
+                    .before
+                    .lines()
+                    .count()
+                    .max(source.as_str().lines().count())
+                    + 1)
+                .to_string();
                 ui.painter()
                     .layout_no_wrap(digits, font.clone(), muted)
                     .size()
@@ -426,7 +455,6 @@ pub(crate) fn show(
             };
             let output = ui
                 .horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
                     let (old_rect, _) =
                         ui.allocate_exact_size(vec2(column + gap, 1.0), Sense::hover());
                     ui.allocate_exact_size(vec2(gutter, 1.0), Sense::hover());
@@ -468,8 +496,19 @@ pub(crate) fn show(
                     ui.visuals().text_color(),
                 );
             let palette = theme::palette(ui.ctx());
-            let mut shapes = Vec::new();
-            for (i, pair) in diff.pairs.iter().enumerate().filter(|(_, p)| p.changed) {
+            let clip = ui.clip_rect();
+            let paint_clip = if clip.is_finite() && clip.is_positive() {
+                clip.expand(PAINT_GUARD)
+            } else {
+                Rect::NOTHING
+            };
+            let visible = visible_pairs(&current_layout, origin, paint_clip);
+            let mut shapes = Vec::with_capacity(visible.len() * 2);
+            for i in visible {
+                let Some(pair) = diff.pairs.get(i) else { break };
+                if !pair.changed {
+                    continue;
+                }
                 let y = origin.y + current_layout.tops[i];
                 let h = current_layout.heights[i];
                 for (present, x, color) in [
@@ -477,11 +516,10 @@ pub(crate) fn show(
                     (pair.new.is_some(), origin.x - gutter, palette.success),
                 ] {
                     if present {
-                        shapes.push(Shape::rect_filled(
-                            Rect::from_min_size(pos2(x, y), vec2(column, h)),
-                            0.0,
-                            color.gamma_multiply(0.12),
-                        ));
+                        let rect = Rect::from_min_size(pos2(x, y), vec2(column, h));
+                        if paint_clip.intersects(rect) {
+                            shapes.push(Shape::rect_filled(rect, 0.0, color.gamma_multiply(0.12)));
+                        }
                     }
                 }
                 let rect = Rect::from_min_size(
@@ -515,32 +553,47 @@ pub(crate) fn show(
                 }
             }
             ui.painter().set(backgrounds, Shape::Vec(shapes));
-            for (g, groups, base, x) in [
-                (
-                    &current_layout.old,
-                    &current_layout.old_rows,
-                    old_origin,
-                    old_origin.x - 4.0,
-                ),
-                (
-                    &output.galley,
-                    &current_layout.new_rows,
-                    origin,
-                    origin.x - 4.0,
-                ),
-            ] {
-                for (line, rows) in groups.iter().enumerate().filter(|_| settings.line_numbers) {
-                    let row = &g.rows[rows.start];
-                    let rect = row.rect().translate(base.to_vec2());
-                    if ui.clip_rect().intersects(rect) {
-                        let number = ui.painter().layout_no_wrap(
-                            (line + 1).to_string(),
-                            font.clone(),
-                            muted,
-                        );
-                        let position =
-                            crate::app::line_number_position(x, rect.top(), row, &number);
-                        ui.painter().galley(position, number, muted);
+            if settings.line_numbers
+                && paint_clip.is_finite()
+                && paint_clip.is_positive()
+                && old_origin.is_finite()
+                && origin.is_finite()
+            {
+                for (g, groups, base, x) in [
+                    (
+                        &current_layout.old,
+                        &current_layout.old_rows,
+                        old_origin,
+                        old_origin.x - 4.0,
+                    ),
+                    (
+                        &output.galley,
+                        &current_layout.new_rows,
+                        origin,
+                        origin.x - 4.0,
+                    ),
+                ] {
+                    // Only the first visual row carries a logical line number.
+                    // Its row positions remain sorted even across inserted gaps.
+                    let start = groups.partition_point(|rows| {
+                        g.rows[rows.start].rect().bottom() + base.y < paint_clip.top()
+                    });
+                    let end = groups.partition_point(|rows| {
+                        g.rows[rows.start].rect().top() + base.y <= paint_clip.bottom()
+                    });
+                    for (offset, rows) in groups[start..end].iter().enumerate() {
+                        let row = &g.rows[rows.start];
+                        let rect = row.rect().translate(base.to_vec2());
+                        if paint_clip.intersects(rect) {
+                            let number = ui.painter().layout_no_wrap(
+                                (start + offset + 1).to_string(),
+                                font.clone(),
+                                muted,
+                            );
+                            let position =
+                                crate::app::line_number_position(x, rect.top(), row, &number);
+                            ui.painter().galley(position, number, muted);
+                        }
                     }
                 }
             }
@@ -814,5 +867,368 @@ mod tests {
         assert!(harness.state().1.contains('α'));
         assert_eq!(harness.state().0.current, harness.state().1);
         assert_eq!(harness.state().0.before, "one\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn full_diff_only_builds_visible_changed_backgrounds_throughout_a_large_document() {
+        fn backgrounds(shape: &Shape, colors: [Color32; 2], found: &mut Vec<Rect>) {
+            match shape {
+                Shape::Vec(children) => {
+                    for child in children {
+                        backgrounds(child, colors, found);
+                    }
+                }
+                Shape::Rect(rect) if colors.contains(&rect.fill) => found.push(rect.rect),
+                _ => {}
+            }
+        }
+        let context = Context::default();
+        fonts(&context);
+        let before = "#let old = 1\n".repeat(2048);
+        let mut source = "#let new = 2\n".repeat(2048);
+        let mut diff = DocumentDiff::new(before, &source);
+        let settings = AppSettings::default();
+        let count = source.chars().count();
+        let mut frame = 0;
+        for at in [0, count / 2, count] {
+            for settle in 0..12 {
+                let mut viewport = Rect::NOTHING;
+                let mut galley_origin = Pos2::ZERO;
+                let output = context.run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 500.0))),
+                        time: Some(frame as f64 / 60.0),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let output = show(
+                            ui,
+                            &mut diff,
+                            &mut source,
+                            ViewConfig {
+                                id: Id::new("visible-backgrounds"),
+                                path: std::path::Path::new("main.typ"),
+                                settings: &settings,
+                                repository_ready: true,
+                                mitex_dollars: false,
+                                jump: (settle == 0).then_some(at..at),
+                            },
+                        );
+                        viewport = output.viewport;
+                        galley_origin = output.edit.galley_pos;
+                    },
+                );
+                frame += 1;
+                if settle == 11 {
+                    if at > 0 {
+                        assert!(
+                            galley_origin.y < viewport.top() - 1_000.0,
+                            "the test must actually scroll far beyond the first viewport"
+                        );
+                    }
+                    let palette = theme::palette(&context);
+                    let mut painted = Vec::new();
+                    for shape in &output.shapes {
+                        backgrounds(
+                            &shape.shape,
+                            [
+                                palette.error.gamma_multiply(0.12),
+                                palette.success.gamma_multiply(0.12),
+                            ],
+                            &mut painted,
+                        );
+                    }
+                    assert!(
+                        !painted.is_empty(),
+                        "visible diff rows must retain their backgrounds"
+                    );
+                    assert!(
+                        painted.len() < 128,
+                        "{} changed backgrounds were constructed for a 500-point viewport",
+                        painted.len()
+                    );
+                    let guarded = viewport.expand(4.0);
+                    assert!(
+                        painted
+                            .iter()
+                            .all(|rect| rect.bottom() >= guarded.top()
+                                && rect.top() <= guarded.bottom()),
+                        "off-screen diff backgrounds must not enter the editor paint/shake list"
+                    );
+                    assert!(
+                        painted
+                            .iter()
+                            .any(|rect| rect.center().x < viewport.center().x)
+                    );
+                    assert!(
+                        painted
+                            .iter()
+                            .any(|rect| rect.center().x > viewport.center().x)
+                    );
+                    let numbers: Vec<_> = output
+                        .shapes
+                        .iter()
+                        .filter_map(|shape| {
+                            let Shape::Text(text) = &shape.shape else {
+                                return None;
+                            };
+                            text.galley.job.text.parse::<usize>().ok()
+                        })
+                        .collect();
+                    assert!(!numbers.is_empty(), "visible line numbers remain painted");
+                    if at > 0 {
+                        assert!(
+                            numbers.iter().any(|line| *line > 512),
+                            "visible row indices must not restart at one after culling"
+                        );
+                    }
+                }
+                output.drop_without_applying_deltas();
+            }
+        }
+        assert_eq!(
+            diff.builds, 1,
+            "scrolling and animation frames reuse diff alignment"
+        );
+    }
+
+    #[test]
+    #[ignore = "opt-in optimized cached full-diff UI paint timing; excludes tessellation and GPU"]
+    fn full_diff_visible_paint_cost_probe() {
+        use std::{hint::black_box, time::Instant};
+        const WARMUP: usize = 20;
+        const SAMPLES: usize = 50;
+        assert!(
+            !black_box(cfg!(debug_assertions)),
+            "run this probe with --release"
+        );
+        for lines in [1_000, 20_000] {
+            for middle in [false, true] {
+                let context = Context::default();
+                context.set_theme(egui::Theme::Dark);
+                fonts(&context);
+                let before = "#let old = 1\n".repeat(lines);
+                let mut source = "#let new = 2\n".repeat(lines);
+                let bytes = source.len();
+                let mut diff = DocumentDiff::new(before, &source);
+                let settings = AppSettings::default();
+                let target = if middle {
+                    source.chars().count() / 2
+                } else {
+                    0
+                };
+                let mut samples = Vec::with_capacity(SAMPLES);
+                let mut background_shapes = 0_usize;
+                for frame in 0..WARMUP + SAMPLES {
+                    let mut elapsed = 0.0;
+                    let output = context.run_ui(
+                        RawInput {
+                            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(850.0, 500.0))),
+                            time: Some(frame as f64 / 60.0),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            let started = Instant::now();
+                            black_box(show(
+                                ui,
+                                &mut diff,
+                                &mut source,
+                                ViewConfig {
+                                    id: Id::new("diff-paint-cost-probe"),
+                                    path: std::path::Path::new("main.typ"),
+                                    settings: &settings,
+                                    repository_ready: false,
+                                    mitex_dollars: false,
+                                    jump: (frame == 0).then_some(target..target),
+                                },
+                            ));
+                            elapsed = started.elapsed().as_secs_f64() * 1_000_000.0;
+                        },
+                    );
+                    if frame >= WARMUP {
+                        samples.push(elapsed);
+                        background_shapes += output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                Shape::Vec(children) => Some(children.len()),
+                                _ => None,
+                            })
+                            .sum::<usize>();
+                    }
+                    black_box(&output.shapes);
+                    output.drop_without_applying_deltas();
+                }
+                assert_eq!(
+                    diff.builds, 1,
+                    "cached paint must not recompute document alignment"
+                );
+                samples.sort_by(f64::total_cmp);
+                eprintln!(
+                    "full_diff_visible_paint position={} changed_lines={lines} fixture_bytes={bytes} viewport=850x500 theme=egui-dark font=editor-default scale=1 warmup={WARMUP} frames={SAMPLES} p50_us={:.3} p95_us={:.3} mean_us={:.3} grouped_shapes_mean={:.1}; excludes_tessellation_gpu=true",
+                    if middle { "middle" } else { "top" },
+                    samples[(SAMPLES - 1) / 2],
+                    samples[(SAMPLES - 1) * 95 / 100],
+                    samples.iter().sum::<f64>() / SAMPLES as f64,
+                    background_shapes as f64 / SAMPLES as f64,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_diff_idle_frames_reuse_the_same_layout_arc() {
+        let context = Context::default();
+        fonts(&context);
+        let before = "#let old = 1\n".repeat(1000);
+        let mut source = "#let new = 2\n".repeat(1000);
+        let mut diff = DocumentDiff::new(before, &source);
+        let settings = AppSettings::default();
+        let id = Id::new("cached-diff-frames");
+        let mut previous: Option<Arc<Layout>> = None;
+        for frame in 0..3 {
+            context
+                .run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(850.0, 500.0))),
+                        time: Some(frame as f64 / 60.0),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(
+                            ui,
+                            &mut diff,
+                            &mut source,
+                            ViewConfig {
+                                id,
+                                path: std::path::Path::new("main.typ"),
+                                settings: &settings,
+                                repository_ready: false,
+                                mitex_dollars: false,
+                                jump: None,
+                            },
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            let cached = context
+                .data(|data| data.get_temp::<Arc<LayoutCache>>(id.with("full-diff-layout")))
+                .unwrap();
+            if let Some(previous) = &previous {
+                assert!(
+                    Arc::ptr_eq(previous, &cached.layout),
+                    "an idle diff frame rebuilt the complete document layout"
+                );
+            }
+            previous = Some(cached.layout.clone());
+        }
+        assert_eq!(diff.builds, 1);
+    }
+
+    #[test]
+    fn full_diff_empty_and_collapsed_clips_keep_the_editor_usable() {
+        for clip in [
+            Rect::NOTHING,
+            Rect::from_min_max(pos2(100.0, 300.0), pos2(500.0, 200.0)),
+            Rect::from_min_size(pos2(20.0, 250.0), vec2(500.0, 0.0)),
+            Rect::from_min_size(pos2(20.0, 250.0), vec2(500.0, 1.0)),
+        ] {
+            let context = Context::default();
+            fonts(&context);
+            let before = "#let old = 1\n".repeat(100);
+            let mut source = "#let new = 2\n".repeat(100);
+            let mut diff = DocumentDiff::new(before, &source);
+            let settings = AppSettings::default();
+            context
+                .run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(850.0, 500.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.set_clip_rect(clip);
+                        let output = show(
+                            ui,
+                            &mut diff,
+                            &mut source,
+                            ViewConfig {
+                                id: Id::new("collapsed-diff-clip"),
+                                path: std::path::Path::new("main.typ"),
+                                settings: &settings,
+                                repository_ready: false,
+                                mitex_dollars: false,
+                                jump: None,
+                            },
+                        );
+                        assert_eq!(output.edit.galley.job.text, source);
+                    },
+                )
+                .drop_without_applying_deltas();
+            assert_eq!(diff.builds, 1);
+        }
+    }
+
+    #[test]
+    fn full_diff_rebuilds_retained_layout_after_the_font_atlas_is_recreated() {
+        fn paint(
+            context: &Context,
+            diff: &mut DocumentDiff,
+            source: &mut String,
+            frame: u64,
+        ) -> Arc<Layout> {
+            let id = Id::new("font-atlas-diff-cache");
+            context
+                .run_ui(
+                    RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(850.0, 500.0))),
+                        time: Some(frame as f64 / 60.0),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        show(
+                            ui,
+                            diff,
+                            source,
+                            ViewConfig {
+                                id,
+                                path: std::path::Path::new("main.typ"),
+                                settings: &AppSettings::default(),
+                                repository_ready: false,
+                                mitex_dollars: false,
+                                jump: None,
+                            },
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            context
+                .data(|data| data.get_temp::<Arc<LayoutCache>>(id.with("full-diff-layout")))
+                .unwrap()
+                .layout
+                .clone()
+        }
+        let context = Context::default();
+        fonts(&context);
+        let mut source = "#let new = $alpha$\n".repeat(20);
+        let mut diff = DocumentDiff::new("#let old = $beta$\n".repeat(20), &source);
+        let initial = paint(&context, &mut diff, &mut source, 0);
+        assert!(Arc::ptr_eq(
+            &initial,
+            &paint(&context, &mut diff, &mut source, 1)
+        ));
+        crate::theme::recreate_test_font_atlas(&context);
+        let refreshed = paint(&context, &mut diff, &mut source, 2);
+        assert!(
+            !Arc::ptr_eq(&initial, &refreshed),
+            "font-atlas recreation must retire galleys with stale glyph UVs"
+        );
+        assert!(
+            Arc::ptr_eq(&refreshed, &paint(&context, &mut diff, &mut source, 3)),
+            "the refreshed atlas should settle back to cached layout"
+        );
+        assert_eq!(
+            diff.builds, 1,
+            "a font-atlas reset does not change document alignment"
+        );
     }
 }
