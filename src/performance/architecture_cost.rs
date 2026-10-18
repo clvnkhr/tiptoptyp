@@ -1,10 +1,5 @@
 //! Opt-in optimized costs; no timing thresholds in the normal test suite.
-#[allow(dead_code)]
-#[path = "../src/lsp/transport.rs"]
-mod framing;
-#[allow(dead_code)]
-#[path = "../src/project_index.rs"]
-mod project_index;
+use crate::{lsp::transport as framing, project_index};
 
 use std::{collections::BTreeMap, hint::black_box, io::Cursor, time::Instant};
 

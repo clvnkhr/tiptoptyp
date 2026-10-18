@@ -27,7 +27,7 @@ The baseline worktree is `/tmp/tiptoptyp-architecture-baseline.OeiF44`.
 Run the opt-in headless probe with:
 
 ```sh
-RUSTFLAGS=-Cforce-frame-pointers=yes cargo test --profile profiling --features profiling --test architecture_cost architecture_cost_probe -- --ignored --nocapture
+RUSTFLAGS=-Cforce-frame-pointers=yes cargo test --profile profiling --features profiling --bin tiptoptyp architecture_cost_probe -- --ignored --nocapture
 ```
 
 Fixtures are created before timing. Each case has five warmups and seven

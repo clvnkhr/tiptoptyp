@@ -316,7 +316,7 @@ bytes). Five warmups precede seven batches of 1,000 handoffs per path. No viewpo
 or theme applies to this isolated headless handoff; no build ran during timing.
 
 ```sh
-RUSTFLAGS=-Cforce-frame-pointers=yes cargo test --profile profiling --features profiling --test completion_payload_cost completion_payload_cost_probe -- --ignored --nocapture
+RUSTFLAGS=-Cforce-frame-pointers=yes cargo test --profile profiling --features profiling --bin tiptoptyp completion_payload_cost_probe -- --ignored --nocapture
 ```
 
 The baseline operation is the previous `items.clone()`; the new operation passes

@@ -64,6 +64,11 @@ pub(crate) fn secondary_repaints(_context: &eframe::egui::Context) {}
 pub(crate) fn counter(_name: &'static str) {}
 
 #[cfg(test)]
+mod architecture_cost;
+#[cfg(test)]
+mod completion_payload_cost;
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn dormant_profiling_does_not_even_query_capture_state() {

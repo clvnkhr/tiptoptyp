@@ -1,52 +1,7 @@
 //! Isolates the unchanged-frame payload handoff, not egui layout or GPU costs.
-#[allow(dead_code)]
-#[path = "../src/lsp/protocol.rs"]
-mod protocol;
+use crate::{lsp::protocol, test_allocations::allocated};
+use std::{hint::black_box, time::Instant};
 
-use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    cell::Cell,
-    hint::black_box,
-    time::Instant,
-};
-
-thread_local! {
-    static ALLOCATED: Cell<Option<usize>> = const { Cell::new(None) };
-}
-struct CountingAllocator;
-// Test-only, thread-local observation; all memory operations delegate unchanged.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record(layout.size());
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record(layout.size());
-        unsafe { System.alloc_zeroed(layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        record(size);
-        unsafe { System.realloc(ptr, layout, size) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-fn record(size: usize) {
-    let _ = ALLOCATED.try_with(|count| {
-        if let Some(bytes) = count.get() {
-            count.set(Some(bytes + size));
-        }
-    });
-}
-fn allocated(operation: impl FnOnce()) -> usize {
-    ALLOCATED.with(|count| count.set(Some(0)));
-    operation();
-    ALLOCATED.with(|count| count.replace(None).unwrap())
-}
 fn fixture() -> Vec<protocol::CompletionItem> {
     (0..256)
         .map(|index| protocol::CompletionItem {
@@ -67,20 +22,20 @@ fn fixture() -> Vec<protocol::CompletionItem> {
 #[test]
 fn borrowed_popup_payload_has_no_documentation_sized_allocations() {
     let items = fixture();
-    let before = allocated(|| {
+    let (_, before) = allocated(|| {
         black_box(items.clone());
     });
-    let after = allocated(|| {
+    let (_, after) = allocated(|| {
         black_box(items.as_slice());
     });
     assert!(before > 1_000_000);
     assert_eq!(after, 0);
     // Enforce that the actual view keeps using the borrowed handoff measured here.
-    let renderer = include_str!("../src/app/completion_popup.rs")
+    let renderer = include_str!("../app/completion_popup.rs")
         .split("#[cfg(test)]")
         .next()
         .unwrap();
-    let adapter = include_str!("../src/app/editor_view.rs");
+    let adapter = include_str!("../app/editor_view.rs");
     let adapter = adapter
         .split("fn show_editor_completion_popup")
         .nth(1)
@@ -117,7 +72,7 @@ fn completion_payload_cost_probe() {
         }
         for sample in 0..7 {
             let start = Instant::now();
-            let bytes = allocated(|| {
+            let (_, bytes) = allocated(|| {
                 for _ in 0..1000 {
                     operation();
                 }
