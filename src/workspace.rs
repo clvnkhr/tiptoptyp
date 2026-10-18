@@ -220,7 +220,7 @@ impl WorkspaceTree {
         &self.snapshot.root
     }
 
-    pub fn snapshot(&self) -> &WorkspaceSnapshot {
+    pub(crate) fn shared_snapshot(&self) -> &Arc<WorkspaceSnapshot> {
         &self.snapshot
     }
 
@@ -538,9 +538,9 @@ mod tests {
         assert_eq!(tree.generation(), 0);
 
         project.file("chapter.typ", "chapter");
-        assert!(tree.snapshot().find("chapter.typ").is_none());
+        assert!(tree.shared_snapshot().find("chapter.typ").is_none());
         assert!(refresh_workspace_tree(&mut tree).unwrap());
-        assert!(tree.snapshot().find("chapter.typ").is_some());
+        assert!(tree.shared_snapshot().find("chapter.typ").is_some());
         assert_eq!(tree.generation(), 1);
 
         assert!(!refresh_workspace_tree(&mut tree).unwrap());
@@ -558,7 +558,7 @@ mod tests {
         project.file("chapters/one.typ", "one");
 
         let tree = workspace_tree(project.path());
-        let node = tree.snapshot().find("chapters/one.typ").unwrap();
+        let node = tree.shared_snapshot().find("chapters/one.typ").unwrap();
         assert_eq!(tree.root(), project.path().canonicalize().unwrap());
         assert_eq!(node.relative_path, PathBuf::from("chapters/one.typ"));
         assert_eq!(node.path, tree.root().join("chapters/one.typ"));
@@ -601,14 +601,14 @@ mod tests {
         let project = TempProject::new("failed-refresh");
         project.file("main.typ", "main");
         let mut tree = workspace_tree(project.path());
-        let cached = tree.snapshot().clone();
+        let cached = tree.shared_snapshot().clone();
 
         fs::remove_dir_all(project.path()).unwrap();
         assert_eq!(
             refresh_workspace_tree(&mut tree).unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
-        assert_eq!(tree.snapshot(), &cached);
+        assert_eq!(tree.shared_snapshot(), &cached);
         assert_eq!(tree.generation(), 0);
     }
 

@@ -1,6 +1,438 @@
 //! Stable Explorer identities and a validated, user-configurable display order.
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use crate::workspace::{WorkspaceNode, WorkspaceSnapshot};
+
+/// One visibility result for an immutable filesystem snapshot and search query.
+/// Retaining the snapshot prevents an address from being reused as a cache hit.
+#[derive(Default)]
+struct WorkspaceFilter {
+    snapshot: Option<Arc<WorkspaceSnapshot>>,
+    query: String,
+    matches: Option<Arc<WorkspaceMatches>>,
+    #[cfg(test)]
+    builds: usize,
+}
+
+#[derive(Default)]
+pub(crate) struct WorkspaceMatches {
+    paths: HashSet<PathBuf>,
+    directories: Vec<PathBuf>,
+    #[cfg(test)]
+    visited: usize,
+}
+
+impl WorkspaceMatches {
+    pub(crate) fn contains(&self, path: &Path) -> bool {
+        self.paths.contains(path)
+    }
+
+    pub(crate) fn directories(&self) -> &[PathBuf] {
+        &self.directories
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    fn visit(&mut self, node: &WorkspaceNode, query: &str) -> bool {
+        #[cfg(test)]
+        {
+            self.visited += 1;
+        }
+        let mut descendant_matches = false;
+        for child in &node.children {
+            // Visit every child even when a sibling matches: each node's
+            // visibility is built once for subsequent tree construction.
+            descendant_matches |= self.visit(child, query);
+        }
+        let matches = node.display_name().to_lowercase().contains(query)
+            || node
+                .relative_path
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(query)
+            || descendant_matches;
+        if matches {
+            self.paths.insert(node.path.clone());
+            if node.is_directory() {
+                self.directories.push(node.path.clone());
+            }
+        }
+        matches
+    }
+}
+
+impl WorkspaceFilter {
+    fn prepare(
+        &mut self,
+        snapshot: Option<&Arc<WorkspaceSnapshot>>,
+        query: &str,
+    ) -> Option<Arc<WorkspaceMatches>> {
+        let Some(snapshot) = snapshot.filter(|_| !query.is_empty()) else {
+            // Do not pin an old tree or retain path allocations once filtering
+            // is cleared or its workspace disappears.
+            *self = Self::default();
+            return None;
+        };
+        if self.query == query
+            && self
+                .snapshot
+                .as_ref()
+                .is_some_and(|previous| Arc::ptr_eq(previous, snapshot))
+        {
+            return self.matches.clone();
+        }
+        let mut matches = WorkspaceMatches::default();
+        for node in &snapshot.nodes {
+            matches.visit(node, query);
+        }
+        let matches = Arc::new(matches);
+        self.snapshot = Some(Arc::clone(snapshot));
+        self.query = query.to_owned();
+        self.matches = Some(Arc::clone(&matches));
+        #[cfg(test)]
+        {
+            self.builds += 1;
+        }
+        Some(matches)
+    }
+}
+
+#[cfg(test)]
+mod workspace_filter_tests {
+    use super::*;
+    use crate::workspace::WorkspaceNodeKind;
+
+    fn node(
+        root: &Path,
+        relative: impl AsRef<Path>,
+        children: Vec<WorkspaceNode>,
+    ) -> WorkspaceNode {
+        let relative = relative.as_ref();
+        WorkspaceNode {
+            name: relative.file_name().unwrap().to_owned(),
+            path: root.join(relative),
+            relative_path: relative.to_owned(),
+            kind: if children.is_empty() {
+                WorkspaceNodeKind::File
+            } else {
+                WorkspaceNodeKind::Directory
+            },
+            children,
+        }
+    }
+
+    fn snapshot(root: &str, filename: &str) -> Arc<WorkspaceSnapshot> {
+        let root = PathBuf::from(root);
+        Arc::new(WorkspaceSnapshot {
+            nodes: vec![node(
+                &root,
+                "chapters",
+                vec![
+                    node(&root, Path::new("chapters").join(filename), vec![]),
+                    node(&root, "chapters/unrelated.txt", vec![]),
+                ],
+            )],
+            root,
+        })
+    }
+
+    // The pre-cache production recursive predicate, retained only to compare
+    // behavior and operation counts with the new postorder classifier.
+    fn reference_matches(node: &WorkspaceNode, query: &str, visits: &mut usize) -> bool {
+        *visits += 1;
+        node.display_name().to_lowercase().contains(query)
+            || node
+                .relative_path
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(query)
+            || node
+                .children
+                .iter()
+                .any(|child| reference_matches(child, query, visits))
+    }
+
+    fn reference_frame(nodes: &[WorkspaceNode], query: &str) -> (usize, usize, usize) {
+        fn ancestors(nodes: &[WorkspaceNode], query: &str, visits: &mut usize) -> usize {
+            let mut count = 0;
+            for node in nodes.iter().filter(|node| node.is_directory()) {
+                if reference_matches(node, query, visits) {
+                    count += 1 + ancestors(&node.children, query, visits);
+                }
+            }
+            count
+        }
+        fn rows(nodes: &[WorkspaceNode], query: &str, visits: &mut usize) -> usize {
+            let mut count = 0;
+            for node in nodes {
+                if reference_matches(node, query, visits) {
+                    count += 1;
+                    if node.is_directory() {
+                        count += rows(&node.children, query, visits);
+                    }
+                }
+            }
+            count
+        }
+        let mut visits = 0;
+        let directories = ancestors(nodes, query, &mut visits);
+        let visible = rows(nodes, query, &mut visits);
+        let any = nodes
+            .iter()
+            .any(|node| reference_matches(node, query, &mut visits));
+        assert_eq!(any, visible != 0);
+        (visible, directories, visits)
+    }
+
+    fn cached_rows(nodes: &[WorkspaceNode], matches: &WorkspaceMatches) -> usize {
+        nodes
+            .iter()
+            .filter(|node| matches.contains(&node.path))
+            .map(|node| 1 + cached_rows(&node.children, matches))
+            .sum()
+    }
+
+    fn assert_reference(snapshot: &WorkspaceSnapshot, query: &str, matches: &WorkspaceMatches) {
+        fn verify(nodes: &[WorkspaceNode], query: &str, matches: &WorkspaceMatches) {
+            for node in nodes {
+                let expected = reference_matches(node, query, &mut 0);
+                assert_eq!(matches.contains(&node.path), expected, "{:?}", node.path);
+                assert_eq!(
+                    matches.directories.contains(&node.path),
+                    expected && node.is_directory(),
+                    "{:?}",
+                    node.path
+                );
+                verify(&node.children, query, matches);
+            }
+        }
+        verify(&snapshot.nodes, query, matches);
+        let (rows, directories, _) = reference_frame(&snapshot.nodes, query);
+        assert_eq!(matches.paths.len(), rows);
+        assert_eq!(matches.directories.len(), directories);
+        assert_eq!(cached_rows(&snapshot.nodes, matches), rows);
+    }
+
+    #[test]
+    fn unchanged_snapshot_and_query_reuse_filter_without_visiting_nodes() {
+        let snapshot = snapshot("/workspace", "Résumé.TYP");
+        let mut filter = WorkspaceFilter::default();
+        let first = filter.prepare(Some(&snapshot), "résumé").unwrap();
+        assert_eq!(first.visited, 3);
+        for _ in 0..100 {
+            let reused = filter.prepare(Some(&snapshot), "résumé").unwrap();
+            assert!(Arc::ptr_eq(&first, &reused));
+        }
+        assert_eq!(filter.builds, 1);
+        assert_reference(&snapshot, "résumé", &first);
+    }
+
+    #[test]
+    fn query_and_snapshot_replacement_rebuild_even_with_the_same_root() {
+        let original = snapshot("/workspace", "needle.typ");
+        let mut filter = WorkspaceFilter::default();
+        let first = filter.prepare(Some(&original), "needle").unwrap();
+        let no_match = filter.prepare(Some(&original), "missing").unwrap();
+        assert!(!Arc::ptr_eq(&first, &no_match));
+        assert!(no_match.is_empty());
+        assert_eq!(no_match.visited, 3);
+        let replacement = snapshot("/workspace", "missing.tex");
+        let new_match = filter.prepare(Some(&replacement), "missing").unwrap();
+        assert!(!new_match.is_empty());
+        assert_reference(&replacement, "missing", &new_match);
+        let other_root = snapshot("/another", "missing.typ");
+        let other_match = filter.prepare(Some(&other_root), "missing").unwrap();
+        assert!(other_match.contains(Path::new("/another/chapters/missing.typ")));
+        assert!(!other_match.contains(Path::new("/workspace/chapters/missing.tex")));
+        assert_eq!(filter.builds, 4);
+        assert_eq!(Arc::strong_count(&original), 1);
+        assert_eq!(Arc::strong_count(&replacement), 1);
+    }
+
+    #[test]
+    fn clearing_filter_or_workspace_releases_snapshot_and_match_allocations() {
+        for no_snapshot in [false, true] {
+            let snapshot = snapshot("/workspace", "needle.typ");
+            let weak_snapshot = Arc::downgrade(&snapshot);
+            let mut filter = WorkspaceFilter::default();
+            let matches = filter.prepare(Some(&snapshot), "needle").unwrap();
+            let weak_matches = Arc::downgrade(&matches);
+            drop(matches);
+            if no_snapshot {
+                assert!(filter.prepare(None, "needle").is_none());
+            } else {
+                assert!(filter.prepare(Some(&snapshot), "").is_none());
+            }
+            drop(snapshot);
+            assert!(weak_snapshot.upgrade().is_none());
+            assert!(weak_matches.upgrade().is_none());
+            assert_eq!(filter.query.capacity(), 0);
+            assert!(filter.snapshot.is_none() && filter.matches.is_none());
+        }
+    }
+
+    #[test]
+    fn retained_ancestors_unicode_and_relative_paths_match_recursive_semantics() {
+        let snapshot = snapshot("/workspace", "Résumé.TYP");
+        let mut filter = WorkspaceFilter::default();
+        for query in ["résumé", "chapters/", "chapters", "unrelated", "absent"] {
+            let matches = filter.prepare(Some(&snapshot), query).unwrap();
+            assert_reference(&snapshot, query, &matches);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_filenames_retain_lossy_matching_without_changing_identity() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let name = OsString::from_vec(b"bad-\xff.typ".to_vec());
+        let root = PathBuf::from("/workspace");
+        let snapshot = Arc::new(WorkspaceSnapshot {
+            nodes: vec![node(&root, &name, vec![])],
+            root,
+        });
+        let mut filter = WorkspaceFilter::default();
+        for query in ["bad-", "�", ".typ"] {
+            let matches = filter.prepare(Some(&snapshot), query).unwrap();
+            assert_reference(&snapshot, query, &matches);
+            assert!(matches.contains(&snapshot.nodes[0].path));
+        }
+    }
+
+    fn deep_snapshot() -> Arc<WorkspaceSnapshot> {
+        fn branch(root: &Path, relative: PathBuf, depth: usize) -> WorkspaceNode {
+            let mut children = (0..32)
+                .map(|file| node(root, relative.join(format!("notes-{file:02}.typ")), vec![]))
+                .collect::<Vec<_>>();
+            children.push(if depth == 1 {
+                node(root, relative.join("needle.typ"), vec![])
+            } else {
+                branch(root, relative.join(format!("level-{depth:02}")), depth - 1)
+            });
+            node(root, relative, children)
+        }
+        let root = PathBuf::from("/fixture/explorer-filter");
+        Arc::new(WorkspaceSnapshot {
+            nodes: (0..8)
+                .map(|index| branch(&root, format!("branch-{index:02}").into(), 16))
+                .collect(),
+            root,
+        })
+    }
+
+    #[test]
+    fn deep_tree_filter_visits_each_node_once_and_matches_existing_results() {
+        let snapshot = deep_snapshot();
+        let mut filter = WorkspaceFilter::default();
+        let matches = filter.prepare(Some(&snapshot), "needle").unwrap();
+        assert_eq!(matches.visited, 4_232);
+        let (rows, directories, recursive_visits) = reference_frame(&snapshot.nodes, "needle");
+        assert_eq!(rows, matches.paths.len());
+        assert_eq!(directories, matches.directories.len());
+        assert_eq!(cached_rows(&snapshot.nodes, &matches), rows);
+        assert!(recursive_visits > matches.visited * 10);
+        assert_eq!(filter.builds, 1);
+    }
+
+    #[test]
+    #[ignore = "opt-in optimized Explorer filtering measurement; no timing assertion"]
+    fn explorer_filter_cost_measurement() {
+        assert!(
+            std::hint::black_box(!cfg!(debug_assertions)),
+            "use --release"
+        );
+        let snapshot = deep_snapshot();
+        let query = "needle";
+        let mut warm_filter = WorkspaceFilter::default();
+        let admitted = warm_filter.prepare(Some(&snapshot), query).unwrap();
+        let expected = (admitted.paths.len(), admitted.directories.len());
+        let mut reference_us = Vec::new();
+        let mut cold_us = Vec::new();
+        let mut warm_us = Vec::new();
+        for sample in 0..47 {
+            // Counterbalance order; all three cases use the same process,
+            // source tree, normalized query and admitted visible-row walk.
+            let cases = if sample % 2 == 0 {
+                [0, 1, 2]
+            } else {
+                [2, 1, 0]
+            };
+            for case in cases {
+                let mut cold_filter = WorkspaceFilter::default();
+                let start = std::time::Instant::now();
+                let result = match case {
+                    0 => {
+                        let (rows, directories, _) = reference_frame(
+                            std::hint::black_box(&snapshot.nodes),
+                            std::hint::black_box(query),
+                        );
+                        (rows, directories)
+                    }
+                    _ => {
+                        let filter = if case == 1 {
+                            &mut cold_filter
+                        } else {
+                            &mut warm_filter
+                        };
+                        let matches = filter
+                            .prepare(
+                                Some(std::hint::black_box(&snapshot)),
+                                std::hint::black_box(query),
+                            )
+                            .unwrap();
+                        let rows = cached_rows(&snapshot.nodes, &matches);
+                        assert_eq!(matches.is_empty(), rows == 0);
+                        (rows, matches.directories().len())
+                    }
+                };
+                let elapsed = start.elapsed().as_secs_f64() * 1_000_000.0;
+                assert_eq!(result, expected);
+                std::hint::black_box(result);
+                if sample >= 7 {
+                    match case {
+                        0 => reference_us.push(elapsed),
+                        1 => cold_us.push(elapsed),
+                        _ => warm_us.push(elapsed),
+                    }
+                }
+            }
+        }
+        let median = |samples: &[f64]| {
+            let mut ordered = samples.to_vec();
+            ordered.sort_by(f64::total_cmp);
+            ordered[ordered.len() / 2]
+        };
+        eprintln!(
+            "EXPLORER_FILTER_MEASUREMENT {}",
+            serde_json::json!({
+                "fixture": "eight branches, depth16,32 sibling files per directory,one matching leaf per branch",
+                "nodes": admitted.visited,
+                "visible_rows": expected.0,
+                "opened_directories": expected.1,
+                "query": query,
+                "warmup_samples": 7,
+                "measured_samples": reference_us.len(),
+                "optimized": true,
+                "architecture": std::env::consts::ARCH,
+                "operating_system": std::env::consts::OS,
+                "reference_median_us": median(&reference_us),
+                "cold_median_us": median(&cold_us),
+                "warm_median_us": median(&warm_us),
+                "reference_us": reference_us,
+                "cold_us": cold_us,
+                "warm_us": warm_us,
+            })
+        );
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -235,6 +667,7 @@ pub(crate) struct ExplorerPanelState {
     reveal_git: bool,
     selected_path: Option<PathBuf>,
     maximized: Option<ExplorerSection>,
+    workspace_filter: WorkspaceFilter,
 }
 impl Default for ExplorerPanelState {
     fn default() -> Self {
@@ -250,10 +683,23 @@ impl Default for ExplorerPanelState {
             reveal_git: true,
             selected_path: None,
             maximized: None,
+            workspace_filter: WorkspaceFilter::default(),
         }
     }
 }
 impl ExplorerPanelState {
+    pub(crate) fn clear_workspace_filter(&mut self) {
+        self.workspace_filter = WorkspaceFilter::default();
+    }
+
+    pub(crate) fn filter_workspace(
+        &mut self,
+        snapshot: Option<&Arc<WorkspaceSnapshot>>,
+        normalized_query: &str,
+    ) -> Option<Arc<WorkspaceMatches>> {
+        self.workspace_filter.prepare(snapshot, normalized_query)
+    }
+
     pub(crate) fn maximized_section(&self, git_visible: bool) -> Option<ExplorerSection> {
         self.maximized
             .filter(|section| *section != ExplorerSection::Git || git_visible)

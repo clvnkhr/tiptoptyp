@@ -7,20 +7,23 @@ use super::{
 };
 use crate::workspace::{WorkspaceNode, WorkspaceSnapshot};
 use crate::{
-    explorer::{ExplorerOrder, ExplorerPanelState, ExplorerSection},
+    explorer::{ExplorerOrder, ExplorerPanelState, ExplorerSection, WorkspaceMatches},
     project_index::ProjectIndex,
     theme,
 };
 use eframe::egui::Color32;
 use eframe::egui::{self, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
 use egui_ltreeview::{Action as TreeAction, NodeBuilder, TreeView, TreeViewBuilder, TreeViewState};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 pub(super) struct Input<'a> {
     pub root: &'a Path,
     pub label: &'a str,
     pub generation: Option<u64>,
-    pub snapshot: Option<&'a WorkspaceSnapshot>,
+    pub snapshot: Option<&'a Arc<WorkspaceSnapshot>>,
     pub index: &'a ProjectIndex,
     pub active: Option<&'a Path>,
     pub preview: Option<&'a Path>,
@@ -198,6 +201,7 @@ pub(super) fn show(
         },
         |ui, section| match section {
             ExplorerSection::Files => {
+                let file_matches = state.filter_workspace(snapshot, explorer_query);
                 if let Some(snapshot) = &snapshot {
                     // A scan generation describes fresh filesystem data, not a
                     // new UI. Keeping it out of the identity preserves opened
@@ -205,12 +209,10 @@ pub(super) fn show(
                     // offset when a file open triggers a background rescan.
                     let tree_id = workspace_tree_state_id(ui, &snapshot.root, filter_active);
                     let mut tree_state = TreeViewState::load(ui, tree_id).unwrap_or_default();
-                    if filter_active {
-                        open_matching_workspace_ancestors(
-                            &mut tree_state,
-                            &snapshot.nodes,
-                            explorer_query,
-                        );
+                    if let Some(matches) = &file_matches {
+                        for directory in matches.directories() {
+                            tree_state.set_openness(directory.clone(), true);
+                        }
                     }
                     if let Some(selected) = state.selected_path() {
                         open_workspace_ancestors_for_path(
@@ -259,7 +261,7 @@ pub(super) fn show(
                                     active,
                                     preview,
                                     &context,
-                                    explorer_query,
+                                    file_matches.as_deref(),
                                     input.statuses,
                                 );
                             })
@@ -299,11 +301,9 @@ pub(super) fn show(
                             _ => {}
                         }
                     }
-                    if filter_active
-                        && !snapshot
-                            .nodes
-                            .iter()
-                            .any(|node| workspace_node_matches_query(node, explorer_query))
+                    if file_matches
+                        .as_ref()
+                        .is_some_and(|matches| matches.is_empty())
                     {
                         ui.label(RichText::new("No matching files").weak());
                     }
@@ -434,11 +434,11 @@ pub(super) fn add_workspace_nodes(
     active: Option<&Path>,
     preview: Option<&Path>,
     context: &egui::Context,
-    query: &str,
+    matches: Option<&WorkspaceMatches>,
     git: &crate::git::editor::FileStatuses,
 ) {
     for node in nodes {
-        if !workspace_node_matches_query(node, query) {
+        if matches.is_some_and(|matches| !matches.contains(&node.path)) {
             continue;
         }
         let is_active = active.is_some_and(|path| path == node.path);
@@ -470,7 +470,7 @@ pub(super) fn add_workspace_nodes(
                     active,
                     preview,
                     context,
-                    query,
+                    matches,
                     git,
                 );
             }
@@ -560,6 +560,7 @@ pub(super) fn explorer_path_matches_query(path: &Path, normalized_query: &str) -
     explorer_text_matches_query(&path.to_string_lossy(), normalized_query)
 }
 
+#[cfg(test)]
 pub(super) fn workspace_node_self_matches_query(
     node: &WorkspaceNode,
     normalized_query: &str,
@@ -568,25 +569,13 @@ pub(super) fn workspace_node_self_matches_query(
         || explorer_path_matches_query(&node.relative_path, normalized_query)
 }
 
+#[cfg(test)]
 pub(super) fn workspace_node_matches_query(node: &WorkspaceNode, normalized_query: &str) -> bool {
     workspace_node_self_matches_query(node, normalized_query)
         || node
             .children
             .iter()
             .any(|child| workspace_node_matches_query(child, normalized_query))
-}
-
-pub(super) fn open_matching_workspace_ancestors(
-    state: &mut TreeViewState<PathBuf>,
-    nodes: &[WorkspaceNode],
-    normalized_query: &str,
-) {
-    for node in nodes.iter().filter(|node| node.is_directory()) {
-        if workspace_node_matches_query(node, normalized_query) {
-            state.set_openness(node.path.clone(), true);
-            open_matching_workspace_ancestors(state, &node.children, normalized_query);
-        }
-    }
 }
 
 /// Keep a selected imported file visible after its destination appears in a

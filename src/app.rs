@@ -2149,6 +2149,7 @@ impl EditorApp {
         self.project_index_job.supersede();
         self.workspace_service.unsubscribe();
         self.workspace = None;
+        self.explorer.clear_workspace_filter();
         self.workspace_error = None;
         self.project_index = ProjectIndex::default();
         // Read results are discarded. Exclusive mutations detach to the
@@ -4605,6 +4606,7 @@ impl EditorApp {
         self.explorer.clear_selection();
         self.tabs.set_workspace(&root);
         self.workspace = None;
+        self.explorer.clear_workspace_filter();
         self.workspace_error = None;
         self.request_workspace_scan(root.clone());
         self.remember_workspace(&root);
@@ -5491,6 +5493,7 @@ impl EditorApp {
         }
         let root = self.project_root();
         self.workspace = None;
+        self.explorer.clear_workspace_filter();
         self.workspace_error = None;
         self.request_workspace_scan(root);
         // Outline, symbols, references, dependencies, and packages are all
@@ -7916,7 +7919,7 @@ impl EditorApp {
                 root: &self.workspace_root,
                 label: &label,
                 generation: self.workspace.as_ref().map(WorkspaceTree::generation),
-                snapshot: self.workspace.as_ref().map(WorkspaceTree::snapshot),
+                snapshot: self.workspace.as_ref().map(WorkspaceTree::shared_snapshot),
                 index: &self.project_index,
                 active: self.tabs.current_record().document.path().as_deref(),
                 preview: preview.as_deref(),

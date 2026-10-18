@@ -4979,6 +4979,82 @@ fn explorer_search_is_unicode_case_insensitive_and_retains_ancestors() {
 }
 
 #[test]
+fn hidden_files_skip_query_classification_until_the_section_is_open() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    let root = Path::new("/workspace");
+    let snapshot = Arc::new(WorkspaceSnapshot {
+        root: root.to_owned(),
+        nodes: vec![WorkspaceNode {
+            name: "main.typ".into(),
+            path: root.join("main.typ"),
+            relative_path: "main.typ".into(),
+            kind: crate::workspace::WorkspaceNodeKind::File,
+            children: Vec::new(),
+        }],
+    });
+    let index = ProjectIndex::default();
+    let statuses = crate::git::editor::FileStatuses::default();
+    let mut harness = Harness::builder()
+        .with_size(Vec2::new(320.0, 700.0))
+        .build_ui_state(
+            |ui, state: &mut (ExplorerPanelState, Arc<WorkspaceSnapshot>)| {
+                let _ = explorer_view::show(
+                    ui,
+                    explorer_view::Input {
+                        root,
+                        label: "/workspace",
+                        generation: Some(1),
+                        snapshot: Some(&state.1),
+                        index: &index,
+                        active: None,
+                        preview: None,
+                        statuses: &statuses,
+                        error: None,
+                        order: ExplorerOrder::default(),
+                        git_visible: false,
+                        tex: false,
+                        handwriting: Default::default(),
+                    },
+                    &mut state.0,
+                    &mut crate::handwriting::Drawing::default(),
+                    |_| panic!("hidden Git must not be painted"),
+                );
+            },
+            (ExplorerPanelState::default(), snapshot),
+        );
+    harness.run();
+    harness.get_by_label("Files").click();
+    harness.run();
+    let mut queries = harness.state_mut().0.take_queries();
+    queries[ExplorerSection::Files.index()] = "main".into();
+    harness.state_mut().0.set_queries(queries);
+    harness.run();
+    assert_eq!(
+        Arc::strong_count(&harness.state().1),
+        1,
+        "a collapsed Files body must not classify or retain its snapshot"
+    );
+    assert!(harness.query_by_label("main.typ").is_none());
+    harness.get_by_label("Files").click();
+    harness.run();
+    assert_eq!(Arc::strong_count(&harness.state().1), 2);
+    harness.get_by_label("main.typ");
+    harness
+        .state_mut()
+        .0
+        .toggle_section_maximized(ExplorerSection::Contents);
+    harness.state_mut().0.clear_workspace_filter();
+    harness.run();
+    assert_eq!(
+        Arc::strong_count(&harness.state().1),
+        1,
+        "maximizing another section must not classify Files"
+    );
+    assert!(harness.query_by_label("main.typ").is_none());
+    assert_eq!(harness.state().0.query(ExplorerSection::Files), "main");
+}
+
+#[test]
 fn explorer_section_search_sticks_and_does_not_filter_other_sections() {
     use egui_kittest::{Harness, kittest::Queryable as _};
     struct State {
@@ -5223,7 +5299,7 @@ fn explorer_file_rows_expose_git_status_badges() {
             let mut state = TreeViewState::default();
             let context = ui.ctx().clone();
             TreeView::new(ui.id().with("git-files")).show_state(ui, &mut state, |builder| {
-                add_workspace_nodes(builder, &nodes, None, None, &context, "", &git.statuses);
+                add_workspace_nodes(builder, &nodes, None, None, &context, None, &git.statuses);
             });
         });
     harness.run();
@@ -9406,7 +9482,31 @@ fn closed_last_document_can_render_hidden_host_and_reopen_settings() {
     let frame = eframe::Frame::_new_kittest();
     app.request_window_resume();
     assert!(app.lifecycle.activate());
+    let root = directory.path().to_owned();
+    let snapshot = Arc::new(WorkspaceSnapshot {
+        nodes: vec![WorkspaceNode {
+            name: "main.typ".into(),
+            path: root.join("main.typ"),
+            relative_path: "main.typ".into(),
+            kind: crate::workspace::WorkspaceNodeKind::File,
+            children: Vec::new(),
+        }],
+        root,
+    });
+    let old_snapshot = Arc::downgrade(&snapshot);
+    app.workspace = Some(WorkspaceTree::from_shared(Arc::clone(&snapshot)));
+    let mut queries = app.explorer.take_queries();
+    queries[ExplorerSection::Files.index()] = "main".into();
+    app.explorer.set_queries(queries);
+    app.explorer.hide();
+    let _ = app.explorer.filter_workspace(Some(&snapshot), "main");
+    drop(snapshot);
     app.finish_window_close();
+    assert!(
+        old_snapshot.upgrade().is_none(),
+        "a dormant host must release filtered filesystem snapshots without another Explorer paint"
+    );
+    assert_eq!(app.explorer.query(ExplorerSection::Files), "main");
     assert!(app.tabs.is_empty());
     assert_eq!(app.document().kind(), DocumentKind::Typst);
     for visible in [false, true, false] {
