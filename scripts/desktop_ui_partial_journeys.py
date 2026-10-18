@@ -13,11 +13,35 @@ def assert_partial_coverage(renderer, pages=48):
     visible = value.get("visible", [])
     if value.get("pages") != pages or not visible:
         raise AssertionError("partial renderer has no visible document pages")
-    if any(page.get("dummy") or not page.get("ink") for page in visible):
-        raise AssertionError("a visible partial-render page has no SVG ink")
-    if value.get("canvases") or value.get("populated", 0) > len(visible) + 6:
+    if not isinstance(visible, list) or any(
+            not isinstance(page, dict) or type(page.get("index")) is not int
+            or not 0 <= page["index"] < pages or page.get("dummy") is not False
+            or page.get("ink") is not True for page in visible):
+        raise AssertionError("a visible partial-render page has no identified SVG ink")
+    if len({page["index"] for page in visible}) != len(visible):
+        raise AssertionError("partial-render visible pages contain duplicate indices")
+    populated, canvases = value.get("populated"), value.get("canvases")
+    if (type(populated) is not int or type(canvases) is not int or canvases != 0
+            or not len(visible) <= populated <= min(pages, len(visible) + 6)):
         raise AssertionError("partial rendering escaped its bounded SVG buffer")
     return value
+
+
+def assert_zoom_burst(before, after, vector_requests, count=20):
+    """Require current native evidence; an old schema must not skip coalescing."""
+    for state in (before, after):
+        if (any(type(state.get(field)) is not int or state[field] < 0
+                for field in ("inputs", "hits"))
+                or any(type(state.get(field)) is not bool for field in ("deferred", "active"))
+                or any(field not in state for field in ("pending", "in_flight"))):
+            raise AssertionError("zoom burst has missing or invalid native evidence")
+    if (after["inputs"] < before["inputs"] + count or after["active"]
+            or after["deferred"] or after["pending"] is not None
+            or after["in_flight"] is not None):
+        raise AssertionError("native burst has not handed off its latest input")
+    if (type(vector_requests) is not int or vector_requests != 1
+            or after["hits"] != before["hits"] + count):
+        raise AssertionError("cached burst must transform all inputs and send exactly one final vector request")
 
 
 def assert_partial_default(document, renderer):
@@ -120,7 +144,7 @@ class PartialPreviewJourneys:
             time.sleep(.05)
         time.sleep(3)
         native_before = state["document"]["preview_zoom_overlay"]
-        requests_before = cache.get("hits", 0) + cache.get("misses", 0)
+        requests_before = cache["hits"] + cache["misses"]
         started = time.monotonic()
         self.native("key-burst", 24, "cmd", 20, 18)
         producer_done = time.monotonic()
@@ -144,10 +168,8 @@ class PartialPreviewJourneys:
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(.02)
-        vector_requests = cache.get("hits", 0)+cache.get("misses", 0)-requests_before
-        if "deferred" in native_before:
-            if vector_requests != 1 or native["hits"] != native_before["hits"] + 20:
-                raise AssertionError("cached burst must transform all inputs and send exactly one final vector request")
+        vector_requests = cache["hits"] + cache["misses"] - requests_before
+        assert_zoom_burst(native_before, native, vector_requests)
         self.record("partial.zoom-burst", mode=mode, count=20, interval_ms=18, warmup_seconds=3,
                     viewport=state["document"]["native_size"], dark=state["document"]["dark"], page_dark=state["document"]["page_dark"],
                     producer_ms=(producer_done-started)*1000,

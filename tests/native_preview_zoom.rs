@@ -18,6 +18,11 @@ fn main() {
     }
     #[cfg(target_os = "macos")]
     run();
+    #[cfg(not(target_os = "macos"))]
+    {
+        eprintln!("native preview zoom requires macOS with WebKit and a desktop session");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(target_os = "macos")]

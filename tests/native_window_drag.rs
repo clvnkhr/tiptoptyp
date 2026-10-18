@@ -13,6 +13,11 @@ fn main() {
     }
     #[cfg(target_os = "macos")]
     check();
+    #[cfg(not(target_os = "macos"))]
+    {
+        eprintln!("native window drag check requires macOS and a desktop session");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(target_os = "macos")]

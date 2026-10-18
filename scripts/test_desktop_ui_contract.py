@@ -248,6 +248,35 @@ class PartialPreviewCoverageContract(unittest.TestCase):
                 assert_partial_coverage({"age_ms": 0,
                     "value": {**self.observation()["value"], **changed}})
 
+    def test_missing_or_malformed_current_coverage_cannot_pass(self):
+        from desktop_ui_partial_journeys import assert_partial_coverage
+        original = self.observation()["value"]
+        cases = []
+        for missing in ("populated", "canvases"):
+            cases.append({key: value for key, value in original.items() if key != missing})
+        for field in ("populated", "canvases"):
+            for value in (None, True, False, -1, 1.5, float("nan")):
+                cases.append({**original, field: value})
+        cases.extend(({**original, "populated": 0},
+                      {**original, "populated": 1, "visible": [
+                          {"index": 0, "dummy": False, "ink": True},
+                          {"index": 1, "dummy": False, "ink": True}]}))
+        for value in cases:
+            with self.subTest(value=value), self.assertRaises(AssertionError):
+                assert_partial_coverage({"age_ms": 0, "value": value})
+
+    def test_visible_pages_need_unique_in_range_indices_and_real_ink_flags(self):
+        from desktop_ui_partial_journeys import assert_partial_coverage
+        original = self.observation()["value"]
+        page = original["visible"][0]
+        cases = [[{key: value for key, value in page.items() if key != missing}]
+                 for missing in ("index", "dummy", "ink")]
+        cases.extend([[{**page, "index": value}] for value in (None, True, -1, 48, 0.5)])
+        cases.extend(([page, page], [{**page, "dummy": 0}], [{**page, "ink": 1}]))
+        for visible in cases:
+            with self.subTest(visible=visible), self.assertRaises(AssertionError):
+                assert_partial_coverage({"age_ms": 0, "value": {**original, "visible": visible}})
+
     def test_fresh_default_requires_selected_and_actual_partial_renderer(self):
         from desktop_ui_partial_journeys import assert_partial_default
         document = {"preview_requested_backend": "InteractivePartial",
@@ -278,6 +307,42 @@ class PartialPreviewCoverageContract(unittest.TestCase):
                 assert_zoom_geometry({"age_ms": 0, "value": {**renderer["value"], **changed}}, baseline, 1.1)
         with self.assertRaises(AssertionError):
             assert_zoom_geometry({**renderer, "age_ms": 501}, baseline, 1.1)
+
+
+class ZoomBurstCoalescingContract(unittest.TestCase):
+    def observation(self, inputs=10, hits=8):
+        return {"inputs": inputs, "hits": hits, "deferred": False,
+                "active": False, "in_flight": None, "pending": None}
+
+    def test_requires_all_twenty_cached_inputs_and_one_final_vector_request(self):
+        from desktop_ui_partial_journeys import assert_zoom_burst
+        before, after = self.observation(), self.observation(inputs=30, hits=28)
+        assert_zoom_burst(before, after, 1)
+        for requests in (0, 2, True, None):
+            with self.subTest(requests=requests), self.assertRaises(AssertionError):
+                assert_zoom_burst(before, after, requests)
+        for mutation in ({"inputs": 29}, {"hits": 27}, {"hits": 29},
+                         {"deferred": True}, {"active": True},
+                         {"pending": 5}, {"in_flight": 5}):
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                assert_zoom_burst(before, {**after, **mutation}, 1)
+
+    def test_missing_legacy_marker_or_current_counters_cannot_bypass_coalescing(self):
+        from desktop_ui_partial_journeys import assert_zoom_burst
+        before, after = self.observation(), self.observation(inputs=30, hits=28)
+        for field in before:
+            for baseline in (True, False):
+                earlier = {key: value for key, value in before.items() if key != field} if baseline else before
+                later = after if baseline else {key: value for key, value in after.items() if key != field}
+                with self.subTest(field=field, baseline=baseline), self.assertRaises(AssertionError):
+                    assert_zoom_burst(earlier, later, 1)
+        for field in ("inputs", "hits"):
+            for value in (None, True, -1, 1.5):
+                with self.subTest(field=field, value=value), self.assertRaises(AssertionError):
+                    assert_zoom_burst({**before, field: value}, after, 1)
+        for field in ("deferred", "active"):
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                assert_zoom_burst({**before, field: 0}, after, 1)
 
 
 class HarperMathProseContract(unittest.TestCase):

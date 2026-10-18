@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import shutil
@@ -21,14 +22,35 @@ import time
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def resolve_tinymist():
+    """Use the host's pinned helper unless an explicit test sidecar was selected."""
+    if sys.platform != "darwin":
+        raise RuntimeError("Native preview zoom requires macOS with WebKit and a desktop session")
+    selected = os.environ.get("TIPTOPTYP_TEST_TINYMIST")
+    if selected:
+        program = Path(selected).expanduser().resolve()
+    else:
+        architecture = platform.machine()
+        target = {"arm64": "aarch64-apple-darwin", "x86_64": "x86_64-apple-darwin"}.get(architecture)
+        if target is None:
+            raise RuntimeError(f"Unsupported macOS architecture for native preview zoom: {architecture}")
+        program = ROOT / "toolchain/bin" / f"tinymist-{target}"
+    if not program.is_file():
+        raise FileNotFoundError(f"Missing Tinymist sidecar: {program}; set TIPTOPTYP_TEST_TINYMIST")
+    if not os.access(program, os.X_OK):
+        raise PermissionError(f"Tinymist sidecar is not executable: {program}")
+    return program
+
+
 def run(binary, mode, output, refresh_race=False, transitions=False, fixture=None, scroll_race=False, dark=False):
+    program = resolve_tinymist()
     source_fixture = (fixture or ROOT / "scripts/fixtures/tinymist-zoom-stress.typ").resolve()
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ttt-native-zoom-") as directory:
         folder = Path(directory)
         shutil.copyfile(source_fixture, folder / "main.typ")
         with (output / f"tinymist-{mode}.log").open("w+") as log:
-            command = [str(ROOT / "toolchain/bin/tinymist-aarch64-apple-darwin"), "preview", "--no-open",
+            command = [str(program), "preview", "--no-open",
                        f"--partial-rendering={'true' if mode == 'partial' else 'false'}", "--root", directory,
                        "--host", "127.0.0.1:0", "--data-plane-host", "127.0.0.1:0", "--control-plane-host",
                        "127.0.0.1:0", "--invert-colors", "never", str(folder / "main.typ")]

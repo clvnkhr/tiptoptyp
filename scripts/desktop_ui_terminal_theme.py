@@ -7,7 +7,6 @@ The runner supplies an isolated default settings profile.
 
 import json
 import os
-from pathlib import Path
 import shlex
 import shutil
 import sys
