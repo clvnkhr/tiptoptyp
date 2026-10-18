@@ -24,13 +24,127 @@ class FixtureFingerprintContract(unittest.TestCase):
 
 class TypingParticleContract(unittest.TestCase):
     def document(self):
-        return {"editor_particles": {"enabled": True, "density": "Medium", "style": "Explosion"},
+        return {"editor_effects": {"enabled": True, "density": "Medium", "actions": {
+                    action.lower(): {"particles": "Explosion", "shake": False, "flash": False, "glow": False}
+                    for action in ("Typing", "Newline", "Indent", "Delete", "Comment", "Undo", "Redo", "Copy", "Cut", "Paste")}},
                 "typing_particles": {"active_count": 7, "burst_count": 1,
                     "emitted_count": 7, "max_live": 7, "pool_limit": 128,
                     "lifetime_ms": 480, "last_emission_age_ms": 100,
                     "origin": [200, 100], "clip": [10, 10, 800, 500],
                     "last_style": "Explosion", "live_styles": {"Explosion": 7},
-                    "last_action": "Typing", "action_bursts": {"Typing": 1}}}
+                    "last_action": "Typing", "action_bursts": {"Typing": 1},
+                    "feedback": {"burst_count": 0, "action_bursts": {}, "last_action": None,
+                        "last_effects": [], "active_effects": [], "shake_offset": [0, 0],
+                        "flash_alpha": 0, "glow_alpha": 0, "lifetime_ms": 480,
+                        "last_emission_age_ms": None}}}
+
+    def test_per_action_preferences_require_every_action_and_reject_legacy_or_invalid_options(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import editor_effect_preferences
+        document = self.document()
+        self.assertEqual(editor_effect_preferences(document)["actions"]["typing"]["particles"], "Explosion")
+        document["editor_effects"]["actions"]["copy"] = {
+            "particles": None, "shake": True, "flash": False, "glow": True}
+        self.assertIsNone(editor_effect_preferences(document)["actions"]["copy"]["particles"])
+        mutations = [lambda d: d.pop("editor_effects"),
+                     lambda d: d.update(editor_effects={"enabled": True, "density": "Medium", "style": "Explosion"}),
+                     lambda d: d["editor_effects"].update(enabled=1),
+                     lambda d: d["editor_effects"].update(density="Ultra"),
+                     lambda d: d["editor_effects"]["actions"].pop("paste"),
+                     lambda d: d["editor_effects"]["actions"].update(save={}),
+                     lambda d: d["editor_effects"]["actions"]["copy"].update(particles="Off"),
+                     lambda d: d["editor_effects"]["actions"]["typing"].update(particles="Unknown"),
+                     lambda d: d["editor_effects"]["actions"]["typing"].update(shake="true"),
+                     lambda d: d["editor_effects"]["actions"]["typing"].pop("glow")]
+        for mutate in mutations:
+            changed = deepcopy(document)
+            mutate(changed)
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                editor_effect_preferences(changed)
+
+    def test_actual_per_action_chooser_updates_only_its_row_and_records_with_real_signature(self):
+        from copy import deepcopy
+        from io import StringIO
+        import json
+        from desktop_ui_journeys import EditorJourneys
+        case = self
+
+        class FakeJourney(EditorJourneys):
+            # Exercise the runner's real event writer/signature, rather than a
+            # permissive **kwargs stub that can hide argument-name collisions.
+            record = runner.Journey.record
+
+            def __init__(self, mutate=None):
+                self.document = case.gpu_document()
+                self.document["typing_particles"].update(active_count=0, live_styles={}, last_emission_age_ms=900)
+                self.log, self.record_lock = StringIO(), threading.Lock()
+                self.calls, self.open, self.menu, self.mutate = [], False, None, mutate
+
+            def snapshot(self):
+                return {"document": deepcopy(self.document)}
+
+            def settings(self):
+                self.open = True
+
+            def setting_section(self, query, title):
+                case.assertTrue(self.open)
+                case.assertEqual((query, title), ("editor effects", "Editor effects"))
+
+            def wait_target(self, target):
+                case.assertEqual(target, self.menu + "." + self.option)
+
+            def wait(self, description, predicate):
+                case.assertTrue(predicate(deepcopy(self.document)), description)
+
+            def stable_state(self, predicate, frames):
+                for _ in range(frames):
+                    case.assertTrue(predicate(deepcopy(self.document)), "effect history changed")
+
+            def close_settings(self):
+                self.open = False
+
+        def click(journey, target):
+            case.assertTrue(journey.open)
+            journey.calls.append(target)
+            action, control, *option = target.split("settings.editor.effects.", 1)[1].split(".")
+            row = journey.document["editor_effects"]["actions"][action]
+            if control == "particles":
+                if option:
+                    case.assertEqual(target, journey.menu + "." + journey.option)
+                    row[control] = None if option[0] == "Off" else option[0]
+                    journey.menu = None
+                else:
+                    journey.menu = target
+            else:
+                row[control] = not row[control]
+            if journey.mutate:
+                journey.mutate(journey.document)
+        FakeJourney.click = click
+
+        for effects in ({"particles": None, "shake": True, "flash": False, "glow": True},
+                        {"particles": "Plasma", "shake": True, "flash": True, "glow": False}):
+            journey = FakeJourney()
+            journey.option = effects["particles"] or "Off"
+            before = deepcopy(journey.document)
+            journey.editor_effect_choose("Copy", **effects)
+            expected = deepcopy(before)
+            expected["editor_effects"]["actions"]["copy"] = effects
+            self.assertEqual(journey.document, expected)
+            self.assertFalse(journey.open)
+            event = json.loads(journey.log.getvalue())
+            self.assertEqual(event["action"], "typing_particles.action_preferences")
+            self.assertEqual(event["editor_action"], "Copy")
+            self.assertEqual(event["effects"], effects)
+            self.assertTrue(all(target.startswith("settings.editor.effects.copy.") for target in journey.calls))
+
+        mutations = [lambda d: d["editor_effects"]["actions"]["paste"].update(glow=True),
+                     lambda d: d["typing_particles"].update(burst_count=2, emitted_count=14,
+                         last_action="Copy", action_bursts={"Typing": 1, "Copy": 1})]
+        for mutate in mutations:
+            journey = FakeJourney(mutate)
+            journey.option = "Off"
+            with self.subTest(mutate=mutate), self.assertRaises(AssertionError):
+                journey.editor_effect_choose("Copy", particles=None)
 
     def test_actual_bounded_fresh_emission_and_expired_counter_history_are_distinct(self):
         from desktop_ui_journeys import typing_particle_state
@@ -64,7 +178,7 @@ class TypingParticleContract(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(AssertionError):
                 typing_particle_state(document)
         document = self.document()
-        document["editor_particles"]["enabled"] = False
+        document["editor_effects"]["enabled"] = False
         with self.assertRaises(AssertionError):
             typing_particle_state(document)
 
@@ -72,12 +186,12 @@ class TypingParticleContract(unittest.TestCase):
     def test_birth_styles_remain_valid_when_the_selected_preference_changes(self):
         from desktop_ui_journeys import typing_particle_state
         document = self.document()
-        document["editor_particles"]["style"] = "Shotgun"
+        document["editor_effects"]["actions"]["typing"]["particles"] = "Shotgun"
         self.assertEqual(typing_particle_state(document)["live_styles"], {"Explosion": 7})
         document["typing_particles"]["live_styles"] = {"Explosion": 4, "Shotgun": 3}
         document["typing_particles"]["last_style"] = "Shotgun"
         self.assertEqual(sum(typing_particle_state(document)["live_styles"].values()), 7)
-        document["editor_particles"]["style"] = "Unknown"
+        document["editor_effects"]["actions"]["typing"]["particles"] = "Unknown"
         with self.assertRaises(AssertionError):
             typing_particle_state(document)
 
@@ -123,15 +237,19 @@ class TypingParticleContract(unittest.TestCase):
         before = self.gpu_document()
         before.update(source_fingerprint=fingerprint("alpha"), source_bytes=5,
                       editor_keyboard_focused=True)
+        before["editor_effects"]["actions"]["copy"]["particles"] = "Railgun"
+        before["editor_effects"]["actions"]["typing"]["particles"] = "Plasma"
         actual = deepcopy(before)
         state = actual["typing_particles"]
-        state.update(burst_count=2, emitted_count=14, last_action="Copy",
+        state.update(last_style="Railgun", live_styles={"Railgun": 7},
+                     burst_count=2, emitted_count=14, last_action="Copy",
                      action_bursts={"Typing": 1, "Copy": 1})
         state["gpu"].update(draws=4, uploads=2)
         self.assertTrue(particle_action_rendered(actual, before, "Copy", "alpha"))
         cases = [lambda d: d.update(source_fingerprint=fingerprint("changed")),
                  lambda d: d.update(editor_keyboard_focused=False),
                  lambda d: d["typing_particles"]["gpu"].update(draws=3),
+                 lambda d: d["typing_particles"].update(last_style="Plasma", live_styles={"Plasma": 7}),
                  lambda d: d["typing_particles"].update(last_action="Typing", action_bursts={"Typing": 2}),
                  lambda d: d["typing_particles"].update(burst_count=3, action_bursts={"Typing": 1, "Copy": 2})]
         for mutate in cases:
@@ -171,6 +289,80 @@ class TypingParticleContract(unittest.TestCase):
             document["typing_particles"]["gpu"] = ({**original, **gpu} if gpu else gpu)
             with self.subTest(gpu=gpu), self.assertRaises(AssertionError):
                 typing_particle_gpu_state(document)
+
+
+class EditorFeedbackContract(unittest.TestCase):
+    def feedback_document(self, effect="Shake"):
+        document = TypingParticleContract().gpu_document()
+        document["typing_particles"].update(active_count=0, live_styles={})
+        document["editor_effects"]["actions"]["typing"] = {
+            "particles": None, "shake": effect == "Shake", "flash": effect == "Flash", "glow": effect == "Glow"}
+        return document
+
+    def emitted_document(self, effect="Shake"):
+        document = self.feedback_document(effect)
+        document["typing_particles"]["feedback"].update(
+            burst_count=1, action_bursts={"Typing": 1}, last_action="Typing", last_effects=[effect],
+            active_effects=[effect], shake_offset=([2.5, -1] if effect == "Shake" else [0, 0]),
+            flash_alpha=(0.2 if effect == "Flash" else 0), glow_alpha=(0.3 if effect == "Glow" else 0),
+            last_emission_age_ms=50)
+        return document
+
+    def test_feedback_requires_actual_amplitude_and_own_cause_without_particle_gpu_work(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import editor_feedback_action_rendered, fingerprint
+        for effect in ("Shake", "Flash", "Glow"):
+            before = self.feedback_document(effect)
+            before.update(source_fingerprint=fingerprint("a"), source_bytes=1, editor_keyboard_focused=True)
+            actual = self.emitted_document(effect)
+            actual.update(source_fingerprint=fingerprint("ax"), source_bytes=2, editor_keyboard_focused=True)
+            self.assertTrue(editor_feedback_action_rendered(actual, before, "Typing", effect, "ax"))
+            mutations = [lambda d: d.update(editor_keyboard_focused=False),
+                         lambda d: d.update(source_fingerprint=fingerprint("wrong")),
+                         lambda d: d["typing_particles"]["feedback"].update(last_action="Copy", action_bursts={"Copy": 1}),
+                         lambda d: d["typing_particles"]["feedback"].update(burst_count=2, action_bursts={"Typing": 2}),
+                         lambda d: d["typing_particles"]["feedback"].update(active_effects=[], shake_offset=[0, 0], flash_alpha=0, glow_alpha=0),
+                         lambda d: d["typing_particles"]["feedback"].update(shake_offset=[0, 0], flash_alpha=0, glow_alpha=0),
+                         lambda d: d["typing_particles"]["gpu"].update(draws=4),
+                         lambda d: d["typing_particles"]["gpu"].update(uploads=2),
+                         lambda d: d["typing_particles"].update(burst_count=2, emitted_count=14, action_bursts={"Typing": 2})]
+            for mutate in mutations:
+                changed = deepcopy(actual)
+                mutate(changed)
+                with self.subTest(effect=effect, changed=changed):
+                    self.assertFalse(editor_feedback_action_rendered(changed, before, "Typing", effect, "ax"))
+
+    def test_missing_invalid_expired_or_disabled_feedback_cannot_pass(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import editor_feedback_state
+        document = self.emitted_document()
+        self.assertEqual(editor_feedback_state(document)["active_effects"], ["Shake"])
+        mutations = [lambda d: d["typing_particles"].pop("feedback"),
+                     lambda d: d["editor_effects"].update(enabled=False),
+                     lambda d: d["typing_particles"]["feedback"].update(burst_count=True),
+                     lambda d: d["typing_particles"]["feedback"].update(action_bursts={"Copy": 2}),
+                     lambda d: d["typing_particles"]["feedback"].update(last_action="Missing"),
+                     lambda d: d["typing_particles"]["feedback"].update(lifetime_ms=1001),
+                     lambda d: d["typing_particles"]["feedback"].update(last_effects=["Shake", "Shake"]),
+                     lambda d: d["typing_particles"]["feedback"].update(active_effects=["Flash"]),
+                     lambda d: d["typing_particles"]["feedback"].update(active_effects=None),
+                     lambda d: d["typing_particles"]["feedback"].update(shake_offset=[float("nan"), 0]),
+                     lambda d: d["typing_particles"]["feedback"].update(shake_offset=[33, 0]),
+                     lambda d: d["typing_particles"]["feedback"].update(flash_alpha=True),
+                     lambda d: d["typing_particles"]["feedback"].update(glow_alpha=1.1),
+                     lambda d: d["typing_particles"]["feedback"].update(last_emission_age_ms=None),
+                     lambda d: d["typing_particles"]["feedback"].update(last_emission_age_ms=480),
+                     lambda d: d["typing_particles"]["feedback"].update(active_effects=[])]
+        for mutate in mutations:
+            changed = deepcopy(document)
+            mutate(changed)
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                editor_feedback_state(changed)
+        expired = deepcopy(document)
+        expired["typing_particles"]["feedback"].update(active_effects=[], shake_offset=[0, 0], last_emission_age_ms=900)
+        self.assertEqual(editor_feedback_state(expired)["burst_count"], 1)
+        expired["editor_effects"]["enabled"] = False
+        self.assertEqual(editor_feedback_state(expired)["active_effects"], [])
 
 
 class PartialFixtureCleanupContract(unittest.TestCase):

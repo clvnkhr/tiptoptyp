@@ -50,6 +50,8 @@ use popup_layout::{
 mod package_browser;
 use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_ui};
 #[cfg(test)]
+mod editor_effect_tests;
+#[cfg(test)]
 mod editor_particle_action_tests;
 mod editor_particles;
 pub(crate) use editor_particles::Renderer as ParticleRenderer;
@@ -986,7 +988,7 @@ enum SettingsTarget {
     DarkImages,
     SourceRevealAnimation,
     PreviewRevealAnimation,
-    EditorParticles,
+    EditorEffects,
     WrapLines,
     IndependentDividers,
     IndentationGuides,
@@ -1049,7 +1051,7 @@ impl SettingsTarget {
         Self::DarkImages,
         Self::SourceRevealAnimation,
         Self::PreviewRevealAnimation,
-        Self::EditorParticles,
+        Self::EditorEffects,
         Self::WrapLines,
         Self::IndependentDividers,
         Self::IndentationGuides,
@@ -1112,7 +1114,7 @@ impl SettingsTarget {
             Self::DarkImages => "Apply dark page appearance to images",
             Self::SourceRevealAnimation => "Reveal in source",
             Self::PreviewRevealAnimation => "Reveal in preview",
-            Self::EditorParticles => "Editor particles",
+            Self::EditorEffects => "Editor effects",
             Self::WrapLines => "Wrap lines",
             Self::IndependentDividers => "Independent main dividers",
             Self::IndentationGuides => "Indentation guides",
@@ -1184,7 +1186,7 @@ impl SettingsTarget {
             | Self::UiFont
             | Self::UiFontWeight => SettingsSection::Appearance,
             Self::IndependentDividers
-            | Self::EditorParticles
+            | Self::EditorEffects
             | Self::WrapLines
             | Self::IndentationGuides
             | Self::LocalUseHighlights
@@ -1252,8 +1254,8 @@ impl SettingsTarget {
             Self::PreviewRevealAnimation => {
                 "preview navigation jump reveal animation effects rings pulse spotlight duration size"
             }
-            Self::EditorParticles => {
-                "editor typing particles copy cut paste comment undo redo delete newline indent sparks effects animation density style weapon explosion shotgun flamethrower railgun plasma"
+            Self::EditorEffects => {
+                "editor typing particles copy cut paste comment undo redo delete newline indent sparks effects animation density style weapon explosion shotgun flamethrower railgun plasma shake flash glow per action"
             }
             Self::WrapLines => "editor soft wrapping word wrap",
             Self::IndependentDividers => {
@@ -7092,7 +7094,8 @@ impl EditorApp {
         context: &egui::Context,
         action: editor_particles::Action,
     ) {
-        if !self.settings.editor_particles.enabled
+        if !self.settings.editor_effects.enabled
+            || !self.settings.editor_effects.actions.get(action).enabled()
             || self.table_editor.is_some()
             || self.latexdiff.is_some()
             || !self.document().kind().is_editable()

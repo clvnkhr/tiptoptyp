@@ -51,7 +51,7 @@ impl Renderer {
     }
 
     #[cfg(test)]
-    pub(super) fn simulate_unavailable_for_tests(&self) {
+    pub(in crate::app) fn simulate_unavailable_for_tests(&self) {
         self.0.status.store(2, Ordering::Release);
     }
 

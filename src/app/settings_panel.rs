@@ -17,9 +17,9 @@ use crate::{
     font_catalog::FontCatalog,
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
     settings::{
-        AppSettings, ColorThemeChoice, DocumentTheme, EditorParticleSettings, GitDiffStyle,
-        InterfaceTheme, ParticleDensity, ParticleStyle, PreviewPreference, RevealAnimation,
-        RevealStyle, SourcePreviewTrigger,
+        ActionEffectSettings, AppSettings, ColorThemeChoice, DocumentTheme, EditorAction,
+        EditorEffectSettings, GitDiffStyle, InterfaceTheme, ParticleDensity, ParticleStyle,
+        PreviewPreference, RevealAnimation, RevealStyle, SourcePreviewTrigger,
     },
     shortcuts::ShortcutAction,
     theme::{self, METRICS},
@@ -827,10 +827,10 @@ impl SettingsPanel<'_> {
             SettingsSection::Editor => {
                 settings_target_anchor(
                     ui,
-                    SettingsTarget::EditorParticles,
+                    SettingsTarget::EditorEffects,
                     &mut settings_scroll_target,
                 );
-                editor_particle_controls(ui, &mut edited.editor_particles);
+                editor_effect_controls(ui, &mut edited.editor_effects);
                 settings_target_anchor(
                     ui,
                     SettingsTarget::IndependentDividers,
@@ -1599,48 +1599,142 @@ fn reveal_animation_controls(ui: &mut egui::Ui, label: &str, animation: &mut Rev
     });
 }
 
-fn editor_particle_controls(ui: &mut egui::Ui, particles: &mut EditorParticleSettings) {
+fn editor_effect_controls(ui: &mut egui::Ui, effects: &mut EditorEffectSettings) {
     ui.horizontal_wrapped(|ui| {
-        let enabled = ui.checkbox(
-            &mut particles.enabled,
-            SettingsTarget::EditorParticles.label(),
-        );
-        let style_label = ui.label("Style");
-        let style = egui::ComboBox::from_id_salt("typing-particle-style")
-            .width(128.0)
-            .selected_text(particles.style.label())
-            .show_ui(ui, |ui| {
-                for value in ParticleStyle::ALL {
-                    let response = ui.selectable_value(&mut particles.style, value, value.label());
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe(
-                        &format!("settings.editor.particles.style.{}", value.label()),
-                        &response,
-                    );
-                    let _ = response;
-                }
-            })
-            .response
-            .labelled_by(style_label.id);
+        let enabled = ui.checkbox(&mut effects.enabled, SettingsTarget::EditorEffects.label());
         let density_label = ui.label("Density");
-        let density = egui::ComboBox::from_id_salt("typing-particle-density")
+        let density = egui::ComboBox::from_id_salt("editor-effect-density")
             .width(94.0)
-            .selected_text(particles.density.label())
+            .selected_text(effects.density.label())
             .show_ui(ui, |ui| {
                 for value in ParticleDensity::ALL {
-                    ui.selectable_value(&mut particles.density, value, value.label());
+                    ui.selectable_value(&mut effects.density, value, value.label());
                 }
             })
             .response
             .labelled_by(density_label.id);
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         {
-            crate::desktop_test::observe("settings.editor.particles.enabled", &enabled);
-            crate::desktop_test::observe("settings.editor.particles.style", &style);
-            crate::desktop_test::observe("settings.editor.particles.density", &density);
+            crate::desktop_test::observe("settings.editor.effects.enabled", &enabled);
+            crate::desktop_test::observe("settings.editor.effects.density", &density);
         }
-        let _ = (enabled, style, density);
+        let _ = (enabled, density);
     });
+    let spacing = Vec2::new(12.0, 3.0);
+    let body_font = egui::TextStyle::Body.resolve(ui.style());
+    let button_font = egui::TextStyle::Button.resolve(ui.style());
+    let ink = ui.visuals().text_color();
+    let required_width = ui.fonts_mut(|fonts| {
+        let mut width = |text: &str, font: &egui::FontId| {
+            fonts
+                .layout_no_wrap(text.into(), font.clone(), ink)
+                .size()
+                .x
+        };
+        let action_heading = width("Action", &body_font);
+        let action = EditorAction::ALL
+            .into_iter()
+            .map(|action| width(action.label(), &body_font))
+            .fold(action_heading, f32::max);
+        let off = width("Off", &button_font);
+        let particles = ParticleStyle::ALL
+            .into_iter()
+            .map(|style| width(style.label(), &button_font))
+            .fold(off, f32::max)
+            + ui.spacing().icon_width
+            + ui.spacing().icon_spacing
+            + 2.0 * ui.spacing().button_padding.x;
+        let toggles: f32 = ["Shake", "Flash", "Glow"]
+            .into_iter()
+            .map(|label| width(label, &body_font).max(ui.spacing().interact_size.y))
+            .sum();
+        action + particles.max(128.0) + toggles + 4.0 * spacing.x
+    });
+    if required_width > ui.available_width() {
+        for action in EditorAction::ALL {
+            let value = effects.actions.get_mut(action);
+            ui.horizontal_wrapped(|ui| {
+                let label = ui.label(action.label());
+                editor_action_particles(ui, action, value, label.id);
+            });
+            ui.horizontal_wrapped(|ui| editor_action_toggles(ui, action, value, true));
+        }
+    } else {
+        egui::Grid::new("editor-action-effects")
+            .spacing(spacing)
+            .show(ui, |ui| {
+                for heading in ["Action", "Particles", "Shake", "Flash", "Glow"] {
+                    ui.weak(heading);
+                }
+                ui.end_row();
+                for action in EditorAction::ALL {
+                    let label = ui.label(action.label());
+                    let value = effects.actions.get_mut(action);
+                    editor_action_particles(ui, action, value, label.id);
+                    editor_action_toggles(ui, action, value, false);
+                    ui.end_row();
+                }
+            });
+    }
+}
+
+fn editor_action_particles(
+    ui: &mut egui::Ui,
+    action: EditorAction,
+    value: &mut ActionEffectSettings,
+    label: egui::Id,
+) {
+    let particles = egui::ComboBox::from_id_salt(("particles", action.key()))
+        .width(128.0)
+        .selected_text(value.particles.map_or("Off", ParticleStyle::label))
+        .show_ui(ui, |ui| {
+            for style in [None].into_iter().chain(ParticleStyle::ALL.map(Some)) {
+                let label = style.map_or("Off", ParticleStyle::label);
+                let response = ui.selectable_value(&mut value.particles, style, label);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe(
+                    &format!("settings.editor.effects.{}.particles.{label}", action.key()),
+                    &response,
+                );
+                let _ = response;
+            }
+        })
+        .response
+        .labelled_by(label);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe(
+        &format!("settings.editor.effects.{}.particles", action.key()),
+        &particles,
+    );
+    let _ = particles;
+}
+
+fn editor_action_toggles(
+    ui: &mut egui::Ui,
+    action: EditorAction,
+    value: &mut ActionEffectSettings,
+    labelled: bool,
+) {
+    for (kind, label, enabled) in [
+        ("shake", "Shake", &mut value.shake),
+        ("flash", "Flash", &mut value.flash),
+        ("glow", "Glow", &mut value.glow),
+    ] {
+        let response = ui.checkbox(enabled, if labelled { label } else { "" });
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::Checkbox,
+                ui.is_enabled(),
+                *enabled,
+                format!("{} {}", action.label(), kind),
+            )
+        });
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe(
+            &format!("settings.editor.effects.{}.{kind}", action.key()),
+            &response,
+        );
+    }
 }
 
 /// Reserve the complete label/control width before egui places the group in a
@@ -2064,7 +2158,7 @@ mod tests {
     #[test]
     fn reveal_and_typing_effect_controls_change_only_their_own_preferences() {
         let mut harness = Harness::builder()
-            .with_size(Vec2::new(680.0, 220.0))
+            .with_size(Vec2::new(680.0, 620.0))
             .build_ui_state(
                 |ui, settings: &mut AppSettings| {
                     reveal_animation_controls(
@@ -2072,7 +2166,7 @@ mod tests {
                         "Reveal in source",
                         &mut settings.source_reveal_animation,
                     );
-                    editor_particle_controls(ui, &mut settings.editor_particles);
+                    editor_effect_controls(ui, &mut settings.editor_effects);
                 },
                 AppSettings::default(),
             );
@@ -2092,7 +2186,7 @@ mod tests {
             harness.state().source_reveal_animation.style,
             RevealStyle::Spotlight
         );
-        harness.get_by_label("Editor particles").click();
+        harness.get_by_label("Editor effects").click();
         harness.run();
         harness
             .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Density")
@@ -2100,9 +2194,9 @@ mod tests {
         harness.run();
         harness.get_by_label("High").click();
         harness.run();
-        assert!(harness.state().editor_particles.enabled);
+        assert!(harness.state().editor_effects.enabled);
         assert_eq!(
-            harness.state().editor_particles.density,
+            harness.state().editor_effects.density,
             ParticleDensity::High
         );
         assert_eq!(
@@ -2114,37 +2208,134 @@ mod tests {
     }
 
     #[test]
-    fn typing_particle_style_control_selects_every_style_without_enabling_effects() {
+    fn per_action_effect_controls_select_styles_and_toggle_independently() {
         let mut harness = Harness::builder()
-            .with_size(Vec2::new(680.0, 220.0))
+            .with_size(Vec2::new(680.0, 620.0))
             .build_ui_state(
                 |ui, settings: &mut AppSettings| {
-                    editor_particle_controls(ui, &mut settings.editor_particles);
+                    editor_effect_controls(ui, &mut settings.editor_effects);
                 },
                 AppSettings::default(),
             );
         harness.run();
-        for style in ParticleStyle::ALL.into_iter().rev() {
+        let typing_rect = harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Typing")
+            .rect();
+        let mut previous_bottom = typing_rect.top();
+        for action in EditorAction::ALL {
+            let row = harness
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, action.label())
+                .rect();
+            assert_eq!(row.left(), typing_rect.left());
+            assert_eq!(row.width(), typing_rect.width());
+            assert!(row.top() >= previous_bottom);
+            previous_bottom = row.bottom();
+            for kind in ["shake", "flash", "glow"] {
+                let toggle = harness
+                    .get_by_role_and_label(
+                        egui::accesskit::Role::CheckBox,
+                        &format!("{} {kind}", action.label()),
+                    )
+                    .rect();
+                assert!(toggle.left() > row.right());
+                assert!((toggle.center().y - row.center().y).abs() < 1.0);
+            }
+        }
+        assert!(previous_bottom - typing_rect.top() < 400.0);
+        for (index, action) in EditorAction::ALL.into_iter().enumerate() {
+            let style = ParticleStyle::ALL[index % ParticleStyle::ALL.len()];
             harness
-                .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Style")
+                .get_by_role_and_label(egui::accesskit::Role::ComboBox, action.label())
                 .click();
             harness.run();
             harness.get_by_label(style.label()).click();
             harness.run();
-            assert_eq!(harness.state().editor_particles.style, style);
-            assert!(!harness.state().editor_particles.enabled);
-            assert_eq!(
-                harness.state().editor_particles.density,
-                ParticleDensity::Medium
-            );
-            assert_eq!(
-                harness.state().source_reveal_animation,
-                RevealAnimation::default()
-            );
-            assert_eq!(
-                harness.state().preview_reveal_animation,
-                RevealAnimation::default()
-            );
+            for kind in ["shake", "flash", "glow"] {
+                harness
+                    .get_by_role_and_label(
+                        egui::accesskit::Role::CheckBox,
+                        &format!("{} {kind}", action.label()),
+                    )
+                    .click();
+                harness.run();
+            }
+            let value = *harness.state().editor_effects.actions.get(action);
+            assert_eq!(value.particles, Some(style));
+            assert!(value.shake && value.flash && value.glow);
+            for other in EditorAction::ALL.into_iter().skip(index + 1) {
+                assert_eq!(
+                    *harness.state().editor_effects.actions.get(other),
+                    Default::default()
+                );
+            }
+            assert!(!harness.state().editor_effects.enabled);
+        }
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "Copy")
+            .click();
+        harness.run();
+        harness.get_by_label("Off").click();
+        harness.run();
+        assert_eq!(harness.state().editor_effects.actions.copy.particles, None);
+        assert!(harness.state().editor_effects.actions.copy.shake);
+        assert!(
+            harness
+                .state()
+                .editor_effects
+                .actions
+                .paste
+                .particles
+                .is_some()
+        );
+        let serialized = serde_json::to_string(harness.state()).unwrap();
+        let restored = crate::settings_json::parse(&serialized).unwrap();
+        assert_eq!(restored, *harness.state());
+    }
+
+    #[test]
+    fn narrow_effect_controls_keep_every_action_and_toggle_inside_the_window() {
+        for font_size in [14.0, 20.0] {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(360.0, 900.0))
+                .build_ui_state(
+                    move |ui, settings: &mut AppSettings| {
+                        for font in ui.style_mut().text_styles.values_mut() {
+                            font.size = font_size;
+                        }
+                        editor_effect_controls(ui, &mut settings.editor_effects);
+                    },
+                    AppSettings::default(),
+                );
+            harness.run();
+            for action in EditorAction::ALL {
+                let particles = harness
+                    .get_by_role_and_label(egui::accesskit::Role::ComboBox, action.label())
+                    .rect();
+                assert!(
+                    particles.left() >= 0.0 && particles.right() <= 360.0,
+                    "{} particle selector at {font_size}: {particles:?}",
+                    action.label()
+                );
+                for kind in ["shake", "flash", "glow"] {
+                    let label = format!("{} {kind}", action.label());
+                    let toggle =
+                        harness.get_by_role_and_label(egui::accesskit::Role::CheckBox, &label);
+                    let rect = toggle.rect();
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= 360.0,
+                        "{label} at {font_size}: {rect:?}"
+                    );
+                    toggle.click();
+                    harness.run();
+                    let value = harness.state().editor_effects.actions.get(action);
+                    assert!(match kind {
+                        "shake" => value.shake,
+                        "flash" => value.flash,
+                        "glow" => value.glow,
+                        _ => unreachable!(),
+                    });
+                }
+            }
         }
     }
 

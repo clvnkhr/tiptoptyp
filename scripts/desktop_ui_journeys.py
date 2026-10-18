@@ -5,6 +5,7 @@ See docs/desktop-ui-audit.md for the lower-level tests these journeys promote.
 """
 
 import math
+from copy import deepcopy
 from contextlib import contextmanager
 
 from desktop_ui_tex_journeys import TexJourneys
@@ -38,13 +39,28 @@ def fingerprint(text):
     return f"{value:016x}"
 
 
+def editor_effect_preferences(document):
+    """Require the current complete per-action schema, with no legacy fallback."""
+    settings = document.get("editor_effects")
+    if not isinstance(settings, dict) or type(settings.get("enabled")) is not bool \
+            or settings.get("density") not in ("Low", "Medium", "High"):
+        raise AssertionError("editor effect settings are unavailable or invalid")
+    actions = settings.get("actions")
+    if not isinstance(actions, dict) or set(actions) != {action.lower() for action in PARTICLE_ACTIONS}:
+        raise AssertionError("editor effect settings must identify every keyboard action")
+    for action, effects in actions.items():
+        if not isinstance(effects, dict) or set(effects) != {"particles", "shake", "flash", "glow"} \
+                or effects["particles"] is not None and effects["particles"] not in PARTICLE_STYLES \
+                or any(type(effects.get(effect)) is not bool for effect in ("shake", "flash", "glow")):
+            raise AssertionError("invalid editor effects for " + action)
+    return settings
+
+
 def typing_particle_state(document):
     """Reject missing/stale-looking animation evidence rather than infer a pass."""
     state = document.get("typing_particles")
-    settings = document.get("editor_particles")
-    if not isinstance(state, dict) or not isinstance(settings, dict) \
-            or type(settings.get("enabled")) is not bool \
-            or settings.get("style") not in PARTICLE_STYLES:
+    settings = editor_effect_preferences(document)
+    if not isinstance(state, dict):
         raise AssertionError("particle settings/inspection is unavailable")
     for field in ("active_count", "burst_count", "emitted_count", "max_live", "pool_limit", "lifetime_ms"):
         if type(state.get(field)) is not int or state[field] < 0:
@@ -114,7 +130,7 @@ def particle_action_rendered(document, before, action, expected):
     gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
     counts = dict(prior["action_bursts"])
     counts[action] = counts.get(action, 0) + 1
-    style = before["editor_particles"]["style"]
+    style = editor_effect_preferences(before)["actions"][action.lower()]["particles"]
     return (state["active_count"] > 0 and state["burst_count"] == prior["burst_count"] + 1
             and state["last_action"] == action and state["action_bursts"] == counts
             and state["last_style"] == style and state["live_styles"] == {style: state["active_count"]}
@@ -126,11 +142,82 @@ def particle_action_rendered(document, before, action, expected):
             and document["editor_keyboard_focused"])
 
 
+def editor_feedback_state(document):
+    """Require bounded, cause-tagged evidence for actual nonparticle feedback."""
+    particles = typing_particle_state(document)
+    settings = editor_effect_preferences(document)
+    state = particles.get("feedback")
+    effects = {"Shake", "Flash", "Glow"}
+    if not isinstance(state, dict) or type(state.get("burst_count")) is not int \
+            or state["burst_count"] < 0 or type(state.get("lifetime_ms")) is not int \
+            or not 0 < state["lifetime_ms"] <= 1000:
+        raise AssertionError("bounded editor feedback evidence is unavailable")
+    counts = state.get("action_bursts")
+    if not isinstance(counts, dict) or any(
+            action not in PARTICLE_ACTIONS or type(count) is not int or count <= 0
+            for action, count in counts.items()) or sum(counts.values()) != state["burst_count"]:
+        raise AssertionError("editor feedback must identify each action exactly once")
+    last, active = state.get("last_effects"), state.get("active_effects")
+    if any(not isinstance(value, list) or any(item not in effects for item in value)
+           or len(set(value)) != len(value) for value in (last, active)) \
+            or not set(active) <= set(last):
+        raise AssertionError("editor feedback effects are missing or invalid")
+    offset = state.get("shake_offset")
+    if not isinstance(offset, list) or len(offset) != 2 or any(
+            type(value) not in (int, float) or not math.isfinite(value) or abs(value) > 32
+            for value in offset) or any(
+            type(state.get(field)) not in (int, float) or not math.isfinite(state[field])
+            or not 0 <= state[field] <= 1 for field in ("flash_alpha", "glow_alpha")):
+        raise AssertionError("editor feedback render amplitudes are unbounded or invalid")
+    age = state.get("last_emission_age_ms")
+    if state["burst_count"]:
+        if state.get("last_action") not in counts or not last \
+                or type(age) not in (int, float) or not math.isfinite(age) or age < 0:
+            raise AssertionError("editor feedback has no valid last action/emission")
+    elif state.get("last_action") is not None or last or active or age is not None:
+        raise AssertionError("empty editor feedback reports an emission")
+    if active and (not settings["enabled"] or age >= state["lifetime_ms"]):
+        raise AssertionError("disabled or expired editor feedback is active")
+    if ("Shake" not in active and offset != [0, 0]) \
+            or ("Flash" not in active and state["flash_alpha"] != 0) \
+            or ("Glow" not in active and state["glow_alpha"] != 0):
+        raise AssertionError("inactive editor feedback still changes its rendered appearance")
+    return state
+
+
+def editor_feedback_action_rendered(document, before, action, effect, expected):
+    """A particle-Off action must render only its chosen finite feedback."""
+    state, prior = editor_feedback_state(document), editor_feedback_state(before)
+    particles, prior_particles = typing_particle_state(document), typing_particle_state(before)
+    gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
+    settings = editor_effect_preferences(before)
+    chosen = settings["actions"][action.lower()]
+    expected_choice = {"particles": None, "shake": effect == "Shake", "flash": effect == "Flash",
+                       "glow": effect == "Glow"}
+    counts = dict(prior["action_bursts"])
+    counts[action] = counts.get(action, 0) + 1
+    amplitude = {"Shake": any(abs(value) > 0.01 for value in state["shake_offset"]),
+                 "Flash": state["flash_alpha"] > 0, "Glow": state["glow_alpha"] > 0}[effect]
+    return (settings["enabled"] and chosen == expected_choice
+            and state["burst_count"] == prior["burst_count"] + 1
+            and state["last_action"] == action and state["action_bursts"] == counts
+            and state["last_effects"] == [effect] and state["active_effects"] == [effect] and amplitude
+            and all(particles[field] == prior_particles[field] for field in (
+                "burst_count", "emitted_count", "action_bursts"))
+            and particles["active_count"] == 0
+            and all(gpu[field] == prior_gpu[field] for field in ("draws", "uploads"))
+            and document["source_fingerprint"] == fingerprint(expected)
+            and document["source_bytes"] == len(expected.encode("utf-8"))
+            and document["editor_keyboard_focused"])
+
+
 def particle_document_returned_quiet(document, before, expected):
     """A document switch resets its trace; it must not replay a hidden command."""
     state = typing_particle_state(document)
+    feedback = editor_feedback_state(document)
     gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
-    return (document["active_tab_id"] == before["active_tab_id"]
+    return (feedback["burst_count"] == 0 and not feedback["active_effects"]
+            and document["active_tab_id"] == before["active_tab_id"]
             and document["source_fingerprint"] == fingerprint(expected)
             and document["source_bytes"] == len(expected.encode("utf-8"))
             and all(state[field] == 0 for field in (
@@ -1993,7 +2080,7 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             active = self.wait("real editor action renders one native GPU burst: " + editor_action,
                                lambda d: particle_action_rendered(d, before, editor_action, expected))
             self.record("typing_particles.active", editor_action=editor_action,
-                        style=active["document"]["editor_particles"]["style"],
+                        style=active["document"]["editor_effects"]["actions"][editor_action.lower()]["particles"],
                         dark=active["document"]["dark"],
                         observation=active["document"]["typing_particles"])
             if capture:
@@ -2014,6 +2101,10 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                           and typing_particle_gpu_state(d)["draws"] == draws, frames=3)
 
     def editor_particle_commands(self, expected):
+        for action, style in (("Comment", "Shotgun"), ("Copy", "Railgun"), ("Paste", "Plasma"),
+                              ("Cut", "Flamethrower"), ("Undo", "Explosion"), ("Redo", "Shotgun"),
+                              ("Newline", "Railgun"), ("Delete", "Plasma"), ("Indent", "Flamethrower")):
+            self.editor_effect_choose(action, particles=style)
         def eof():
             self.click("editor.source")
             self.key(125)
@@ -2069,6 +2160,9 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.editor_particle_action("Undo", pasted, lambda: self.key(6), capture=self.capture_review)
         self.editor_particle_action("Redo", expected, lambda: self.key(6, "cmd+shift"), capture=self.capture_review)
         eof()
+        self.editor_particle_action("Indent", expected + "  ", lambda: self.key(48, "none"), capture=self.capture_review)
+        self.editor_particle_action("Undo", expected, lambda: self.key(6), capture=self.capture_review)
+        eof()
         self.editor_particle_action("Newline", expected + "\n", lambda: self.key(36, "none"), capture=self.capture_review)
         self.editor_particle_action("Delete", expected, lambda: self.key(51, "none"), capture=self.capture_review)
         # Opening/dismissing a command popup does not execute an editor action.
@@ -2077,21 +2171,85 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         self.source_is(expected)
         return expected
 
-    def typing_particle_choose_style(self, style):
-        before = typing_particle_state(self.snapshot()["document"])
+    def editor_effect_choose(self, action, particles=None, shake=False, flash=False, glow=False):
+        before_document = self.snapshot()["document"]
+        before = typing_particle_state(before_document)
         history = {field: before[field] for field in (
             "burst_count", "emitted_count", "last_style", "last_action", "action_bursts")}
+        feedback = editor_feedback_state(before_document)
+        feedback_history = {field: deepcopy(feedback[field]) for field in (
+            "burst_count", "action_bursts", "last_action", "last_effects")}
+        preferences = deepcopy(editor_effect_preferences(before_document))
+        effects = {"particles": particles, "shake": shake, "flash": flash, "glow": glow}
         self.settings()
-        self.setting_section("editor particles", "Editor particles")
-        self.click("settings.editor.particles.style")
-        self.wait_target("settings.editor.particles.style." + style)
-        self.click("settings.editor.particles.style." + style)
-        self.wait("particle style applies through Settings: " + style, lambda d:
-                  d["editor_particles"]["style"] == style)
+        self.setting_section("editor effects", "Editor effects")
+        prefix = "settings.editor.effects." + action.lower()
+        current = preferences["actions"][action.lower()]
+        if current["particles"] != particles:
+            self.click(prefix + ".particles")
+            self.wait_target(prefix + ".particles." + (particles or "Off"))
+            self.click(prefix + ".particles." + (particles or "Off"))
+        for effect in ("shake", "flash", "glow"):
+            if current[effect] != effects[effect]:
+                self.click(prefix + "." + effect)
+        preferences["actions"][action.lower()] = effects
+        self.wait("only the selected action's effects change: " + action, lambda d:
+                  editor_effect_preferences(d) == preferences)
         self.stable_state(lambda d: all(typing_particle_state(d)[field] == value
-                                       for field, value in history.items()), frames=3)
+                                       for field, value in history.items())
+                          and all(editor_feedback_state(d)[field] == value
+                                  for field, value in feedback_history.items()), frames=3)
         self.close_settings()
-        self.record("typing_particles.style", style=style, preserved_history=history)
+        self.record("typing_particles.action_preferences", editor_action=action, effects=effects,
+                    preserved_history=history)
+
+    def editor_feedback_actions(self, expected):
+        from concurrent.futures import ThreadPoolExecutor
+        for action, effect, text, perform in (
+                ("Typing", "Shake", "s", lambda: self.native("text", "s")),
+                ("Indent", "Flash", "  ", lambda: self.key(48, "none")),
+                ("Newline", "Glow", "\n", lambda: self.key(36, "none"))):
+            self.editor_effect_choose(action, **{effect.lower(): True})
+            self.click("editor.source")
+            self.key(125)
+            self.wait("nonparticle action caret is at EOF", lambda d:
+                      d["editor_keyboard_focused"] and d["cursor"] == [len(expected), len(expected)])
+            before = self.snapshot()["document"]
+            expected += text
+            # Observe concurrently: native event posting includes a key-up delay,
+            # while Flash intentionally has a much shorter lifetime than particles.
+            with ThreadPoolExecutor(max_workers=1) as observer:
+                active = observer.submit(self.wait, "particle-Off action renders " + effect,
+                                         lambda d: editor_feedback_action_rendered(
+                                             d, before, action, effect, expected))
+                perform()
+                active = active.result()
+            self.record("typing_particles.feedback", editor_action=action, effect=effect,
+                        observation=active["document"]["typing_particles"])
+            if self.capture_review:
+                self.capture_viewport("main")
+            self.source_is(expected)
+            expired = self.wait("nonparticle feedback expires without input", lambda d:
+                                not editor_feedback_state(d)["active_effects"], timeout=3)["document"]
+            burst_count = editor_feedback_state(expired)["burst_count"]
+            draws = typing_particle_gpu_state(expired)["draws"]
+            self.stable_state(lambda d: not editor_feedback_state(d)["active_effects"]
+                              and editor_feedback_state(d)["burst_count"] == burst_count
+                              and typing_particle_gpu_state(d)["draws"] == draws, frames=3)
+        # All individual effects Off must be a true no-op, including no GPU work.
+        self.editor_effect_choose("Typing")
+        self.click("editor.source")
+        self.key(125)
+        before = self.snapshot()["document"]
+        expected += "o"
+        self.native("text", "o")
+        self.source_is(expected)
+        self.stable_state(lambda d: editor_feedback_state(d)["burst_count"]
+                          == editor_feedback_state(before)["burst_count"]
+                          and not editor_feedback_state(d)["active_effects"]
+                          and typing_particle_state(d)["burst_count"] == typing_particle_state(before)["burst_count"]
+                          and typing_particle_gpu_state(d)["draws"] == typing_particle_gpu_state(before)["draws"], frames=3)
+        return expected
 
     def typing_particles(self):
         launch = self.snapshot()["document"]
@@ -2109,21 +2267,24 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
         document = self.snapshot()["document"]
         appearance = document["interface_theme"]
         initial_dark = document["dark"]
-        preferences = dict(document["editor_particles"])
+        preferences = deepcopy(editor_effect_preferences(document))
         state = typing_particle_state(document)
         typing_particle_gpu_state(document)
-        if preferences != {"enabled": False, "density": "Medium", "style": "Explosion"} \
-                or state["active_count"] or state["burst_count"]:
-            raise AssertionError("editor particles must default off at medium density with Explosion style")
+        if preferences != {"enabled": False, "density": "Medium", "actions": {
+                action.lower(): {"particles": "Explosion", "shake": False, "flash": False, "glow": False}
+                for action in PARTICLE_ACTIONS}} or state["active_count"] or state["burst_count"]:
+            raise AssertionError("editor effects must default off at medium density with Explosion for every action")
         expected = initial
         try:
             self.settings()
-            self.setting_section("editor particles", "Editor particles")
-            self.click("settings.editor.particles.enabled")
-            self.wait("particle checkbox enables the real setting", lambda d: d["editor_particles"]["enabled"])
+            self.setting_section("editor effects", "Editor effects")
+            self.click("settings.editor.effects.enabled")
+            self.wait("particle checkbox enables the real setting", lambda d: d["editor_effects"]["enabled"])
+            if self.capture_review:
+                self.capture_viewport("settings")
             self.close_settings()
             for style, text in zip(PARTICLE_STYLES, "esfrp"):
-                self.typing_particle_choose_style(style)
+                self.editor_effect_choose("Typing", particles=style)
                 self.click("editor.source")
                 self.key(125)  # Cmd+Down reaches EOF even after clicking a blank line.
                 self.wait("source owns particle input at EOF", lambda d:
@@ -2142,13 +2303,19 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
                 expected += text
                 self.typing_particle_burst(text, expected, capture=self.capture_review)
             expected = self.editor_particle_commands(expected)
+            expected = self.editor_feedback_actions(expected)
+            # Keep every feedback kind configured for disabled/foreign-focus negatives.
+            self.editor_effect_choose("Typing", particles="Plasma", shake=True, flash=True, glow=True)
             quiet_document = self.snapshot()["document"]
             before = typing_particle_state(quiet_document)["burst_count"]
             idle_draws = typing_particle_gpu_state(quiet_document)["draws"]
+            feedback_bursts = editor_feedback_state(quiet_document)["burst_count"]
             def remains_quiet(document):
                 state = typing_particle_state(document)
                 gpu = typing_particle_gpu_state(document)
+                feedback = editor_feedback_state(document)
                 return (state["burst_count"] == before and state["active_count"] == 0
+                        and feedback["burst_count"] == feedback_bursts and not feedback["active_effects"]
                         and gpu["draws"] == idle_draws)
             self.key(123, "none")  # Moving a caret must not emit another burst.
             self.stable_state(remains_quiet, frames=3)
@@ -2171,11 +2338,14 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             empty = self.snapshot()["document"]
             empty_bursts = typing_particle_state(empty)["burst_count"]
             empty_draws = typing_particle_gpu_state(empty)["draws"]
+            empty_feedback = editor_feedback_state(empty)["burst_count"]
             self.key(6)
             self.key(6, "cmd+shift")
             self.stable_state(lambda d: d["source_fingerprint"] == fingerprint("")
                               and typing_particle_state(d)["burst_count"] == empty_bursts
                               and typing_particle_state(d)["active_count"] == 0
+                              and editor_feedback_state(d)["burst_count"] == empty_feedback
+                              and not editor_feedback_state(d)["active_effects"]
                               and typing_particle_gpu_state(d)["draws"] == empty_draws, frames=3)
             self.close_scratch(empty_count)
             self.source_is(expected)
@@ -2185,10 +2355,11 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             self.record("typing_particles.document_return", previous_burst_count=before,
                         reset_burst_count=0, idle_gpu_draws=idle_draws)
             before = 0
+            feedback_bursts = 0
             self.settings()
-            self.setting_section("editor particles", "Editor particles")
-            self.click("settings.editor.particles.enabled")
-            self.wait("particle checkbox disables the real setting", lambda d: not d["editor_particles"]["enabled"])
+            self.setting_section("editor effects", "Editor effects")
+            self.click("settings.editor.effects.enabled")
+            self.wait("particle checkbox disables the real setting", lambda d: not d["editor_effects"]["enabled"])
             self.close_settings()
             self.click("editor.source")
             self.key(125)
@@ -2198,16 +2369,18 @@ class EditorJourneys(TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJ
             self.record("typing_particles.negative", burst_count=before, idle_gpu_draws=idle_draws)
         finally:
             self.settings()
-            self.setting_section("editor particles", "Editor particles")
-            current = self.snapshot()["document"]["editor_particles"]
-            if current["style"] != preferences["style"]:
-                self.click("settings.editor.particles.style")
-                self.wait_target("settings.editor.particles.style." + preferences["style"])
-                self.click("settings.editor.particles.style." + preferences["style"])
+            self.setting_section("editor effects", "Editor effects")
+            current = editor_effect_preferences(self.snapshot()["document"])
+            for action, effects in preferences["actions"].items():
+                if current["actions"][action] != effects:
+                    self.close_settings()
+                    self.editor_effect_choose(action, **effects)
+                    self.settings()
+                    self.setting_section("editor effects", "Editor effects")
             if current["enabled"] != preferences["enabled"]:
-                self.click("settings.editor.particles.enabled")
-            self.wait("particle journey restores the exact initial particle preferences", lambda d:
-                      d["editor_particles"] == preferences)
+                self.click("settings.editor.effects.enabled")
+            self.wait("effect journey restores every initial per-action preference", lambda d:
+                      editor_effect_preferences(d) == preferences)
             self.setting_section("appearance", "Appearance")
             self.click("settings.theme." + ("Follow system" if appearance == "System" else appearance))
             self.wait("particle journey restores the exact initial appearance", lambda d:

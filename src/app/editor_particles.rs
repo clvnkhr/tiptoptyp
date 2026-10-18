@@ -1,7 +1,7 @@
 //! Finite editor-action feedback over the existing editor, with no input or layout widgets.
 use crate::{
     document::DocumentKey,
-    settings::{EditorParticleSettings, ParticleDensity, ParticleStyle},
+    settings::{ActionEffectSettings, EditorEffectSettings, ParticleDensity, ParticleStyle},
     theme,
 };
 use eframe::egui::{self, Id, Pos2, Rect, Ui, Vec2, text_edit::TextEditOutput};
@@ -10,58 +10,17 @@ use std::sync::{Arc, Mutex};
 #[allow(unsafe_code)]
 mod gpu;
 pub(crate) use gpu::Renderer;
+mod feedback;
 #[cfg(test)]
 mod gpu_tests;
+pub(super) mod shake;
 
 const LIMIT: usize = 256;
 const MAX_INPUT_EVENTS: usize = 64;
 const LIFETIME: f64 = 0.64;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum Action {
-    #[default]
-    Typing,
-    Newline,
-    Indent,
-    Delete,
-    Comment,
-    Undo,
-    Redo,
-    Copy,
-    Cut,
-    Paste,
-}
+pub(super) use crate::settings::EditorAction as Action;
 impl Action {
-    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-    const ALL: [Self; 10] = [
-        Self::Typing,
-        Self::Newline,
-        Self::Indent,
-        Self::Delete,
-        Self::Comment,
-        Self::Undo,
-        Self::Redo,
-        Self::Copy,
-        Self::Cut,
-        Self::Paste,
-    ];
-
-    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-    fn label(self) -> &'static str {
-        match self {
-            Self::Typing => "Typing",
-            Self::Newline => "Newline",
-            Self::Indent => "Indent",
-            Self::Delete => "Delete",
-            Self::Comment => "Comment",
-            Self::Undo => "Undo",
-            Self::Redo => "Redo",
-            Self::Copy => "Copy",
-            Self::Cut => "Cut",
-            Self::Paste => "Paste",
-        }
-    }
-
     fn count(self, density: ParticleDensity, events: u8) -> usize {
         let base = density_count(density);
         match self {
@@ -248,6 +207,8 @@ pub(super) struct Surface<'a> {
     pub(super) document: DocumentKey,
     pub(super) viewport: Rect,
     pub(super) view: View,
+    pub(super) paint_range: shake::PaintRange,
+    pub(super) shake_viewport: Rect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -297,6 +258,7 @@ struct State {
     seed: u32,
     base_time: f64,
     gpu_instances: Option<Arc<[gpu::Instance]>>,
+    feedback: Option<feedback::Pulse>,
 }
 impl State {
     fn random(&mut self) -> f32 {
@@ -317,6 +279,7 @@ impl State {
     ) {
         if !now.is_finite() {
             self.particles.clear();
+            self.feedback = None;
             self.gpu_instances = None;
             return;
         }
@@ -327,8 +290,12 @@ impl State {
             || now < self.last_time
         {
             self.particles.clear();
+            self.feedback = None;
             self.gpu_instances = None;
             self.emitted_frame = None;
+        }
+        if self.feedback.is_some_and(|pulse| !pulse.alive(now)) {
+            self.feedback = None;
         }
         self.identity = Some(identity);
         self.last_frame = Some(frame);
@@ -389,6 +356,33 @@ impl State {
         self.gpu_instances = None;
         self.emitted_frame = Some(frame);
         self.bursts = self.bursts.wrapping_add(1);
+    }
+
+    fn update_feedback(
+        &mut self,
+        caret: Option<Pos2>,
+        effects: Option<ActionEffectSettings>,
+        now: f64,
+        frame: u64,
+    ) -> bool {
+        let Some(origin) = caret else {
+            return false;
+        };
+        // Discarded passes may consume the action receipt on the first pass.
+        // Realign the existing envelope even if preferences changed meanwhile.
+        if let Some(pulse) = &mut self.feedback
+            && pulse.frame == frame
+        {
+            pulse.origin = origin;
+            return false;
+        }
+        if let Some(effects) = effects
+            && (effects.shake || effects.flash || effects.glow)
+        {
+            self.feedback = Some(feedback::Pulse::new(origin, effects, now, frame));
+            return true;
+        }
+        false
     }
 
     fn instances(&mut self) -> Arc<[gpu::Instance]> {
@@ -541,7 +535,7 @@ fn caret_for_frame(
 pub(super) fn paint(
     ui: &Ui,
     surface: Surface<'_>,
-    settings: EditorParticleSettings,
+    settings: EditorEffectSettings,
     intent: InputIntent,
     document_changed: bool,
 ) {
@@ -555,13 +549,6 @@ pub(super) fn paint(
         return;
     }
     let renderer = Renderer::for_context(context);
-    if renderer.is_unavailable() {
-        context.data_mut(|data| {
-            data.remove::<SharedState>(id);
-            data.remove::<Receipt>(receipt_id(surface.edit.response.id));
-        });
-        return;
-    }
     let identity = Identity::new(surface.document, surface.view);
     let receipt = take_receipt(
         context,
@@ -586,9 +573,19 @@ pub(super) fn paint(
             copied,
         )
     });
+    let action = action.filter(|&action| {
+        let effects = settings.actions.get(action);
+        effects.enabled()
+            && (!renderer.is_unavailable() || effects.shake || effects.flash || effects.glow)
+    });
     let accepted = action.is_some();
     if existing.is_none() && !accepted {
-        renderer.warm(ui, surface.viewport.intersect(ui.clip_rect()));
+        if Action::ALL
+            .into_iter()
+            .any(|action| settings.actions.get(action).particles.is_some())
+        {
+            renderer.warm(ui, surface.viewport.intersect(ui.clip_rect()));
+        }
         return;
     }
     let state = existing.unwrap_or_else(|| {
@@ -597,13 +594,20 @@ pub(super) fn paint(
         state
     });
     let mut state = state.lock().unwrap();
+    if renderer.is_unavailable() {
+        // A shader can fail on its first actual paint. Retire invisible particles
+        // immediately while keeping independent CPU feedback alive.
+        state.particles.clear();
+        state.gpu_instances = None;
+    }
     let frame = context.cumulative_frame_nr();
     let viewport = surface.viewport.intersect(ui.clip_rect());
     let action = action.unwrap_or(state.action);
     let caret = caret_for_frame(
         settings.enabled,
         accepted,
-        state.emitted_frame == Some(frame) && !state.particles.is_empty(),
+        (state.emitted_frame == Some(frame) && !state.particles.is_empty())
+            || state.feedback.is_some_and(|pulse| pulse.frame == frame),
         || {
             surface
                 .edit
@@ -622,45 +626,68 @@ pub(super) fn paint(
         },
     );
     let now = context.input(|input| input.time);
-    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
     let bursts_before = state.bursts;
-    state.style = settings.style;
+    let effects = *settings.actions.get(action);
+    if let Some(style) = effects.particles {
+        state.style = style;
+    }
     state.action = action;
     state.update(
         Identity::new(surface.document, surface.view),
         frame,
         now,
         caret,
-        if accepted {
+        if accepted && effects.particles.is_some() && !renderer.is_unavailable() {
             action.count(settings.density, intent.events.max(1))
         } else {
             0
         },
     );
-    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    let feedback_emitted = state.update_feedback(caret, accepted.then_some(effects), now, frame);
+    #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
+    if feedback_emitted {
+        feedback::record(context, id, identity, action, effects, now);
+    }
+    let _ = feedback_emitted;
+    #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
     if state.bursts != bursts_before {
         record_emission(context, id, &state, now, viewport);
     }
-    if state.particles.is_empty() {
+    let pulse = state.feedback;
+    if state.particles.is_empty() && pulse.is_none() {
         drop(state);
         context.data_mut(|data| data.remove::<SharedState>(id));
         return;
     }
-    let instances = state.instances();
+    let instances =
+        (!state.particles.is_empty() && !renderer.is_unavailable()).then(|| state.instances());
     let time = (now - state.base_time) as f32;
     drop(state);
-    renderer.submit(
-        ui,
-        viewport,
-        instances,
-        time,
-        theme::palette(context).accent,
-        ui.visuals().dark_mode,
-    );
+    let accent = theme::palette(context).accent;
+    if let Some(pulse) = pulse {
+        let frame = pulse.sample(now);
+        surface.paint_range.apply(
+            ui,
+            frame.shake,
+            surface.shake_viewport.intersect(ui.clip_rect()),
+        );
+        feedback::paint(ui, viewport, pulse.origin, accent, frame);
+    }
+    if let Some(instances) = instances {
+        renderer.submit(
+            ui,
+            viewport,
+            instances,
+            time,
+            accent,
+            ui.visuals().dark_mode,
+        );
+    }
     context.request_repaint_after(theme::METRICS.motion.animation_frame);
 }
 
-#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+#[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
 #[derive(Clone)]
 struct Trace {
     identity: Identity,
@@ -675,7 +702,7 @@ struct Trace {
     clip: Rect,
 }
 
-#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+#[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
 fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, clip: Rect) {
     let Some(identity) = state.identity else {
         return;
@@ -721,7 +748,7 @@ fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, cli
 
 /// Read-only native evidence. Counts survive expiry so paste/navigation checks
 /// cannot pass merely by observing a short animation after it has finished.
-#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+#[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
 pub(super) fn inspected(
     context: &egui::Context,
     editor: Id,
@@ -753,6 +780,7 @@ pub(super) fn inspected(
         live_styles.values().sum::<usize>()
     });
     serde_json::json!({
+        "feedback": feedback::inspected(context, id, identity, now),
         "gpu": Renderer::for_context(context).inspected(),
         "active_count": active_count,
         "live_styles": live_styles,
@@ -774,7 +802,7 @@ pub(super) fn inspected(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::app::{EditorApp, EditorSelection, source_editor_id};
     use egui_kittest::Harness;
@@ -785,6 +813,28 @@ mod tests {
             DocumentKey::new(WindowSessionId::new(1), epoch, revision),
             view,
         )
+    }
+
+    #[test]
+    fn discarded_feedback_pass_realigns_without_a_second_action_or_changing_the_envelope() {
+        let mut state = State::default();
+        let effects = ActionEffectSettings {
+            particles: None,
+            glow: true,
+            flash: false,
+            shake: false,
+        };
+        assert!(state.update_feedback(Some(egui::pos2(10.0, 20.0)), Some(effects), 5.0, 100));
+        assert!(!state.update_feedback(Some(egui::pos2(30.0, 40.0)), None, 5.1, 100));
+        let pulse = state.feedback.unwrap();
+        assert_eq!(pulse.origin, egui::pos2(30.0, 40.0));
+        assert!(pulse.sample(5.1).glow > 0.0);
+        assert!(
+            !pulse.alive(5.5),
+            "realignment must not restart the envelope"
+        );
+        assert!(!state.update_feedback(None, Some(effects), 5.5, 101));
+        assert!(state.update_feedback(Some(egui::pos2(50.0, 60.0)), Some(effects), 5.6, 101));
     }
 
     #[test]
@@ -1174,7 +1224,7 @@ mod tests {
         assert!(density_count(ParticleDensity::Medium) < density_count(ParticleDensity::High));
     }
 
-    fn editor(diff: bool) -> Harness<'static, EditorApp> {
+    pub(in crate::app) fn editor(diff: bool) -> Harness<'static, EditorApp> {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
@@ -1183,7 +1233,7 @@ mod tests {
         app.settings.ascii_punctuation = false;
         app.settings.sticky_context_rows = false;
         app.settings.auto_save = false;
-        app.settings.editor_particles.enabled = true;
+        app.settings.editor_effects.enabled = true;
         app.document_mut().replace_unprojected_untitled("prefix ");
         if diff {
             app.document_diff = Some(crate::git::editor::document_diff::DocumentDiff::new(
@@ -1266,7 +1316,7 @@ mod tests {
                     .iter()
                     .all(|p| p.origin.distance(expected) <= 1.0)
             );
-            harness.state_mut().settings.editor_particles.enabled = false;
+            harness.state_mut().settings.editor_effects.enabled = false;
             harness.step();
             assert_eq!(counts(&harness), (0, 0));
         }

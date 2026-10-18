@@ -212,7 +212,7 @@ impl Draft {
 mod tests {
     #[test]
     fn motion_json_accepts_valid_options_and_rejects_impossible_or_out_of_range_values() {
-        use crate::settings::{ParticleDensity, ParticleStyle, RevealStyle};
+        use crate::settings::{EditorAction, ParticleDensity, ParticleStyle, RevealStyle};
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         for style in RevealStyle::ALL {
             for key in ["source_reveal_animation", "preview_reveal_animation"] {
@@ -221,24 +221,41 @@ mod tests {
             assert!(super::parse(&value.to_string()).is_ok());
         }
         for density in ParticleDensity::ALL {
-            value["editor_particles"]["density"] = serde_json::to_value(density).unwrap();
+            value["editor_effects"]["density"] = serde_json::to_value(density).unwrap();
             assert!(super::parse(&value.to_string()).is_ok());
         }
-        for style in ParticleStyle::ALL {
-            value["editor_particles"]["style"] = serde_json::to_value(style).unwrap();
-            assert!(super::parse(&value.to_string()).is_ok());
+        for action in EditorAction::ALL {
+            for style in ParticleStyle::ALL.into_iter().map(Some).chain([None]) {
+                value["editor_effects"]["actions"][action.key()]["particles"] =
+                    serde_json::to_value(style).unwrap();
+                assert!(super::parse(&value.to_string()).is_ok());
+            }
+            let mut invalid_style = value.clone();
+            invalid_style["editor_effects"]["actions"][action.key()]["particles"] =
+                serde_json::json!("Impossible");
+            let error = super::parse(&invalid_style.to_string()).unwrap_err();
+            assert!(
+                error.contains(&format!(
+                    "editor_effects.actions.{}.particles",
+                    action.key()
+                )) && error.contains("choose")
+                    && ParticleStyle::ALL
+                        .into_iter()
+                        .all(|style| error.contains(style.label())),
+                "{error}"
+            );
+            for field in ["shake", "flash", "glow"] {
+                let mut invalid_toggle = value.clone();
+                invalid_toggle["editor_effects"]["actions"][action.key()][field] =
+                    serde_json::json!("yes");
+                let error = super::parse(&invalid_toggle.to_string()).unwrap_err();
+                assert!(
+                    error.contains(&format!("editor_effects.actions.{}.{field}", action.key()))
+                        && error.contains("boolean"),
+                    "{error}"
+                );
+            }
         }
-        let mut invalid_style = value.clone();
-        invalid_style["editor_particles"]["style"] = serde_json::json!("Impossible");
-        let error = super::parse(&invalid_style.to_string()).unwrap_err();
-        assert!(
-            error.contains("editor_particles.style")
-                && error.contains("choose")
-                && ParticleStyle::ALL
-                    .into_iter()
-                    .all(|style| error.contains(style.label())),
-            "{error}"
-        );
         for key in ["source_reveal_animation", "preview_reveal_animation"] {
             for (field, invalid, expected) in [
                 ("duration_ms", 249, "250 and 2000"),
@@ -265,10 +282,10 @@ mod tests {
                 "{error}"
             );
         }
-        value["editor_particles"]["density"] = serde_json::json!("Impossible");
+        value["editor_effects"]["density"] = serde_json::json!("Impossible");
         let error = super::parse(&value.to_string()).unwrap_err();
         assert!(
-            error.contains("editor_particles.density")
+            error.contains("editor_effects.density")
                 && error.contains("choose")
                 && error.contains("Medium"),
             "{error}"

@@ -411,7 +411,7 @@ impl EditorApp {
                 crate::auto_pairs::ascii_punctuation(&mut input.events);
             });
         }
-        let particle_settings = self.settings.editor_particles;
+        let particle_settings = self.settings.editor_effects;
         let typing_intent =
             editor_particles::capture(ui, editor_id, particle_settings.enabled && !read_only);
         let snapshot_before_edit = self.editor_snapshot(ui.ctx());
@@ -513,6 +513,7 @@ impl EditorApp {
             scroll_area
         };
         let scroll_output = scroll_area.show_viewport(ui, |ui, viewport| {
+            let effect_paint = editor_particles::shake::begin(ui);
             let visible_viewport =
                 Rect::from_min_size(ui.max_rect().min + viewport.min.to_vec2(), viewport.size())
                     .intersect(ui.clip_rect());
@@ -1147,6 +1148,7 @@ impl EditorApp {
                         .request_discard("realign source before presenting resized text");
                 }
             }
+            let effect_paint = effect_paint.finish(ui);
             reveal::paint_editor(
                 ui,
                 visible_viewport,
@@ -1162,6 +1164,8 @@ impl EditorApp {
                     document: document.key(),
                     viewport: visible_viewport,
                     view: editor_particles::View::Source,
+                    paint_range: effect_paint,
+                    shake_viewport: visible_viewport,
                 },
                 particle_settings,
                 typing_intent,

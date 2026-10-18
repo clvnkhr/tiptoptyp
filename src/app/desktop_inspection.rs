@@ -123,8 +123,7 @@ impl EditorApp {
             .into();
         observation["interface_theme"] =
             serde_json::to_value(self.settings.interface_theme).unwrap();
-        observation["editor_particles"] =
-            serde_json::to_value(self.settings.editor_particles).unwrap();
+        observation["editor_effects"] = serde_json::to_value(self.settings.editor_effects).unwrap();
         observation["typing_particles"] =
             editor_particles::inspected(context, source_editor_id(context), self.document().key());
         observation["reveal_animation_options"] = serde_json::json!({

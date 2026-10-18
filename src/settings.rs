@@ -265,11 +265,137 @@ impl ParticleStyle {
     }
 }
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum EditorAction {
+    #[default]
+    Typing,
+    Newline,
+    Indent,
+    Delete,
+    Comment,
+    Undo,
+    Redo,
+    Copy,
+    Cut,
+    Paste,
+}
+impl EditorAction {
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Typing,
+        Self::Newline,
+        Self::Indent,
+        Self::Delete,
+        Self::Comment,
+        Self::Undo,
+        Self::Redo,
+        Self::Copy,
+        Self::Cut,
+        Self::Paste,
+    ];
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Typing => "Typing",
+            Self::Newline => "Newline",
+            Self::Indent => "Indent",
+            Self::Delete => "Delete",
+            Self::Comment => "Comment",
+            Self::Undo => "Undo",
+            Self::Redo => "Redo",
+            Self::Copy => "Copy",
+            Self::Cut => "Cut",
+            Self::Paste => "Paste",
+        }
+    }
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Typing => "typing",
+            Self::Newline => "newline",
+            Self::Indent => "indent",
+            Self::Delete => "delete",
+            Self::Comment => "comment",
+            Self::Undo => "undo",
+            Self::Redo => "redo",
+            Self::Copy => "copy",
+            Self::Cut => "cut",
+            Self::Paste => "paste",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
-pub(crate) struct EditorParticleSettings {
+pub(crate) struct ActionEffectSettings {
+    pub(crate) particles: Option<ParticleStyle>,
+    pub(crate) shake: bool,
+    pub(crate) flash: bool,
+    pub(crate) glow: bool,
+}
+impl Default for ActionEffectSettings {
+    fn default() -> Self {
+        Self {
+            particles: Some(ParticleStyle::Explosion),
+            shake: false,
+            flash: false,
+            glow: false,
+        }
+    }
+}
+impl ActionEffectSettings {
+    pub(crate) const fn enabled(self) -> bool {
+        self.particles.is_some() || self.shake || self.flash || self.glow
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct EditorActionEffects {
+    pub(crate) typing: ActionEffectSettings,
+    pub(crate) newline: ActionEffectSettings,
+    pub(crate) indent: ActionEffectSettings,
+    pub(crate) delete: ActionEffectSettings,
+    pub(crate) comment: ActionEffectSettings,
+    pub(crate) undo: ActionEffectSettings,
+    pub(crate) redo: ActionEffectSettings,
+    pub(crate) copy: ActionEffectSettings,
+    pub(crate) cut: ActionEffectSettings,
+    pub(crate) paste: ActionEffectSettings,
+}
+impl EditorActionEffects {
+    pub(crate) const fn get(&self, action: EditorAction) -> &ActionEffectSettings {
+        match action {
+            EditorAction::Typing => &self.typing,
+            EditorAction::Newline => &self.newline,
+            EditorAction::Indent => &self.indent,
+            EditorAction::Delete => &self.delete,
+            EditorAction::Comment => &self.comment,
+            EditorAction::Undo => &self.undo,
+            EditorAction::Redo => &self.redo,
+            EditorAction::Copy => &self.copy,
+            EditorAction::Cut => &self.cut,
+            EditorAction::Paste => &self.paste,
+        }
+    }
+    pub(crate) const fn get_mut(&mut self, action: EditorAction) -> &mut ActionEffectSettings {
+        match action {
+            EditorAction::Typing => &mut self.typing,
+            EditorAction::Newline => &mut self.newline,
+            EditorAction::Indent => &mut self.indent,
+            EditorAction::Delete => &mut self.delete,
+            EditorAction::Comment => &mut self.comment,
+            EditorAction::Undo => &mut self.undo,
+            EditorAction::Redo => &mut self.redo,
+            EditorAction::Copy => &mut self.copy,
+            EditorAction::Cut => &mut self.cut,
+            EditorAction::Paste => &mut self.paste,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct EditorEffectSettings {
     pub(crate) enabled: bool,
     pub(crate) density: ParticleDensity,
-    pub(crate) style: ParticleStyle,
+    pub(crate) actions: EditorActionEffects,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -486,7 +612,7 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) preview_reveal_animation: RevealAnimation,
     #[serde(default)]
-    pub(crate) editor_particles: EditorParticleSettings,
+    pub(crate) editor_effects: EditorEffectSettings,
     /// Color scheme used whenever the effective interface appearance is light.
     pub(crate) light_theme: ColorThemeChoice,
     /// Color scheme used whenever the effective interface appearance is dark.
@@ -626,7 +752,7 @@ impl Default for AppSettings {
             window_background: crate::window_background::Settings::default(),
             source_reveal_animation: RevealAnimation::default(),
             preview_reveal_animation: RevealAnimation::default(),
-            editor_particles: EditorParticleSettings::default(),
+            editor_effects: EditorEffectSettings::default(),
             light_theme: ColorThemeChoice::builtin("tiptop-light"),
             dark_theme: ColorThemeChoice::builtin("tiptop-dark"),
             theme_invert: false,
@@ -721,7 +847,7 @@ impl AppSettings {
             window_background,
             source_reveal_animation,
             preview_reveal_animation,
-            editor_particles,
+            editor_effects,
             light_theme,
             dark_theme,
             theme_invert,
@@ -1217,7 +1343,7 @@ mod tests {
             window_background: crate::window_background::Settings::default(),
             source_reveal_animation: RevealAnimation::default(),
             preview_reveal_animation: RevealAnimation::default(),
-            editor_particles: EditorParticleSettings::default(),
+            editor_effects: EditorEffectSettings::default(),
             tex: Default::default(),
             latexdiff: Default::default(),
             interface_theme: InterfaceTheme::Light,
@@ -1636,18 +1762,18 @@ mod tests {
             defaults.source_reveal_animation
         );
         assert_eq!(
-            defaults.editor_particles,
-            EditorParticleSettings {
+            defaults.editor_effects,
+            EditorEffectSettings {
                 enabled: false,
                 density: ParticleDensity::Medium,
-                style: ParticleStyle::Explosion
+                actions: EditorActionEffects::default()
             }
         );
         let mut value = serde_json::to_value(&defaults).unwrap();
         for key in [
             "source_reveal_animation",
             "preview_reveal_animation",
-            "editor_particles",
+            "editor_effects",
         ] {
             value.as_object_mut().unwrap().remove(key);
         }
@@ -1664,13 +1790,17 @@ mod tests {
         };
         let mut preview = defaults.clone();
         preview.preview_reveal_animation.style = RevealStyle::Pulse;
-        preview.editor_particles = EditorParticleSettings {
-            enabled: true,
-            density: ParticleDensity::High,
-            style: ParticleStyle::Shotgun,
+        preview.editor_effects.enabled = true;
+        preview.editor_effects.density = ParticleDensity::High;
+        preview.editor_effects.actions.paste = ActionEffectSettings {
+            particles: Some(ParticleStyle::Shotgun),
+            shake: true,
+            flash: true,
+            glow: true,
         };
         let mut current = defaults.clone();
         current.apply_edits(&defaults, source);
+        let effects = preview.editor_effects;
         current.apply_edits(&defaults, preview);
         assert!(!current.source_reveal_animation.enabled);
         assert_eq!(
@@ -1678,34 +1808,64 @@ mod tests {
             RevealStyle::Spotlight
         );
         assert_eq!(current.preview_reveal_animation.style, RevealStyle::Pulse);
-        assert!(current.editor_particles.enabled);
-        assert_eq!(current.editor_particles.density, ParticleDensity::High);
-        assert_eq!(current.editor_particles.style, ParticleStyle::Shotgun);
+        assert!(current.editor_effects.enabled);
+        assert_eq!(current.editor_effects.density, ParticleDensity::High);
+        assert_eq!(current.editor_effects.actions.paste, effects.actions.paste);
         let mut storage = MemoryStorage::default();
         current.save(&mut storage);
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), current);
     }
 
     #[test]
-    fn typing_particle_styles_persist_and_default_without_enabling_effects() {
+    fn per_action_effects_persist_independently_and_allow_every_effect_to_be_disabled() {
         let mut settings = AppSettings::default();
         let mut storage = MemoryStorage::default();
-        for style in ParticleStyle::ALL {
-            settings.editor_particles.style = style;
-            settings.save(&mut storage);
-            let loaded = AppSettings::load(Some(&storage)).unwrap();
-            assert_eq!(loaded.editor_particles.style, style);
-            assert!(!loaded.editor_particles.enabled);
-            assert_eq!(loaded.editor_particles.density, ParticleDensity::Medium);
+        let off = ActionEffectSettings {
+            particles: None,
+            shake: false,
+            flash: false,
+            glow: false,
+        };
+        assert!(!off.enabled());
+        for action in EditorAction::ALL {
+            for style in ParticleStyle::ALL.into_iter().map(Some).chain([None]) {
+                let effects = ActionEffectSettings {
+                    particles: style,
+                    shake: true,
+                    flash: true,
+                    glow: true,
+                };
+                assert!(effects.enabled());
+                *settings.editor_effects.actions.get_mut(action) = effects;
+                settings.save(&mut storage);
+                let loaded = AppSettings::load(Some(&storage)).unwrap();
+                assert_eq!(*loaded.editor_effects.actions.get(action), effects);
+                assert_eq!(loaded, settings);
+                assert!(!loaded.editor_effects.enabled);
+            }
+            *settings.editor_effects.actions.get_mut(action) = off;
         }
+        assert!(
+            EditorAction::ALL.into_iter().all(|action| !settings
+                .editor_effects
+                .actions
+                .get(action)
+                .enabled())
+        );
+        settings.save(&mut storage);
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), settings);
+
         let mut value = serde_json::to_value(&settings).unwrap();
-        value["editor_particles"]
+        value["editor_effects"]
             .as_object_mut()
             .unwrap()
-            .remove("style");
+            .remove("actions");
         let loaded: AppSettings = serde_json::from_value(value).unwrap();
-        assert_eq!(loaded.editor_particles.style, ParticleStyle::Explosion);
-        assert!(!loaded.editor_particles.enabled);
+        assert_eq!(
+            loaded.editor_effects.actions,
+            EditorActionEffects::default()
+        );
+        assert!(!loaded.editor_effects.enabled);
     }
 
     #[test]
@@ -1742,7 +1902,7 @@ mod tests {
             (2000, 50)
         );
         assert!(!loaded.source_reveal_animation.enabled);
-        assert!(!loaded.editor_particles.enabled);
+        assert!(!loaded.editor_effects.enabled);
         invalid.save(&mut storage);
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), loaded);
     }

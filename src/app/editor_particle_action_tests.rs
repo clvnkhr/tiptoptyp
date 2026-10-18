@@ -6,7 +6,7 @@ fn fixture(source: &str, diff: bool) -> (tempfile::TempDir, egui::Context, Edito
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
-    app.settings.editor_particles.enabled = true;
+    app.settings.editor_effects.enabled = true;
     app.document_mut().replace_unprojected_untitled(source);
     app.document_mut().set_history_reset(false);
     if diff {
@@ -100,7 +100,7 @@ fn editor_action_particles_reject_empty_selection_disabled_effects_and_paste_req
         );
     }
     let (_directory, context, mut app) = fixture("alpha", false);
-    app.settings.editor_particles.enabled = false;
+    app.settings.editor_effects.enabled = false;
     app.store_editor_cursor(
         &context,
         CCursorRange::two(CCursor::new(0), CCursor::new(5)),
