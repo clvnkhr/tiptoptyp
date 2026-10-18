@@ -1,0 +1,69 @@
+{
+  "command": [
+    ".tiptoptyp/desktop-ui-tests/table-grid-only-final",
+    "--ui-screenshot-exit",
+    "--ui-screenshot-settle",
+    "30",
+    "--ui-screenshot-subdir",
+    "screenshots/table-grid-handoff",
+    "--ui-screenshot-step",
+    "catppuccin-latte,table-editor-tex-merged,false,0",
+    "--ui-screenshot-step",
+    "catppuccin-mocha,table-editor-tex-merged,false,0",
+    "docs/ui-snapshots/theme-fixture.typ"
+  ],
+  "binary_sha256": "bae4e17561fcb84151436c34d8b232de799c8eab6e64ff8fa478bcb25d94be1a",
+  "exit": 0,
+  "elapsed_seconds": 12.830378,
+  "sources": [
+    ".tiptoptyp/screenshots/table-grid-handoff/1792301679243-0001-table-editor-table-editor-tex-merged.png",
+    ".tiptoptyp/screenshots/table-grid-handoff/1792301684823-0002-table-editor-table-editor-tex-merged.png"
+  ],
+  "kind": "app-generated child viewport framebuffers; no desktop composition evidence",
+  "contact_sheet": "docs/ui-snapshots/tex-table-grid-review.png",
+  "gallery_pngs_validated": 25,
+  "native_interaction_status": "passed: tables and arxiv_tables with real macOS input",
+  "native_commands": [
+    {
+      "journey": "tables",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "tables",
+        "--executable",
+        ".tiptoptyp/desktop-ui-tests/table-grid-only-final"
+      ],
+      "exit": 0,
+      "log": "/private/tmp/table-grid-native-tables-interaction.log",
+      "evidence": ".tiptoptyp/desktop-ui-tests/run-1_qwkocb",
+      "binary_sha256": "bae4e17561fcb84151436c34d8b232de799c8eab6e64ff8fa478bcb25d94be1a",
+      "version": "tiptoptyp Dev 0.1.0 (d77fa3a15f16-dirty.1792301595)"
+    },
+    {
+      "journey": "arxiv_tables",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "arxiv_tables",
+        "--executable",
+        ".tiptoptyp/desktop-ui-tests/table-grid-only-final"
+      ],
+      "exit": 0,
+      "log": "/private/tmp/table-grid-native-arxiv_tables-interaction.log",
+      "evidence": ".tiptoptyp/desktop-ui-tests/run-7cnash9m",
+      "binary_sha256": "bae4e17561fcb84151436c34d8b232de799c8eab6e64ff8fa478bcb25d94be1a",
+      "version": "tiptoptyp Dev 0.1.0 (d77fa3a15f16-dirty.1792301595)"
+    }
+  ],
+  "automated_checks": {
+    "rust_tests_passed": 2269,
+    "rust_tests_ignored": 62,
+    "xtask_tests_passed": 28,
+    "journey_contracts_passed": 126,
+    "formatting": "passed",
+    "strict_clippy": "passed: default and desktop-ui-tests",
+    "real_tectonic_merged_sampling": "passed: numeric, check, cross, starred check and cross"
+  }
+}

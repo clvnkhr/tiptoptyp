@@ -17,9 +17,9 @@ and table slice, then makes one Unicode-safe, undoable replacement.
 
 ## Cells and appearance
 
-The Typst toolbar groups row/column actions, **Remove**, **Format**,
-**Import Markdown** and **Source** in one compact row, wrapping only when
-necessary. Format opens the appearance controls for **Whole table** or
+The Typst toolbar groups row/column actions, **Remove**, **Format** and
+**Import Markdown** in one compact row, wrapping only when necessary. Format
+opens the appearance controls for **Whole table** or
 **Selected cells**, including spans; they do not occupy a persistent inspector.
 The following selection and cell-navigation shortcuts apply to Typst grids.
 TeX cells retain normal code editing, including Tab for indentation.
@@ -42,20 +42,21 @@ TeX cells retain normal code editing, including Tab for indentation.
 Variables now display read-only compiler samples instead of editable source.
 Typst cells containing computed markup (for example `[#price]`) and TeX cells
 using a named macro (for example `\revenue`) are locked. Literal
-neighbouring cells remain editable. Named TeX commands are conservatively sampled
-because their definitions may come from a package or imported preamble; escaped
-punctuation and literal `\verb` text remain editable. Typst's cell navigation
+neighbouring cells remain editable. Standard TeX formatting and citation commands
+remain editable with their surrounding markup preserved. Unknown named macros
+are conservatively sampled because their definitions may come from a package or
+imported preamble; escaped punctuation and literal `\verb` text remain editable.
+Typst's cell navigation
 skips locked cells; Apply also verifies that their original expressions are
 unchanged. Geometry changes and Markdown
 replacement are disabled while the grid contains locked cells.
 
-Generated Typst tables, including spreads and variable column counts, default
-to a read-only sampled grid. Inherited column settings are resolved by the
-compiler. The Source switch is an explicit way to change the complete table
-expression; samples describe the document as opened, not an unapplied source
-draft. Apply source changes and reopen to refresh the samples. If the table runs
-multiple times, the first instance is shown. Cells unsupported by sampling stay
-locked and show an explanation rather than becoming editable expressions.
+All workbench edits happen in the grid. A table needs concrete, bounded row and
+column geometry before **Edit Table…** is offered. Whole-table generators,
+spreads and variable column counts stay in the main code editor. Close the draft
+to change those definitions. A concrete grid may still contain individual
+computed cells: compiler samples show their values while keeping the expressions
+protected. A sample that cannot be evaluated remains locked with an explanation.
 
 Sampling uses the configured Typst/TeX compiler in one cancellable background
 job per opening. A private source mirror preserves project-relative imports
@@ -66,7 +67,11 @@ the job and removes its private files. TeX samples expand macros in the compiler
 preambles and packages;
 complex protected typesetting commands may remain in the displayed expansion.
 
-Spans render as merged editing areas. This is a source-markup editor, not a
+Spans render as merged editing areas. TeX cell fields expose their contents,
+keeping merged-cell, font and spacing wrappers outside the editable field and
+preserving them on Apply. Math and citations remain editable TeX. Sampled Pifont
+ticks and crosses display their matching glyphs; other complex expansions retain
+the compiler's tokens. This is a cell editor, not a
 Typst typesetting preview: the document preview shows the final typography and
 appearance after Apply. Typst's supported span and styling parameters are
 documented in the [table reference](https://typst.app/docs/reference/model/table/).
@@ -104,31 +109,36 @@ It adds only empty-option imports, so existing package options remain authoritat
 Dependency/library rules follow the [tabularray manual](https://mirrors.ctan.org/macros/latex/contrib/tabularray/tabularray.pdf)
 and the package references below.
 
-Merged cells (`\multicolumn`, `\multirow`, `\Block`, `\SetCell`, structural
-`cell` options), generated/inherited column specifications, custom column types,
-longtable captions and nicematrix drawing blocks use exact Source editing.
-Their source is retained rather than flattened into an incorrect rectangular
-grid. The compiler samples named macros in supported grid cells with the
-original package and imported-preamble context.
+TeX merged cells such as `\multicolumn` and `\multirow`, row formatting and
+structural row commands retain their exact source around the editable grid.
+Supported cell formatting can be edited without discarding its wrappers. When
+an environment's geometry cannot be determined safely, **Edit Table…** is not
+offered; edit that environment in the main code panel instead. The compiler
+samples unknown named macros in supported grid cells using the original package
+and imported-preamble context.
 
 The checked-in [package fixture](../tests/fixtures/tex-table-packages.tex)
 covers 12 formats, including real macro sampling in numeric columns. Three
 [arXiv fixtures](../tests/fixtures/arxiv-tables/provenance.json) also retain
 complete original table environments with versioned attribution and checksums:
 [SciPy's roadmap](../tests/fixtures/arxiv-tables/scipy-roadmap.tex) and
-[optimizer comparison](../tests/fixtures/arxiv-tables/scipy-optimizers.tex) open
-as grids; the [Platonic metric comparison](../tests/fixtures/arxiv-tables/platonic-metrics.tex)
-uses Source to preserve its merged cells. All three are standalone documents.
+[optimizer comparison](../tests/fixtures/arxiv-tables/scipy-optimizers.tex), and
+[Platonic metric comparison](../tests/fixtures/arxiv-tables/platonic-metrics.tex)
+all open as grids. The Platonic fixture exercises merged headers, multirow
+wrappers, row colours, spacing and citations. All three are standalone documents.
 Grid Apply preserves the author's spacing, comments and rules; omitted trailing
 empty cells remain omitted unless edited. Fixture regressions cover detection,
 no-op Apply, exact edits, cancellation and Undo. The `arxiv_tables` native
 journey exercises the same edits through the real workbench.
+The [light/dark grid review](ui-snapshots/tex-table-grid-review.png) shows the
+original Platonic table with editable cell contents and locked compiler samples.
 
 Package syntax follows the maintainers' references for
 [tabularray](https://ctan.org/pkg/tabularray),
 [tabulary](https://ctan.org/pkg/tabulary),
 [xltabular](https://ctan.org/pkg/xltabular),
 [nicematrix](https://ctan.org/pkg/nicematrix),
+[multirow](https://ctan.org/pkg/multirow),
 [siunitx](https://ctan.org/pkg/siunitx) and
 [array/dcolumn](https://ctan.org/pkg/latex-tools).
 
@@ -145,17 +155,17 @@ with a visible error. A failed import leaves the existing draft untouched.
 
 The visual model is limited to 4,096 grid positions and 128 columns. It supports
 static content cells and literal `table.cell`/`grid.cell` row/column spans, with
-preserved named styling arguments. Dynamic cells, spreads, explicit `x`/`y`
-placement, structural helpers (`header`, `hline`, etc.), comments between
-arguments and incomplete rows use the sampled grid with an explicit Source
-editor. Cancelling never rewrites them.
+preserved named styling arguments. Tables whose spreads, column counts,
+explicit placement or other structural expressions prevent a safe grid are not
+offered for table editing. Cancelling never rewrites the document. An invalid
+cell draft keeps its grid open and disables Apply; correct that cell or Cancel.
 
 The cursor query reuses the editor's parsed syntax and caches results by
 document revision/cursor. Unchanged frames do not reparse the source. Grid work
 is bounded and offscreen cell widgets are skipped; this feature adds no frame
-polling, per-frame I/O or continuous repaint. Computed tables start one finite background
-sampling job and repaint only when it finishes. Tests cover reuse and
-bounds; no cross-platform performance claim is made.
+polling, per-frame I/O or continuous repaint. Grids containing computed cells
+start one finite background sampling job and repaint only when it finishes.
+Tests cover reuse and bounds; no cross-platform performance claim is made.
 
 Cells use a compact 36-point row pitch with line-number and column headings.
 Long text scrolls within its own clipped editing area rather than increasing
@@ -171,7 +181,8 @@ errors, Markdown escaping, selection, keyboard navigation, minimum window
 geometry, source locking/copy/scroll, menu availability, insertion and undo.
 
 Deterministic framebuffer scenes: `table-editor` and `table-editor-narrow` for Typst;
-`table-editor-tex` and `table-editor-tex-narrow` for TeX. The real source fixtures
+`table-editor-tex` and `table-editor-tex-narrow` for TeX; `table-editor-tex-merged`
+uses the original Platonic table. The real source fixtures
 are in `scripts/fixtures/table-editor.typ` and `scripts/fixtures/table-editor.tex`.
 An explicit `--ui-screenshot main:table-source-lock` with the former captures
 the parent source banner separately; it does not composite the child window.
@@ -192,9 +203,8 @@ edits long cell text, scrolls the grid and checks the pinned footer. Framebuffer
 captures remain separate evidence for the child viewport's pixels.
 
 On 11 October 2026, 13 sampled-value regressions passed, including actual bundled
-Typst/Tectonic evaluation, imported definitions, inherited columns, generated
-rows, read-only typing, Tab navigation, Apply protection, cancellation and private
-file cleanup. The native `tables` journey passed on macOS 14.6.1/Apple Silicon;
+Typst/Tectonic evaluation, imported definitions, read-only typing, Tab navigation,
+Apply protection, cancellation and private file cleanup. The native `tables` journey passed on macOS 14.6.1/Apple Silicon;
 it verifies real compiler value fingerprints, attempts to type into locked
 samples, edits neighbouring literal cells and checks Apply/undo. Fresh workbench
 framebuffers were inspected and retained under
@@ -221,3 +231,16 @@ Cancel, Apply, Undo/Redo and repeat Apply without duplication. Shared import
 planning also preserves snippet fields and loads packages before preamble
 configuration commands. See `docs/desktop-ui-audit.md` for the build receipt and
 native evidence. Imports add no idle/per-frame work.
+
+On 18 October 2026, source mode was removed and all three arXiv fixtures opened
+as editable grids. The final native `tables` and `arxiv_tables` journeys passed,
+including unsupported-table rejection, protected samples, incomplete-cell repair,
+wide-table horizontal scrolling, projected Platonic cell edits and exact full-file
+Cancel/Apply/Undo. The final build also passed 2,269 Rust tests, 28 xtask tests,
+126 journey contracts, formatting and both strict Clippy configurations. Real
+Tectonic sampling resolved numeric and Pifont glyph values while preserving the
+original source. Fresh light/dark workbench framebuffers were inspected, and the
+25-image maintained gallery was regenerated in one session and validated.
+The checked-in grid review records build hashes and native evidence separately
+from viewport pixels. Visible-cell work remains bounded; no idle polling or
+additional sampling worker was introduced.
