@@ -296,12 +296,12 @@ the release executable. On macOS it builds both Rust targets, verifies the
 architecture of each executable, and combines them with `lipo`. Missing Rust
 standard-library targets are installed for the repository's pinned toolchain.
 The universal app includes both architectures of Typst, Tinymist, Tectonic,
-TexLab, Badness, tex-fmt and PDFium. Helpers and PDFium ship gzip-compressed in
+TexLab, Badness, tex-fmt and PDFium. Helpers and PDFium ship Zstandard-compressed in
 resources; the app verifies and extracts only its current architecture into a
 private cache when needed. A later launch reuses verified cached files. Upstream
 licenses and per-artifact provenance remain readable in the bundle.
 
-The 11 bundled fonts and two handwriting models also ship as gzip resources,
+The 11 bundled fonts and two handwriting models also ship as Zstandard resources,
 with one shared copy for both architectures. Fonts are verified and loaded once
 before the first interface frame; recognizers load their model on the existing
 handwriting worker when first used. They share a content-addressed cache at

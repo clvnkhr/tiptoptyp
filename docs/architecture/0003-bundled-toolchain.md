@@ -45,7 +45,7 @@ archive members, and streams only the exact allowlisted executable/license
 members to owned staging files. It never gives `tar` an extraction directory,
 rejects link and special-file entry types, and therefore cannot write elsewhere
 before validation. Native executables are checked with `--version`.
-The verified executable payloads are gzip-compressed under
+The verified executable payloads are Zstandard-compressed (`.zst`) under
 `Contents/Resources/toolchain/<target>/` for macOS packaging. A per-target
 manifest records each payload's uncompressed size and SHA-256. Before first use,
 the runtime verifies and extracts the selected architecture into its private
@@ -53,6 +53,13 @@ cache, using executable permissions for tools and preserving the native code
 signature. Readable licenses and upstream archive provenance remain separate
 bundle resources. Cache hits avoid decompression; compressed payloads are never
 executed or modified inside the signed app bundle.
+
+Packaging uses deterministic level-19 compression with a declared content size
+and frame checksum. Runtime and package verification share a statically linked
+Zstandard decoder, bounded to an 8 MiB history window and the manifest's decoded
+size. They reject malformed/truncated frames, checksum or SHA-256 mismatches,
+trailing data and concatenated frames. Native code signatures and decoded assets
+are unchanged; existing content-addressed cache entries remain reusable.
 
 Linux packages use Typst's static MUSL release payload staged under the GNU app
 target expected by the packager. Tinymist continues to use its matching GNU
@@ -76,7 +83,7 @@ remain normal development builds for the compiler's selected architecture.
 Since 2026-10-17, production packages store the 11 fallback/terminal/icon fonts
 and two handwriting models once under `Contents/Resources/assets/shared/`.
 `build_support/bundled_assets.rs` defines the single name/source registry used by
-both staging and runtime lookup. Each gzip resource has an uncompressed size and
+both staging and runtime lookup. Each Zstandard resource has an uncompressed size and
 SHA-256 in `manifest.tsv`; no glyphs, variable font axes or model samples are
 removed. The two executable slices no longer each embed these large assets.
 

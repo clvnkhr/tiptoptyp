@@ -2,7 +2,6 @@
 //!
 //! Resolution only reads the small manifest. Actual extraction belongs to the
 //! existing tool-launch/PDF worker, never the Settings or frame paths.
-use flate2::read::MultiGzDecoder;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -13,6 +12,9 @@ use std::{
     sync::{Mutex, OnceLock},
     time::SystemTime,
 };
+
+#[path = "../build_support/payload_codec.rs"]
+mod codec;
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;
@@ -54,7 +56,7 @@ pub(crate) fn packaged_candidates(name: &str) -> Vec<PathBuf> {
         .map(|root| {
             root.join("toolchain")
                 .join(crate::toolchain::target_triple())
-                .join(format!("{name}.gz"))
+                .join(format!("{name}.zst"))
         })
         .collect()
 }
@@ -71,7 +73,7 @@ pub(crate) fn validate_packaged(path: &Path) -> io::Result<()> {
         .ok_or_else(|| invalid("Packaged payload manifest is missing"))
 }
 
-/// A custom executable is left alone. A manifest-backed gzip path is expanded
+/// A custom executable is left alone. A manifest-backed Zstandard path is expanded
 /// only here, after operation arguments have been validated by its caller.
 pub(crate) fn prepare_program(program: &OsStr) -> io::Result<PathBuf> {
     let path = Path::new(program);
@@ -99,7 +101,7 @@ pub(crate) fn prepare_shared_asset(path: &Path) -> io::Result<PathBuf> {
 }
 
 fn describe(archive: &Path) -> io::Result<Option<Payload>> {
-    if archive.extension() != Some(OsStr::new("gz")) {
+    if archive.extension() != Some(OsStr::new("zst")) {
         return Ok(None);
     }
     let Some(parent) = archive.parent() else {
@@ -164,7 +166,7 @@ fn describe(archive: &Path) -> io::Result<Option<Payload>> {
         ))
     })?;
     if !fs::symlink_metadata(archive)?.file_type().is_file() {
-        return Err(invalid("Packaged payload must be a regular gzip file"));
+        return Err(invalid("Packaged payload must be a regular Zstandard file"));
     }
     Ok(Some(payload))
 }
@@ -243,27 +245,12 @@ fn expand(payload: &Payload, root: &Path) -> io::Result<PathBuf> {
     // Unique temporary files prevent concurrent first launches from reading an
     // incomplete extraction. No process lock can survive a crashed first use.
     let mut temporary = tempfile::NamedTempFile::new_in(&directory)?;
-    let mut decoder = MultiGzDecoder::new(File::open(&payload.archive)?).take(payload.bytes + 1);
-    let mut hasher = Sha256::new();
-    let mut bytes = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = decoder.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
-        bytes += count as u64;
-        if bytes > payload.bytes {
-            return Err(invalid("Packaged payload exceeds its declared size"));
-        }
-        hasher.update(&buffer[..count]);
-        temporary.write_all(&buffer[..count])?;
-    }
-    if bytes != payload.bytes || format!("{:x}", hasher.finalize()) != payload.sha256 {
-        return Err(invalid(
-            "Packaged payload failed size or SHA256 verification",
-        ));
-    }
+    codec::decode(
+        File::open(&payload.archive)?,
+        payload.bytes,
+        &payload.sha256,
+        &mut temporary,
+    )?;
     temporary.flush()?;
     #[cfg(unix)]
     {
@@ -436,14 +423,11 @@ fn valid_cached(path: &Path, payload: &Payload) -> io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::{Compression, write::GzEncoder};
 
     fn fixture(bytes: &[u8]) -> (tempfile::TempDir, PathBuf, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
-        let archive = directory.path().join("typst.gz");
-        let mut encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::best());
-        encoder.write_all(bytes).unwrap();
-        encoder.finish().unwrap();
+        let archive = directory.path().join("typst.zst");
+        fs::write(&archive, codec::encode_fixture(bytes)).unwrap();
         fs::write(
             directory.path().join("manifest.tsv"),
             format!("typst\t{}\t{:x}\n", bytes.len(), Sha256::digest(bytes)),
@@ -469,17 +453,17 @@ mod tests {
             let tools = root
                 .join("toolchain")
                 .join(crate::toolchain::target_triple())
-                .join("typst.gz");
-            let assets = root.join("assets/shared/noto-sans.ttf.gz");
+                .join("typst.zst");
+            let assets = root.join("assets/shared/noto-sans.ttf.zst");
             assert_eq!(
                 tools.strip_prefix(&root).unwrap(),
                 Path::new("toolchain")
                     .join(crate::toolchain::target_triple())
-                    .join("typst.gz")
+                    .join("typst.zst")
             );
             assert_eq!(
                 assets.strip_prefix(&root).unwrap(),
-                Path::new("assets/shared/noto-sans.ttf.gz")
+                Path::new("assets/shared/noto-sans.ttf.zst")
             );
         }
         assert!(resource_roots(Path::new("/")).is_empty());
@@ -528,7 +512,7 @@ mod tests {
         let archive = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("toolchain/payloads")
             .join(crate::toolchain::target_triple())
-            .join(format!("{}.gz", name.to_string_lossy()));
+            .join(format!("{}.zst", name.to_string_lossy()));
         let payload = describe(&archive).unwrap().unwrap();
         assert!(payload.bytes <= 64 * 1024 * 1024);
         // Warm archive I/O equally before both paths. This measures a fresh
@@ -663,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_manifests_hashes_sizes_and_truncated_gzip() {
+    fn rejects_bad_manifests_hashes_sizes_and_truncated_zstd() {
         for record in [
             "../escape\t3\tHASH",
             "typst\t0\tHASH",

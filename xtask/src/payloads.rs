@@ -1,6 +1,5 @@
 //! Small, deterministic resource archives with verified, architecture-specific payloads.
 use super::*;
-use flate2::{Compression, GzBuilder, read::MultiGzDecoder};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
@@ -9,6 +8,12 @@ use std::{
 
 #[path = "../../build_support/bundled_assets.rs"]
 mod bundled_assets;
+#[path = "../../build_support/payload_codec.rs"]
+mod codec;
+
+// Level 19 saves another 15 MB across the universal package over level 9.
+// Compression happens at packaging time; runtime expansion remains lazy.
+const COMPRESSION_LEVEL: i32 = 19;
 
 const TOOLS: [&str; 6] = [
     "typst", "tinymist", "tectonic", "texlab", "badness", "tex-fmt",
@@ -126,12 +131,15 @@ fn pack_file(source: &Path, directory: &Path, name: &str) -> Result<Entry, Strin
     if !(1..=MAX_PAYLOAD_BYTES).contains(&bytes) {
         return Err(format!("{name} has unsupported payload size {bytes}"));
     }
-    let archive = fs::File::create(directory.join(format!("{name}.gz")))
+    let archive = fs::File::create(directory.join(format!("{name}.zst")))
         .map_err(|error| error.to_string())?;
-    let mut encoder = GzBuilder::new()
-        .mtime(0)
-        .operating_system(255)
-        .write(archive, Compression::best());
+    let mut encoder = zstd::stream::write::Encoder::new(archive, COMPRESSION_LEVEL)
+        .map_err(|error| error.to_string())?;
+    encoder
+        .include_checksum(true)
+        .and_then(|_| encoder.window_log(codec::WINDOW_LOG))
+        .and_then(|_| encoder.set_pledged_src_size(Some(bytes)))
+        .map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
     let mut actual = 0_u64;
     let mut buffer = [0_u8; 64 * 1024];
@@ -179,7 +187,7 @@ fn write_manifest(directory: &Path, entries: &[Entry]) -> Result<(), String> {
 fn print_sizes(label: &str, directory: &Path, entries: &[Entry]) -> Result<(), String> {
     let raw = entries.iter().map(|entry| entry.bytes).sum::<u64>();
     let packed = entries.iter().try_fold(0_u64, |total, entry| {
-        fs::metadata(directory.join(format!("{}.gz", entry.name)))
+        fs::metadata(directory.join(format!("{}.zst", entry.name)))
             .map(|metadata| total + metadata.len())
             .map_err(|error| error.to_string())
     })?;
@@ -384,7 +392,7 @@ fn read_manifest(directory: &Path, expected: &[String]) -> Result<Vec<Entry>, St
     let entries = parse_manifest_entries(&text, expected)?;
     let mut files = expected
         .iter()
-        .map(|name| format!("{name}.gz"))
+        .map(|name| format!("{name}.zst"))
         .collect::<BTreeSet<_>>();
     files.insert("manifest.tsv".to_owned());
     for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
@@ -480,7 +488,7 @@ fn decode_temporary(
 ) -> Result<tempfile::TempPath, String> {
     let mut file = tempfile::NamedTempFile::new_in(temporary).map_err(|error| error.to_string())?;
     decode_payload(
-        &directory.join(format!("{}.gz", entry.name)),
+        &directory.join(format!("{}.zst", entry.name)),
         entry,
         file.as_file_mut(),
     )?;
@@ -496,35 +504,13 @@ fn decode_temporary(
 }
 
 fn decode_payload(archive: &Path, entry: &Entry, output: &mut impl Write) -> Result<(), String> {
-    let mut decoder =
-        MultiGzDecoder::new(fs::File::open(archive).map_err(|error| error.to_string())?)
-            .take(entry.bytes + 1);
-    let mut hasher = Sha256::new();
-    let mut actual = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = decoder
-            .read(&mut buffer)
-            .map_err(|error| format!("decoding {}: {error}", entry.name))?;
-        if count == 0 {
-            break;
-        }
-        actual += count as u64;
-        if actual > entry.bytes {
-            return Err(format!("{} exceeds its declared payload size", entry.name));
-        }
-        hasher.update(&buffer[..count]);
-        output
-            .write_all(&buffer[..count])
-            .map_err(|error| error.to_string())?;
-    }
-    if actual != entry.bytes || format!("{:x}", hasher.finalize()) != entry.sha256 {
-        return Err(format!(
-            "{} failed payload size or SHA256 verification",
-            entry.name
-        ));
-    }
-    Ok(())
+    codec::decode(
+        fs::File::open(archive).map_err(|error| error.to_string())?,
+        entry.bytes,
+        &entry.sha256,
+        output,
+    )
+    .map_err(|error| format!("decoding {}: {error}", entry.name))
 }
 
 #[cfg(test)]
@@ -532,7 +518,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gzip_is_deterministic_and_round_trips_exact_bytes() {
+    fn zstd_is_deterministic_and_round_trips_exact_bytes() {
         let temporary = tempfile::tempdir().unwrap();
         let source = temporary.path().join("source");
         let first = temporary.path().join("first");
@@ -545,11 +531,11 @@ mod tests {
         fs::write(&source, &contents).unwrap();
         pack_file(&source, &second, "test.bin").unwrap();
         assert_eq!(
-            fs::read(first.join("test.bin.gz")).unwrap(),
-            fs::read(second.join("test.bin.gz")).unwrap()
+            fs::read(first.join("test.bin.zst")).unwrap(),
+            fs::read(second.join("test.bin.zst")).unwrap()
         );
         let mut decoded = Vec::new();
-        decode_payload(&first.join("test.bin.gz"), &entry, &mut decoded).unwrap();
+        decode_payload(&first.join("test.bin.zst"), &entry, &mut decoded).unwrap();
         assert_eq!(decoded, contents);
         assert_eq!(fs::read(source).unwrap(), contents);
     }
@@ -560,7 +546,7 @@ mod tests {
         let source = temporary.path().join("source");
         fs::write(&source, vec![b'a'; 200_000]).unwrap();
         let entry = pack_file(&source, temporary.path(), "test.bin").unwrap();
-        let archive = temporary.path().join("test.bin.gz");
+        let archive = temporary.path().join("test.bin.zst");
         let mut wrong = entry.clone();
         wrong.sha256 = "0".repeat(64);
         assert!(decode_payload(&archive, &wrong, &mut Vec::new()).is_err());
@@ -574,7 +560,7 @@ mod tests {
         let mut output = Vec::new();
         assert!(decode_payload(&archive, &wrong, &mut output).is_err());
         assert!(output.len() <= 1, "decoder wrote beyond its declared bound");
-        fs::write(&archive, b"not gzip").unwrap();
+        fs::write(&archive, b"not zstd").unwrap();
         assert!(decode_payload(&archive, &entry, &mut Vec::new()).is_err());
     }
 
@@ -610,16 +596,79 @@ mod tests {
         write_manifest(&directory, &[entry]).unwrap();
         let expected = ["one".to_owned()];
         assert!(read_manifest(&directory, &expected).is_ok());
-        fs::write(directory.join("extra.gz"), "unexpected").unwrap();
+        fs::write(directory.join("extra.zst"), "unexpected").unwrap();
         assert!(read_manifest(&directory, &expected).is_err());
-        fs::remove_file(directory.join("extra.gz")).unwrap();
-        fs::remove_file(directory.join("one.gz")).unwrap();
+        fs::remove_file(directory.join("extra.zst")).unwrap();
+        fs::remove_file(directory.join("one.zst")).unwrap();
         assert!(read_manifest(&directory, &expected).is_err());
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&source, directory.join("one.gz")).unwrap();
+            std::os::unix::fs::symlink(&source, directory.join("one.zst")).unwrap();
             assert!(read_manifest(&directory, &expected).is_err());
         }
+    }
+
+    /// Uses already-fetched, pinned inputs. This explicit integration probe
+    /// replaces only generated package resource trees; it never builds or
+    /// installs the app and never downloads missing toolchains.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "stages and verifies every universal helper and shared asset"]
+    fn staged_universal_payload_probe() {
+        stage(macos::UNIVERSAL_TARGET).unwrap();
+        let root = repository_root();
+        let resources = tempfile::tempdir().unwrap();
+        for (source, destination) in [("payloads", "toolchain"), ("shared-assets", "assets")] {
+            std::os::unix::fs::symlink(
+                root.join("toolchain").join(source),
+                resources.path().join(destination),
+            )
+            .unwrap();
+        }
+        // Decode/hash every payload and shared asset, verify native signatures
+        // and both architectures, and execute tool version checks when possible.
+        verify(resources.path(), macos::UNIVERSAL_TARGET).unwrap();
+        let mut count = 0;
+        for (scope, directory, expected) in macos::MACOS_TARGETS
+            .into_iter()
+            .map(|target| {
+                let mut expected = TOOLS
+                    .iter()
+                    .map(|name| (*name).to_owned())
+                    .collect::<Vec<_>>();
+                expected.push(library_name(target).to_owned());
+                (
+                    target,
+                    root.join("toolchain/payloads").join(target),
+                    expected,
+                )
+            })
+            .chain(std::iter::once((
+                "shared",
+                root.join("toolchain/shared-assets/shared"),
+                bundled_assets::SHARED_ASSETS
+                    .iter()
+                    .map(|asset| asset.name.to_owned())
+                    .collect(),
+            )))
+        {
+            for entry in read_manifest(&directory, &expected).unwrap() {
+                let archive = directory.join(format!("{}.zst", entry.name));
+                println!(
+                    "PACKAGE_PAYLOAD_PROBE\t{scope}\t{}\t{}\t{}\t{}\t{}",
+                    entry.name,
+                    entry.bytes,
+                    entry.sha256,
+                    archive.metadata().unwrap().len(),
+                    sha256(&archive).unwrap(),
+                );
+                count += 1;
+            }
+        }
+        assert_eq!(
+            count,
+            2 * (TOOLS.len() + 1) + bundled_assets::SHARED_ASSETS.len()
+        );
     }
 
     #[test]

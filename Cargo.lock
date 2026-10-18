@@ -7340,7 +7340,6 @@ dependencies = [
  "egui_kittest",
  "egui_ltreeview",
  "encoding_rs",
- "flate2",
  "harfrust",
  "harper-core",
  "harper-tex",
@@ -7376,6 +7375,7 @@ dependencies = [
  "url",
  "winit",
  "wry",
+ "zstd",
 ]
 
 [[package]]

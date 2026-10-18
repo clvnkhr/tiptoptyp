@@ -14,7 +14,7 @@ native-ui-tests = []
 desktop-ui-tests = []
 
 [dependencies]
-flate2 = "1.1"
+zstd = { version = "0.13.3", default-features = false }
 sha2 = "0.10"
 tract-onnx = { version = "0.23.8", default-features = false }
 tiptoptyp-core = { path = "core" }

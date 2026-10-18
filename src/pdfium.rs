@@ -554,10 +554,10 @@ mod tests {
     #[test]
     fn packaged_presence_checks_do_not_decode_or_replace_the_library() {
         let directory = tempfile::tempdir().unwrap();
-        let archive = directory.path().join("libpdfium.dylib.gz");
-        // Presence is deliberately independent of gzip decoding and native
+        let archive = directory.path().join("libpdfium.dylib.zst");
+        // Presence is deliberately independent of Zstandard decoding and native
         // loading, both of which belong to the first actual PDF request.
-        std::fs::write(&archive, b"not a gzip stream").unwrap();
+        std::fs::write(&archive, b"not a Zstandard frame").unwrap();
         std::fs::write(
             directory.path().join("manifest.tsv"),
             format!("libpdfium.dylib\t3\t{}\n", "a".repeat(64)),
@@ -567,7 +567,7 @@ mod tests {
             locate_library(vec![archive.clone()], Vec::new()).unwrap(),
             LibrarySource::Packaged(archive.clone())
         );
-        assert_eq!(std::fs::read(&archive).unwrap(), b"not a gzip stream");
+        assert_eq!(std::fs::read(&archive).unwrap(), b"not a Zstandard frame");
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
 
         let development = directory.path().join("raw-library");

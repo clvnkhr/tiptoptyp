@@ -504,9 +504,9 @@ mod tests {
     fn manifest_backed_tools_resolve_without_extracting_and_custom_paths_still_win() {
         use sha2::{Digest, Sha256};
         let directory = tempfile::tempdir().unwrap();
-        let archive = directory.path().join("typst.gz");
+        let archive = directory.path().join("typst.zst");
         // Availability only reads the manifest and file metadata: intentionally
-        // not a valid gzip stream, so this cannot accidentally test extraction.
+        // not a valid Zstandard frame, so this cannot accidentally test extraction.
         std::fs::write(&archive, b"compressed payload token").unwrap();
         std::fs::write(
             directory.path().join("manifest.tsv"),

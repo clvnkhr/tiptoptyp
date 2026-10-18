@@ -80,7 +80,7 @@ pub(super) fn fetch_to(target: &str, bundle: &Path) -> Result<(), String> {
     let member = find_unique_member(&listing, OsStr::new(lib))?;
     // This directory contains generated artifacts only, for one package target.
     if bundle.exists() {
-        fs::remove_dir_all(&bundle).map_err(|e| e.to_string())?;
+        fs::remove_dir_all(bundle).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(bundle.join("licenses")).map_err(|e| e.to_string())?;
     extract_member_to_file(&archive, &member, &bundle.join(lib), false)?;

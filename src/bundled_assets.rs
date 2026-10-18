@@ -100,7 +100,7 @@ fn archive_path(asset: AssetId) -> Result<std::path::PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     for root in crate::bundled_payload::resource_roots(&executable) {
         let root = root.join("assets/shared");
-        let archive = root.join(format!("{}.gz", asset.name()));
+        let archive = root.join(format!("{}.zst", asset.name()));
         if archive.exists() {
             if crate::bundled_payload::is_packaged_payload(&archive) {
                 return Ok(archive);
