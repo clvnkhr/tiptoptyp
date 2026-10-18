@@ -319,10 +319,6 @@ impl DocumentWorkflow {
         self.flow.cancel_continuation();
     }
     #[cfg(test)]
-    pub(crate) fn take_continuation(&mut self) -> Option<PendingDocumentAction> {
-        self.flow.take_continuation()
-    }
-    #[cfg(test)]
     pub(crate) fn has_continuation(&self) -> bool {
         self.flow.has_continuation()
     }
@@ -551,7 +547,7 @@ mod tests {
             .unwrap();
         assert!(matches!(action.action, DeferredDocumentAction::CloseWindow));
         assert_eq!(action.key, document.key());
-        assert!(flow.take_continuation().is_none());
+        assert!(!flow.has_continuation());
         assert!(
             !flow.may_close(document.key()),
             "completion returns intent, not a native close permit"
@@ -637,7 +633,7 @@ mod tests {
         );
         assert_eq!(document.source(), "replacement");
         assert!(!flow.may_close(document.key()));
-        assert!(flow.take_continuation().is_none());
+        assert!(!flow.has_continuation());
     }
 
     #[test]

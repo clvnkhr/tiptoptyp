@@ -33,48 +33,15 @@ struct Raster<T> {
     key: ArtifactKey,
     pages: Vec<T>,
 }
-enum RasterState<T> {
-    Missing,
-    Rendering(Option<Raster<T>>),
-    Ready(Raster<T>),
-    Failed {
-        key: ArtifactKey,
-        error: String,
-        displayed: Option<Raster<T>>,
-    },
-}
-impl<T> RasterState<T> {
-    fn displayed(&self) -> Option<&Raster<T>> {
-        match self {
-            Self::Ready(raster) => Some(raster),
-            Self::Rendering(old) | Self::Failed { displayed: old, .. } => old.as_ref(),
-            Self::Missing => None,
-        }
-    }
-    fn displayed_mut(&mut self) -> Option<&mut Raster<T>> {
-        match self {
-            Self::Ready(raster) => Some(raster),
-            Self::Rendering(old) | Self::Failed { displayed: old, .. } => old.as_mut(),
-            Self::Missing => None,
-        }
-    }
-    fn into_displayed(self) -> Option<Raster<T>> {
-        match self {
-            Self::Ready(raster) => Some(raster),
-            Self::Rendering(old) | Self::Failed { displayed: old, .. } => old,
-            Self::Missing => None,
-        }
-    }
-}
 pub struct PreviewContent<T> {
     canonical: Canonical,
-    raster: RasterState<T>,
+    raster: Option<Raster<T>>,
 }
 impl<T> Default for PreviewContent<T> {
     fn default() -> Self {
         Self {
             canonical: Canonical::Missing,
-            raster: RasterState::Missing,
+            raster: None,
         }
     }
 }
@@ -100,54 +67,21 @@ impl<T> PreviewContent<T> {
         }
     }
     pub fn raster_key(&self) -> Option<ArtifactKey> {
-        self.raster.displayed().map(|raster| raster.key)
+        self.raster.as_ref().map(|raster| raster.key)
     }
     pub fn pages(&self) -> &[T] {
-        self.raster.displayed().map_or(&[], |raster| &raster.pages)
-    }
-    pub fn pages_mut(&mut self) -> &mut [T] {
-        self.raster
-            .displayed_mut()
-            .map_or(&mut [], |raster| &mut raster.pages)
-    }
-    pub fn error(&self) -> Option<&str> {
-        if let RasterState::Failed { key, error, .. } = &self.raster {
-            (self.artifact_key() == Some(*key)).then_some(error)
-        } else {
-            None
-        }
+        self.raster.as_ref().map_or(&[], |raster| &raster.pages)
     }
     pub fn accept_artifact(&mut self, key: ArtifactKey, pdf: Arc<[u8]>) {
         self.canonical = Canonical::Current(Artifact {
             key,
             content: Content::Pdf(pdf),
         });
-        let displayed = std::mem::replace(&mut self.raster, RasterState::Missing).into_displayed();
-        self.raster = RasterState::Rendering(displayed);
-    }
-    pub fn accept_raster(&mut self, key: ArtifactKey, pages: Vec<T>) -> bool {
-        if self.artifact_key() != Some(key) {
-            return false;
-        }
-        self.raster = RasterState::Ready(Raster { key, pages });
-        true
-    }
-    pub fn fail_raster(&mut self, key: ArtifactKey, error: String) -> bool {
-        if self.artifact_key() != Some(key) {
-            return false;
-        }
-        let displayed = std::mem::replace(&mut self.raster, RasterState::Missing).into_displayed();
-        self.raster = RasterState::Failed {
-            key,
-            error,
-            displayed,
-        };
-        true
     }
     pub fn replace_asset(&mut self, key: ArtifactKey, pdf: Option<Arc<[u8]>>, pages: Vec<T>) {
         let content = pdf.map_or(Content::Image, Content::Pdf);
         self.canonical = Canonical::Current(Artifact { key, content });
-        self.raster = RasterState::Ready(Raster { key, pages });
+        self.raster = Some(Raster { key, pages });
     }
     pub fn invalidate(&mut self) {
         self.canonical = match std::mem::take(&mut self.canonical) {
@@ -165,11 +99,8 @@ impl<T> PreviewContent<T> {
             }
             Canonical::Missing => {}
         }
-        if let Some(raster) = self.raster.displayed_mut() {
+        if let Some(raster) = self.raster.as_mut() {
             raster.key.revision = revision;
-        }
-        if let RasterState::Failed { key, .. } = &mut self.raster {
-            key.revision = revision;
         }
     }
 }
@@ -178,7 +109,7 @@ impl<T> PreviewContent<T> {
 mod tests {
     use super::*;
     #[test]
-    fn dependency_rebuild_keeps_old_pixels_without_accepting_old_results() {
+    fn dependency_rebuild_retains_static_pixels_without_promoting_their_provenance() {
         let mut state = PreviewContent::default();
         let old = ArtifactKey {
             revision: 4,
@@ -188,18 +119,28 @@ mod tests {
             generation: 2,
             ..old
         };
-        state.accept_artifact(old, Arc::from(&b"old"[..]));
-        assert!(state.accept_raster(old, vec![10]));
+        state.replace_asset(old, Some(Arc::from(&b"old"[..])), vec![10]);
         state.accept_artifact(new, Arc::from(&b"new"[..]));
+        assert_eq!(state.artifact_key(), Some(new));
+        assert_eq!(state.raster_key(), Some(old));
         assert_eq!(state.pages(), &[10]);
-        assert!(!state.accept_raster(old, vec![99]));
-        assert!(!state.fail_raster(old, "late error".into()));
-        assert!(state.fail_raster(new, "rasterizer failed".into()));
         assert_eq!(state.pdf().unwrap().as_ref(), b"new");
-        assert_eq!(state.error(), Some("rasterizer failed"));
-        assert!(state.accept_raster(new, vec![20]));
+        state.invalidate();
+        assert_eq!(state.artifact_key(), None);
+        assert_eq!(state.raster_key(), Some(old));
+        assert_eq!(state.pages(), &[10]);
+        state.replace_asset(new, None, vec![20]);
+        assert_eq!(state.artifact_key(), Some(new));
+        assert_eq!(state.raster_key(), Some(new));
         assert_eq!(state.pages(), &[20]);
-        assert_eq!(state.error(), None);
+        assert!(
+            state.pdf().is_none(),
+            "an image replacement removes old PDF bytes"
+        );
+        state.clear();
+        assert_eq!(state.artifact_key(), None);
+        assert_eq!(state.raster_key(), None);
+        assert!(state.pages().is_empty());
     }
     #[test]
     fn invalidation_retains_stale_pdf_until_replacement() {
@@ -210,6 +151,5 @@ mod tests {
         state.invalidate();
         assert_eq!(state.artifact_key(), None);
         assert!(state.pdf().is_some());
-        assert!(!state.accept_raster(key, vec![1]));
     }
 }

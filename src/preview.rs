@@ -1216,8 +1216,7 @@ mod tests {
         let mut preview = PreviewController::new(false, PreviewPreference::Pdfium);
         preview
             .content
-            .accept_artifact(key(4, 11), Arc::from(&b"old"[..]));
-        preview.content.accept_raster(key(4, 11), vec![]);
+            .replace_asset(key(4, 11), Some(Arc::from(&b"old"[..])), vec![]);
         preview
             .content
             .accept_artifact(key(4, 12), Arc::from(&b"new"[..]));

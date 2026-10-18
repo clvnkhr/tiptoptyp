@@ -143,9 +143,6 @@ impl<A, M, D> Workflow<A, M, D> {
         self.after_save = Some((SaveContinuationToken(next), action));
         Ok(())
     }
-    pub fn take_continuation(&mut self) -> Option<A> {
-        self.after_save.take().map(|(_, action)| action)
-    }
     pub fn cancel_continuation(&mut self) {
         self.after_save = None;
     }
@@ -226,9 +223,19 @@ mod tests {
         assert!(flow.show_prompt("unrelated prompt").is_err());
         assert_eq!(flow.take_dialog(), Some("save destination"));
         assert_eq!(flow.take_dialog(), None);
-        let next = flow.take_continuation().unwrap();
+        let token = flow.continuation_token();
+        let next = flow
+            .complete_save(token, Ok(crate::document::SaveStatus::Applied), false, true)
+            .unwrap()
+            .unwrap();
         flow.queue(next).unwrap();
-        assert_eq!(flow.take_continuation(), None);
+        assert!(!flow.has_continuation());
+        assert_eq!(
+            flow.complete_save(token, Ok(crate::document::SaveStatus::Applied), false, true)
+                .unwrap(),
+            None,
+            "a save receipt can release its action only once"
+        );
         assert_eq!(flow.take_action(), Some("close"));
         assert_eq!(flow.take_action(), None);
         flow.finish_dispatch();
@@ -243,7 +250,7 @@ mod tests {
         flow.cancel_continuation();
         flow.finish_dispatch();
         assert_eq!(flow.take_action(), None);
-        assert_eq!(flow.take_continuation(), None);
+        assert!(!flow.has_continuation());
         assert!(!flow.is_busy());
     }
 

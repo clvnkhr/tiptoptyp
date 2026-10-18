@@ -29,8 +29,19 @@ fn save_close_sequences_cover_cancellation_failure_new_edits_and_durability() {
         assert!(flow.queue("duplicate close").is_err());
         assert_eq!(flow.take_dialog(), Some("save destination"));
         let mut writes = Vec::new();
-        if scenario == "cancel" || scenario == "write failure" {
+        if scenario == "cancel" {
             flow.cancel_continuation();
+        } else if scenario == "write failure" {
+            assert_eq!(
+                flow.complete_save(
+                    flow.continuation_token(),
+                    Err("write failure"),
+                    doc.is_dirty(),
+                    true,
+                ),
+                Err("write failure")
+            );
+            assert!(doc.is_dirty());
         } else {
             let write = doc.prepare_save("note.txt".into(), DocumentKind::Text);
             writes.push(write.source().to_owned());
@@ -53,7 +64,7 @@ fn save_close_sequences_cover_cancellation_failure_new_edits_and_durability() {
             writes.is_empty(),
             scenario == "cancel" || scenario == "write failure"
         );
-        assert_eq!(flow.take_continuation(), None);
+        assert!(!flow.has_continuation());
         flow.finish_dispatch();
         assert!(!flow.is_busy());
     }
@@ -85,6 +96,6 @@ fn receipt_from_another_window_or_replaced_document_cannot_release_close() {
         );
         assert_eq!(doc.snapshot().key(), before.key());
         assert_eq!(doc.source(), before.source());
-        assert_eq!(flow.take_continuation(), None);
+        assert!(!flow.has_continuation());
     }
 }

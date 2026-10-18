@@ -105,7 +105,7 @@ fn close_batch_requires_current_versions_and_quiescent_operations() {
 }
 
 #[test]
-fn preview_provenance_keeps_displayed_pixels_but_rejects_stale_results() {
+fn preview_provenance_retains_pixels_until_explicit_asset_replacement() {
     let mut preview = PreviewContent::<u32>::default();
     let first = ArtifactKey {
         revision: 8,
@@ -115,18 +115,14 @@ fn preview_provenance_keeps_displayed_pixels_but_rejects_stale_results() {
         generation: 2,
         ..first
     };
-    preview.accept_artifact(first, Arc::from(&b"first pdf"[..]));
-    assert!(preview.accept_raster(first, vec![1, 2]));
+    preview.replace_asset(first, Some(Arc::from(&b"first pdf"[..])), vec![1, 2]);
     preview.accept_artifact(second, Arc::from(&b"second pdf"[..]));
     assert_eq!(preview.pages(), &[1, 2]);
     assert_eq!(preview.raster_key(), Some(first));
-    assert!(!preview.accept_raster(first, vec![99]));
-    assert!(preview.fail_raster(second, "decode failed".to_owned()));
-    assert_eq!(preview.error(), Some("decode failed"));
     assert_eq!(preview.pdf().unwrap().as_ref(), b"second pdf");
-    assert_eq!(preview.pages(), &[1, 2]);
-    assert!(preview.accept_raster(second, vec![3]));
-    assert_eq!(preview.error(), None);
+    assert_eq!(preview.artifact_key(), Some(second));
+    preview.replace_asset(second, Some(Arc::from(&b"second pdf"[..])), vec![3]);
+    assert_eq!(preview.raster_key(), Some(second));
     assert_eq!(preview.pages(), &[3]);
 
     preview.invalidate();
