@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 const source = readFileSync(new URL('../src/preview_navigation.js', import.meta.url), 'utf8');
+const snapshotSource = readFileSync(new URL('../src/preview_zoom_snapshot.js', import.meta.url), 'utf8');
 function fixture() {
   const handlers = new Map();
   let focused = true;
@@ -254,7 +255,7 @@ test('preview focus uses a theme border, never a badge, with no layout or pointe
 
 // Model the pinned SVG frontend's synchronous patcher and asynchronous queue.
 // The first document is pushed before the socket enables partial rendering.
-function partialFixture({ pages = Array.from({length:48}, () => ({width:600, height:300})), startup = true, partial = true, lateContainer = false, initializeLinks = null, decorated = false, configure = null, zoomSnapshot = null, layoutHook = null } = {}) {
+function partialFixture({ pages = Array.from({length:48}, () => ({width:600, height:300})), startup = true, partial = true, lateContainer = false, initializeLinks = null, decorated = false, configure = null, zoomSnapshot = null, layoutHook = null, nativeSnapshot = false } = {}) {
   const handlers = new Map(), frames = new Map(), windows = [], merges = [], errors = [];
   let nextFrame = 1, now = 0, canvasPages = 0, postRenders = 0, layouts = 0, reads = 0, timeouts = 0, rectReads = 0, domReads = 0, cursorSearches = 0;
   const classes = {toggle() {}, contains: name => name === 'typst-page'};
@@ -351,18 +352,23 @@ function partialFixture({ pages = Array.from({length:48}, () => ({width:600, hei
   const body=element(),head=element();
   const messages=[];
   const window={innerWidth:646,innerHeight:374,addEventListener:(name,handler)=>handlers.set(name,handler),ipc:{postMessage:value=>messages.push(JSON.parse(value))},tiptoptypZoomSnapshot:zoomSnapshot};
-  runInNewContext(source,{window,
+  const sandbox={window,
     document:{getElementById:()=>availableContainer,readyState:'loading',hasFocus:()=>true,documentElement:{...element(),classList:classes},body,head,
       createElement:element,createElementNS:element,addEventListener:(name,handler)=>handlers.set(name,handler)},
     MutationObserver:class {constructor(callback){observers.push(callback);}observe(){}disconnect(){observerDisconnects++;}},
     requestAnimationFrame,cancelAnimationFrame,performance:{now:()=>now},
-    setTimeout(){timeouts++;return timeouts;},clearTimeout(){},console:{error:e=>errors.push(e),log(){}}});
+    setTimeout(){timeouts++;return timeouts;},clearTimeout(){},console:{error:e=>errors.push(e),log(){}}};
+  if(nativeSnapshot){
+    window.tiptoptypCaptureZoomSnapshot=message=>messages.push({type:'preview-zoom-snapshot',...message});
+    runInNewContext(snapshotSource,sandbox);
+  }
+  runInNewContext(source,sandbox);
   if(lateContainer) {availableContainer=container;observers.forEach(callback=>callback());}
   container.documents=[]; // Assignment in the frontend's module initialization.
   container.documents.push({impl:doc,setPartialRendering(value){doc.partialRendering=value;}});
   doc.partialRendering=partial;
   if(!startup)patch([0,0,600,600]);
-  return {doc,scroll,windows,merges,errors,frames,container,messages,body,head,properties,
+  return {doc,scroll,windows,merges,errors,frames,container,messages,body,head,properties,window,
     palette:(...args)=>window.tiptoptypSetPalette(...args),get propertyWrites(){return propertyWrites;},
     advance(ms){now+=ms;},
     revealOptions:options=>window.tiptoptypSetRevealOptions(options),
@@ -1020,6 +1026,60 @@ test('native resize owns smooth divider work and sends a final absolute scroll t
   assert.equal(f.scroll.scrollTop,120);
 });
 
+
+for(const partial of [false,true]) test(`${partial?'partial':'full'} DOM resize refreshes an active native flight before its sharp handoff`,()=>{
+  const f=partialFixture({partial,decorated:true,nativeSnapshot:true});
+  f.start();f.flush();f.flush();
+  const cache=f.window.tiptoptypZoomSnapshot;
+  cache.configure(true);
+  f.scroll.clientWidth=560;f.window.innerWidth=560;
+  const request={revision:6,scale:1,resize:true,token:'cached-pixels',source:{x:0,y:{page:18,local:75},clientX:23,clientY:37}};
+  assert.equal(f.nativeZoom(request),true);f.flush();
+  assert.equal(f.doc.cachedDOMState.width,560);
+  assert.equal(cache.owns(6,f.doc),true);
+  const renders=f.windows.length,layouts=f.layouts;
+  // The first flight laid out at560, but AppKit has already queued the next
+  // native width480. Only its delayed DOM notification is arriving now.
+  f.scroll.clientWidth=480;f.window.innerWidth=480;
+  for(let i=0;i<100;i++)f.event('resize');
+  assert.ok(f.frames.size<=2,'at most one existing handoff RAF plus one coalesced geometry refresh');
+  for(let i=0;i<6;i++)f.flush();
+  assert.equal(f.doc.cachedDOMState.width,480,'the active slot must refresh before its queued successor can run');
+  assert.equal(cache.inspect().active,false);
+  assert.equal(f.messages.filter(message=>message.op==='ready').length,1);
+  assert.equal(f.messages.filter(message=>message.op==='ready')[0].revision,6);
+  assert.equal(f.windows.length,renders,'same-owner resize must reuse SVG ink');
+  assert.ok(f.layouts<=layouts+(partial?2:1),`one geometry refresh uses bounded layout passes: ${f.layouts-layouts}`);
+  assert.equal(f.frames.size,0,'geometry refresh must not introduce idle polling');
+  assert.equal(f.messages.filter(message=>message.op==='capture').length,0);
+  const page=f.doc.hookedElem.firstElementChild.children.filter(node=>node.classList.contains('typst-page'))[18];
+  const matrix=page.getScreenCTM();
+  assert.ok(Math.abs(matrix.f+75*matrix.d-37)<1e-8,'refresh must retain the active request source anchor');
+});
+
+for(const ownerChange of ['revision','document']) test(`DOM resize cannot resurrect native ownership after ${ownerChange} changes`,()=>{
+  const f=partialFixture({partial:false,decorated:true,nativeSnapshot:true});
+  f.start();f.flush();f.flush();
+  const cache=f.window.tiptoptypZoomSnapshot;
+  cache.configure(true);
+  f.scroll.clientWidth=560;f.window.innerWidth=560;
+  const request={revision:6,scale:1,resize:true,token:'cached-pixels'};
+  f.nativeZoom(request);f.flush();
+  const owner=ownerChange==='document'?{}:f.doc;
+  const revision=ownerChange==='revision'?7:6;
+  cache.native({...request,revision},owner);
+  const layouts=f.layouts;
+  f.scroll.clientWidth=480;f.window.innerWidth=480;
+  for(let i=0;i<100;i++)f.event('resize');
+  for(let i=0;i<4;i++)f.flush();
+  assert.equal(f.layouts,layouts,'the stale request must not mutate another owner layout');
+  assert.equal(f.doc.cachedDOMState.width,560);
+  assert.equal(cache.owns(revision,owner),true,'stale metadata must not release the current owner');
+  assert.equal(f.messages.filter(message=>message.op==='ready').length,0);
+  assert.equal(f.frames.size,0,'rejected stale work must not poll');
+  cache.abandon(revision);f.flush();
+  assert.equal(cache.inspect().active,false);
+});
 
 test('buffered native anchors preserve page-local points and fixed-size gaps after zoom and resize',()=>{
   for(const resize of [false,true]) for(const gap of [false,true]) {

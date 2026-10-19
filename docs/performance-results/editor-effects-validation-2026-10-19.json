@@ -1,0 +1,836 @@
+{
+  "schema": 1,
+  "status": "validated_with_explicit_remaining_blocker_and_interrupted_checks",
+  "all_native_checks_passed": false,
+  "runtime_builds": {
+    "final_effects_worker_before_navigation": {
+      "receipt": {
+        "command": "cargo test --release --locked --features desktop-ui-tests --no-run --message-format=json",
+        "built_utc": "2026-10-19T11:23:43.907831+00:00",
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "desktop-ui-tests"
+        ],
+        "sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+        "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+        "base_revision": "af69f9efaad018be4b0f37c56bb8536bf5a8423e",
+        "source_diff_sha256": "575bc058b0fa058b8284816195cce2d53c1355a5b668bd1df55b1add03ad3dde",
+        "changed_source_files_sha256": {
+          "Cargo.lock": "fc896f4c87bbfe0a109ecadff599636eb68125680605d802331007779c786d49",
+          "Cargo.toml": "ae90895189544c7a534dfe196cb6c27e2b99f9abcfcc3cc18ebe8288227e1629",
+          "docs/desktop-ui-journeys.md": "d423ace26f024643234c589125838e433b0dab8717d4d15c27be56c05385cb3d",
+          "docs/performance.md": "a87e17a62d112d8edd7177a116945f39658f5730f0036d585dc872670717a9d4",
+          "scripts/desktop_ui_journeys.py": "53882357507e1e33f99ee2e20a75401e9ea084d0377135f36de9b2538518d973",
+          "scripts/test-desktop-ui.py": "0264ffb98302315005bc358d971fa1a1a38a7075546f9166dca8605b1e0799e5",
+          "scripts/test-preview-zoom-snapshot.mjs": "d35af95d961370d8aa7feb6836cf3123fc27c38ec6260f5fbbb5229393bba1b0",
+          "src/app.rs": "8107b84eccf40c6619f6341ee500e5232f0c4e0a9bc4eb0b2b662633b8d66cec",
+          "src/app/editor_particles.rs": "0bdf192c95abb8e00ab2662f787bad8e8eb4e36940819108fd11bdcd2aaf687e",
+          "src/app/editor_particles/gpu.rs": "18f8e55dc22e3bcc9b160a1fe5f950d45a2848fb5c60c068aec44bb60d0fba8c",
+          "src/app/editor_particles/gpu_tests.rs": "160745a9094d1c2aa9776c98e17f3242d3a163fbbe3eb8a24d0db4813677d367",
+          "src/app/editor_particles/perf_tests.rs": "6965ea9c5001b6428f318859d1e3168d9fc862c816b2c56f86e339604e13c904",
+          "src/preview_zoom_snapshot.js": "79c709deca84f51a0f7098c6a1f3e34bb2eb3bf23b578dc94f677cf202594ad9",
+          "src/preview_zoom_snapshot.rs": "0d58bc7271fd0eb9e7be0dfdf8eb2c1050a56bb361c4e7b5d78dc695a9ce058a",
+          "tests/native_preview_zoom.rs": "14a2b9fa7c9bc99df71c48462598e9a1ceb8768bc88738d502fd0f01c66f41f9",
+          "docs/performance-results/editor-effects-pacing-2026-10-19.json": "4658b9c94e088b52af1972fc721bc23b403c2690b591ab6a4a280546e3305f72",
+          "docs/performance-results/editor-effects-snapshot-control-2026-10-19.json": "8e3ac4ecb3225112f3709f27be55f4eff660ab400016a55a00ef2697d81a4217",
+          "scripts/desktop_ui_effects_journeys.py": "c486c38f380bdc3ff3ae7d5ea1e12df9153691b98bd799527503e8c5a7fb5cad",
+          "scripts/test_desktop_ui_effects_contract.py": "85657d7f2452f943683d9335d86c113175c0bba0c0ff6ac95ff6eb49f28de16f",
+          "src/app/editor_particles/clock.rs": "152e2692d9bcd74f2585d870058e4f6a51674331ace7539949b0785057ec7a7d"
+        }
+      },
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-build-receipt.json",
+        "sha256": "5ee225b07dfda7dd9d444daed0adc50d068d9492dd217c5d9a092f2441a5b60e"
+      }
+    },
+    "handoff_with_navigation_followup": {
+      "receipt": {
+        "app": {
+          "target": {
+            "kind": [
+              "bin"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "tiptoptyp",
+            "src_path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/main.rs",
+            "edition": "2024",
+            "doc": true,
+            "doctest": false,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "desktop-ui-tests"
+          ]
+        },
+        "native_probe": {
+          "target": {
+            "kind": [
+              "test"
+            ],
+            "crate_types": [
+              "bin"
+            ],
+            "name": "native_preview_zoom",
+            "src_path": "/Users/calvinkhor/Documents/GitHub/mytypst/tests/native_preview_zoom.rs",
+            "edition": "2024",
+            "required-features": [
+              "desktop-ui-tests"
+            ],
+            "doc": false,
+            "doctest": false,
+            "test": true
+          },
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": true
+          },
+          "features": [
+            "desktop-ui-tests"
+          ]
+        },
+        "app_sha256": "501fb79a443666ea2b740ddeb45c06d64ab1d6af1836fa3bf0659ca5d2fadbba",
+        "native_probe_sha256": "fc07c878c8fda87cc8761441507f4ccea5798693d569a01ef0021df125c307cf",
+        "version": "tiptoptyp Dev 0.1.0 (f19a64497493-dirty.1792410251)",
+        "base_revision": "f19a64497493ba21b7a4d2acb358e95cb6c056e5",
+        "changed_source_sha256": {
+          "src/preview_navigation.js": "8bf6fe6e29139994f0008c76db75ea190d25ef4c57a747c24b88f95d600ad31d",
+          "scripts/test-preview-navigation.mjs": "d28152222437b25c4ba7625135af649cb58e1880fcb6c6a2a23e4cd2c3bf3bae"
+        }
+      },
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-build-receipt.json",
+        "sha256": "51b71b1227249f57732820d8d0e5f9468751507c25cde8bc765b637b6583b524"
+      }
+    }
+  },
+  "checks": {
+    "rust_source_scope": "Full default/profiling suites cover the last Rust worker-logic changes. They precede the later embedded preview_navigation.js follow-up; no complete Rust-suite rerun after that JS-only change is claimed. The handoff release build embeds the later JS and compiled successfully.",
+    "default": {
+      "status": "passed",
+      "command": "cargo test --no-fail-fast",
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/tests-default-handoff.log",
+        "sha256": "6031d71f176ff0c2fd11204113aa2e3b5d6b7b65e7110eae0de1bc9d61fe46c7"
+      },
+      "suite_summaries": 17,
+      "passed": 2333,
+      "failed": 0,
+      "ignored": 70,
+      "count_scope": "Sum of all Cargo test-result summaries, including workspace and doctest suites."
+    },
+    "profiling": {
+      "status": "passed",
+      "command": "cargo test --features profiling --no-fail-fast",
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/tests-profiling-handoff.log",
+        "sha256": "5b04cb88709446bb05bec0deb502a84190c142762d5e504b1446a97acdc6f6d3"
+      },
+      "suite_summaries": 17,
+      "passed": 2341,
+      "failed": 0,
+      "ignored": 70,
+      "count_scope": "Sum of all Cargo test-result summaries, including workspace and doctest suites."
+    },
+    "xtask": {
+      "status": "passed",
+      "command": "cargo test --manifest-path xtask/Cargo.toml",
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/tests-xtask-handoff.log",
+        "sha256": "18d37b18655e46a43430ce515682c0ae6ef3e47167caa6166b973781971f556b"
+      },
+      "suite_summaries": 1,
+      "passed": 32,
+      "failed": 0,
+      "ignored": 1,
+      "count_scope": "Sum of all Cargo test-result summaries, including workspace and doctest suites."
+    },
+    "clippy": [
+      {
+        "status": "passed",
+        "features": [],
+        "warnings_denied": true,
+        "artifact": {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/clippy-post-resize.log",
+          "sha256": "df03781208376c9b8a8e8c2b45c445c2ee3c3c9be3f8e382c0bed96dfe963255"
+        }
+      },
+      {
+        "status": "passed",
+        "features": [
+          "profiling"
+        ],
+        "warnings_denied": true,
+        "artifact": {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/clippy-post-resize-profiling.log",
+          "sha256": "bcdf2324911e22653c2f9713015e1f06df971ccdc728872724ea4dceeee476f7"
+        }
+      },
+      {
+        "status": "passed",
+        "features": [
+          "desktop-ui-tests"
+        ],
+        "warnings_denied": true,
+        "artifact": {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/clippy-post-resize-desktop.log",
+          "sha256": "e8d87cd22df78c34748ee2f9f032d68f252a41e20f04d53074a1f9a3553cc2a1"
+        }
+      }
+    ],
+    "gpu": [
+      {
+        "status": "passed",
+        "command": "Focused actual CGL test; see retained log",
+        "artifact": {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/gpu-prewarm.log",
+          "sha256": "17a4c9554e2790574ce1481a956bb173ca9e70ba1262835246456078d64dc90f"
+        },
+        "suite_summaries": 1,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "count_scope": "Sum of all Cargo test-result summaries, including workspace and doctest suites.",
+        "scope": "Actual graphics-context prewarm/pixel uniform test, separate from native app interaction.",
+        "nonfatal_log_note": "The debug linker emits an __eh_frame size warning; the focused test passed."
+      },
+      {
+        "status": "passed",
+        "command": "Focused actual CGL test; see retained log",
+        "artifact": {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/gpu-uniforms.log",
+          "sha256": "4ca29eb9971c755426ee0b75dc72cdd29b2537df1f3a07a960a66bb9a6576460"
+        },
+        "suite_summaries": 1,
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "count_scope": "Sum of all Cargo test-result summaries, including workspace and doctest suites.",
+        "scope": "Actual graphics-context prewarm/pixel uniform test, separate from native app interaction.",
+        "nonfatal_log_note": "The debug linker emits an __eh_frame size warning; the focused test passed."
+      }
+    ],
+    "python_contracts": {
+      "status": "passed",
+      "tests": 9,
+      "scope": "Pure effects-pacing Python contracts; not actual GUI checks.",
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/tests-python-handoff.log",
+        "sha256": "5f0635b83af38a6c5d516fcb60dc3fa63c9c6ca4854e51a6a29ca33c92ccef16"
+      }
+    },
+    "javascript_followup": {
+      "status": "passed",
+      "tests_total": 223,
+      "failed_total": 0,
+      "runs": [
+        {
+          "status": "passed",
+          "tests": 216,
+          "passed": 216,
+          "failed": 0,
+          "artifact": {
+            "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/tests-js-handoff.log",
+            "sha256": "f7e6e56cae20206af8faf51741214c1b343a3b5afe2cc48c769b389366ff7dcb"
+          },
+          "scope": "Navigation (155), zoom snapshot (54), desktop-preview-probe (7) JavaScript contracts."
+        },
+        {
+          "status": "passed",
+          "tests": 7,
+          "passed": 7,
+          "failed": 0,
+          "artifact": {
+            "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/tests-native-js-handoff.log",
+            "sha256": "11357d054f8386bebad262746c3db399a01afcbe4a3e43f895e017cf11347468"
+          },
+          "scope": "Separate preview-native-probe JavaScript contracts (7); not actual native GUI checks."
+        }
+      ],
+      "scope": "Later JS-only navigation follow-up; separate from earlier full Rust suites and actual macOS interaction evidence."
+    },
+    "serial_resize_regression": {
+      "status": "passed_after_failing_reproduction",
+      "before_failed": 2,
+      "after_passed": 4,
+      "scope": "Current production-controller integration tests loaded with baseline navigation JS for red reproduction, then current JS for green; no assertion weakened.",
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/serial-resize-bridge-proof.txt",
+        "sha256": "a86555f055fcaf144a55c6730fcbc91b205e077da6a69e1e126358b77444b7de"
+      }
+    }
+  },
+  "native_application_journeys": [
+    {
+      "stage": "final effects pacing",
+      "status": "passed",
+      "recorded_native_pass": true,
+      "journeys_completed": [
+        "effects_pacing"
+      ],
+      "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+      "binary_sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "artifact": {
+        "path": ".tiptoptyp/desktop-ui-tests/run-lsd2f0iu/result.json",
+        "sha256": "8000abe83dfc650f52de8fdd692e55ba0487b6a7bc8b55e8d16b778e948ee2e2"
+      }
+    },
+    {
+      "stage": "final all-action effects",
+      "status": "passed",
+      "recorded_native_pass": true,
+      "journeys_completed": [
+        "typing_particles"
+      ],
+      "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+      "binary_sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "artifact": {
+        "path": ".tiptoptyp/desktop-ui-tests/run-56dp7yhz/result.json",
+        "sha256": "87f9fa219b2fc03350b148e7cd2cd9a82ba2c23f1326c33c7ebbdd6bf46848af"
+      }
+    },
+    {
+      "stage": "final editable diff",
+      "status": "passed",
+      "recorded_native_pass": true,
+      "journeys_completed": [
+        "git_hunks"
+      ],
+      "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+      "binary_sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "artifact": {
+        "path": ".tiptoptyp/desktop-ui-tests/run-2xxfgz8o/result.json",
+        "sha256": "e652b13ee25597c0587d6eb64e66eb45029a0820d63618bac9393ecd5074ea3c"
+      }
+    },
+    {
+      "stage": "final partial preview zoom",
+      "status": "passed",
+      "recorded_native_pass": true,
+      "journeys_completed": [
+        "partial_zoom_stress"
+      ],
+      "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+      "binary_sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "artifact": {
+        "path": ".tiptoptyp/desktop-ui-tests/run-iz9euiz7/result.json",
+        "sha256": "e733b7c26137d15dc4fd45f176bbc113927b85bddc549fd35dc4e657b622545e"
+      }
+    },
+    {
+      "stage": "post-navigation partial preview zoom",
+      "status": "interrupted_unverified",
+      "recorded_native_pass": false,
+      "journeys_completed": [],
+      "version": "tiptoptyp Dev 0.1.0 (f19a64497493-dirty.1792410251)",
+      "binary_sha256": "501fb79a443666ea2b740ddeb45c06d64ab1d6af1836fa3bf0659ca5d2fadbba",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "preflight": {
+        "accessibility": true,
+        "desktop": true,
+        "input": true,
+        "locked": false,
+        "screens": [
+          {
+            "height": 982,
+            "scale": 2,
+            "width": 1512
+          }
+        ]
+      },
+      "artifact": {
+        "path": ".tiptoptyp/desktop-ui-tests/run-k_3xaqio/result.json",
+        "sha256": "91773418b28bc61e69ab8bfa51a877978bdc710c691e206af0e0a6d38ec372b8"
+      },
+      "failure": "UI did not publish a fresh frame",
+      "failure_foreground": {
+        "bundle": "com.brave.Browser",
+        "pid": 28984
+      },
+      "failure_native_windows": {
+        "windows": [
+          {
+            "AXFocused": false,
+            "AXMain": true,
+            "AXMinimized": false,
+            "AXTitle": "partial-zoom-stress.typ \u2014 tiptoptyp",
+            "size": [
+              1400,
+              883
+            ]
+          }
+        ]
+      },
+      "interpretation": "Interrupted/unverified: Brave was foreground and the app window AXFocused was false. The fresh-frame failure is retained; this run cannot exclude an application defect."
+    }
+  ],
+  "not_started": [
+    {
+      "check": "post-navigation effects_pacing",
+      "reason": "The chained command stopped after the zoom fresh-frame failure. User requested finish with interrupted checks noted; no later run was started."
+    }
+  ],
+  "native_owned_view_transition_probes": [
+    {
+      "stage": "baseline-native-full",
+      "mode": "full",
+      "classification": "preserved prior-build dense fixture failure",
+      "passed": false,
+      "process_returncode": 101,
+      "actual_tinymist": true,
+      "actual_partial_mode": false,
+      "transition_passed": false,
+      "transition_steps_recorded": 0,
+      "failures": [
+        "no usable idle image for mid-document-idle"
+      ],
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+      "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+      "probe_binary_sha256": "8d3f2217a596707cdb4e8058d9db350d755a5769243fc72f428e865b5b87a51f",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": [
+        640,
+        420
+      ],
+      "input_scope": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "artifacts": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/baseline-native-full/native-full.json",
+          "sha256": "38e3bcf8c193ea9fa0938bf13f38ae15ccd1644ba1edf9d59d842c046a497d4e"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/baseline-native-full/metadata-full.json",
+          "sha256": "de8b147c997abba931a26b63fd42679199ca99d1691e6c41622771c774fe15b0"
+        }
+      ]
+    },
+    {
+      "stage": "final-native-pixels",
+      "mode": "full",
+      "classification": "worker-stage dense full failure before navigation follow-up",
+      "passed": false,
+      "process_returncode": 101,
+      "actual_tinymist": true,
+      "actual_partial_mode": false,
+      "transition_passed": false,
+      "transition_steps_recorded": 1,
+      "failures": [
+        "no sharp handoff for resize-flight-race"
+      ],
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+      "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+      "probe_binary_sha256": "6c910e5e2ef2d375da38a8dbbb542d64e03b4447e2bae8a100d72a909a092d31",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": [
+        640,
+        420
+      ],
+      "input_scope": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "artifacts": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-native-pixels/native-full.json",
+          "sha256": "95a3e9cd3d0d6fa68e9e67433ac9d2bd75e413ec459c8b93c07b38d2885d1c76"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-native-pixels/metadata-full.json",
+          "sha256": "952fb0726103664b46192e9c42bcc6c1e12156c2087a2e946983b41a530509c0"
+        }
+      ]
+    },
+    {
+      "stage": "final-native-pixels",
+      "mode": "partial",
+      "classification": "worker-stage dense partial pass",
+      "passed": true,
+      "process_returncode": 0,
+      "actual_tinymist": true,
+      "actual_partial_mode": true,
+      "transition_passed": true,
+      "transition_steps_recorded": 18,
+      "failures": [],
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+      "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+      "probe_binary_sha256": "6c910e5e2ef2d375da38a8dbbb542d64e03b4447e2bae8a100d72a909a092d31",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": [
+        640,
+        420
+      ],
+      "input_scope": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "artifacts": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-native-pixels/native-partial.json",
+          "sha256": "7d78a2e717bf4052a76353d9c2c53dbd4fb3c929a10ef9b6768e58b83d2a7927"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-native-pixels/metadata-partial.json",
+          "sha256": "6292b352a78636b3d959e471752096c3acfbd8b1f41c6af899ecc652a08f27bd"
+        }
+      ]
+    },
+    {
+      "stage": "handoff-native-pixels",
+      "mode": "full",
+      "classification": "remaining dense full-mode blocker after navigation follow-up",
+      "passed": false,
+      "process_returncode": 101,
+      "actual_tinymist": true,
+      "actual_partial_mode": false,
+      "transition_passed": false,
+      "transition_steps_recorded": 0,
+      "failures": [
+        "no usable idle image for mid-document-idle"
+      ],
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+      "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+      "probe_binary_sha256": "fc07c878c8fda87cc8761441507f4ccea5798693d569a01ef0021df125c307cf",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": [
+        640,
+        420
+      ],
+      "input_scope": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "artifacts": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-pixels/native-full.json",
+          "sha256": "1036f1635410a25b2d102dac93f17b8ad444ad6063e7a660db505c517064f0ab"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-pixels/metadata-full.json",
+          "sha256": "ba4aedcc93f97217226fb98c01fd3275b981dbd1ae5318d90cf0330dd2cc6544"
+        }
+      ]
+    },
+    {
+      "stage": "handoff-native-pixels",
+      "mode": "partial",
+      "classification": "dense partial pass after navigation follow-up",
+      "passed": true,
+      "process_returncode": 0,
+      "actual_tinymist": true,
+      "actual_partial_mode": true,
+      "transition_passed": true,
+      "transition_steps_recorded": 18,
+      "failures": [],
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-stress.typ",
+      "fixture_sha256": "e6dd2f741269b617df5e5d8712d85301b99cf81a46fa2221467a3417fd383828",
+      "probe_binary_sha256": "fc07c878c8fda87cc8761441507f4ccea5798693d569a01ef0021df125c307cf",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": [
+        640,
+        420
+      ],
+      "input_scope": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "artifacts": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-pixels/native-partial.json",
+          "sha256": "1743a379251a6136599cf11818a62ea41ab28e853fad4052952f33b97d44349c"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-pixels/metadata-partial.json",
+          "sha256": "4ede01d98f9c1f2573f7d8cb7ca2a781b5da8b2781e52ec41558f678d4da4895"
+        }
+      ]
+    },
+    {
+      "stage": "handoff-native-serial",
+      "mode": "full",
+      "classification": "diagnostic fixture-contract failure: initial uniform-width fixture violated right-gutter expectation",
+      "passed": false,
+      "process_returncode": 101,
+      "actual_tinymist": true,
+      "actual_partial_mode": false,
+      "transition_passed": false,
+      "transition_steps_recorded": 18,
+      "failures": [
+        "cached right gutter contains [40, 40, 40, 255], expected opaque live gray"
+      ],
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-serial.typ",
+      "fixture_sha256": "cf0736d133891fef3a06857f653c166dce59d8c300ad6589a6fb2e56f32ec6d5",
+      "probe_binary_sha256": "fc07c878c8fda87cc8761441507f4ccea5798693d569a01ef0021df125c307cf",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": [
+        640,
+        420
+      ],
+      "input_scope": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "artifacts": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-serial/native-full.json",
+          "sha256": "77e792193ca76a1b42b24a4243ad5eb1d53ee27b9c86c548f13bfabfb2087ec5"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-serial/metadata-full.json",
+          "sha256": "662fde71355ff635dd8fa782c5b54592481054400c871f95d2e10885fcf0fd40"
+        }
+      ]
+    },
+    {
+      "stage": "handoff-native-serial-pages",
+      "mode": "full",
+      "classification": "24 light unequal-width pages preserve original stress width pattern; complete transition pass",
+      "passed": true,
+      "process_returncode": 0,
+      "actual_tinymist": true,
+      "actual_partial_mode": false,
+      "transition_passed": true,
+      "transition_steps_recorded": 18,
+      "failures": [],
+      "fixture": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/fixtures/tinymist-zoom-serial.typ",
+      "fixture_sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb",
+      "probe_binary_sha256": "fc07c878c8fda87cc8761441507f4ccea5798693d569a01ef0021df125c307cf",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "viewport": [
+        640,
+        420
+      ],
+      "input_scope": "owned AppKit zoom keys; transitions additionally inject CaptureState zoom and WebView bounds",
+      "not_established": "physical trackpad pinch or GPU presentation",
+      "artifacts": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-serial-pages/native-full.json",
+          "sha256": "96c9233268af17aef61c2942260c03f8703b86a51ddc6fdcae82c5c543a029b5"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-serial-pages/metadata-full.json",
+          "sha256": "42c26463a2c32c6d66a6935e36e3f4097cb3d35a83fbf0e261cf309e5ca1a511"
+        }
+      ]
+    }
+  ],
+  "serial_fixture": {
+    "artifact": {
+      "path": "scripts/fixtures/tinymist-zoom-serial.typ",
+      "sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb"
+    },
+    "pages": 24,
+    "workload": "Light content with the original unequal-width page pattern; existing viewport/gutter assertions unchanged.",
+    "diagnostic_uniform_width_fixture": {
+      "classification": "Retained diagnostic fixture-contract failure, not a product pass; no assertion weakened.",
+      "artifact": {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/handoff-native-serial-uniform.typ",
+        "sha256": "cf0736d133891fef3a06857f653c166dce59d8c300ad6589a6fb2e56f32ec6d5"
+      },
+      "matches_original_failed_run_fixture_sha256": true
+    }
+  },
+  "visual_review": {
+    "reviewer": "Root agent; fresh images inspected in this task",
+    "scope": "Owned native-view orientation, palette and opaque page-boundary/gutter; not composed editor root-window proof.",
+    "findings": "Orientation, palette and opaque boundary were acceptable in the inspected owned-view PNGs.",
+    "root_composed_app_visual_verification": false,
+    "artifacts": [
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-full-handoff-native-serial-pages.png",
+        "sha256": "df841d816739b7bb472ecc348c15a105665e45c03b64e3964c65a56dc248fb49"
+      },
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-full-handoff-native-serial-pages.edge.png",
+        "sha256": "12a6a1ab17df4e97aeaa96c6ec3c78670a7a0c289602f86d8233290be047bf92"
+      },
+      {
+        "path": ".tiptoptyp/screenshots/agent-review/zoom-edge/native-partial-handoff-native-pixels.edge.png",
+        "sha256": "d37da03b664da36d5ef62cff76741151e6587cae384697c8723cb450822777fb"
+      }
+    ]
+  },
+  "performance": {
+    "stage": "final effects/worker build BEFORE navigation follow-up",
+    "native_run": "run-lsd2f0iu",
+    "post_navigation_rerun": false,
+    "clock_checks_passed": 28,
+    "clock_checks_total": 28,
+    "scope": "Native render-callback cadence, not compositor FPS, GPU execution or input-to-pixel latency.",
+    "artifact": {
+      "path": ".tiptoptyp/desktop-ui-tests/run-lsd2f0iu/effects-pacing.json",
+      "sha256": "8de1159b7ecf85e8d9e8f23d42c598e9b66b209119881da71a2212c92f5d331a"
+    },
+    "warm_aggregates": [
+      {
+        "suffix": "txt",
+        "action": "Typing",
+        "warm_bursts": 6,
+        "callback_intervals": {
+          "early": {
+            "count": 118,
+            "p50_ms": 16.635667000000467,
+            "p95_ms": 17.25804099999732,
+            "max_ms": 20.087499999999636,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "count": 116,
+            "p50_ms": 16.60931199999959,
+            "p95_ms": 18.51433300000099,
+            "max_ms": 19.842625000001135,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "txt",
+        "action": "Copy",
+        "warm_bursts": 6,
+        "callback_intervals": {
+          "early": {
+            "count": 116,
+            "p50_ms": 16.678854499999943,
+            "p95_ms": 18.386083000001236,
+            "max_ms": 21.28270899999916,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "count": 114,
+            "p50_ms": 16.642958500000532,
+            "p95_ms": 18.16912500000035,
+            "max_ms": 19.933124999999563,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "typ",
+        "action": "Typing",
+        "warm_bursts": 6,
+        "callback_intervals": {
+          "early": {
+            "count": 114,
+            "p50_ms": 16.641291500003717,
+            "p95_ms": 20.141542000004847,
+            "max_ms": 22.818000000006577,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "count": 115,
+            "p50_ms": 16.647208000002138,
+            "p95_ms": 18.166958000001614,
+            "max_ms": 19.920583000006445,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "typ",
+        "action": "Copy",
+        "warm_bursts": 6,
+        "callback_intervals": {
+          "early": {
+            "count": 115,
+            "p50_ms": 16.679792000002635,
+            "p95_ms": 18.771416000003228,
+            "max_ms": 24.144000000000233,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "count": 115,
+            "p50_ms": 16.66333399999712,
+            "p95_ms": 17.58312499999738,
+            "max_ms": 17.960791999998037,
+            "above_33_334_ms": 0
+          }
+        }
+      }
+    ]
+  },
+  "remaining_blockers": [
+    {
+      "issue": "Dense full Tinymist preview cannot produce a usable mid-document idle image in the retained stress probe.",
+      "current_evidence": "handoff-native-pixels/native-full.json",
+      "state": "failed",
+      "present_in_prior_probe": true,
+      "qualification": "The later serial-resize bridge has red/green controller proof and passes the light unequal-width native fixture; the dense full probe fails before completing those transitions, so full dense end-to-end correctness remains unverified."
+    },
+    {
+      "issue": "Post-navigation composed partial-zoom journey did not complete.",
+      "state": "interrupted_unverified",
+      "failure": "UI did not publish a fresh frame",
+      "qualification": "Brave foreground and AXFocused=false were observed. Neither a clean product pass nor exclusion of an application defect is established; the subsequent pacing run was not started."
+    }
+  ],
+  "limitations": [
+    "Native callback measurements are not display FPS or GPU execution time.",
+    "The full/partial owned-view probes are separate from real composed-app mouse/keyboard journeys; their injected CaptureState transitions do not prove physical trackpad pinch.",
+    "Passing the lighter 24-page fixture does not replace the retained dense full-mode failure.",
+    "Earlier final-app performance receipts remain valid for their exact binary phase; no post-navigation performance measurement is claimed.",
+    "No additional GUI/native runs were launched after the user requested finish with interrupted checks noted."
+  ]
+}

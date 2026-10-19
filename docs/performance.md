@@ -464,6 +464,22 @@ These are single sequential native runs with six warmed bursts per case.
 Local raw evidence remains under `.tiptoptyp/editor-effects-pacing-2026-10-19/`
 and the native run directories referenced by the receipts.
 
+Follow-up checks exposed a separate serial resize race: a flight fitted at
+560 px could wait indefinitely after the real DOM reached 480 px. The production
+navigation and snapshot controllers now coalesce a same-owner geometry refresh;
+failing full/partial regressions, resize storms and stale-owner guards cover it.
+The new lightweight `scripts/fixtures/tinymist-zoom-serial.typ` retains fractional,
+unequal page widths and passes native full-mode handoff/gutter checks. It is a
+separate isolation lane; the default dense fixture remains unchanged. Dense
+partial-mode transitions pass, while dense full mode still fails its existing
+mid-document idle-image check, also reproduced with the preserved older build.
+The final composed-editor rerun lost foreground to Brave and failed to publish a
+fresh frame; its result remains interrupted/unverified, and the later pacing
+rerun was not started at the user's request. Earlier effects, diff and composed
+zoom passes retain their own build receipts. See the
+[validation record](performance-results/editor-effects-validation-2026-10-19.json)
+for exact checks, inspected native PNGs and remaining limitations.
+
 ## Headless scaling probes
 
 ```sh

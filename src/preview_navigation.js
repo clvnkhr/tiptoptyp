@@ -3,6 +3,7 @@
 (() => {
   let frame = 0;
   let pending = null;
+  let lastNativeRequest = null;
   let sourceContextRequest = null;
   const prepared = new WeakSet();
   // The optional renderer keeps SVG ink only for the viewport and one viewport
@@ -884,6 +885,7 @@
   window.tiptoptypNativeZoom = request => {
     const doc = documentRenderer();
     if (!doc || !window.tiptoptypZoomSnapshot?.native(request, doc)) return false;
+    lastNativeRequest = request;
     enqueue(doc, input => {
       input.scale = Math.min(10, Math.max(0.1, request.scale));
       input.zoom = !request.resize; input.resize = !!request.resize; input.x = request.x; input.y = request.y;
@@ -897,7 +899,22 @@
     const doc = documentRenderer();
     if (!doc) return;
     event.stopImmediatePropagation();
-    if (window.tiptoptypZoomSnapshot?.resize?.()) return;
+    if (window.tiptoptypZoomSnapshot?.resize?.()) {
+      const request = lastNativeRequest, scroll = doc.hookedElem.parentElement;
+      // Native bounds can already contain a newer queued width while this
+      // flight's first RAF fitted the previous DOM width. Refresh this same
+      // owner once so readiness can release its serial slot for the successor.
+      if (request && window.tiptoptypZoomSnapshot.owns?.(request.revision, doc) &&
+          (doc.cachedDOMState.width !== scroll.clientWidth || doc.cachedDOMState.height !== scroll.clientHeight) &&
+          !(pending?.doc === doc && pending.nativeRevision === request.revision)) {
+        enqueue(doc, input => {
+          input.resize = true;
+          input.scroll = request.scroll; input.source = request.source;
+          input.nativeRevision = request.revision;
+        });
+      }
+      return;
+    }
     enqueue(doc, input => { input.resize = true; });
     updateControls();
   }, true);
