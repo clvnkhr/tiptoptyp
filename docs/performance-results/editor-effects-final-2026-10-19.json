@@ -1,0 +1,4601 @@
+{
+  "schema": 1,
+  "scope": "Natural native GPU callback cadence, not compositor presentation/FPS, GPU execution or input-to-pixel latency.",
+  "matched_fixture_viewport_theme_effects_profile_platform": true,
+  "comparison_policy": "Use clock_fix_intermediate snapshots-on versus final_snapshot_on for timing comparisons with identical clock semantics. Baseline remains evidence of the clock regression; snapshot_off_control diagnoses snapshot-path overhead using the intermediate binary.",
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "preflight": {
+    "accessibility": true,
+    "desktop": true,
+    "input": true,
+    "locked": false,
+    "screens": [
+      {
+        "height": 982,
+        "scale": 2,
+        "width": 1512
+      }
+    ]
+  },
+  "protocol": "one native action; no inspection, screenshots or app requests until 0.9 seconds after the producer returns",
+  "prior_reports_unchanged": [
+    {
+      "path": "docs/performance-results/editor-effects-pacing-2026-10-19.json",
+      "sha256": "4658b9c94e088b52af1972fc721bc23b403c2690b591ab6a4a280546e3305f72"
+    },
+    {
+      "path": "docs/performance-results/editor-effects-snapshot-control-2026-10-19.json",
+      "sha256": "8e3ac4ecb3225112f3709f27be55f4eff660ab400016a55a00ef2697d81a4217"
+    }
+  ],
+  "stages": [
+    {
+      "stage": "baseline",
+      "preview_zoom_snapshot": true,
+      "clock_semantics": "queued UI clock (known inconsistent)",
+      "build": {
+        "declared_profile": "release",
+        "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-pacing-2026-10-19/before-app",
+        "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792404088)",
+        "binary_sha256": "28795588cb5714fb96583b2e2a9ad196e38f78e6fb928a7b82765e3f7f81a314",
+        "verified_build_receipt": {
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "desktop-ui-tests"
+          ],
+          "sha256": "28795588cb5714fb96583b2e2a9ad196e38f78e6fb928a7b82765e3f7f81a314",
+          "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792404088)",
+          "base_revision": "3c42e9f84dc1e243987ebb1bab81a9debd43b301",
+          "source_diff_sha256": "9971e18b1228e767648262c5ea23020bc4ed050846b926ac286432df27521b13"
+        }
+      },
+      "raw_evidence": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-8n80daz_/effects-pacing.json",
+          "sha256": "0ebe5dc94f60c5a4f68bef8a71757b6023fab946870ca6782e15a75eefce4e16"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-8n80daz_/result.json",
+          "sha256": "8d4b7d5803efd7d6d7e30c4e5f6ef2bc49f93563f7ce0555723a2550cfefc21c"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/before-build-receipt.json",
+          "sha256": "533b2198089788ae4357a11fae4681457d4efeb99f14596e28a52a2b7e383fd0"
+        }
+      ],
+      "clock_consistency": {
+        "passed_bursts": 3,
+        "total_bursts": 28,
+        "failed_bursts": 25
+      },
+      "warm_aggregates": [
+        {
+          "suffix": "txt",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            39,
+            40,
+            40,
+            39
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 114,
+              "p50_ms": 16.599749999999403,
+              "p95_ms": 17.597500000001673,
+              "max_ms": 23.847375000001193
+            },
+            "late": {
+              "count": 117,
+              "p50_ms": 16.725791999997455,
+              "p95_ms": 19.053541999999652,
+              "max_ms": 21.179958000000624
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.62775000000056,
+            "late": 16.734750500000246
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 17.548062500000924,
+            "late": 18.72625000000062
+          },
+          "shader_clock_lead": {
+            "min_ms": 2.8460249980780645,
+            "median_ms": 3.7012312737433604,
+            "max_ms": 4.429273887635645
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 3.754622699920219,
+            "median_ms": 4.275913046929418,
+            "max_ms": 4.932541623003999
+          },
+          "first_clock_step_excess": {
+            "min_ms": 2.8241251221606944,
+            "median_ms": 3.504979649161214,
+            "max_ms": 4.02054229748137
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 0,
+            "failed_bursts": 6
+          },
+          "queue_to_callback": {
+            "count": 237,
+            "p50_ms": 0.552334,
+            "p95_ms": 0.739833,
+            "max_ms": 0.849083
+          },
+          "draw_submission": {
+            "count": 237,
+            "p50_ms": 0.007292,
+            "p95_ms": 0.012333,
+            "max_ms": 0.023542
+          },
+          "initialize": {
+            "count": 237,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.000167,
+            "max_ms": 0.000375
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "txt",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            40,
+            40,
+            40,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 117,
+              "p50_ms": 16.691999999999098,
+              "p95_ms": 18.814249999999447,
+              "max_ms": 23.430749999999534
+            },
+            "late": {
+              "count": 116,
+              "p50_ms": 16.660853999999745,
+              "p95_ms": 17.618666999998823,
+              "max_ms": 20.39812499999971
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.70578099999784,
+            "late": 16.680729249999786
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 19.686875000001237,
+            "late": 17.4575205000001
+          },
+          "shader_clock_lead": {
+            "min_ms": -0.2812229383525846,
+            "median_ms": 0.12074486932397122,
+            "max_ms": 0.7692504385049688
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 1.2604181638853333,
+            "median_ms": 1.3140911199516268,
+            "max_ms": 1.5264283901524323
+          },
+          "first_clock_step_excess": {
+            "min_ms": 0.1482919494555972,
+            "median_ms": 0.6255416087169579,
+            "max_ms": 0.8842088118799438
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 0,
+            "failed_bursts": 6
+          },
+          "queue_to_callback": {
+            "count": 239,
+            "p50_ms": 0.6107079999999999,
+            "p95_ms": 1.02075,
+            "max_ms": 1.262208
+          },
+          "draw_submission": {
+            "count": 239,
+            "p50_ms": 0.007375,
+            "p95_ms": 0.010917000000000001,
+            "max_ms": 0.018417
+          },
+          "initialize": {
+            "count": 239,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.00020800000000000001,
+            "max_ms": 0.001084
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            38,
+            38,
+            38,
+            38,
+            38,
+            37
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 111,
+              "p50_ms": 16.559250000005704,
+              "p95_ms": 23.188083000000915,
+              "max_ms": 47.311625000002095
+            },
+            "late": {
+              "count": 110,
+              "p50_ms": 16.843479500003014,
+              "p95_ms": 36.68229099999735,
+              "max_ms": 48.07437499999651
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.493333250000433,
+            "late": 16.87889549999454
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 23.224312499998632,
+            "late": 41.139624999999796
+          },
+          "shader_clock_lead": {
+            "min_ms": 12.564968116577802,
+            "median_ms": 13.684250045778754,
+            "max_ms": 14.311166404724645
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 21.823104899995087,
+            "median_ms": 24.137088730363757,
+            "max_ms": 25.41574629020033
+          },
+          "first_clock_step_excess": {
+            "min_ms": 12.18883366054797,
+            "median_ms": 12.732208006411383,
+            "max_ms": 13.67495811849949
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 0,
+            "failed_bursts": 6
+          },
+          "queue_to_callback": {
+            "count": 227,
+            "p50_ms": 0.6457499999999999,
+            "p95_ms": 1.0835409999999999,
+            "max_ms": 6.413374999999999
+          },
+          "draw_submission": {
+            "count": 227,
+            "p50_ms": 0.00775,
+            "p95_ms": 0.0125,
+            "max_ms": 0.054125
+          },
+          "initialize": {
+            "count": 227,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.000167,
+            "max_ms": 0.000875
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 3,
+              "above_33_334_ms": 1
+            },
+            "late": {
+              "above_25_ms": 6,
+              "above_33_334_ms": 6
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            39,
+            40,
+            39,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 116,
+              "p50_ms": 16.650416499996936,
+              "p95_ms": 17.64258300000074,
+              "max_ms": 19.596041999997396
+            },
+            "late": {
+              "count": 115,
+              "p50_ms": 16.682999999997264,
+              "p95_ms": 17.62016699999367,
+              "max_ms": 18.517958000004
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.645770499999344,
+            "late": 16.686906250000902
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 17.960292000003392,
+            "late": 17.581167000000278
+          },
+          "shader_clock_lead": {
+            "min_ms": -0.5826482429547468,
+            "median_ms": 0.049721813476935495,
+            "max_ms": 0.20123560333013302
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 0.7808810331262066,
+            "median_ms": 1.3722089959737787,
+            "max_ms": 2.114194590569241
+          },
+          "first_clock_step_excess": {
+            "min_ms": 0.26479208058299264,
+            "median_ms": 0.4307714569767995,
+            "max_ms": 0.6865420360336429
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 3,
+            "failed_bursts": 3
+          },
+          "queue_to_callback": {
+            "count": 237,
+            "p50_ms": 0.678083,
+            "p95_ms": 0.913208,
+            "max_ms": 1.093625
+          },
+          "draw_submission": {
+            "count": 237,
+            "p50_ms": 0.007834,
+            "p95_ms": 0.011291,
+            "max_ms": 0.017499999999999998
+          },
+          "initialize": {
+            "count": 237,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.000167,
+            "max_ms": 0.000458
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "stage": "clock_fix_intermediate",
+      "preview_zoom_snapshot": true,
+      "clock_semantics": "shared monotonic GL-callback clock",
+      "build": {
+        "declared_profile": "release",
+        "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-pacing-2026-10-19/after-app",
+        "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792405385)",
+        "binary_sha256": "2afac79267f1e3b22ca596ea3a2d8a8c430db049fcc86e577bb28d4ba1d4a4fd",
+        "verified_build_receipt": {
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "desktop-ui-tests"
+          ],
+          "sha256": "2afac79267f1e3b22ca596ea3a2d8a8c430db049fcc86e577bb28d4ba1d4a4fd",
+          "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792405385)",
+          "base_revision": "3c42e9f84dc1e243987ebb1bab81a9debd43b301",
+          "source_diff_sha256": "8081bb3632f79dc4ce7259487de9f941900acfbeba554dc87fc53014d449ff19"
+        }
+      },
+      "raw_evidence": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-7w1j20mp/effects-pacing.json",
+          "sha256": "8fcc1998761db9f4ea771960351c6f77346c000cdbdff9f95e7aeda4c6477ac0"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-7w1j20mp/result.json",
+          "sha256": "1efecda34e9c3fdb24cd916962fdfe28c8cc0071bf6c060dafc44cf5290025d7"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/after-build-receipt.json",
+          "sha256": "1008e4aacb860425bf970e4b5d98c632b70b095384ff2030df0b78720ad81402"
+        }
+      ],
+      "clock_consistency": {
+        "passed_bursts": 28,
+        "total_bursts": 28,
+        "failed_bursts": 0
+      },
+      "warm_aggregates": [
+        {
+          "suffix": "txt",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            39,
+            40,
+            40,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 117,
+              "p50_ms": 16.58824999999888,
+              "p95_ms": 17.938458000000537,
+              "max_ms": 28.272375000000466
+            },
+            "late": {
+              "count": 115,
+              "p50_ms": 16.67224999999962,
+              "p95_ms": 17.956292000000758,
+              "max_ms": 21.332667000000583
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.603322749999734,
+            "late": 16.6576670000004
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 19.92206199999964,
+            "late": 18.028041499999745
+          },
+          "shader_clock_lead": {
+            "min_ms": -1.5930454537738115e-05,
+            "median_ms": -2.8656631911871955e-07,
+            "max_ms": 1.4835819456493482e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 4.6996885430417024e-05,
+            "median_ms": 5.2861983931506984e-05,
+            "max_ms": 5.8304200138081796e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -2.0462903194129467e-07,
+            "median_ms": -1.1900374374818057e-07,
+            "max_ms": 2.015240170294419e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 238,
+            "p50_ms": 0.583229,
+            "p95_ms": 0.7780830000000001,
+            "max_ms": 0.8859589999999999
+          },
+          "draw_submission": {
+            "count": 238,
+            "p50_ms": 0.007333,
+            "p95_ms": 0.011542,
+            "max_ms": 0.017708
+          },
+          "initialize": {
+            "count": 238,
+            "p50_ms": 8.3e-05,
+            "p95_ms": 0.00029099999999999997,
+            "max_ms": 0.0045000000000000005
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 1,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "txt",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            39,
+            40,
+            39,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 116,
+              "p50_ms": 16.585770499999853,
+              "p95_ms": 17.598625000002357,
+              "max_ms": 26.431000000000495
+            },
+            "late": {
+              "count": 115,
+              "p50_ms": 16.690083000001323,
+              "p95_ms": 17.891416999995272,
+              "max_ms": 20.183084000000235
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.604198249998262,
+            "late": 16.683396250000442
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 17.38952099999915,
+            "late": 17.820770999996967
+          },
+          "shader_clock_lead": {
+            "min_ms": -1.9097449694527313e-05,
+            "median_ms": 1.2271273590158671e-05,
+            "max_ms": 2.7927293558605015e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 3.096961881965399e-05,
+            "median_ms": 4.4719605284626596e-05,
+            "max_ms": 5.4061889386503026e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -3.6237179301679134e-07,
+            "median_ms": -3.1513991416431963e-08,
+            "max_ms": 2.2391395759768784e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 237,
+            "p50_ms": 0.6515829999999999,
+            "p95_ms": 1.01075,
+            "max_ms": 1.658667
+          },
+          "draw_submission": {
+            "count": 237,
+            "p50_ms": 0.007125,
+            "p95_ms": 0.011041,
+            "max_ms": 0.014833
+          },
+          "initialize": {
+            "count": 237,
+            "p50_ms": 8.3e-05,
+            "p95_ms": 0.00025,
+            "max_ms": 0.004875
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 1,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            38,
+            39,
+            36,
+            37,
+            39,
+            38
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 112,
+              "p50_ms": 16.698187499998312,
+              "p95_ms": 22.348540999999386,
+              "max_ms": 49.67158399999607
+            },
+            "late": {
+              "count": 109,
+              "p50_ms": 16.73762500000157,
+              "p95_ms": 38.92033300000185,
+              "max_ms": 48.48395800000435
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.70231249999597,
+            "late": 16.820228999999017
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 23.28697899999861,
+            "late": 42.36143749999974
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.1623869542963803e-05,
+            "median_ms": -7.172824552981183e-06,
+            "max_ms": 1.638960384298116e-06
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 2.96365687972866e-05,
+            "median_ms": 4.849996548728086e-05,
+            "max_ms": 5.031222099205479e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -2.1255254978314042e-07,
+            "median_ms": -9.429277270101011e-08,
+            "max_ms": 2.7241185307502747e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 227,
+            "p50_ms": 0.6549159999999999,
+            "p95_ms": 1.0729579999999999,
+            "max_ms": 5.900042
+          },
+          "draw_submission": {
+            "count": 227,
+            "p50_ms": 0.007584,
+            "p95_ms": 0.011333,
+            "max_ms": 0.02075
+          },
+          "initialize": {
+            "count": 227,
+            "p50_ms": 8.4e-05,
+            "p95_ms": 0.000292,
+            "max_ms": 0.0048330000000000005
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 2,
+              "above_33_334_ms": 2
+            },
+            "late": {
+              "above_25_ms": 7,
+              "above_33_334_ms": 6
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            40,
+            40,
+            39,
+            40,
+            40,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 117,
+              "p50_ms": 16.644708999992872,
+              "p95_ms": 18.821208000001207,
+              "max_ms": 23.69987499999843
+            },
+            "late": {
+              "count": 116,
+              "p50_ms": 16.65422899999612,
+              "p95_ms": 18.251374999999825,
+              "max_ms": 24.649416000007477
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.69554199999766,
+            "late": 16.679875249999895
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 18.017500000001746,
+            "late": 18.07129150000401
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.066064189421013e-05,
+            "median_ms": -5.286849045660347e-06,
+            "max_ms": 2.3015680199023336e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 2.960395795525983e-05,
+            "median_ms": 4.303169407648966e-05,
+            "max_ms": 5.218142905505374e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -1.269145286642015e-07,
+            "median_ms": 9.575160220265388e-09,
+            "max_ms": 2.442029654048383e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 239,
+            "p50_ms": 0.7169169999999999,
+            "p95_ms": 0.990875,
+            "max_ms": 1.2772919999999999
+          },
+          "draw_submission": {
+            "count": 239,
+            "p50_ms": 0.007333999999999999,
+            "p95_ms": 0.010583,
+            "max_ms": 0.017791
+          },
+          "initialize": {
+            "count": 239,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.00025,
+            "max_ms": 0.000584
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "stage": "snapshot_off_control",
+      "preview_zoom_snapshot": false,
+      "clock_semantics": "shared monotonic GL-callback clock",
+      "build": {
+        "declared_profile": "release",
+        "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-pacing-2026-10-19/after-app",
+        "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792405385)",
+        "binary_sha256": "2afac79267f1e3b22ca596ea3a2d8a8c430db049fcc86e577bb28d4ba1d4a4fd",
+        "verified_build_receipt": {
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "desktop-ui-tests"
+          ],
+          "sha256": "2afac79267f1e3b22ca596ea3a2d8a8c430db049fcc86e577bb28d4ba1d4a4fd",
+          "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792405385)",
+          "base_revision": "3c42e9f84dc1e243987ebb1bab81a9debd43b301",
+          "source_diff_sha256": "8081bb3632f79dc4ce7259487de9f941900acfbeba554dc87fc53014d449ff19"
+        }
+      },
+      "raw_evidence": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-du4ccee_/effects-pacing.json",
+          "sha256": "dad0a9e38ec7c813ee7c77a8d466e2e577d2c43946e88ddca0a8fee2421b660e"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-du4ccee_/result.json",
+          "sha256": "3fa25fe3a31bf49c8fcc972a7afd66ab504dc61d58a511850dc79a53e8f10869"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/after-build-receipt.json",
+          "sha256": "1008e4aacb860425bf970e4b5d98c632b70b095384ff2030df0b78720ad81402"
+        }
+      ],
+      "clock_consistency": {
+        "passed_bursts": 28,
+        "total_bursts": 28,
+        "failed_bursts": 0
+      },
+      "warm_aggregates": [
+        {
+          "suffix": "txt",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            40,
+            40,
+            39,
+            40,
+            40,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 117,
+              "p50_ms": 16.58454200000051,
+              "p95_ms": 17.58783299999959,
+              "max_ms": 24.1456249999992
+            },
+            "late": {
+              "count": 116,
+              "p50_ms": 16.588228999999956,
+              "p95_ms": 18.877291999999215,
+              "max_ms": 20.258708000001207
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.566968749999432,
+            "late": 16.622614500000054
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 18.063270500000726,
+            "late": 18.63495800000055
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.935954398708418e-05,
+            "median_ms": -1.0538357855693903e-05,
+            "max_ms": 1.2375730875646695e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 3.940963506465778e-05,
+            "median_ms": 5.2143279390293173e-05,
+            "max_ms": 5.798721576866228e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -2.2029598767403513e-07,
+            "median_ms": 6.856407708255574e-08,
+            "max_ms": 1.9028993847314268e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 239,
+            "p50_ms": 0.5557500000000001,
+            "p95_ms": 0.7003750000000001,
+            "max_ms": 0.869333
+          },
+          "draw_submission": {
+            "count": 239,
+            "p50_ms": 0.006541,
+            "p95_ms": 0.011375,
+            "max_ms": 0.030750000000000003
+          },
+          "initialize": {
+            "count": 239,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.00029099999999999997,
+            "max_ms": 0.0037500000000000003
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "txt",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            39,
+            40,
+            39,
+            39
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 116,
+              "p50_ms": 16.66533299999719,
+              "p95_ms": 18.076042000000598,
+              "max_ms": 23.055333000000246
+            },
+            "late": {
+              "count": 114,
+              "p50_ms": 16.683916999998473,
+              "p95_ms": 17.524583000002167,
+              "max_ms": 18.11120899999878
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.641645999998218,
+            "late": 16.714104500000758
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 18.64258300000074,
+            "late": 17.526875000001382
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.9590570193249732e-05,
+            "median_ms": -6.895501428516582e-06,
+            "max_ms": 1.2044933100696653e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 4.523049938143231e-05,
+            "median_ms": 4.9373446017852984e-05,
+            "max_ms": 5.573999078478664e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -2.187989593949169e-07,
+            "median_ms": 2.001797838602215e-07,
+            "max_ms": 4.969115252606571e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 236,
+            "p50_ms": 0.597521,
+            "p95_ms": 0.920625,
+            "max_ms": 1.390542
+          },
+          "draw_submission": {
+            "count": 236,
+            "p50_ms": 0.0067705000000000005,
+            "p95_ms": 0.010583,
+            "max_ms": 0.015625
+          },
+          "initialize": {
+            "count": 236,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.000292,
+            "max_ms": 0.00045900000000000004
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            39,
+            40,
+            39,
+            39,
+            39
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 114,
+              "p50_ms": 16.694978999999876,
+              "p95_ms": 17.833542000000307,
+              "max_ms": 25.643958000000566
+            },
+            "late": {
+              "count": 115,
+              "p50_ms": 16.607374999999593,
+              "p95_ms": 17.638459000001603,
+              "max_ms": 18.784915999996883
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.71387450000475,
+            "late": 16.667604499994923
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 19.391749999995227,
+            "late": 17.66810450000412
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.5873327103909105e-05,
+            "median_ms": -4.011657438240945e-06,
+            "max_ms": 2.7343026886228472e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 3.319703682791442e-05,
+            "median_ms": 4.99402049172204e-05,
+            "max_ms": 5.350076389731839e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -8.1039615906775e-08,
+            "median_ms": 1.1783777154050767e-07,
+            "max_ms": 4.1534804040566087e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 235,
+            "p50_ms": 0.664584,
+            "p95_ms": 1.17425,
+            "max_ms": 5.779458
+          },
+          "draw_submission": {
+            "count": 235,
+            "p50_ms": 0.007625,
+            "p95_ms": 0.0115,
+            "max_ms": 0.020125
+          },
+          "initialize": {
+            "count": 235,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.000292,
+            "max_ms": 0.0005
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 1,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            39,
+            40,
+            39,
+            39
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 116,
+              "p50_ms": 16.669166500003485,
+              "p95_ms": 17.596082999996725,
+              "max_ms": 19.655791999997746
+            },
+            "late": {
+              "count": 114,
+              "p50_ms": 16.635395999997854,
+              "p95_ms": 18.22500000000582,
+              "max_ms": 20.567250000000058
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.64868750000096,
+            "late": 16.635395999997854
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 17.55279149999842,
+            "late": 18.41595850000158
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.9452188755385578e-05,
+            "median_ms": 5.834623152622953e-06,
+            "max_ms": 2.8762682632077485e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 4.191933840047568e-05,
+            "median_ms": 4.749660729430616e-05,
+            "max_ms": 5.541610880754888e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -2.435626811347902e-07,
+            "median_ms": 2.8259819373488426e-08,
+            "max_ms": 2.797387423925102e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 236,
+            "p50_ms": 0.68675,
+            "p95_ms": 0.979292,
+            "max_ms": 1.455708
+          },
+          "draw_submission": {
+            "count": 236,
+            "p50_ms": 0.0077919999999999994,
+            "p95_ms": 0.011375,
+            "max_ms": 0.015291999999999998
+          },
+          "initialize": {
+            "count": 236,
+            "p50_ms": 8.3e-05,
+            "p95_ms": 0.000334,
+            "max_ms": 0.0015
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "stage": "final_snapshot_on",
+      "preview_zoom_snapshot": true,
+      "clock_semantics": "shared monotonic GL-callback clock",
+      "build": {
+        "declared_profile": "release",
+        "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-pacing-2026-10-19/final-app",
+        "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+        "binary_sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+        "verified_build_receipt": {
+          "command": "cargo test --release --locked --features desktop-ui-tests --no-run --message-format=json",
+          "built_utc": "2026-10-19T11:23:43.907831+00:00",
+          "profile": {
+            "opt_level": "3",
+            "debuginfo": 0,
+            "debug_assertions": false,
+            "overflow_checks": false,
+            "test": false
+          },
+          "features": [
+            "desktop-ui-tests"
+          ],
+          "sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+          "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+          "base_revision": "af69f9efaad018be4b0f37c56bb8536bf5a8423e",
+          "source_diff_sha256": "575bc058b0fa058b8284816195cce2d53c1355a5b668bd1df55b1add03ad3dde",
+          "changed_source_files_sha256": {
+            "Cargo.lock": "fc896f4c87bbfe0a109ecadff599636eb68125680605d802331007779c786d49",
+            "Cargo.toml": "ae90895189544c7a534dfe196cb6c27e2b99f9abcfcc3cc18ebe8288227e1629",
+            "docs/desktop-ui-journeys.md": "d423ace26f024643234c589125838e433b0dab8717d4d15c27be56c05385cb3d",
+            "docs/performance.md": "a87e17a62d112d8edd7177a116945f39658f5730f0036d585dc872670717a9d4",
+            "scripts/desktop_ui_journeys.py": "53882357507e1e33f99ee2e20a75401e9ea084d0377135f36de9b2538518d973",
+            "scripts/test-desktop-ui.py": "0264ffb98302315005bc358d971fa1a1a38a7075546f9166dca8605b1e0799e5",
+            "scripts/test-preview-zoom-snapshot.mjs": "d35af95d961370d8aa7feb6836cf3123fc27c38ec6260f5fbbb5229393bba1b0",
+            "src/app.rs": "8107b84eccf40c6619f6341ee500e5232f0c4e0a9bc4eb0b2b662633b8d66cec",
+            "src/app/editor_particles.rs": "0bdf192c95abb8e00ab2662f787bad8e8eb4e36940819108fd11bdcd2aaf687e",
+            "src/app/editor_particles/gpu.rs": "18f8e55dc22e3bcc9b160a1fe5f950d45a2848fb5c60c068aec44bb60d0fba8c",
+            "src/app/editor_particles/gpu_tests.rs": "160745a9094d1c2aa9776c98e17f3242d3a163fbbe3eb8a24d0db4813677d367",
+            "src/app/editor_particles/perf_tests.rs": "6965ea9c5001b6428f318859d1e3168d9fc862c816b2c56f86e339604e13c904",
+            "src/preview_zoom_snapshot.js": "79c709deca84f51a0f7098c6a1f3e34bb2eb3bf23b578dc94f677cf202594ad9",
+            "src/preview_zoom_snapshot.rs": "0d58bc7271fd0eb9e7be0dfdf8eb2c1050a56bb361c4e7b5d78dc695a9ce058a",
+            "tests/native_preview_zoom.rs": "14a2b9fa7c9bc99df71c48462598e9a1ceb8768bc88738d502fd0f01c66f41f9",
+            "docs/performance-results/editor-effects-pacing-2026-10-19.json": "4658b9c94e088b52af1972fc721bc23b403c2690b591ab6a4a280546e3305f72",
+            "docs/performance-results/editor-effects-snapshot-control-2026-10-19.json": "8e3ac4ecb3225112f3709f27be55f4eff660ab400016a55a00ef2697d81a4217",
+            "scripts/desktop_ui_effects_journeys.py": "c486c38f380bdc3ff3ae7d5ea1e12df9153691b98bd799527503e8c5a7fb5cad",
+            "scripts/test_desktop_ui_effects_contract.py": "85657d7f2452f943683d9335d86c113175c0bba0c0ff6ac95ff6eb49f28de16f",
+            "src/app/editor_particles/clock.rs": "152e2692d9bcd74f2585d870058e4f6a51674331ace7539949b0785057ec7a7d"
+          }
+        }
+      },
+      "raw_evidence": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-lsd2f0iu/effects-pacing.json",
+          "sha256": "8de1159b7ecf85e8d9e8f23d42c598e9b66b209119881da71a2212c92f5d331a"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-lsd2f0iu/result.json",
+          "sha256": "8000abe83dfc650f52de8fdd692e55ba0487b6a7bc8b55e8d16b778e948ee2e2"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-build-receipt.json",
+          "sha256": "5ee225b07dfda7dd9d444daed0adc50d068d9492dd217c5d9a092f2441a5b60e"
+        }
+      ],
+      "clock_consistency": {
+        "passed_bursts": 28,
+        "total_bursts": 28,
+        "failed_bursts": 0
+      },
+      "warm_aggregates": [
+        {
+          "suffix": "txt",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            40,
+            40,
+            40,
+            40,
+            40,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 118,
+              "p50_ms": 16.635667000000467,
+              "p95_ms": 17.25804099999732,
+              "max_ms": 20.087499999999636
+            },
+            "late": {
+              "count": 116,
+              "p50_ms": 16.60931199999959,
+              "p95_ms": 18.51433300000099,
+              "max_ms": 19.842625000001135
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.6120834999997,
+            "late": 16.614895499998056
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 17.214333500000066,
+            "late": 18.44250000000102
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.973437585751526e-05,
+            "median_ms": 4.160791831964161e-06,
+            "max_ms": 2.2839001758256927e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 4.209327744320035e-05,
+            "median_ms": 4.8467726628587116e-05,
+            "max_ms": 5.4771240684203804e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -1.3632416084874421e-07,
+            "median_ms": -3.6812707548961043e-08,
+            "max_ms": 2.2416861611418426e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 240,
+            "p50_ms": 0.5325415,
+            "p95_ms": 0.7201249999999999,
+            "max_ms": 0.956417
+          },
+          "draw_submission": {
+            "count": 240,
+            "p50_ms": 0.007375,
+            "p95_ms": 0.011583999999999999,
+            "max_ms": 0.024417
+          },
+          "initialize": {
+            "count": 240,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.000292,
+            "max_ms": 0.004167
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "txt",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            39,
+            39,
+            39,
+            40
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 116,
+              "p50_ms": 16.678854499999943,
+              "p95_ms": 18.386083000001236,
+              "max_ms": 21.28270899999916
+            },
+            "late": {
+              "count": 114,
+              "p50_ms": 16.642958500000532,
+              "p95_ms": 18.16912500000035,
+              "max_ms": 19.933124999999563
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.65099950000149,
+            "late": 16.642958500000532
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 18.8326455000024,
+            "late": 18.293291500000123
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.726390812313184e-05,
+            "median_ms": -9.550074537401088e-06,
+            "max_ms": 2.425610728096217e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 4.298800558899529e-05,
+            "median_ms": 4.6575547457905486e-05,
+            "max_ms": 5.041158874519169e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -4.751163942273706e-07,
+            "median_ms": -2.1905907487962395e-07,
+            "max_ms": 1.7873026081360877e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 236,
+            "p50_ms": 0.6805829999999999,
+            "p95_ms": 1.076583,
+            "max_ms": 2.0391250000000003
+          },
+          "draw_submission": {
+            "count": 236,
+            "p50_ms": 0.008021,
+            "p95_ms": 0.013,
+            "max_ms": 0.024666999999999998
+          },
+          "initialize": {
+            "count": 236,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.00033299999999999996,
+            "max_ms": 0.003541
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Typing",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            39,
+            39,
+            39,
+            40,
+            39
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 114,
+              "p50_ms": 16.641291500003717,
+              "p95_ms": 20.141542000004847,
+              "max_ms": 22.818000000006577
+            },
+            "late": {
+              "count": 115,
+              "p50_ms": 16.647208000002138,
+              "p95_ms": 18.166958000001614,
+              "max_ms": 19.920583000006445
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.61577099999704,
+            "late": 16.637927249999848
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 20.532396000005974,
+            "late": 18.203395499996986
+          },
+          "shader_clock_lead": {
+            "min_ms": -2.5860732421278954e-05,
+            "median_ms": 4.3712498154491186e-07,
+            "max_ms": 2.1422449208330363e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 4.2469029722269624e-05,
+            "median_ms": 4.9047743232222274e-05,
+            "max_ms": 5.35205690539442e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -5.969341145828366e-07,
+            "median_ms": -2.1648884285241365e-07,
+            "max_ms": 5.090842023491859e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 235,
+            "p50_ms": 0.714625,
+            "p95_ms": 1.076875,
+            "max_ms": 5.939584
+          },
+          "draw_submission": {
+            "count": 235,
+            "p50_ms": 0.0085,
+            "p95_ms": 0.012292,
+            "max_ms": 0.016541
+          },
+          "initialize": {
+            "count": 235,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.00033299999999999996,
+            "max_ms": 0.0035
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            24
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        },
+        {
+          "suffix": "typ",
+          "action": "Copy",
+          "phase": "warmed",
+          "bursts": 6,
+          "draws_per_burst": [
+            39,
+            40,
+            40,
+            39,
+            39,
+            39
+          ],
+          "pooled_callback_intervals": {
+            "early": {
+              "count": 115,
+              "p50_ms": 16.679792000002635,
+              "p95_ms": 18.771416000003228,
+              "max_ms": 24.144000000000233
+            },
+            "late": {
+              "count": 115,
+              "p50_ms": 16.66333399999712,
+              "p95_ms": 17.58312499999738,
+              "max_ms": 17.960791999998037
+            }
+          },
+          "median_of_burst_callback_p50_ms": {
+            "early": 16.680666499996732,
+            "late": 16.66998975000206
+          },
+          "median_of_burst_callback_p95_ms": {
+            "early": 19.429417000003014,
+            "late": 17.476958499995817
+          },
+          "shader_clock_lead": {
+            "min_ms": 1.66093377629295e-06,
+            "median_ms": 8.716600859770551e-06,
+            "max_ms": 2.766024408629164e-05
+          },
+          "shader_callback_offset_range": {
+            "min_ms": 3.7019730370957404e-05,
+            "median_ms": 4.83530129713472e-05,
+            "max_ms": 5.36649749847129e-05
+          },
+          "first_clock_step_excess": {
+            "min_ms": -2.095330273732543e-07,
+            "median_ms": -3.55576048605144e-08,
+            "max_ms": 1.2912641977891326e-07
+          },
+          "clock_consistency": {
+            "tolerance_ms": 1,
+            "passed_bursts": 6,
+            "failed_bursts": 0
+          },
+          "queue_to_callback": {
+            "count": 236,
+            "p50_ms": 0.7477705,
+            "p95_ms": 1.064167,
+            "max_ms": 1.4518339999999998
+          },
+          "draw_submission": {
+            "count": 236,
+            "p50_ms": 0.008271,
+            "p95_ms": 0.012416,
+            "max_ms": 0.017416
+          },
+          "initialize": {
+            "count": 236,
+            "p50_ms": 4.2e-05,
+            "p95_ms": 0.00025,
+            "max_ms": 0.000958
+          },
+          "uploads_per_burst": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ],
+          "instances": [
+            12
+          ],
+          "descriptive_gap_counts": {
+            "early": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            },
+            "late": {
+              "above_25_ms": 0,
+              "above_33_334_ms": 0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "final": {
+    "native_passed": true,
+    "build": {
+      "declared_profile": "release",
+      "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-pacing-2026-10-19/final-app",
+      "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+      "binary_sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+      "verified_build_receipt": {
+        "command": "cargo test --release --locked --features desktop-ui-tests --no-run --message-format=json",
+        "built_utc": "2026-10-19T11:23:43.907831+00:00",
+        "profile": {
+          "opt_level": "3",
+          "debuginfo": 0,
+          "debug_assertions": false,
+          "overflow_checks": false,
+          "test": false
+        },
+        "features": [
+          "desktop-ui-tests"
+        ],
+        "sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+        "version": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+        "base_revision": "af69f9efaad018be4b0f37c56bb8536bf5a8423e",
+        "source_diff_sha256": "575bc058b0fa058b8284816195cce2d53c1355a5b668bd1df55b1add03ad3dde",
+        "changed_source_files_sha256": {
+          "Cargo.lock": "fc896f4c87bbfe0a109ecadff599636eb68125680605d802331007779c786d49",
+          "Cargo.toml": "ae90895189544c7a534dfe196cb6c27e2b99f9abcfcc3cc18ebe8288227e1629",
+          "docs/desktop-ui-journeys.md": "d423ace26f024643234c589125838e433b0dab8717d4d15c27be56c05385cb3d",
+          "docs/performance.md": "a87e17a62d112d8edd7177a116945f39658f5730f0036d585dc872670717a9d4",
+          "scripts/desktop_ui_journeys.py": "53882357507e1e33f99ee2e20a75401e9ea084d0377135f36de9b2538518d973",
+          "scripts/test-desktop-ui.py": "0264ffb98302315005bc358d971fa1a1a38a7075546f9166dca8605b1e0799e5",
+          "scripts/test-preview-zoom-snapshot.mjs": "d35af95d961370d8aa7feb6836cf3123fc27c38ec6260f5fbbb5229393bba1b0",
+          "src/app.rs": "8107b84eccf40c6619f6341ee500e5232f0c4e0a9bc4eb0b2b662633b8d66cec",
+          "src/app/editor_particles.rs": "0bdf192c95abb8e00ab2662f787bad8e8eb4e36940819108fd11bdcd2aaf687e",
+          "src/app/editor_particles/gpu.rs": "18f8e55dc22e3bcc9b160a1fe5f950d45a2848fb5c60c068aec44bb60d0fba8c",
+          "src/app/editor_particles/gpu_tests.rs": "160745a9094d1c2aa9776c98e17f3242d3a163fbbe3eb8a24d0db4813677d367",
+          "src/app/editor_particles/perf_tests.rs": "6965ea9c5001b6428f318859d1e3168d9fc862c816b2c56f86e339604e13c904",
+          "src/preview_zoom_snapshot.js": "79c709deca84f51a0f7098c6a1f3e34bb2eb3bf23b578dc94f677cf202594ad9",
+          "src/preview_zoom_snapshot.rs": "0d58bc7271fd0eb9e7be0dfdf8eb2c1050a56bb361c4e7b5d78dc695a9ce058a",
+          "tests/native_preview_zoom.rs": "14a2b9fa7c9bc99df71c48462598e9a1ceb8768bc88738d502fd0f01c66f41f9",
+          "docs/performance-results/editor-effects-pacing-2026-10-19.json": "4658b9c94e088b52af1972fc721bc23b403c2690b591ab6a4a280546e3305f72",
+          "docs/performance-results/editor-effects-snapshot-control-2026-10-19.json": "8e3ac4ecb3225112f3709f27be55f4eff660ab400016a55a00ef2697d81a4217",
+          "scripts/desktop_ui_effects_journeys.py": "c486c38f380bdc3ff3ae7d5ea1e12df9153691b98bd799527503e8c5a7fb5cad",
+          "scripts/test_desktop_ui_effects_contract.py": "85657d7f2452f943683d9335d86c113175c0bba0c0ff6ac95ff6eb49f28de16f",
+          "src/app/editor_particles/clock.rs": "152e2692d9bcd74f2585d870058e4f6a51674331ace7539949b0785057ec7a7d"
+        }
+      }
+    },
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "preflight": {
+      "accessibility": true,
+      "desktop": true,
+      "input": true,
+      "locked": false,
+      "screens": [
+        {
+          "height": 982,
+          "scale": 2,
+          "width": 1512
+        }
+      ]
+    },
+    "protocol": "one native action; no inspection, screenshots or app requests until 0.9 seconds after the producer returns",
+    "first_bursts_separate": true,
+    "warm_bursts_per_action": 6,
+    "raw_evidence": [
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-lsd2f0iu/effects-pacing.json",
+        "sha256": "8de1159b7ecf85e8d9e8f23d42c598e9b66b209119881da71a2212c92f5d331a"
+      },
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-lsd2f0iu/result.json",
+        "sha256": "8000abe83dfc650f52de8fdd692e55ba0487b6a7bc8b55e8d16b778e948ee2e2"
+      },
+      {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-build-receipt.json",
+        "sha256": "5ee225b07dfda7dd9d444daed0adc50d068d9492dd217c5d9a092f2441a5b60e"
+      }
+    ],
+    "clock_consistency": {
+      "tolerance_ms": 1,
+      "total_bursts": 28,
+      "passed_bursts": 28,
+      "failed_bursts": []
+    },
+    "documents": [
+      {
+        "suffix": "txt",
+        "fixture_sha256": "f2793323eb41089bf0a2425b20a3ddb1231eebfd7746fa3b0598bb1528860de2",
+        "fixture_bytes": 252058,
+        "fixture_lines": 2002,
+        "build": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+        "viewport": "\"FFFF\"",
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "PDFium",
+        "preview_native_ready": false,
+        "preview_zoom_snapshot": true,
+        "preview_zoom_snapshot_native_enabled": false,
+        "preferences": {
+          "actions": {
+            "comment": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "copy": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "cut": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "delete": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "indent": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "newline": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "paste": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "redo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "typing": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "undo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            }
+          },
+          "density": "Low",
+          "enabled": true
+        },
+        "bursts": [
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 628.9411805919372,
+            "callback_span_ms": 628.9411660000005,
+            "shader_clock_lead_ms": 1.4591936633223668e-05,
+            "shader_callback_offset_range_ms": 5.159796273801476e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 0.6295419880189002,
+            "last_shader_age_ms": 629.570722579956,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.564415999999255,
+              "p95_ms": 22.827792000000045,
+              "max_ms": 22.827792000000045
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.640041999999085,
+              "p95_ms": 18.291540999998688,
+              "max_ms": 18.291540999998688
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.5446249999999999,
+              "p95_ms": 0.71075,
+              "max_ms": 0.726125
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 8.3e-05,
+              "p95_ms": 0.000292,
+              "max_ms": 0.000292
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.008291999999999999,
+              "p95_ms": 0.011833,
+              "max_ms": 0.015875
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000833
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 0,
+            "ledger_dropped_after": 0,
+            "action": "Typing",
+            "repetition": 0,
+            "phase": "first",
+            "producer_ms": 189.8114169598557,
+            "observation_free_ms": 935.6039160047658,
+            "ledger_before_ms": 9685.823209,
+            "source_bytes": 252059,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.550165999999081,
+            "first_shader_step_ms": 6.55016623204574,
+            "first_clock_step_excess_ms": 2.3204665922094136e-07,
+            "max_interval_clock_error_ms": 5.159796273801476e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 636.7204741691239,
+            "callback_span_ms": 636.7204580000016,
+            "shader_clock_lead_ms": 1.6169122318387963e-05,
+            "shader_callback_offset_range_ms": 4.209327744320035e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.641707971226424,
+            "last_shader_age_ms": 637.3621821403503,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.600083999999697,
+              "p95_ms": 17.61358299999847,
+              "max_ms": 17.61358299999847
+            },
+            "late": {
+              "count": 20,
+              "p50_ms": 16.69227050000063,
+              "p95_ms": 17.956915999999183,
+              "max_ms": 18.220250000002125
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.595271,
+              "p95_ms": 0.7865,
+              "max_ms": 0.874958
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 6.25e-05,
+              "p95_ms": 0.00033299999999999996,
+              "max_ms": 0.000458
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.0085835,
+              "p95_ms": 0.012666,
+              "max_ms": 0.014292
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.001333
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 0,
+            "ledger_dropped_after": 0,
+            "action": "Typing",
+            "repetition": 1,
+            "phase": "warmed",
+            "producer_ms": 186.66941695846617,
+            "observation_free_ms": 955.1764579955488,
+            "ledger_before_ms": 10861.282292,
+            "source_bytes": 252060,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 3.692958000001454,
+            "first_shader_step_ms": 3.692957863677293,
+            "first_clock_step_excess_ms": -1.3632416084874421e-07,
+            "max_interval_clock_error_ms": 3.441656554059591e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 638.5328558390029,
+            "callback_span_ms": 638.5328330000011,
+            "shader_clock_lead_ms": 2.2839001758256927e-05,
+            "shader_callback_offset_range_ms": 5.17770677106455e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.6296249921433628,
+            "last_shader_age_ms": 639.1624808311462,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.61870850000014,
+              "p95_ms": 17.17804200000137,
+              "max_ms": 17.30254100000093
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.76495800000157,
+              "p95_ms": 19.842625000001135,
+              "max_ms": 19.842625000001135
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.5485005000000001,
+              "p95_ms": 0.676291,
+              "max_ms": 0.886459
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000167,
+              "max_ms": 0.00033299999999999996
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.0068955,
+              "p95_ms": 0.010332999999999998,
+              "max_ms": 0.024417
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.0007080000000000001
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 0,
+            "ledger_dropped_after": 0,
+            "action": "Typing",
+            "repetition": 2,
+            "phase": "warmed",
+            "producer_ms": 187.34616704750806,
+            "observation_free_ms": 944.1922499681823,
+            "ledger_before_ms": 12059.026334,
+            "source_bytes": 252061,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 3.47229100000186,
+            "first_shader_step_ms": 3.472291224170476,
+            "first_clock_step_excess_ms": 2.2416861611418426e-07,
+            "max_interval_clock_error_ms": 4.882830580754671e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 639.5610869512893,
+            "callback_span_ms": 639.5610829999987,
+            "shader_clock_lead_ms": 3.951290636905469e-06,
+            "shader_callback_offset_range_ms": 4.376983633846976e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.6010829820297658,
+            "last_shader_age_ms": 640.1621699333191,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.656999999999243,
+              "p95_ms": 20.087499999999636,
+              "max_ms": 20.087499999999636
+            },
+            "late": {
+              "count": 20,
+              "p50_ms": 16.52556249999907,
+              "p95_ms": 18.736249999999927,
+              "max_ms": 19.787333000000217
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.5046664999999999,
+              "p95_ms": 0.5943339999999999,
+              "max_ms": 0.598125
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 8.3e-05,
+              "p95_ms": 0.000167,
+              "max_ms": 0.00020800000000000001
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.007228999999999999,
+              "p95_ms": 0.009458,
+              "max_ms": 0.018333
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.0006659999999999999
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 0,
+            "ledger_dropped_after": 0,
+            "action": "Typing",
+            "repetition": 3,
+            "phase": "warmed",
+            "producer_ms": 201.60258299438283,
+            "observation_free_ms": 954.0340419625863,
+            "ledger_before_ms": 13253.681167,
+            "source_bytes": 252062,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 4.132832999999664,
+            "first_shader_step_ms": 4.132832924369723,
+            "first_clock_step_excess_ms": -7.562994142062962e-08,
+            "max_interval_clock_error_ms": 3.944778291042894e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 625.0273793702945,
+            "callback_span_ms": 625.0273750000015,
+            "shader_clock_lead_ms": 4.3702930270228535e-06,
+            "shader_callback_offset_range_ms": 4.590243588609155e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.5549580091610551,
+            "last_shader_age_ms": 625.5823373794556,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.706333499999346,
+              "p95_ms": 17.119292000001224,
+              "max_ms": 17.221624999998312
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.53425000000061,
+              "p95_ms": 18.14875000000211,
+              "max_ms": 18.14875000000211
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.5958749999999999,
+              "p95_ms": 0.761083,
+              "max_ms": 0.956417
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000334,
+              "max_ms": 0.000417
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.0083335,
+              "p95_ms": 0.014124999999999999,
+              "max_ms": 0.01575
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.00075
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 0,
+            "ledger_dropped_after": 0,
+            "action": "Typing",
+            "repetition": 4,
+            "phase": "warmed",
+            "producer_ms": 193.60675005009398,
+            "observation_free_ms": 956.2193329911679,
+            "ledger_before_ms": 14469.044958999999,
+            "source_bytes": 252063,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 4.277375000001484,
+            "first_shader_step_ms": 4.277374944649637,
+            "first_clock_step_excess_ms": -5.535184754990041e-08,
+            "max_interval_clock_error_ms": 4.074859680258669e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 634.4383670366369,
+            "callback_span_ms": 634.4383750000015,
+            "shader_clock_lead_ms": -7.963364623719826e-06,
+            "shader_callback_offset_range_ms": 5.103301737108268e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.6507919752039015,
+            "last_shader_age_ms": 635.0891590118408,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.60545849999926,
+              "p95_ms": 17.250624999998763,
+              "max_ms": 17.283125000001746
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.592249999999694,
+              "p95_ms": 17.379624999999578,
+              "max_ms": 17.379624999999578
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.47279099999999996,
+              "p95_ms": 0.5473750000000001,
+              "max_ms": 0.648459
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00020800000000000001,
+              "max_ms": 0.000292
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.005958000000000001,
+              "p95_ms": 0.00775,
+              "max_ms": 0.009125
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000875
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 0,
+            "ledger_dropped_after": 0,
+            "action": "Typing",
+            "repetition": 5,
+            "phase": "warmed",
+            "producer_ms": 192.50233302591369,
+            "observation_free_ms": 955.9307919698767,
+            "ledger_before_ms": 15692.46425,
+            "source_bytes": 252064,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 3.5675000000010186,
+            "first_shader_step_ms": 3.567499981727451,
+            "first_clock_step_excess_ms": -1.8273567548021674e-08,
+            "max_interval_clock_error_ms": 3.8665588363073766e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 637.4997202656232,
+            "callback_span_ms": 637.499749999999,
+            "shader_clock_lead_ms": -2.973437585751526e-05,
+            "shader_callback_offset_range_ms": 5.4771240684203804e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.6542499759234488,
+            "last_shader_age_ms": 638.1539702415466,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.5318750000024,
+              "p95_ms": 17.070416999998997,
+              "max_ms": 17.25804099999732
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.637540999996418,
+              "p95_ms": 19.089749999999185,
+              "max_ms": 19.089749999999185
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.5178125,
+              "p95_ms": 0.6665,
+              "max_ms": 0.815916
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00025,
+              "max_ms": 0.004167
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.0072499999999999995,
+              "p95_ms": 0.010458,
+              "max_ms": 0.012875
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000958
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 0,
+            "ledger_dropped_after": 24,
+            "action": "Typing",
+            "repetition": 6,
+            "phase": "warmed",
+            "producer_ms": 185.13770797289908,
+            "observation_free_ms": 966.8229169910774,
+            "ledger_before_ms": 16912.466292,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 3.420124999996915,
+            "first_shader_step_ms": 3.4201251692138612,
+            "first_clock_step_excess_ms": 1.6921694623306394e-07,
+            "max_interval_clock_error_ms": 5.120849527884275e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 628.3949749777094,
+            "callback_span_ms": 628.3949999999968,
+            "shader_clock_lead_ms": -2.5022287445608526e-05,
+            "shader_callback_offset_range_ms": 5.111276186653413e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 0.9136659791693091,
+            "last_shader_age_ms": 629.3086409568787,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.60895800000071,
+              "p95_ms": 17.265625,
+              "max_ms": 17.265625
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.652084000001196,
+              "p95_ms": 17.632042000001093,
+              "max_ms": 17.632042000001093
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.5697500000000001,
+              "p95_ms": 0.8465830000000001,
+              "max_ms": 0.9086660000000001
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 8.4e-05,
+              "p95_ms": 0.00025,
+              "max_ms": 0.000334
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007666000000000001,
+              "p95_ms": 0.010750000000000001,
+              "max_ms": 0.011792
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.0011250000000000001
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 24,
+            "ledger_dropped_after": 63,
+            "action": "Copy",
+            "repetition": 0,
+            "phase": "first",
+            "producer_ms": 188.80450003780425,
+            "observation_free_ms": 952.7291670092382,
+            "ledger_before_ms": 18401.560542,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 12.285249999997177,
+            "first_shader_step_ms": 12.285249889828265,
+            "first_clock_step_excess_ms": -1.1016891221515834e-07,
+            "max_interval_clock_error_ms": 4.6466459025396034e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 624.8133125482127,
+            "callback_span_ms": 624.8133330000019,
+            "shader_clock_lead_ms": -2.0451789168873802e-05,
+            "shader_callback_offset_range_ms": 4.349518349044956e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 1.0667500318959355,
+            "last_shader_age_ms": 625.8800625801086,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.5535830000008,
+              "p95_ms": 20.162167000002228,
+              "max_ms": 20.162167000002228
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.836958000003506,
+              "p95_ms": 17.532084000002214,
+              "max_ms": 17.532084000002214
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.683083,
+              "p95_ms": 1.06375,
+              "max_ms": 1.19525
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 8.4e-05,
+              "p95_ms": 0.00041600000000000003,
+              "max_ms": 0.000417
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.008749999999999999,
+              "p95_ms": 0.013,
+              "max_ms": 0.015708
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000959
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 63,
+            "ledger_dropped_after": 102,
+            "action": "Copy",
+            "repetition": 1,
+            "phase": "warmed",
+            "producer_ms": 199.432916007936,
+            "observation_free_ms": 950.7335419766605,
+            "ledger_before_ms": 19639.495667,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 4.071583000000828,
+            "first_shader_step_ms": 4.071582923643291,
+            "first_clock_step_excess_ms": -7.635753718204796e-08,
+            "max_interval_clock_error_ms": 4.2194369598291814e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 637.5947380438447,
+            "callback_span_ms": 637.5947499999966,
+            "shader_clock_lead_ms": -1.1956151865888387e-05,
+            "shader_callback_offset_range_ms": 4.298800558899529e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.9495830163359642,
+            "last_shader_age_ms": 638.5443210601807,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.743458000000828,
+              "p95_ms": 18.386083000001236,
+              "max_ms": 18.46404199999961
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.71849999999904,
+              "p95_ms": 19.306749999999738,
+              "max_ms": 19.306749999999738
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.6499375000000001,
+              "p95_ms": 1.0354999999999999,
+              "max_ms": 2.0391250000000003
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00020800000000000001,
+              "max_ms": 0.00033299999999999996
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.006916500000000001,
+              "p95_ms": 0.013292,
+              "max_ms": 0.01375
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.00075
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 102,
+            "ledger_dropped_after": 142,
+            "action": "Copy",
+            "repetition": 2,
+            "phase": "warmed",
+            "producer_ms": 193.40004195692018,
+            "observation_free_ms": 948.9998330245726,
+            "ledger_before_ms": 20890.231292,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 4.105082999998558,
+            "first_shader_step_ms": 4.105083178728819,
+            "first_clock_step_excess_ms": 1.7873026081360877e-07,
+            "max_interval_clock_error_ms": 3.6308290873421356e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 627.7685147360899,
+            "callback_span_ms": 627.768541999998,
+            "shader_clock_lead_ms": -2.726390812313184e-05,
+            "shader_callback_offset_range_ms": 5.041158874519169e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 0.8852499886415899,
+            "last_shader_age_ms": 628.6537647247314,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.64679099999921,
+              "p95_ms": 19.279208000003564,
+              "max_ms": 19.279208000003564
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.591416999999637,
+              "p95_ms": 17.199749999999767,
+              "max_ms": 17.199749999999767
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.681458,
+              "p95_ms": 0.976,
+              "max_ms": 1.159959
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00033299999999999996,
+              "max_ms": 0.00045900000000000004
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007125,
+              "p95_ms": 0.010625,
+              "max_ms": 0.010791
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000791
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 142,
+            "ledger_dropped_after": 181,
+            "action": "Copy",
+            "repetition": 3,
+            "phase": "warmed",
+            "producer_ms": 187.58879200322554,
+            "observation_free_ms": 951.0373329976574,
+            "ledger_before_ms": 22132.516875,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 7.799541999997018,
+            "first_shader_step_ms": 7.799541635904461,
+            "first_clock_step_excess_ms": -3.640925569925457e-07,
+            "max_interval_clock_error_ms": 4.88893456349615e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 624.8980592936277,
+            "callback_span_ms": 624.8980420000007,
+            "shader_clock_lead_ms": 1.7293627024628222e-05,
+            "shader_callback_offset_range_ms": 4.4555483327712864e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 1.0764170438051224,
+            "last_shader_age_ms": 625.9744763374329,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.655208000003768,
+              "p95_ms": 20.439416000001074,
+              "max_ms": 20.439416000001074
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.639124999997875,
+              "p95_ms": 18.125332999999955,
+              "max_ms": 18.125332999999955
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.758083,
+              "p95_ms": 1.0747090000000001,
+              "max_ms": 1.076583
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000417,
+              "max_ms": 0.002959
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.008208,
+              "p95_ms": 0.014167,
+              "max_ms": 0.022125
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.001167
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 181,
+            "ledger_dropped_after": 220,
+            "action": "Copy",
+            "repetition": 4,
+            "phase": "warmed",
+            "producer_ms": 192.24991695955396,
+            "observation_free_ms": 954.0161660406739,
+            "ledger_before_ms": 23370.30425,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 3.8136669999985315,
+            "first_shader_step_ms": 3.813666757196188,
+            "first_clock_step_excess_ms": -2.42802343564108e-07,
+            "max_interval_clock_error_ms": 3.7693203921662644e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 632.9250242561102,
+            "callback_span_ms": 632.9250000000029,
+            "shader_clock_lead_ms": 2.425610728096217e-05,
+            "shader_callback_offset_range_ms": 4.897690087091178e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 0.9587500244379044,
+            "last_shader_age_ms": 633.8837742805481,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.700207999998383,
+              "p95_ms": 17.214124999998603,
+              "max_ms": 17.214124999998603
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.55104100000608,
+              "p95_ms": 18.46125000000029,
+              "max_ms": 18.46125000000029
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.6495420000000001,
+              "p95_ms": 1.1475000000000002,
+              "max_ms": 1.1592079999999998
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000458,
+              "max_ms": 0.003541
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007208,
+              "p95_ms": 0.011125,
+              "max_ms": 0.012374999999999999
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000583
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 220,
+            "ledger_dropped_after": 259,
+            "action": "Copy",
+            "repetition": 5,
+            "phase": "warmed",
+            "producer_ms": 187.57433397695422,
+            "observation_free_ms": 966.7783330078237,
+            "ledger_before_ms": 24615.372542,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 15.82679200000348,
+            "first_shader_step_ms": 15.826791524887085,
+            "first_clock_step_excess_ms": -4.751163942273706e-07,
+            "max_interval_clock_error_ms": 3.702163667185232e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 632.8140758560039,
+            "callback_span_ms": 632.8140830000011,
+            "shader_clock_lead_ms": -7.143997208913788e-06,
+            "shader_callback_offset_range_ms": 4.859561158809811e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 0.7744170143269002,
+            "last_shader_age_ms": 633.5884928703308,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.525000499997986,
+              "p95_ms": 17.727999999995518,
+              "max_ms": 21.28270899999916
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.646792000003188,
+              "p95_ms": 19.933124999999563,
+              "max_ms": 19.933124999999563
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.6360005,
+              "p95_ms": 1.112583,
+              "max_ms": 1.204167
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000292,
+              "max_ms": 0.000417
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.0081665,
+              "p95_ms": 0.012792000000000001,
+              "max_ms": 0.024666999999999998
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000958
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 259,
+            "ledger_dropped_after": 299,
+            "action": "Copy",
+            "repetition": 6,
+            "phase": "warmed",
+            "producer_ms": 188.2021669880487,
+            "observation_free_ms": 952.0284170284867,
+            "ledger_before_ms": 25864.499875,
+            "source_bytes": 252065,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 3.486457999999402,
+            "first_shader_step_ms": 3.486457804683596,
+            "first_clock_step_excess_ms": -1.9531580619513988e-07,
+            "max_interval_clock_error_ms": 3.5186585591873154e-05
+          }
+        ]
+      },
+      {
+        "suffix": "typ",
+        "fixture_sha256": "e6bf3c9b2cde204638a046c6f494ca15b60d33a8986b9574ca94930c4b4c1661",
+        "fixture_bytes": 240086,
+        "fixture_lines": 2005,
+        "build": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+        "viewport": "\"FFFF\"",
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "Tinymist partial",
+        "preview_native_ready": true,
+        "preview_zoom_snapshot": true,
+        "preview_zoom_snapshot_native_enabled": true,
+        "preferences": {
+          "actions": {
+            "comment": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "copy": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "cut": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "delete": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "indent": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "newline": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "paste": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "redo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "typing": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "undo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            }
+          },
+          "density": "Low",
+          "enabled": true
+        },
+        "bursts": [
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 620.5526972189546,
+            "callback_span_ms": 620.5527080000029,
+            "shader_clock_lead_ms": -1.0781048331409693e-05,
+            "shader_callback_offset_range_ms": 4.7794528654776514e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 6.062707863748074,
+            "last_shader_age_ms": 626.6154050827026,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.667083999993338,
+              "p95_ms": 19.83437500000582,
+              "max_ms": 19.83437500000582
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.655209000004106,
+              "p95_ms": 17.68445800000336,
+              "max_ms": 17.68445800000336
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.659084,
+              "p95_ms": 1.04925,
+              "max_ms": 6.058833
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000292,
+              "max_ms": 0.000292
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007583,
+              "p95_ms": 0.012084,
+              "max_ms": 0.015042
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.001167
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 299,
+            "ledger_dropped_after": 338,
+            "action": "Typing",
+            "repetition": 0,
+            "phase": "first",
+            "producer_ms": 189.96341701131314,
+            "observation_free_ms": 960.9614170040004,
+            "ledger_before_ms": 33334.613,
+            "source_bytes": 240087,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.947542000001704,
+            "first_shader_step_ms": 6.947542540729046,
+            "first_clock_step_excess_ms": 5.407273420132697e-07,
+            "max_interval_clock_error_ms": 3.989792458014563e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 624.7684741392732,
+            "callback_span_ms": 624.7685000000056,
+            "shader_clock_lead_ms": -2.5860732421278954e-05,
+            "shader_callback_offset_range_ms": 5.35205690539442e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 5.896708928048611,
+            "last_shader_age_ms": 630.6651830673218,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.59362500000134,
+              "p95_ms": 22.818000000006577,
+              "max_ms": 22.818000000006577
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.600291999995534,
+              "p95_ms": 17.580334000005678,
+              "max_ms": 17.580334000005678
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.759125,
+              "p95_ms": 1.30075,
+              "max_ms": 5.892792
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000334,
+              "max_ms": 0.000417
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.008917,
+              "p95_ms": 0.012292,
+              "max_ms": 0.012542
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000958
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 338,
+            "ledger_dropped_after": 377,
+            "action": "Typing",
+            "repetition": 1,
+            "phase": "warmed",
+            "producer_ms": 187.11033300496638,
+            "observation_free_ms": 963.0642080446705,
+            "ledger_before_ms": 34559.306958999994,
+            "source_bytes": 240088,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.41883300000336,
+            "first_shader_step_ms": 6.418833509087563,
+            "first_clock_step_excess_ms": 5.090842023491859e-07,
+            "max_interval_clock_error_ms": 5.35205690539442e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 624.961047898978,
+            "callback_span_ms": 624.9610419999954,
+            "shader_clock_lead_ms": 5.8989826356992126e-06,
+            "shader_callback_offset_range_ms": 5.171585507923737e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 5.814999807626009,
+            "last_shader_age_ms": 630.776047706604,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.616291999991518,
+              "p95_ms": 21.034082999998645,
+              "max_ms": 21.034082999998645
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.569500000005064,
+              "p95_ms": 17.884040999997524,
+              "max_ms": 17.884040999997524
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.750792,
+              "p95_ms": 1.2288329999999998,
+              "max_ms": 5.812125
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000958,
+              "max_ms": 0.0035
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.009167,
+              "p95_ms": 0.011875,
+              "max_ms": 0.012667
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.001
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 377,
+            "ledger_dropped_after": 416,
+            "action": "Typing",
+            "repetition": 2,
+            "phase": "warmed",
+            "producer_ms": 192.83254101173952,
+            "observation_free_ms": 968.7990419915877,
+            "ledger_before_ms": 35788.691125,
+            "source_bytes": 240089,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.3521249999976135,
+            "first_shader_step_ms": 6.352125201374292,
+            "first_clock_step_excess_ms": 2.0137667888775468e-07,
+            "max_interval_clock_error_ms": 2.4715416657272726e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 624.0791464224458,
+            "callback_span_ms": 624.0791249999966,
+            "shader_clock_lead_ms": 2.1422449208330363e-05,
+            "shader_callback_offset_range_ms": 4.2469029722269624e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 5.9134578332304955,
+            "last_shader_age_ms": 629.9926042556763,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.589583000000857,
+              "p95_ms": 19.980791999994835,
+              "max_ms": 19.980791999994835
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.515874999997322,
+              "p95_ms": 18.667208999999275,
+              "max_ms": 18.667208999999275
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.734541,
+              "p95_ms": 1.329792,
+              "max_ms": 5.910125
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000375,
+              "max_ms": 0.000375
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.008624999999999999,
+              "p95_ms": 0.013042,
+              "max_ms": 0.013209
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.001166
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 416,
+            "ledger_dropped_after": 455,
+            "action": "Typing",
+            "repetition": 3,
+            "phase": "warmed",
+            "producer_ms": 194.85649996204302,
+            "observation_free_ms": 952.2473340039141,
+            "ledger_before_ms": 37040.970167,
+            "source_bytes": 240090,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.728750000002037,
+            "first_shader_step_ms": 6.728749722242355,
+            "first_clock_step_excess_ms": -2.777596819214523e-07,
+            "max_interval_clock_error_ms": 3.2443822419736534e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 621.112197637558,
+            "callback_span_ms": 621.1122079999986,
+            "shader_clock_lead_ms": -1.0362440661992878e-05,
+            "shader_callback_offset_range_ms": 4.644030559575185e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 5.833417177200317,
+            "last_shader_age_ms": 626.9456148147583,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.71062499999971,
+              "p95_ms": 20.27029200000834,
+              "max_ms": 20.27029200000834
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.821750000002794,
+              "p95_ms": 18.23983299999236,
+              "max_ms": 18.23983299999236
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.7274579999999999,
+              "p95_ms": 1.211667,
+              "max_ms": 5.830458999999999
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 8.3e-05,
+              "p95_ms": 0.00029099999999999997,
+              "max_ms": 0.00045900000000000004
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.008875000000000001,
+              "p95_ms": 0.012583,
+              "max_ms": 0.016541
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000917
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 455,
+            "ledger_dropped_after": 494,
+            "action": "Typing",
+            "repetition": 4,
+            "phase": "warmed",
+            "producer_ms": 193.7315000104718,
+            "observation_free_ms": 953.1511249952018,
+            "ledger_before_ms": 38270.388084,
+            "source_bytes": 240091,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.472332999997889,
+            "first_shader_step_ms": 6.472332403063774,
+            "first_clock_step_excess_ms": -5.969341145828366e-07,
+            "max_interval_clock_error_ms": 3.123111673630774e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 633.9724119752645,
+            "callback_span_ms": 633.9724169999972,
+            "shader_clock_lead_ms": -5.024732672609389e-06,
+            "shader_callback_offset_range_ms": 4.483432712731883e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 5.88112510740757,
+            "last_shader_age_ms": 639.8535370826721,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.61525000000256,
+              "p95_ms": 20.79450000000361,
+              "max_ms": 20.79450000000361
+            },
+            "late": {
+              "count": 20,
+              "p50_ms": 16.675562500004162,
+              "p95_ms": 18.166958000001614,
+              "max_ms": 19.920583000006445
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.655979,
+              "p95_ms": 1.005459,
+              "max_ms": 5.878167
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 8.3e-05,
+              "p95_ms": 0.00025,
+              "max_ms": 0.000292
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.007625,
+              "p95_ms": 0.012041,
+              "max_ms": 0.012334000000000001
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.001
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 494,
+            "ledger_dropped_after": 534,
+            "action": "Typing",
+            "repetition": 5,
+            "phase": "warmed",
+            "producer_ms": 186.11545901512727,
+            "observation_free_ms": 956.6037080367096,
+            "ledger_before_ms": 39504.11425,
+            "source_bytes": 240092,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.321042000003217,
+            "first_shader_step_ms": 6.3210418447852135,
+            "first_clock_step_excess_ms": -1.5521800378337502e-07,
+            "max_interval_clock_error_ms": 4.483432712731883e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 623.0340893380344,
+            "callback_span_ms": 623.0340829999986,
+            "shader_clock_lead_ms": 6.338035746011883e-06,
+            "shader_callback_offset_range_ms": 5.1655180868692696e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 5.942374933511019,
+            "last_shader_age_ms": 628.9764642715454,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.704542000006768,
+              "p95_ms": 20.141542000004847,
+              "max_ms": 20.141542000004847
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.801500000001397,
+              "p95_ms": 18.2867499999993,
+              "max_ms": 18.2867499999993
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.6629579999999999,
+              "p95_ms": 1.076875,
+              "max_ms": 5.939584
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00025,
+              "max_ms": 0.00025
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007500000000000001,
+              "p95_ms": 0.013084,
+              "max_ms": 0.013333
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.00125
+            },
+            "max_instances": 24,
+            "uploads": 1,
+            "ledger_dropped_before": 534,
+            "ledger_dropped_after": 573,
+            "action": "Typing",
+            "repetition": 6,
+            "phase": "warmed",
+            "producer_ms": 192.3122910084203,
+            "observation_free_ms": 950.4620000370778,
+            "ledger_before_ms": 40723.932417,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.194582999996783,
+            "first_shader_step_ms": 6.194582674652338,
+            "first_clock_step_excess_ms": -3.253444447182119e-07,
+            "max_interval_clock_error_ms": 4.498290945775807e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 632.5437284540385,
+            "callback_span_ms": 632.543709000005,
+            "shader_clock_lead_ms": 1.945403346326202e-05,
+            "shader_callback_offset_range_ms": 5.716324085369706e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 1.046790974214673,
+            "last_shader_age_ms": 633.5905194282532,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.882354000001214,
+              "p95_ms": 20.831875000003492,
+              "max_ms": 20.83908400000655
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.71454200000153,
+              "p95_ms": 17.79937500000233,
+              "max_ms": 17.79937500000233
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.6526455,
+              "p95_ms": 1.017916,
+              "max_ms": 1.043958
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00025,
+              "max_ms": 0.000334
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.007521,
+              "p95_ms": 0.010750000000000001,
+              "max_ms": 0.037917000000000006
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.0011250000000000001
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 573,
+            "ledger_dropped_after": 613,
+            "action": "Copy",
+            "repetition": 0,
+            "phase": "first",
+            "producer_ms": 194.6872080443427,
+            "observation_free_ms": 949.4828750030138,
+            "ledger_before_ms": 42202.93975,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 5.277625000002445,
+            "first_shader_step_ms": 5.277625052258372,
+            "first_clock_step_excess_ms": 5.2255927585065365e-08,
+            "max_interval_clock_error_ms": 5.716324085369706e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 623.6825891537592,
+            "callback_span_ms": 623.6825829999943,
+            "shader_clock_lead_ms": 6.1537648434750736e-06,
+            "shader_callback_offset_range_ms": 4.0141865611076355e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 1.409500022418797,
+            "last_shader_age_ms": 625.092089176178,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.737082999999984,
+              "p95_ms": 18.771416000003228,
+              "max_ms": 18.771416000003228
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.796999999991385,
+              "p95_ms": 17.960791999998037,
+              "max_ms": 17.960791999998037
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.680333,
+              "p95_ms": 0.957042,
+              "max_ms": 1.406667
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00020800000000000001,
+              "max_ms": 0.000958
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007833,
+              "p95_ms": 0.011875,
+              "max_ms": 0.016292
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.00075
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 613,
+            "ledger_dropped_after": 652,
+            "action": "Copy",
+            "repetition": 1,
+            "phase": "warmed",
+            "producer_ms": 214.00224999524653,
+            "observation_free_ms": 957.638209045399,
+            "ledger_before_ms": 43448.708167,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 5.005041999997047,
+            "first_shader_step_ms": 5.005041952244937,
+            "first_clock_step_excess_ms": -4.7752109821885824e-08,
+            "max_interval_clock_error_ms": 2.6698871806729585e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 632.4611266609281,
+            "callback_span_ms": 632.4611249999944,
+            "shader_clock_lead_ms": 1.66093377629295e-06,
+            "shader_callback_offset_range_ms": 5.3215029765851796e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 1.0679999832063913,
+            "last_shader_age_ms": 633.5291266441345,
+            "early": {
+              "count": 20,
+              "p50_ms": 16.76824999999735,
+              "p95_ms": 17.70329099999799,
+              "max_ms": 18.76837499999965
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.68062500000815,
+              "p95_ms": 17.273709000000963,
+              "max_ms": 17.273709000000963
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.704521,
+              "p95_ms": 0.9940000000000001,
+              "max_ms": 1.0650410000000001
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00020800000000000001,
+              "max_ms": 0.000292
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.0078955,
+              "p95_ms": 0.011,
+              "max_ms": 0.012125
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000625
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 652,
+            "ledger_dropped_after": 692,
+            "action": "Copy",
+            "repetition": 2,
+            "phase": "warmed",
+            "producer_ms": 187.4897499801591,
+            "observation_free_ms": 950.9839999955148,
+            "ledger_before_ms": 44715.690666999995,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 5.280249999996158,
+            "first_shader_step_ms": 5.280249984934926,
+            "first_clock_step_excess_ms": -1.506123226135969e-08,
+            "max_interval_clock_error_ms": 4.669570625992492e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 638.58123566024,
+            "callback_span_ms": 638.581207999996,
+            "shader_clock_lead_ms": 2.766024408629164e-05,
+            "shader_callback_offset_range_ms": 5.36649749847129e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 40,
+            "first_shader_age_ms": 1.454334007576108,
+            "last_shader_age_ms": 640.0355696678162,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.613499999999476,
+              "p95_ms": 19.454959000002418,
+              "max_ms": 19.454959000002418
+            },
+            "late": {
+              "count": 20,
+              "p50_ms": 16.65935449999597,
+              "p95_ms": 17.318249999996624,
+              "max_ms": 17.6029170000038
+            },
+            "queue_to_callback": {
+              "count": 40,
+              "p50_ms": 0.781396,
+              "p95_ms": 1.167375,
+              "max_ms": 1.4518339999999998
+            },
+            "initialize": {
+              "count": 40,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000167,
+              "max_ms": 0.00025
+            },
+            "draw_submission": {
+              "count": 40,
+              "p50_ms": 0.009208000000000001,
+              "p95_ms": 0.013166,
+              "max_ms": 0.017416
+            },
+            "upload_submission": {
+              "count": 40,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.001
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 692,
+            "ledger_dropped_after": 732,
+            "action": "Copy",
+            "repetition": 3,
+            "phase": "warmed",
+            "producer_ms": 193.27304197940975,
+            "observation_free_ms": 952.4713329738006,
+            "ledger_before_ms": 45949.989417,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 5.504666000000725,
+            "first_shader_step_ms": 5.504666129127145,
+            "first_clock_step_excess_ms": 1.2912641977891326e-07,
+            "max_interval_clock_error_ms": 3.363400173839182e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 629.4034689199179,
+            "callback_span_ms": 629.403459000001,
+            "shader_clock_lead_ms": 9.919916919898242e-06,
+            "shader_callback_offset_range_ms": 3.7019730370957404e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 0.9985000360757113,
+            "last_shader_age_ms": 630.4019689559937,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.652499999996508,
+              "p95_ms": 24.144000000000233,
+              "max_ms": 24.144000000000233
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.579416000000492,
+              "p95_ms": 17.63566699999501,
+              "max_ms": 17.63566699999501
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.7743329999999999,
+              "p95_ms": 0.9958750000000001,
+              "max_ms": 1.106667
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.00033299999999999996,
+              "max_ms": 0.000334
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007875,
+              "p95_ms": 0.012584,
+              "max_ms": 0.012792000000000001
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.000791
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 732,
+            "ledger_dropped_after": 771,
+            "action": "Copy",
+            "repetition": 4,
+            "phase": "warmed",
+            "producer_ms": 193.71141598094255,
+            "observation_free_ms": 958.4547500126064,
+            "ledger_before_ms": 47191.826042,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.147709000004397,
+            "first_shader_step_ms": 6.147708976641297,
+            "first_clock_step_excess_ms": -2.336309989914298e-08,
+            "max_interval_clock_error_ms": 3.3176787837874144e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 629.190930747427,
+            "callback_span_ms": 629.1909159999996,
+            "shader_clock_lead_ms": 1.4747427485417575e-05,
+            "shader_callback_offset_range_ms": 4.34909961768426e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 1.200667000375688,
+            "last_shader_age_ms": 630.3915977478027,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.708832999996957,
+              "p95_ms": 22.53179100000125,
+              "max_ms": 22.53179100000125
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.600375000001804,
+              "p95_ms": 17.250249999997322,
+              "max_ms": 17.250249999997322
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.733208,
+              "p95_ms": 1.088417,
+              "max_ms": 1.198209
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 4.2e-05,
+              "p95_ms": 0.000375,
+              "max_ms": 0.000375
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.007666000000000001,
+              "p95_ms": 0.010959,
+              "max_ms": 0.013667
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.0037500000000000003
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 771,
+            "ledger_dropped_after": 810,
+            "action": "Copy",
+            "repetition": 5,
+            "phase": "warmed",
+            "producer_ms": 190.1809589471668,
+            "observation_free_ms": 952.3176250513643,
+            "ledger_before_ms": 48446.428084,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 6.481625000000349,
+            "first_shader_step_ms": 6.481624790467322,
+            "first_clock_step_excess_ms": -2.095330273732543e-07,
+            "max_interval_clock_error_ms": 3.543435741448775e-05
+          },
+          {
+            "scope": "native GPU callback intervals; not swap/compositor presentation or GPU execution time",
+            "shader_advance_ms": 625.4592575132847,
+            "callback_span_ms": 625.4592499999999,
+            "shader_clock_lead_ms": 7.513284799642861e-06,
+            "shader_callback_offset_range_ms": 5.348169361241162e-05,
+            "split_shader_age_ms": 320,
+            "draw_count": 39,
+            "first_shader_age_ms": 1.3238750398159027,
+            "last_shader_age_ms": 626.7831325531006,
+            "early": {
+              "count": 19,
+              "p50_ms": 16.6259579999969,
+              "p95_ms": 19.40387500000361,
+              "max_ms": 19.40387500000361
+            },
+            "late": {
+              "count": 19,
+              "p50_ms": 16.882000000005064,
+              "p95_ms": 17.653624999991735,
+              "max_ms": 17.653624999991735
+            },
+            "queue_to_callback": {
+              "count": 39,
+              "p50_ms": 0.7317079999999999,
+              "p95_ms": 1.3118750000000001,
+              "max_ms": 1.3203749999999999
+            },
+            "initialize": {
+              "count": 39,
+              "p50_ms": 8.3e-05,
+              "p95_ms": 0.000292,
+              "max_ms": 0.000375
+            },
+            "draw_submission": {
+              "count": 39,
+              "p50_ms": 0.009042000000000001,
+              "p95_ms": 0.014417,
+              "max_ms": 0.016333
+            },
+            "upload_submission": {
+              "count": 39,
+              "p50_ms": 0.0,
+              "p95_ms": 0.0,
+              "max_ms": 0.00125
+            },
+            "max_instances": 12,
+            "uploads": 1,
+            "ledger_dropped_before": 810,
+            "ledger_dropped_after": 849,
+            "action": "Copy",
+            "repetition": 6,
+            "phase": "warmed",
+            "producer_ms": 192.22258403897285,
+            "observation_free_ms": 960.2384999743663,
+            "ledger_before_ms": 49689.581792,
+            "source_bytes": 240093,
+            "clock_consistent": true,
+            "first_callback_gap_ms": 5.142707999999402,
+            "first_shader_step_ms": 5.142707843333483,
+            "first_clock_step_excess_ms": -1.5666591934859753e-07,
+            "max_interval_clock_error_ms": 5.034601053921506e-05
+          }
+        ]
+      }
+    ],
+    "aggregates": [
+      {
+        "suffix": "txt",
+        "action": "Typing",
+        "phase": "first",
+        "bursts": 1,
+        "draws_per_burst": [
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 19,
+            "p50_ms": 16.564415999999255,
+            "p95_ms": 22.827792000000045,
+            "max_ms": 22.827792000000045
+          },
+          "late": {
+            "count": 19,
+            "p50_ms": 16.640041999999085,
+            "p95_ms": 18.291540999998688,
+            "max_ms": 18.291540999998688
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.564415999999255,
+          "late": 16.640041999999085
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 22.827792000000045,
+          "late": 18.291540999998688
+        },
+        "shader_clock_lead": {
+          "min_ms": 1.4591936633223668e-05,
+          "median_ms": 1.4591936633223668e-05,
+          "max_ms": 1.4591936633223668e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 5.159796273801476e-05,
+          "median_ms": 5.159796273801476e-05,
+          "max_ms": 5.159796273801476e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": 2.3204665922094136e-07,
+          "median_ms": 2.3204665922094136e-07,
+          "max_ms": 2.3204665922094136e-07
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 1,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 39,
+          "p50_ms": 0.5446249999999999,
+          "p95_ms": 0.71075,
+          "max_ms": 0.726125
+        },
+        "draw_submission": {
+          "count": 39,
+          "p50_ms": 0.008291999999999999,
+          "p95_ms": 0.011833,
+          "max_ms": 0.015875
+        },
+        "initialize": {
+          "count": 39,
+          "p50_ms": 8.3e-05,
+          "p95_ms": 0.000292,
+          "max_ms": 0.000292
+        },
+        "uploads_per_burst": [
+          1
+        ],
+        "instances": [
+          24
+        ]
+      },
+      {
+        "suffix": "txt",
+        "action": "Typing",
+        "phase": "warmed",
+        "bursts": 6,
+        "draws_per_burst": [
+          40,
+          40,
+          40,
+          40,
+          40,
+          40
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 118,
+            "p50_ms": 16.635667000000467,
+            "p95_ms": 17.25804099999732,
+            "max_ms": 20.087499999999636
+          },
+          "late": {
+            "count": 116,
+            "p50_ms": 16.60931199999959,
+            "p95_ms": 18.51433300000099,
+            "max_ms": 19.842625000001135
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.6120834999997,
+          "late": 16.614895499998056
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 17.214333500000066,
+          "late": 18.44250000000102
+        },
+        "shader_clock_lead": {
+          "min_ms": -2.973437585751526e-05,
+          "median_ms": 4.160791831964161e-06,
+          "max_ms": 2.2839001758256927e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 4.209327744320035e-05,
+          "median_ms": 4.8467726628587116e-05,
+          "max_ms": 5.4771240684203804e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": -1.3632416084874421e-07,
+          "median_ms": -3.6812707548961043e-08,
+          "max_ms": 2.2416861611418426e-07
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 240,
+          "p50_ms": 0.5325415,
+          "p95_ms": 0.7201249999999999,
+          "max_ms": 0.956417
+        },
+        "draw_submission": {
+          "count": 240,
+          "p50_ms": 0.007375,
+          "p95_ms": 0.011583999999999999,
+          "max_ms": 0.024417
+        },
+        "initialize": {
+          "count": 240,
+          "p50_ms": 4.2e-05,
+          "p95_ms": 0.000292,
+          "max_ms": 0.004167
+        },
+        "uploads_per_burst": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "instances": [
+          24
+        ]
+      },
+      {
+        "suffix": "txt",
+        "action": "Copy",
+        "phase": "first",
+        "bursts": 1,
+        "draws_per_burst": [
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 19,
+            "p50_ms": 16.60895800000071,
+            "p95_ms": 17.265625,
+            "max_ms": 17.265625
+          },
+          "late": {
+            "count": 19,
+            "p50_ms": 16.652084000001196,
+            "p95_ms": 17.632042000001093,
+            "max_ms": 17.632042000001093
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.60895800000071,
+          "late": 16.652084000001196
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 17.265625,
+          "late": 17.632042000001093
+        },
+        "shader_clock_lead": {
+          "min_ms": -2.5022287445608526e-05,
+          "median_ms": -2.5022287445608526e-05,
+          "max_ms": -2.5022287445608526e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 5.111276186653413e-05,
+          "median_ms": 5.111276186653413e-05,
+          "max_ms": 5.111276186653413e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": -1.1016891221515834e-07,
+          "median_ms": -1.1016891221515834e-07,
+          "max_ms": -1.1016891221515834e-07
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 1,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 39,
+          "p50_ms": 0.5697500000000001,
+          "p95_ms": 0.8465830000000001,
+          "max_ms": 0.9086660000000001
+        },
+        "draw_submission": {
+          "count": 39,
+          "p50_ms": 0.007666000000000001,
+          "p95_ms": 0.010750000000000001,
+          "max_ms": 0.011792
+        },
+        "initialize": {
+          "count": 39,
+          "p50_ms": 8.4e-05,
+          "p95_ms": 0.00025,
+          "max_ms": 0.000334
+        },
+        "uploads_per_burst": [
+          1
+        ],
+        "instances": [
+          12
+        ]
+      },
+      {
+        "suffix": "txt",
+        "action": "Copy",
+        "phase": "warmed",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          40,
+          39,
+          39,
+          39,
+          40
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 116,
+            "p50_ms": 16.678854499999943,
+            "p95_ms": 18.386083000001236,
+            "max_ms": 21.28270899999916
+          },
+          "late": {
+            "count": 114,
+            "p50_ms": 16.642958500000532,
+            "p95_ms": 18.16912500000035,
+            "max_ms": 19.933124999999563
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.65099950000149,
+          "late": 16.642958500000532
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 18.8326455000024,
+          "late": 18.293291500000123
+        },
+        "shader_clock_lead": {
+          "min_ms": -2.726390812313184e-05,
+          "median_ms": -9.550074537401088e-06,
+          "max_ms": 2.425610728096217e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 4.298800558899529e-05,
+          "median_ms": 4.6575547457905486e-05,
+          "max_ms": 5.041158874519169e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": -4.751163942273706e-07,
+          "median_ms": -2.1905907487962395e-07,
+          "max_ms": 1.7873026081360877e-07
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 236,
+          "p50_ms": 0.6805829999999999,
+          "p95_ms": 1.076583,
+          "max_ms": 2.0391250000000003
+        },
+        "draw_submission": {
+          "count": 236,
+          "p50_ms": 0.008021,
+          "p95_ms": 0.013,
+          "max_ms": 0.024666999999999998
+        },
+        "initialize": {
+          "count": 236,
+          "p50_ms": 4.2e-05,
+          "p95_ms": 0.00033299999999999996,
+          "max_ms": 0.003541
+        },
+        "uploads_per_burst": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "instances": [
+          12
+        ]
+      },
+      {
+        "suffix": "typ",
+        "action": "Typing",
+        "phase": "first",
+        "bursts": 1,
+        "draws_per_burst": [
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 19,
+            "p50_ms": 16.667083999993338,
+            "p95_ms": 19.83437500000582,
+            "max_ms": 19.83437500000582
+          },
+          "late": {
+            "count": 19,
+            "p50_ms": 16.655209000004106,
+            "p95_ms": 17.68445800000336,
+            "max_ms": 17.68445800000336
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.667083999993338,
+          "late": 16.655209000004106
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 19.83437500000582,
+          "late": 17.68445800000336
+        },
+        "shader_clock_lead": {
+          "min_ms": -1.0781048331409693e-05,
+          "median_ms": -1.0781048331409693e-05,
+          "max_ms": -1.0781048331409693e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 4.7794528654776514e-05,
+          "median_ms": 4.7794528654776514e-05,
+          "max_ms": 4.7794528654776514e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": 5.407273420132697e-07,
+          "median_ms": 5.407273420132697e-07,
+          "max_ms": 5.407273420132697e-07
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 1,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 39,
+          "p50_ms": 0.659084,
+          "p95_ms": 1.04925,
+          "max_ms": 6.058833
+        },
+        "draw_submission": {
+          "count": 39,
+          "p50_ms": 0.007583,
+          "p95_ms": 0.012084,
+          "max_ms": 0.015042
+        },
+        "initialize": {
+          "count": 39,
+          "p50_ms": 4.2e-05,
+          "p95_ms": 0.000292,
+          "max_ms": 0.000292
+        },
+        "uploads_per_burst": [
+          1
+        ],
+        "instances": [
+          24
+        ]
+      },
+      {
+        "suffix": "typ",
+        "action": "Typing",
+        "phase": "warmed",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          39,
+          39,
+          39,
+          40,
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 114,
+            "p50_ms": 16.641291500003717,
+            "p95_ms": 20.141542000004847,
+            "max_ms": 22.818000000006577
+          },
+          "late": {
+            "count": 115,
+            "p50_ms": 16.647208000002138,
+            "p95_ms": 18.166958000001614,
+            "max_ms": 19.920583000006445
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.61577099999704,
+          "late": 16.637927249999848
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 20.532396000005974,
+          "late": 18.203395499996986
+        },
+        "shader_clock_lead": {
+          "min_ms": -2.5860732421278954e-05,
+          "median_ms": 4.3712498154491186e-07,
+          "max_ms": 2.1422449208330363e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 4.2469029722269624e-05,
+          "median_ms": 4.9047743232222274e-05,
+          "max_ms": 5.35205690539442e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": -5.969341145828366e-07,
+          "median_ms": -2.1648884285241365e-07,
+          "max_ms": 5.090842023491859e-07
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 235,
+          "p50_ms": 0.714625,
+          "p95_ms": 1.076875,
+          "max_ms": 5.939584
+        },
+        "draw_submission": {
+          "count": 235,
+          "p50_ms": 0.0085,
+          "p95_ms": 0.012292,
+          "max_ms": 0.016541
+        },
+        "initialize": {
+          "count": 235,
+          "p50_ms": 4.2e-05,
+          "p95_ms": 0.00033299999999999996,
+          "max_ms": 0.0035
+        },
+        "uploads_per_burst": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "instances": [
+          24
+        ]
+      },
+      {
+        "suffix": "typ",
+        "action": "Copy",
+        "phase": "first",
+        "bursts": 1,
+        "draws_per_burst": [
+          40
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 20,
+            "p50_ms": 16.882354000001214,
+            "p95_ms": 20.831875000003492,
+            "max_ms": 20.83908400000655
+          },
+          "late": {
+            "count": 19,
+            "p50_ms": 16.71454200000153,
+            "p95_ms": 17.79937500000233,
+            "max_ms": 17.79937500000233
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.882354000001214,
+          "late": 16.71454200000153
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 20.831875000003492,
+          "late": 17.79937500000233
+        },
+        "shader_clock_lead": {
+          "min_ms": 1.945403346326202e-05,
+          "median_ms": 1.945403346326202e-05,
+          "max_ms": 1.945403346326202e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 5.716324085369706e-05,
+          "median_ms": 5.716324085369706e-05,
+          "max_ms": 5.716324085369706e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": 5.2255927585065365e-08,
+          "median_ms": 5.2255927585065365e-08,
+          "max_ms": 5.2255927585065365e-08
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 1,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 40,
+          "p50_ms": 0.6526455,
+          "p95_ms": 1.017916,
+          "max_ms": 1.043958
+        },
+        "draw_submission": {
+          "count": 40,
+          "p50_ms": 0.007521,
+          "p95_ms": 0.010750000000000001,
+          "max_ms": 0.037917000000000006
+        },
+        "initialize": {
+          "count": 40,
+          "p50_ms": 4.2e-05,
+          "p95_ms": 0.00025,
+          "max_ms": 0.000334
+        },
+        "uploads_per_burst": [
+          1
+        ],
+        "instances": [
+          12
+        ]
+      },
+      {
+        "suffix": "typ",
+        "action": "Copy",
+        "phase": "warmed",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          40,
+          40,
+          39,
+          39,
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 115,
+            "p50_ms": 16.679792000002635,
+            "p95_ms": 18.771416000003228,
+            "max_ms": 24.144000000000233
+          },
+          "late": {
+            "count": 115,
+            "p50_ms": 16.66333399999712,
+            "p95_ms": 17.58312499999738,
+            "max_ms": 17.960791999998037
+          }
+        },
+        "median_of_burst_callback_p50_ms": {
+          "early": 16.680666499996732,
+          "late": 16.66998975000206
+        },
+        "median_of_burst_callback_p95_ms": {
+          "early": 19.429417000003014,
+          "late": 17.476958499995817
+        },
+        "shader_clock_lead": {
+          "min_ms": 1.66093377629295e-06,
+          "median_ms": 8.716600859770551e-06,
+          "max_ms": 2.766024408629164e-05
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 3.7019730370957404e-05,
+          "median_ms": 4.83530129713472e-05,
+          "max_ms": 5.36649749847129e-05
+        },
+        "first_clock_step_excess": {
+          "min_ms": -2.095330273732543e-07,
+          "median_ms": -3.55576048605144e-08,
+          "max_ms": 1.2912641977891326e-07
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "queue_to_callback": {
+          "count": 236,
+          "p50_ms": 0.7477705,
+          "p95_ms": 1.064167,
+          "max_ms": 1.4518339999999998
+        },
+        "draw_submission": {
+          "count": 236,
+          "p50_ms": 0.008271,
+          "p95_ms": 0.012416,
+          "max_ms": 0.017416
+        },
+        "initialize": {
+          "count": 236,
+          "p50_ms": 4.2e-05,
+          "p95_ms": 0.00025,
+          "max_ms": 0.000958
+        },
+        "uploads_per_burst": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "instances": [
+          12
+        ]
+      }
+    ]
+  },
+  "intermediate_to_final_warm_typst_typing": {
+    "early": {
+      "p50_ms": {
+        "intermediate_ms": 16.698187499998312,
+        "final_ms": 16.641291500003717,
+        "change_percent": -0.3407315913454667
+      },
+      "p95_ms": {
+        "intermediate_ms": 22.348540999999386,
+        "final_ms": 20.141542000004847,
+        "change_percent": -9.875360543646227
+      },
+      "max_ms": {
+        "intermediate_ms": 49.67158399999607,
+        "final_ms": 22.818000000006577,
+        "change_percent": -54.06226626473523
+      }
+    },
+    "late": {
+      "p50_ms": {
+        "intermediate_ms": 16.73762500000157,
+        "final_ms": 16.647208000002138,
+        "change_percent": -0.5402020896000836
+      },
+      "p95_ms": {
+        "intermediate_ms": 38.92033300000185,
+        "final_ms": 18.166958000001614,
+        "change_percent": -53.32270666851501
+      },
+      "max_ms": {
+        "intermediate_ms": 48.48395800000435,
+        "final_ms": 19.920583000006445,
+        "change_percent": -58.91304294916546
+      }
+    }
+  },
+  "first_plain_typing_burst_submission": {
+    "stages": {
+      "baseline": {
+        "draw_count": 38,
+        "early": {
+          "count": 17,
+          "p50_ms": 16.68579200000022,
+          "p95_ms": 37.42920799999956,
+          "max_ms": 37.42920799999956
+        },
+        "late": {
+          "count": 20,
+          "p50_ms": 16.671354500000234,
+          "p95_ms": 17.67516700000033,
+          "max_ms": 17.680833000000348
+        },
+        "draw_submission": {
+          "count": 38,
+          "p50_ms": 0.006958499999999999,
+          "p95_ms": 0.010541,
+          "max_ms": 31.990917
+        },
+        "initialize": {
+          "count": 38,
+          "p50_ms": 4.2e-05,
+          "p95_ms": 0.00033299999999999996,
+          "max_ms": 0.000417
+        },
+        "uploads": 1,
+        "first_callback_gap_ms": 37.42920799999956
+      },
+      "clock_fix_intermediate": {
+        "draw_count": 38,
+        "early": {
+          "count": 18,
+          "p50_ms": 16.67154150000033,
+          "p95_ms": 38.596292000000176,
+          "max_ms": 38.596292000000176
+        },
+        "late": {
+          "count": 19,
+          "p50_ms": 16.771832999998878,
+          "p95_ms": 17.54791699999987,
+          "max_ms": 17.54791699999987
+        },
+        "draw_submission": {
+          "count": 38,
+          "p50_ms": 0.0075625,
+          "p95_ms": 0.011958,
+          "max_ms": 32.805166
+        },
+        "initialize": {
+          "count": 38,
+          "p50_ms": 8.3e-05,
+          "p95_ms": 0.000209,
+          "max_ms": 0.00025
+        },
+        "uploads": 1,
+        "first_callback_gap_ms": 38.596292000000176
+      },
+      "final_snapshot_on": {
+        "draw_count": 39,
+        "early": {
+          "count": 19,
+          "p50_ms": 16.564415999999255,
+          "p95_ms": 22.827792000000045,
+          "max_ms": 22.827792000000045
+        },
+        "late": {
+          "count": 19,
+          "p50_ms": 16.640041999999085,
+          "p95_ms": 18.291540999998688,
+          "max_ms": 18.291540999998688
+        },
+        "draw_submission": {
+          "count": 39,
+          "p50_ms": 0.008291999999999999,
+          "p95_ms": 0.011833,
+          "max_ms": 0.015875
+        },
+        "initialize": {
+          "count": 39,
+          "p50_ms": 8.3e-05,
+          "p95_ms": 0.000292,
+          "max_ms": 0.000292
+        },
+        "uploads": 1,
+        "first_callback_gap_ms": 6.550165999999081
+      }
+    },
+    "interpretation": "The first actual effect submission no longer pays the driver first-draw cost. Priming moves this work before measured input; startup/prewarm latency and process-global cold-driver work were not measured away."
+  },
+  "checks": {
+    "final_native_journey_passed": true,
+    "final_clock_consistency_passed_bursts": 28,
+    "final_clock_consistency_total_bursts": 28,
+    "final_settings_json_snapshot_preference": true,
+    "final_native_typst_snapshot_enabled": true,
+    "same_optimized_feature_flags_and_profile": true,
+    "raw_burst_samples_retained_in_hashed_local_evidence": true
+  },
+  "limitations": [
+    "One sequential session per code stage on one Mac, with six warmed isolated bursts per case; not a randomized significance study or cross-platform guarantee.",
+    "First bursts are separate from warmed pools. Callback intervals are classified by the later shader age: early <320 ms, late >=320 ms.",
+    "Baseline used the faulty clock, so baseline early/late buckets are not fully equivalent to the fixed-clock stages.",
+    "Copy leaves source unchanged but emits 12 particles versus Typing 24.",
+    "Native state proves backend and preference application, not composed visual smoothness or screen presentation.",
+    "First-effect driver work is primed before input; total process startup and time-to-first-usable-window were not measured.",
+    "CPU-stack attribution is pending a separate receipt; no CPU-sample hotspot conclusions are made here.",
+    "The small preview stresses substantial source and edit-related capture work, not a large multi-page SVG scene.",
+    "All seven Typing post-observations had capture in progress and no ready cache; all seven Copy post-observations had a ready cache. Separate zoom journeys must establish snapshot usability and handoff; this pacing run does not measure readiness latency."
+  ],
+  "native_snapshot_verification": {
+    "events_path": ".tiptoptyp/desktop-ui-tests/run-lsd2f0iu/events.jsonl",
+    "events_sha256": "22c8918d3c2c84ec6244fb7b51754297a34e86aa086b2cbdc79c19bc4900aa79",
+    "measured_typst_bursts": 14,
+    "before_after_enabled_observations": 28,
+    "all_enabled": true,
+    "post_burst_cache_observations": {
+      "Typing": {
+        "observations": 7,
+        "cached": 0,
+        "capturing": 7
+      },
+      "Copy": {
+        "observations": 7,
+        "cached": 7,
+        "capturing": 0
+      }
+    },
+    "scope": "Settings remain enabled throughout. Pacing does not establish time-to-ready or zoom/handoff correctness; cache was ready in the subsequent unchanged-source Copy phase."
+  }
+}

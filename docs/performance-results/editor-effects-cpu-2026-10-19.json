@@ -1,0 +1,554 @@
+{
+  "schema": 1,
+  "date": "2026-10-19",
+  "scope": "Native statistical stack sampling during the Typst editor-effects pacing workload, with screenshot zoom enabled. Separate diagnostic runs, not uncontended callback timing, GPU execution, compositor presentation or a CPU-percentage measurement.",
+  "interpretation_rules": [
+    "Inclusive stack counts are recorded as individual occurrences with source lines; nested counts are never added.",
+    "A zero-length stack list means not observed in this bounded sample, not impossible at runtime.",
+    "Counts are not milliseconds, CPU utilization, per-frame cost or a normalized speedup; the sample totals differ.",
+    "Wait stacks such as OpenGL display synchronization and condition-variable waits are not evidence of CPU computation.",
+    "Application symbols are stripped; framework symbols and named thread ownership provide the direct evidence."
+  ],
+  "matched_workload_metadata": true,
+  "runs": [
+    {
+      "label": "intermediate_before_capture_deferral_and_pixel_worker",
+      "receipt": {
+        "scope": "native CPU sample during Typst effects with snapshots on; separate from uncontended timing comparison",
+        "run": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-kfh90gnv",
+        "pid": 46141,
+        "seconds": 12,
+        "interval_ms": 1,
+        "binary_sha256": "2afac79267f1e3b22ca596ea3a2d8a8c430db049fcc86e577bb28d4ba1d4a4fd"
+      },
+      "raw_evidence": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/capture-cpu-sample.txt",
+          "sha256": "f34791889876d9a8491bab93f8bc8d27c7567a6b9f836d1679f9e1ba5be468a8"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/capture-cpu-receipt.json",
+          "sha256": "618a385412f37478835986f591040822deb096e2c50af0af14a6dbf13767845e"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-kfh90gnv/effects-pacing.json",
+          "sha256": "8d359541b2a7426ecbe12200151960c087d90d421d59311b3105c328ff825d52"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-kfh90gnv/app.log",
+          "sha256": "7004bffdd608883e6b8380452ae4220bf0ec273cc4ea770d9fd195c531ff754b"
+        }
+      ],
+      "build": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792405385)",
+      "workload": {
+        "fixture_sha256": "e6bf3c9b2cde204638a046c6f494ca15b60d33a8986b9574ca94930c4b4c1661",
+        "fixture_bytes": 240086,
+        "fixture_lines": 2005,
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "Tinymist partial",
+        "preview_native_ready": true,
+        "preview_zoom_snapshot": true,
+        "preview_zoom_snapshot_native_enabled": true,
+        "preferences": {
+          "actions": {
+            "comment": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "copy": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "cut": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "delete": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "indent": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "newline": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "paste": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "redo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "typing": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "undo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            }
+          },
+          "density": "Low",
+          "enabled": true
+        }
+      },
+      "sampling": {
+        "architecture": "ARM64",
+        "os": "macOS 14.6.1 (23G93)",
+        "captured_at": "2026-10-19 11:43:00.065 +0100",
+        "tool": "/usr/bin/sample",
+        "threads": {
+          "main": {
+            "thread_samples": 8983,
+            "thread_header_line": 23,
+            "stacks": {
+              "ca_prepare_image": [
+                {
+                  "line": 895,
+                  "inclusive_stack_samples": 297,
+                  "symbol": "CA::Render::prepare_image(CGImage*, CGColorSpace*, unsigned int, double)",
+                  "library": "QuartzCore"
+                }
+              ],
+              "ca_copy_image": [
+                {
+                  "line": 896,
+                  "inclusive_stack_samples": 297,
+                  "symbol": "CA::Render::copy_image(CGImage*, CGColorSpace*, unsigned int, double, double)",
+                  "library": "QuartzCore"
+                }
+              ],
+              "bitmap_draw_image": [
+                {
+                  "line": 898,
+                  "inclusive_stack_samples": 296,
+                  "symbol": "CGContextDrawImageWithOptions",
+                  "library": "CoreGraphics"
+                }
+              ],
+              "icc_conversion": [
+                {
+                  "line": 907,
+                  "inclusive_stack_samples": 208,
+                  "symbol": "CGColorTransformConvertUsingCMSConverter",
+                  "library": "CoreGraphics"
+                },
+                {
+                  "line": 948,
+                  "inclusive_stack_samples": 2,
+                  "symbol": "CGColorTransformConvertUsingCMSConverter",
+                  "library": "CoreGraphics"
+                }
+              ],
+              "vimage_conversion": [
+                {
+                  "line": 914,
+                  "inclusive_stack_samples": 206,
+                  "symbol": "vImageConvert_AnyToAny",
+                  "library": "vImage"
+                },
+                {
+                  "line": 945,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "vImageConvert_AnyToAny",
+                  "library": "vImage"
+                },
+                {
+                  "line": 947,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "vImageConvert_AnyToAny",
+                  "library": "vImage"
+                }
+              ],
+              "snapshot_completion": [
+                {
+                  "line": 3314,
+                  "inclusive_stack_samples": 4,
+                  "symbol": "WTF::Detail::CallableWrapper<-[WKWebView takeSnapshotWithConfiguration:completionHandler:]::$_27, void, std::optional<WebKit::ShareableBitmapHandle>&&>::call(std::optional<WebKit::ShareableBitmapHandle>&&)",
+                  "library": "WebKit"
+                },
+                {
+                  "line": 3599,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "WTF::Detail::CallableWrapper<-[WKWebView takeSnapshotWithConfiguration:completionHandler:]::$_27, void, std::optional<WebKit::ShareableBitmapHandle>&&>::call(std::optional<WebKit::ShareableBitmapHandle>&&)",
+                  "library": "WebKit"
+                }
+              ],
+              "nsimage_cgimage_lookup": [
+                {
+                  "line": 3316,
+                  "inclusive_stack_samples": 3,
+                  "symbol": "-[NSImage CGImageForProposedRect:context:hints:]",
+                  "library": "AppKit"
+                }
+              ],
+              "html_load": [
+                {
+                  "line": 1066,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "-[WKWebView loadHTMLString:baseURL:]",
+                  "library": "WebKit"
+                }
+              ],
+              "opengl_swap": [
+                {
+                  "line": 48,
+                  "inclusive_stack_samples": 3648,
+                  "symbol": "-[NSOpenGLContext flushBuffer]",
+                  "library": "AppKit"
+                }
+              ],
+              "display_wait": [
+                {
+                  "line": 53,
+                  "inclusive_stack_samples": 3298,
+                  "symbol": "NSWaitUntilHostTime",
+                  "library": "AppKit"
+                }
+              ],
+              "condition_wait": [],
+              "framework_buffer_diagnostic_marker": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "label": "final_with_capture_deferral_and_pixel_worker",
+      "receipt": {
+        "scope": "native CPU sample during Typst effects with snapshots on; separate from uncontended timing comparison",
+        "run": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-_a399u86",
+        "pid": 99762,
+        "seconds": 12,
+        "interval_ms": 1,
+        "binary_sha256": "2ba352800113edd53ae42927b786975eb7e7595805e046241ecb51eb3ff2a5a7",
+        "command": [
+          "python3",
+          "scripts/test-desktop-ui.py",
+          "--journey",
+          "effects_pacing",
+          "--release",
+          "--executable",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-pacing-2026-10-19/final-app"
+        ]
+      },
+      "raw_evidence": [
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-capture-cpu-sample.txt",
+          "sha256": "aba89a455b9d8d7c0f576b428169518856f944f598d41b5bfe617a4bdfa90f9e"
+        },
+        {
+          "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/final-capture-cpu-receipt.json",
+          "sha256": "4a964ad83176093464f60904da029671de321d5415d4c6fa6b3d62a3ccc60890"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-_a399u86/effects-pacing.json",
+          "sha256": "cbd5a6fcc3ec7f0c220b4077c69047bbc841069176260b6a8ad41e361e50ee82"
+        },
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-_a399u86/app.log",
+          "sha256": "fc397488614dc2066076551b6d4a8975728f381809b26361bb29a51d9e07bb36"
+        }
+      ],
+      "build": "tiptoptyp Dev 0.1.0 (af69f9efaad0-dirty.1792408527)",
+      "workload": {
+        "fixture_sha256": "e6bf3c9b2cde204638a046c6f494ca15b60d33a8986b9574ca94930c4b4c1661",
+        "fixture_bytes": 240086,
+        "fixture_lines": 2005,
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "Tinymist partial",
+        "preview_native_ready": true,
+        "preview_zoom_snapshot": true,
+        "preview_zoom_snapshot_native_enabled": true,
+        "preferences": {
+          "actions": {
+            "comment": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "copy": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "cut": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "delete": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "indent": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "newline": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "paste": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "redo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "typing": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            },
+            "undo": {
+              "flash": false,
+              "glow": false,
+              "particles": "Explosion",
+              "shake": false
+            }
+          },
+          "density": "Low",
+          "enabled": true
+        }
+      },
+      "sampling": {
+        "architecture": "ARM64",
+        "os": "macOS 14.6.1 (23G93)",
+        "captured_at": "2026-10-19 12:31:40.413 +0100",
+        "tool": "/usr/bin/sample",
+        "threads": {
+          "main": {
+            "thread_samples": 9711,
+            "thread_header_line": 23,
+            "stacks": {
+              "ca_prepare_image": [],
+              "ca_copy_image": [],
+              "bitmap_draw_image": [],
+              "icc_conversion": [],
+              "vimage_conversion": [],
+              "snapshot_completion": [
+                {
+                  "line": 3029,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "WTF::Detail::CallableWrapper<-[WKWebView takeSnapshotWithConfiguration:completionHandler:]::$_27, void, std::optional<WebKit::ShareableBitmapHandle>&&>::call(std::optional<WebKit::ShareableBitmapHandle>&&)",
+                  "library": "WebKit"
+                }
+              ],
+              "nsimage_cgimage_lookup": [
+                {
+                  "line": 3031,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "-[NSImage CGImageForProposedRect:context:hints:]",
+                  "library": "AppKit"
+                }
+              ],
+              "html_load": [],
+              "opengl_swap": [
+                {
+                  "line": 48,
+                  "inclusive_stack_samples": 4268,
+                  "symbol": "-[NSOpenGLContext flushBuffer]",
+                  "library": "AppKit"
+                }
+              ],
+              "display_wait": [
+                {
+                  "line": 53,
+                  "inclusive_stack_samples": 4036,
+                  "symbol": "NSWaitUntilHostTime",
+                  "library": "AppKit"
+                },
+                {
+                  "line": 58,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "NSWaitUntilHostTime",
+                  "library": "AppKit"
+                }
+              ],
+              "condition_wait": [],
+              "framework_buffer_diagnostic_marker": []
+            }
+          },
+          "tiptoptyp-preview-raster": {
+            "thread_samples": 9711,
+            "thread_header_line": 4104,
+            "stacks": {
+              "ca_prepare_image": [],
+              "ca_copy_image": [],
+              "bitmap_draw_image": [
+                {
+                  "line": 4113,
+                  "inclusive_stack_samples": 125,
+                  "symbol": "CGContextDrawImageWithOptions",
+                  "library": "CoreGraphics"
+                }
+              ],
+              "icc_conversion": [
+                {
+                  "line": 4124,
+                  "inclusive_stack_samples": 92,
+                  "symbol": "CGColorTransformConvertUsingCMSConverter",
+                  "library": "CoreGraphics"
+                },
+                {
+                  "line": 4173,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "CGColorTransformConvertUsingCMSConverter",
+                  "library": "CoreGraphics"
+                }
+              ],
+              "vimage_conversion": [
+                {
+                  "line": 4131,
+                  "inclusive_stack_samples": 78,
+                  "symbol": "vImageConvert_AnyToAny",
+                  "library": "vImage"
+                },
+                {
+                  "line": 4163,
+                  "inclusive_stack_samples": 10,
+                  "symbol": "vImageConvert_AnyToAny",
+                  "library": "vImage"
+                },
+                {
+                  "line": 4166,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "vImageConvert_AnyToAny",
+                  "library": "vImage"
+                },
+                {
+                  "line": 4168,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "vImageConvert_AnyToAny",
+                  "library": "vImage"
+                }
+              ],
+              "snapshot_completion": [],
+              "nsimage_cgimage_lookup": [],
+              "html_load": [],
+              "opengl_swap": [],
+              "display_wait": [],
+              "condition_wait": [
+                {
+                  "line": 4110,
+                  "inclusive_stack_samples": 9583,
+                  "symbol": "_pthread_cond_wait",
+                  "library": "libsystem_pthread.dylib"
+                },
+                {
+                  "line": 4216,
+                  "inclusive_stack_samples": 1,
+                  "symbol": "_pthread_cond_wait",
+                  "library": "libsystem_pthread.dylib"
+                }
+              ],
+              "framework_buffer_diagnostic_marker": [
+                {
+                  "line": 4165,
+                  "inclusive_stack_samples": 10,
+                  "symbol": "_ERROR_Buffer_Write__Too_Small_For_Arguments_To_vImage__CheckBacktrace",
+                  "library": "vImage"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "findings": [
+    {
+      "claim": "The earlier main-thread image-preparation stack was not observed on main in the final sample.",
+      "before_main": {
+        "ca_prepare_image_occurrence_samples": [
+          297
+        ],
+        "ca_copy_image_occurrence_samples": [
+          297
+        ]
+      },
+      "after_main": {
+        "ca_prepare_image_occurrence_samples": [],
+        "ca_copy_image_occurrence_samples": [],
+        "icc_conversion_occurrence_samples": [],
+        "vimage_conversion_occurrence_samples": []
+      },
+      "note": "The earlier 208-sample ICC branch is nested under the 297-sample Core Animation image-preparation branch; these values must not be added."
+    },
+    {
+      "claim": "Pixel rendering and color conversion were observed on the dedicated raster worker in the final sample.",
+      "thread": "tiptoptyp-preview-raster",
+      "bitmap_draw_occurrence_samples": [
+        125
+      ],
+      "icc_conversion_occurrence_samples": [
+        92,
+        1
+      ],
+      "note": "The 92-sample ICC branch is nested under the 125-sample bitmap draw. The worker also spends sampled time asleep on its mailbox."
+    },
+    {
+      "claim": "Required main-thread snapshot completion and NSImage lookup remain, with low observed counts.",
+      "before_nsimage_lookup_occurrence_samples": [
+        3
+      ],
+      "after_nsimage_lookup_occurrence_samples": [
+        1
+      ]
+    }
+  ],
+  "remaining_limits": [
+    "WebKit snapshot calls/completion, NSImage-to-CGImage lookup, native view/layer ownership and layer admission still belong to AppKit main.",
+    "Core Animation may copy or convert again for another display profile, storage format, OS or compositor path; this local absence is not a universal guarantee.",
+    "The final sample contains ten worker samples under an internal vImage buffer-check diagnostic symbol. The app log has no corresponding buffer/error report; this marker alone does not establish a failed conversion or an application allocation bug. The caller uses a CoreGraphics-owned bitmap with explicit stride and allocation bounds.",
+    "This report establishes relocation of the sampled pixel work. Uncontended frame-callback evidence is recorded separately."
+  ]
+}

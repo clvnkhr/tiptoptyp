@@ -1,0 +1,652 @@
+{
+  "schema": 1,
+  "comparison_kind": "Supplemental sequential on/off control using the identical fixed optimized binary; does not replace the primary code before/after result.",
+  "scope": "Natural native GPU render-callback cadence, not GPU execution or compositor presentation/FPS.",
+  "control_variable": "preview_zoom_snapshot",
+  "build": {
+    "declared_profile": "release",
+    "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/editor-effects-pacing-2026-10-19/after-app",
+    "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792405385)",
+    "binary_sha256": "2afac79267f1e3b22ca596ea3a2d8a8c430db049fcc86e577bb28d4ba1d4a4fd",
+    "verified_build_receipt": {
+      "profile": {
+        "opt_level": "3",
+        "debuginfo": 0,
+        "debug_assertions": false,
+        "overflow_checks": false,
+        "test": false
+      },
+      "features": [
+        "desktop-ui-tests"
+      ],
+      "sha256": "2afac79267f1e3b22ca596ea3a2d8a8c430db049fcc86e577bb28d4ba1d4a4fd",
+      "version": "tiptoptyp Dev 0.1.0 (3c42e9f84dc1-dirty.1792405385)",
+      "base_revision": "3c42e9f84dc1e243987ebb1bab81a9debd43b301",
+      "source_diff_sha256": "8081bb3632f79dc4ce7259487de9f941900acfbeba554dc87fc53014d449ff19"
+    }
+  },
+  "editor_effects": {
+    "actions": {
+      "comment": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "copy": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "cut": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "delete": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "indent": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "newline": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "paste": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "redo": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "typing": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      },
+      "undo": {
+        "flash": false,
+        "glow": false,
+        "particles": "Explosion",
+        "shake": false
+      }
+    },
+    "density": "Low",
+    "enabled": true
+  },
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "preflight": {
+    "accessibility": true,
+    "desktop": true,
+    "input": true,
+    "locked": false,
+    "screens": [
+      {
+        "height": 982,
+        "scale": 2,
+        "width": 1512
+      }
+    ]
+  },
+  "protocol": "one native action; no inspection, screenshots or app requests until 0.9 seconds after the producer returns",
+  "first_bursts_excluded_from_warm_pools": true,
+  "warm_bursts_per_action": 6,
+  "interpretation": [
+    "With snapshots on, every warmed Typst typing burst contains a late callback gap above 33.334 ms. With snapshots off, none does.",
+    "This strongly implicates the smooth-preview snapshot path for the recurring late editing stalls in this workload.",
+    "The control does not identify the individual capture, mirror, timer, or WebKit operation responsible; a CPU sample is needed for that attribution.",
+    "The experiment is one sequential on/off session pair on one Mac, not a randomized repeated-run or cross-platform guarantee.",
+    "Copy remains an unchanged-source control, but emits 12 particles versus typing 24.",
+    "Threshold counts describe observations and are never frame-rate pass/fail criteria.",
+    "The plain-text case has no native preview; its inactive fallback backend label is PDFium."
+  ],
+  "on": {
+    "preview_zoom_snapshot": true,
+    "setting_verification": {
+      "native_before_after_every_typst_burst": {
+        "bursts_verified": 14,
+        "observations_verified": 28,
+        "all_match_expected": true,
+        "observed_enabled": true
+      },
+      "explicit_selected_json_field_copy_and_save": false,
+      "note": "The earlier on run predates the explicit JSON-setting control; native inspection confirms enabled around every measured Typst burst."
+    },
+    "native_passed": true,
+    "clock_consistency": {
+      "passed_bursts": 28,
+      "total_bursts": 28
+    },
+    "raw_evidence": [
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-7w1j20mp/effects-pacing.json",
+        "sha256": "8fcc1998761db9f4ea771960351c6f77346c000cdbdff9f95e7aeda4c6477ac0"
+      },
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-7w1j20mp/result.json",
+        "sha256": "1efecda34e9c3fdb24cd916962fdfe28c8cc0071bf6c060dafc44cf5290025d7"
+      },
+      {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/after-build-receipt.json",
+        "sha256": "1008e4aacb860425bf970e4b5d98c632b70b095384ff2030df0b78720ad81402"
+      },
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-7w1j20mp/events.jsonl",
+        "sha256": "f4b6dfdf51702596ddef0bf18411d81334cda497b6e240cd11a9b333503d60c3"
+      }
+    ],
+    "fixtures": [
+      {
+        "suffix": "txt",
+        "fixture_sha256": "f2793323eb41089bf0a2425b20a3ddb1231eebfd7746fa3b0598bb1528860de2",
+        "fixture_bytes": 252058,
+        "fixture_lines": 2002,
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "PDFium",
+        "preview_native_ready": false
+      },
+      {
+        "suffix": "typ",
+        "fixture_sha256": "e6bf3c9b2cde204638a046c6f494ca15b60d33a8986b9574ca94930c4b4c1661",
+        "fixture_bytes": 240086,
+        "fixture_lines": 2005,
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "Tinymist partial",
+        "preview_native_ready": true
+      }
+    ],
+    "warm_aggregates": [
+      {
+        "suffix": "txt",
+        "action": "Typing",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          40,
+          39,
+          40,
+          40,
+          40
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 117,
+            "p50_ms": 16.58824999999888,
+            "p95_ms": 17.938458000000537,
+            "max_ms": 28.272375000000466
+          },
+          "late": {
+            "count": 115,
+            "p50_ms": 16.67224999999962,
+            "p95_ms": 17.956292000000758,
+            "max_ms": 21.332667000000583
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 4.6996885430417024e-05,
+          "median_ms": 5.2861983931506984e-05,
+          "max_ms": 5.8304200138081796e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          24
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 1,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "txt",
+        "action": "Copy",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          40,
+          39,
+          40,
+          39,
+          40
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 116,
+            "p50_ms": 16.585770499999853,
+            "p95_ms": 17.598625000002357,
+            "max_ms": 26.431000000000495
+          },
+          "late": {
+            "count": 115,
+            "p50_ms": 16.690083000001323,
+            "p95_ms": 17.891416999995272,
+            "max_ms": 20.183084000000235
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 3.096961881965399e-05,
+          "median_ms": 4.4719605284626596e-05,
+          "max_ms": 5.4061889386503026e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          12
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 1,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "typ",
+        "action": "Typing",
+        "bursts": 6,
+        "draws_per_burst": [
+          38,
+          39,
+          36,
+          37,
+          39,
+          38
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 112,
+            "p50_ms": 16.698187499998312,
+            "p95_ms": 22.348540999999386,
+            "max_ms": 49.67158399999607
+          },
+          "late": {
+            "count": 109,
+            "p50_ms": 16.73762500000157,
+            "p95_ms": 38.92033300000185,
+            "max_ms": 48.48395800000435
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 2.96365687972866e-05,
+          "median_ms": 4.849996548728086e-05,
+          "max_ms": 5.031222099205479e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          24
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 2,
+            "above_33_334_ms": 2
+          },
+          "late": {
+            "above_25_ms": 7,
+            "above_33_334_ms": 6
+          }
+        }
+      },
+      {
+        "suffix": "typ",
+        "action": "Copy",
+        "bursts": 6,
+        "draws_per_burst": [
+          40,
+          40,
+          39,
+          40,
+          40,
+          40
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 117,
+            "p50_ms": 16.644708999992872,
+            "p95_ms": 18.821208000001207,
+            "max_ms": 23.69987499999843
+          },
+          "late": {
+            "count": 116,
+            "p50_ms": 16.65422899999612,
+            "p95_ms": 18.251374999999825,
+            "max_ms": 24.649416000007477
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 2.960395795525983e-05,
+          "median_ms": 4.303169407648966e-05,
+          "max_ms": 5.218142905505374e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          12
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          }
+        }
+      }
+    ]
+  },
+  "off": {
+    "preview_zoom_snapshot": false,
+    "setting_verification": {
+      "native_before_after_every_typst_burst": {
+        "bursts_verified": 14,
+        "observations_verified": 28,
+        "all_match_expected": true,
+        "observed_enabled": false
+      },
+      "explicit_selected_json_field_copy_and_save": true,
+      "note": "The off run edited and copied the selected real Settings JSON field, saved it, and confirmed native disabled around every measured Typst burst."
+    },
+    "native_passed": true,
+    "clock_consistency": {
+      "passed_bursts": 28,
+      "total_bursts": 28
+    },
+    "raw_evidence": [
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-du4ccee_/effects-pacing.json",
+        "sha256": "dad0a9e38ec7c813ee7c77a8d466e2e577d2c43946e88ddca0a8fee2421b660e"
+      },
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-du4ccee_/result.json",
+        "sha256": "3fa25fe3a31bf49c8fcc972a7afd66ab504dc61d58a511850dc79a53e8f10869"
+      },
+      {
+        "path": ".tiptoptyp/editor-effects-pacing-2026-10-19/after-build-receipt.json",
+        "sha256": "1008e4aacb860425bf970e4b5d98c632b70b095384ff2030df0b78720ad81402"
+      },
+      {
+        "path": ".tiptoptyp/desktop-ui-tests/run-du4ccee_/events.jsonl",
+        "sha256": "e4ba81868c67368959c499e371827b7c6f7c45617d2b4b0a20559a839d94e609"
+      }
+    ],
+    "fixtures": [
+      {
+        "suffix": "txt",
+        "fixture_sha256": "f2793323eb41089bf0a2425b20a3ddb1231eebfd7746fa3b0598bb1528860de2",
+        "fixture_bytes": 252058,
+        "fixture_lines": 2002,
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "PDFium",
+        "preview_native_ready": false
+      },
+      {
+        "suffix": "typ",
+        "fixture_sha256": "e6bf3c9b2cde204638a046c6f494ca15b60d33a8986b9574ca94930c4b4c1661",
+        "fixture_bytes": 240086,
+        "fixture_lines": 2005,
+        "native_size": [
+          1400.0,
+          883.0
+        ],
+        "dark": false,
+        "preview_backend": "Tinymist partial",
+        "preview_native_ready": true
+      }
+    ],
+    "warm_aggregates": [
+      {
+        "suffix": "txt",
+        "action": "Typing",
+        "bursts": 6,
+        "draws_per_burst": [
+          40,
+          40,
+          39,
+          40,
+          40,
+          40
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 117,
+            "p50_ms": 16.58454200000051,
+            "p95_ms": 17.58783299999959,
+            "max_ms": 24.1456249999992
+          },
+          "late": {
+            "count": 116,
+            "p50_ms": 16.588228999999956,
+            "p95_ms": 18.877291999999215,
+            "max_ms": 20.258708000001207
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 3.940963506465778e-05,
+          "median_ms": 5.2143279390293173e-05,
+          "max_ms": 5.798721576866228e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          24
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "txt",
+        "action": "Copy",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          40,
+          39,
+          40,
+          39,
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 116,
+            "p50_ms": 16.66533299999719,
+            "p95_ms": 18.076042000000598,
+            "max_ms": 23.055333000000246
+          },
+          "late": {
+            "count": 114,
+            "p50_ms": 16.683916999998473,
+            "p95_ms": 17.524583000002167,
+            "max_ms": 18.11120899999878
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 4.523049938143231e-05,
+          "median_ms": 4.9373446017852984e-05,
+          "max_ms": 5.573999078478664e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          12
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "typ",
+        "action": "Typing",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          39,
+          40,
+          39,
+          39,
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 114,
+            "p50_ms": 16.694978999999876,
+            "p95_ms": 17.833542000000307,
+            "max_ms": 25.643958000000566
+          },
+          "late": {
+            "count": 115,
+            "p50_ms": 16.607374999999593,
+            "p95_ms": 17.638459000001603,
+            "max_ms": 18.784915999996883
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 3.319703682791442e-05,
+          "median_ms": 4.99402049172204e-05,
+          "max_ms": 5.350076389731839e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          24
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 1,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          }
+        }
+      },
+      {
+        "suffix": "typ",
+        "action": "Copy",
+        "bursts": 6,
+        "draws_per_burst": [
+          39,
+          40,
+          39,
+          40,
+          39,
+          39
+        ],
+        "pooled_callback_intervals": {
+          "early": {
+            "count": 116,
+            "p50_ms": 16.669166500003485,
+            "p95_ms": 17.596082999996725,
+            "max_ms": 19.655791999997746
+          },
+          "late": {
+            "count": 114,
+            "p50_ms": 16.635395999997854,
+            "p95_ms": 18.22500000000582,
+            "max_ms": 20.567250000000058
+          }
+        },
+        "shader_callback_offset_range": {
+          "min_ms": 4.191933840047568e-05,
+          "median_ms": 4.749660729430616e-05,
+          "max_ms": 5.541610880754888e-05
+        },
+        "clock_consistency": {
+          "tolerance_ms": 1,
+          "passed_bursts": 6,
+          "failed_bursts": 0
+        },
+        "instances": [
+          12
+        ],
+        "descriptive_gap_counts": {
+          "early": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          },
+          "late": {
+            "above_25_ms": 0,
+            "above_33_334_ms": 0
+          }
+        }
+      }
+    ]
+  }
+}

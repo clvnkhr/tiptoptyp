@@ -371,6 +371,99 @@ logs, preserved optimized test binaries and supplemental comparisons remain in
 `.tiptoptyp/editor-effects-perf-2026-10-18/`. Cold shader startup, whole-app input
 latency and cross-platform performance are not established by these probes.
 
+## Native effects pacing (19 October 2026)
+
+```sh
+python3 scripts/test-desktop-ui.py --journey effects_pacing --release
+```
+
+This [native journey](desktop-ui-journeys.md#observer-free-effects-pacing) uses
+saved large plain-text/Typst files, Low Explosion effects and a verified live
+Tinymist partial preview. One first burst and six warmed bursts per Typing/Copy
+case remain separate. After each native action it waits 0.9 seconds without
+inspection or screenshots, then fetches the bounded ledger once. Unlike ordinary
+inspection polling, this adds no observation-driven repaints during the effect.
+
+The macOS `desktop-ui-tests` build records timings only when
+`TIPTOPTYP_UI_TEST_FX_TIMING=1`, set by this lane. Its 256-entry in-memory ring has
+sequence/drop counters, one record per actual GL callback, no per-frame disk I/O
+and no artificial repaint loop. Reports reject lost samples and retain raw
+callback/shader times, queue/submission spans and upload counts. Early/late gaps
+are classified by the later sample's shader age, below/above 320 ms. The shader
+and callback clocks sample the same `Instant`; offset variation must remain
+within 1 ms to allow f32 conversion. This protects clock identity without a
+flaky frame-rate assertion. Driver submission includes upload time; those spans
+must not be added together. These observations do not measure GPU completion,
+compositor presentation/FPS, font-cache coldness or input-to-pixel latency.
+
+The matched baseline/intermediate release builds used `desktop-ui-tests`,
+optimization level 3, macOS 14.6.1 arm64, a 1400 × 883 point light window on a
+2× display, and the same fixtures/preferences. Replaying the clock-consistency
+invariant rejects **25/28 baseline bursts**; the intermediate fix passes
+**28/28**, removing the recurring ~13 ms initial Typst animation-clock jump.
+Callback cadence did not materially improve in that comparison: warm Typst
+late p95 was **36.68 → 38.92 ms**. The first GPU submission still cost about
+32 ms, separately from warmed behavior. Full provenance and every burst summary
+are in the [primary measurement receipt](performance-results/editor-effects-pacing-2026-10-19.json).
+
+A subsequent diagnostic control reused that identical intermediate binary,
+changing only `preview_zoom_snapshot` through real Settings JSON. Native state
+confirmed the setting before/after every measured Typst burst. With snapshots
+on/off, warm Typst typing late p95 was **38.92 → 17.64 ms**, maximum
+**48.48 → 18.78 ms**; all six recurring late gaps above 33.334 ms disappeared.
+The [separate control receipt](performance-results/editor-effects-snapshot-control-2026-10-19.json)
+preserves paths/hashes, verified settings and pooled warm metrics. This strongly
+implicates the snapshot path for that workload; one sequential on/off pair does
+not isolate its individual capture/mirror operations or establish a portable
+speedup. Copy leaves source unchanged but uses 12 particles versus Typing's 24.
+
+The final optimized snapshots-on run passed all 28 clock/action checks. Compared
+with the intermediate snapshots-on build using the same clock semantics, warm
+Typst typing early p95/max was **22.35/49.67 → 20.14/22.82 ms** and late p95/max
+**38.92/48.48 → 18.17/19.92 ms**. The recurring six late gaps above 33.334 ms
+were absent; no warmed Typst typing interval exceeded 25 ms in this run. Median
+cadence remained about 16.65 ms. The
+[final receipt](performance-results/editor-effects-final-2026-10-19.json) preserves
+each stage, all final burst summaries, settings and actual optimized build
+provenance. These callback observations establish neither presentation FPS nor a
+cross-platform smoothness guarantee.
+
+Priming also moved the driver's first-draw work before measured input. Maximum
+submission in the first plain-text Typing burst fell from **32.805 to 0.0159 ms**;
+startup/prewarm latency and total process-global cold work were not measured.
+The separate [row-index component receipt](performance-results/editor-row-index-2026-10-19.json)
+records three alternating path rounds on the same 2005-line/3605-row galley:
+median-of-round p50 **13.633 µs** for rebuilding logical/sticky indexes versus
+**0.013 µs** for a cache hit. This removes microseconds of repeated preparation,
+not milliseconds of whole-editor rendering. The tiny cache reading includes
+batch timer/loop/Arc overhead; no empty-loop calibration was subtracted.
+
+Screenshot capture remains asynchronous WebKit work with a main-thread
+callback. Eager BGRA/display-profile preparation now runs on one persistent
+`tiptoptyp-preview-raster` worker with one latest request/result slot and a
+16 MB padded-output cap. Only immutable Core Graphics objects cross threads;
+AppKit lookup and layer installation stay on the UI thread. Optional capture
+warming/admission waits through finite editor feedback, retaining accepted zoom
+pixels; it does not pause the live Tinymist renderer. Changed source still
+invalidates obsolete pixels. The pacing run alone does not establish capture
+readiness: Typing observations still had captures in progress, while subsequent
+Copy observations had a reusable image.
+
+The separate [CPU sample receipt](performance-results/editor-effects-cpu-2026-10-19.json)
+records 12-second diagnostic runs. Earlier, the main-thread Core Animation
+image-preparation branch had 297 samples, including a nested 208-sample color
+conversion branch. Neither branch was observed on main in the final sample;
+the named raster worker had 125 bitmap-draw samples with a nested 92-sample
+color conversion branch. These inclusive counts are not added, normalized,
+interpreted as CPU percentages, or compared as milliseconds. Core Animation can
+still copy/convert on main under other conditions; the required native lookup
+also remains there. The receipt retains the framework diagnostic marker and
+its limitations, without inferring an application buffer error.
+
+These are single sequential native runs with six warmed bursts per case.
+Local raw evidence remains under `.tiptoptyp/editor-effects-pacing-2026-10-19/`
+and the native run directories referenced by the receipts.
+
 ## Headless scaling probes
 
 ```sh

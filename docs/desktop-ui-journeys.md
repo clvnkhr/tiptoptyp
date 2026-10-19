@@ -26,6 +26,7 @@ python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey command_palette --capture-review
 python3 scripts/test-desktop-ui.py --journey preview_jump --capture-review
 python3 scripts/test-desktop-ui.py --journey typing_particles --capture-review
+python3 scripts/test-desktop-ui.py --journey effects_pacing --release
 python3 scripts/test-desktop-ui.py --journey terminal_load
 python3 scripts/test-desktop-ui.py --journey terminal_theme
 python3 scripts/test-desktop-ui.py --journey explorer_toggle --release --capture-review
@@ -112,6 +113,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | Journey | Input and assertions |
 | --- | --- |
 | typing_particles | Requires factory defaults (effects off, Medium density, Explosion per action), enables Editor effects through native Settings, then selects all five particle styles for Typing. Gives the other keyboard actions independent styles and verifies changes preserve every unrelated action preference and emission history. Each enabled action must produce exactly one cause-tagged burst with bounded live counts and actual GPU draw/upload evidence. Covers keyboard comment/uncomment, Copy, Paste, Cut, Undo/Redo, newline/delete/indent, and popup Copy/Toggle Comment; clipboard writes are verified and restored. Selects particle-Off Shake for Typing, Flash for Indent and Glow for Newline and observes their real finite amplitudes with no particle uploads/draws, then verifies every individual effect Off. Checks light/dark appearance, expiry/no idle draws, quiet navigation/menu dismissal, Settings input, empty-history commands and master-disabled typing with all feedback kinds still configured. Restores all per-action preferences and appearance, including on failure. Also runs inside editor_preferences; optional fresh transient framebuffers for each style, both appearances and command effects |
+| effects_pacing | Optimized, observer-free particle callback measurements in saved large plain-text and Typst files with a confirmed live Tinymist preview. Uses native Settings JSON to select Low Explosion effects and snapshots on/off, then measures one first and six warmed Typing/Copy bursts per document. Verifies exact action/source/focus, bounded ledger continuity, finite expiry and shader/callback clock consistency; reports early/late intervals without an FPS threshold |
 | panels | Cmd+5, repeated Terminal/Problems selection and hide/reopen; stable panel height across 30 fresh frames per sample; native terminal typing runs an isolated shell, Off reaps it and remains off across panel transitions, Restart starts a different shell; the header button opens a second shell with its own PID, the numbered switcher moves between shells, a real vim click moves its cursor, exiting one shell leaves the other parked; document stays unchanged |
 | problems_focus | Both effective preview backends hand keyboard ownership to Problems; blank-area/header clicks retain it, typing/paste/undo/comment shortcuts cannot change the source or invert preview pages, Cmd+F opens neither source nor preview Find, and closing/switching panels releases focus so source typing resumes; preview → Terminal shortcut releases native preview ownership, a physical t does not invert pages, and shell typing writes a private receipt without clicking the terminal grid |
 | preview_find | Both effective backends: preview Cmd+F opens and focuses the query without another click, subsequent Cmd+F and typing stay in that field, the source and preview palette stay unchanged; header dragging follows the full pointer displacement and holds a stationary pointer for at least 0.4 seconds and eight fresh frames without drift; a popped-out viewer also opens its hidden controls with Cmd+F |
@@ -328,6 +330,45 @@ Use `--capture-review` to retain fresh
 Help/settings/editor viewport framebuffers.
 The `controls` journey also rejects an oversized short toolbar tooltip and, when
 capturing, focuses that tooltip's native viewport before the screenshot shortcut.
+
+### Observer-free effects pacing
+
+`effects_pacing` is a focused performance lane, separate from `typing_particles`
+interaction coverage and the aggregate `all` run. It uses saved ~250 KB plain text
+and ~240 KB Typst source with 400 definitions, Low Explosion effects, and a small
+live Tinymist preview. Real Settings JSON edits and a restored clipboard receipt
+verify the preference; native `preview_zoom_overlay.enabled` additionally verifies
+its application to the Typst preview. Plain text has no native preview.
+
+For each document it measures one first and six warmed Typing bursts, followed
+by the same Copy sequence on unchanged source. Each native action is followed by
+0.9 seconds with **no snapshots, screenshots or application requests**, then one
+observation. This matters because normal inspection explicitly requests repaints.
+The runner alone enables `TIPTOPTYP_UI_TEST_FX_TIMING=1` for this lane; the
+`desktop-ui-tests` build retains at most 256 in-memory GPU callback samples.
+Sequence continuity rejects lost new samples rather than discarding slow bursts.
+
+`effects-pacing.json` retains the actual build/backend/theme, fixture hashes,
+source sizes, per-burst samples, and callback intervals split at shader age
+320 ms. The animation and callback clocks must retain a constant offset within
+1 ms: both sample the same monotonic instant, with f32 conversion allowed. This
+is a clock-consistency assertion, **not a frame-rate threshold**. Callback cadence
+is not GPU execution time, compositor presentation or input-to-pixel latency.
+Typing emits 24 particles and Copy 12; Copy also avoids source edits.
+
+To diagnose snapshot overhead with the same preserved optimized binary:
+
+```sh
+python3 scripts/test-desktop-ui.py --journey effects_pacing --release --executable /absolute/preserved-app --effects-preview-snapshots on
+python3 scripts/test-desktop-ui.py --journey effects_pacing --release --executable /absolute/preserved-app --effects-preview-snapshots off
+```
+
+The option defaults to `on`; `off` is accepted only for `effects_pacing`. Each run
+has fresh preferences/workspace and separate evidence. Preserve the binary's
+original optimized build receipt; `--executable` cannot establish its provenance.
+Do not run builds, CPU sampling or another GUI workload during a cadence run.
+Use a separate run for CPU-stack attribution. See the
+[recorded pacing and snapshot-control results](performance.md#native-effects-pacing-19-october-2026).
 
 ### Native TeX editing
 

@@ -28,6 +28,7 @@ from desktop_ui_tex_journeys import TEX_JOURNEYS, TEX_SOURCE
 from desktop_ui_image_journeys import IMAGE_JOURNEYS
 from desktop_ui_terminal_theme import terminal_theme
 from desktop_ui_newest_journeys import NEWEST_JOURNEYS
+from desktop_ui_effects_journeys import effects_pacing_fixture
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -39,7 +40,7 @@ JOURNEY_NAMES = (
     "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding",
     "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing",
     "partial_preview", "partial_zoom_stress", "partial_cache_edges", "controls",
-    "settings_search", "editor_preferences", "typing_particles", "background",
+    "settings_search", "editor_preferences", "typing_particles", "effects_pacing", "background",
     "background_fades", "context_menu",
 )
 
@@ -918,11 +919,15 @@ def main():
     parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")
     parser.add_argument("--capture-review", action="store_true", help="capture affected settings/controls framebuffers for separate visual inspection")
     parser.add_argument("--trace-preview", action="store_true", help="retain native preview geometry traces")
+    parser.add_argument("--effects-preview-snapshots", choices=("on", "off"), default="on",
+                        help="effects_pacing only: enable/disable idle Tinymist zoom snapshots (default: on)")
     parser.add_argument("--review-failure", action="store_true", help="retain a failed fixture for up to three minutes of independent inspection")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--observe-only", action="store_true", help="check real-app inspection without input; does not pass the interaction suite")
     modes.add_argument("--prepare-only", action="store_true", help="build runner and editor without launching")
     args = parser.parse_args()
+    if args.journey != "effects_pacing" and args.effects_preview_snapshots != "on":
+        parser.error("--effects-preview-snapshots off requires --journey effects_pacing")
     if sys.platform != "darwin":
         parser.error("requires macOS and a logged-in desktop; this is not a headless test")
     evidence_root = ROOT / ".tiptoptyp/desktop-ui-tests"
@@ -931,6 +936,8 @@ def main():
     driver = evidence_root / "desktop-ui-driver"
     result = {"passed": False, "journeys": [], "platform": platform.platform(),
               "evidence": "native input and read-only state; no visual composition verification"}
+    if args.journey == "effects_pacing":
+        result["effects_preview_snapshots_requested"] = args.effects_preview_snapshots == "on"
     process = None
     journey = None
     try:
@@ -989,6 +996,10 @@ def main():
                 if fixture.suffix == ".typ"
                 else "Desktop journey fixture.\n"
             )
+            if args.journey == "effects_pacing":
+                fixture = directory / "effects-pacing.txt"
+                fixture.write_text(effects_pacing_fixture())
+                (directory / "effects-pacing.typ").write_text(effects_pacing_fixture(typst=True))
             if args.journey == "explorer_toggle":
                 # Large wrapped source, with the same small three-page preview.
                 with fixture.open("a") as stream:
@@ -1013,6 +1024,8 @@ def main():
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)
+            if args.journey == "effects_pacing":
+                environment["TIPTOPTYP_UI_TEST_FX_TIMING"] = "1"
             if args.trace_preview:
                 environment["TIPTOPTYP_UI_TRACE"] = "1"
             # macOS default-shell startup and history belong to this fixture.
@@ -1037,6 +1050,7 @@ def main():
                     journey = Journey(process, driver, directory, evidence)
                     journey.review_preview = args.review_preview
                     journey.capture_review = args.capture_review
+                    journey.effects_preview_snapshots = args.effects_preview_snapshots == "on"
                     journey.explorer_scroll_checks_contents = args.journey == "explorer_scroll"
                     journey.command_palette_check_empty = args.journey == "command_palette"
                     # The socket binds before the native UI is initialized. Initial startup
