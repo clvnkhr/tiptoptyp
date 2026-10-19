@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 #[allow(unsafe_code)]
 mod gpu;
 pub(crate) use gpu::Renderer;
+mod clock;
 mod feedback;
 #[cfg(test)]
 mod gpu_tests;
@@ -240,7 +241,12 @@ pub(super) fn prepare_shake(
             .ctx()
             .data(|data| data.get_temp::<SharedState>(state_id(editor)))
             .and_then(|state| state.lock().unwrap().feedback)
-            .is_some_and(|pulse| pulse.sample(ui.input(|input| input.time)).shake != Vec2::ZERO);
+            .is_some_and(|pulse| {
+                pulse
+                    .sample(clock::Clock::for_context(ui.ctx()).now(ui.ctx()))
+                    .shake
+                    != Vec2::ZERO
+            });
     (configured || live).then(|| shake::begin(ui))
 }
 
@@ -280,6 +286,7 @@ impl Particle {
 
 #[derive(Default)]
 struct State {
+    clock: clock::Clock,
     identity: Option<Identity>,
     style: ParticleStyle,
     action: Action,
@@ -633,7 +640,10 @@ pub(super) fn paint(
         return;
     }
     let state = existing.unwrap_or_else(|| {
-        let state = SharedState::default();
+        let state = Arc::new(Mutex::new(State {
+            clock: clock::Clock::for_context(context),
+            ..Default::default()
+        }));
         context.data_mut(|data| data.insert_temp(id, state.clone()));
         state
     });
@@ -688,7 +698,7 @@ pub(super) fn paint(
                 .and_then(|point| visible_origin(point, viewport, action))
         },
     );
-    let now = context.input(|input| input.time);
+    let now = state.clock.now(context);
     #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
     let bursts_before = state.bursts;
     let effects = *settings.actions.get(action);
@@ -724,7 +734,7 @@ pub(super) fn paint(
         return;
     }
     let instances = (!state.particles.is_empty()).then(|| state.instances());
-    let time = (now - state.base_time) as f32;
+    let time = state.clock.gpu_time(now, state.base_time);
     drop(state);
     let accent = theme::palette(context).accent;
     if let Some(pulse) = pulse {
@@ -827,7 +837,7 @@ pub(super) fn inspected(
                 .filter(|trace| trace.identity.document == identity),
         )
     });
-    let now = context.input(|input| input.time);
+    let now = clock::Clock::for_context(context).now(context);
     let mut live_styles = std::collections::BTreeMap::new();
     let active_count = state.map_or(0, |state| {
         let state = state.lock().unwrap();
@@ -1313,6 +1323,7 @@ pub(super) mod tests {
             .build_ui_state(
                 move |ui, app: &mut EditorApp| {
                     if !ready {
+                        clock::Clock::use_manual(ui.ctx());
                         theme::configure_test_fonts(ui.ctx());
                         ready = true;
                         return;

@@ -71,6 +71,7 @@ fn editor_effect_cpu_cost_probe() {
             Workload::All,
         ] {
             let context = egui::Context::default();
+            clock::Clock::use_manual(&context);
             context.set_theme(egui::Theme::Dark);
             let mut source = SEED.repeat(lines);
             let bytes = source.len();

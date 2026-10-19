@@ -9,7 +9,51 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
+#[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
+mod timing;
+
 pub(super) type Instance = [f32; 8];
+
+/// Runtime animation advances when the graphics owner paints, not at the start
+/// of a potentially expensive editor frame. Fixed times keep offscreen pixels
+/// and GPU component probes deterministic.
+#[derive(Clone, Copy)]
+pub(super) enum FrameTime {
+    #[cfg(test)]
+    Fixed(f32),
+    Live {
+        epoch: std::time::Instant,
+        base_time: f64,
+    },
+}
+
+impl FrameTime {
+    fn is_finite(self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::Fixed(time) => time.is_finite(),
+            Self::Live { base_time, .. } => base_time.is_finite(),
+        }
+    }
+
+    fn sample(self) -> f32 {
+        match self {
+            #[cfg(test)]
+            Self::Fixed(time) => time,
+            live => live.sample_at(std::time::Instant::now()),
+        }
+    }
+
+    fn sample_at(self, now: std::time::Instant) -> f32 {
+        match self {
+            #[cfg(test)]
+            Self::Fixed(time) => time,
+            Self::Live { epoch, base_time } => {
+                (now.saturating_duration_since(epoch).as_secs_f64() - base_time) as f32
+            }
+        }
+    }
+}
 // A strip shares the quad's two middle vertices: analytic motion runs four,
 // rather than six, times per particle without changing either triangle.
 pub(super) const VERTICES_PER_INSTANCE: i32 = 4;
@@ -26,12 +70,30 @@ struct Backend {
     uploaded_bytes_total: u64,
     uploaded_instances: usize,
     last_draw_instances: usize,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    timing: timing::Recorder,
 }
-#[derive(Default)]
 struct Shared {
     // 0 cold, 1 ready, 2 unavailable, 3 destroyed. Idle warm-up checks need no lock.
     status: AtomicU8,
     backend: Mutex<Backend>,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    timing_enabled: bool,
+}
+impl Default for Shared {
+    fn default() -> Self {
+        let backend = Backend {
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            timing: timing::Recorder::from_environment(),
+            ..Default::default()
+        };
+        Self {
+            status: AtomicU8::new(0),
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            timing_enabled: backend.timing.enabled(),
+            backend: Mutex::new(backend),
+        }
+    }
 }
 #[derive(Clone, Default)]
 pub(crate) struct Renderer(Arc<Shared>);
@@ -58,7 +120,8 @@ impl Renderer {
         self.0.status.store(2, Ordering::Release);
     }
 
-    // Compile while the option is being enabled, before the first keystroke.
+    // Compile and exercise the pipeline before the first keystroke. Drivers
+    // may defer their last compilation step until a real draw is submitted.
     // A discarded layout pass may discard its callback too, so only the actual
     // render callback marks initialization complete. No idle repaint is requested.
     pub(super) fn warm(&self, ui: &Ui, clip: Rect) {
@@ -66,12 +129,35 @@ impl Renderer {
             return;
         }
         let renderer = self.clone();
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        let queued = self.queued_timing(ui);
         ui.painter().with_clip_rect(clip).add(egui::PaintCallback {
             rect: clip,
             callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_, painter| {
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let callback = queued.map(|_| std::time::Instant::now());
                 renderer.initialize(painter.gl());
+                renderer.prewarm(painter.gl(), clip);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if let (Some(queued), Some(callback)) = (queued, callback) {
+                    let initialized = std::time::Instant::now();
+                    let mut backend = renderer.0.backend.lock().unwrap();
+                    let draws = backend.draws;
+                    backend
+                        .timing
+                        .record_warm(queued, callback, initialized, draws);
+                }
             })),
         });
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn queued_timing(&self, ui: &Ui) -> Option<timing::Queued> {
+        self.0.timing_enabled.then(|| timing::Queued {
+            at: std::time::Instant::now(),
+            frame: ui.ctx().cumulative_frame_nr(),
+            viewport: ui.ctx().viewport_id().0.value(),
+        })
     }
 
     fn initialize(&self, gl: &glow::Context) {
@@ -95,12 +181,36 @@ impl Renderer {
         }
     }
 
+    fn prewarm(&self, gl: &glow::Context, clip: Rect) {
+        let mut backend = self.0.backend.lock().unwrap();
+        let Some(pipeline) = backend.pipeline.as_mut() else {
+            return;
+        };
+        if pipeline.uploaded.is_some() {
+            return;
+        }
+        // Expired particles collapse outside clip space in the vertex shader.
+        // Exercise both blend variants without touching destination RGB/alpha,
+        // semantic effect counters, framebuffer/scissor, or repaint scheduling.
+        let expired: Arc<[Instance]> = Arc::from([[0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]]);
+        for dark in [false, true] {
+            pipeline.draw(
+                gl,
+                clip,
+                &expired,
+                super::LIFETIME as f32 + 1.0,
+                Color32::WHITE,
+                dark,
+            );
+        }
+    }
+
     pub(super) fn submit(
         &self,
         ui: &Ui,
         clip: Rect,
         instances: Arc<[Instance]>,
-        time: f32,
+        time: FrameTime,
         accent: Color32,
         dark: bool,
     ) {
@@ -114,10 +224,24 @@ impl Renderer {
             return;
         }
         let renderer = self.clone();
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        let queued = self.queued_timing(ui);
         ui.painter().with_clip_rect(clip).add(egui::PaintCallback {
             rect: clip,
             callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_, painter| {
+                // Sample animation and optional evidence at the same callback
+                // boundary, after the UI has finished its expensive edit work.
+                let painted_at = match time {
+                    FrameTime::Live { .. } => Some(std::time::Instant::now()),
+                    #[cfg(test)]
+                    FrameTime::Fixed(_) => None,
+                };
+                let time = painted_at.map_or_else(|| time.sample(), |now| time.sample_at(now));
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let callback = queued.map(|_| painted_at.unwrap_or_else(std::time::Instant::now));
                 renderer.initialize(painter.gl());
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let initialized = callback.map(|_| std::time::Instant::now());
                 if renderer.0.status.load(Ordering::Acquire) != 1 {
                     return;
                 }
@@ -125,13 +249,54 @@ impl Renderer {
                 let Some(pipeline) = backend.pipeline.as_mut() else {
                     return;
                 };
+                if !time.is_finite() {
+                    return;
+                }
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let draw_started = queued.map(|_| std::time::Instant::now());
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let mut submission = timing::DrawSubmission::default();
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let uploaded = if draw_started.is_some() {
+                    pipeline.draw_timed(
+                        painter.gl(),
+                        clip,
+                        &instances,
+                        time,
+                        (accent, dark),
+                        &mut submission,
+                    )
+                } else {
+                    pipeline.draw(painter.gl(), clip, &instances, time, accent, dark)
+                };
+                #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
                 let uploaded = pipeline.draw(painter.gl(), clip, &instances, time, accent, dark);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let draw_submission_ms =
+                    draw_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
                 backend.draws += 1;
                 backend.last_draw_instances = instances.len();
                 if uploaded {
                     backend.uploads += 1;
                     backend.uploaded_instances = instances.len();
                     backend.uploaded_bytes_total += std::mem::size_of_val(&*instances) as u64;
+                }
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if let (Some(queued), Some(callback), Some(initialized), Some(draw_submission_ms)) =
+                    (queued, callback, initialized, draw_submission_ms)
+                {
+                    let draw_counter = backend.draws;
+                    backend.timing.record_draw(timing::Draw {
+                        queued,
+                        callback,
+                        initialized,
+                        draw_counter,
+                        shader_time_s: time,
+                        draw_submission_ms,
+                        upload_submission_ms: submission.upload_ms,
+                        instances: instances.len(),
+                        uploaded,
+                    });
                 }
             })),
         });
@@ -198,7 +363,7 @@ impl Renderer {
     #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
     pub(super) fn inspected(&self) -> serde_json::Value {
         let backend = self.0.backend.lock().unwrap();
-        serde_json::json!({
+        let inspected = serde_json::json!({
             "backend": "instanced-glow",
             "ready": self.0.status.load(Ordering::Acquire) == 1,
             "draws": backend.draws,
@@ -207,7 +372,16 @@ impl Renderer {
             "uploaded_instances": backend.uploaded_instances,
             "last_draw_instances": backend.last_draw_instances,
             "error": backend.error,
-        })
+        });
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        let inspected = {
+            let mut inspected = inspected;
+            if let Some(timing) = backend.timing.inspected() {
+                inspected["timing"] = timing;
+            }
+            inspected
+        };
+        inspected
     }
 }
 
@@ -356,6 +530,42 @@ impl Pipeline {
         accent: Color32,
         dark: bool,
     ) -> bool {
+        self.draw_inner(
+            gl,
+            clip,
+            instances,
+            time,
+            (accent, dark),
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            None,
+        )
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn draw_timed(
+        &mut self,
+        gl: &glow::Context,
+        clip: Rect,
+        instances: &Arc<[Instance]>,
+        time: f32,
+        appearance: (Color32, bool),
+        timing: &mut timing::DrawSubmission,
+    ) -> bool {
+        self.draw_inner(gl, clip, instances, time, appearance, Some(timing))
+    }
+
+    fn draw_inner(
+        &mut self,
+        gl: &glow::Context,
+        clip: Rect,
+        instances: &Arc<[Instance]>,
+        time: f32,
+        appearance: (Color32, bool),
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))] timing: Option<
+            &mut timing::DrawSubmission,
+        >,
+    ) -> bool {
+        let (accent, dark) = appearance;
         let upload = self
             .uploaded
             .as_ref()
@@ -366,6 +576,8 @@ impl Pipeline {
             gl.use_program(Some(self.program));
             gl.bind_vertex_array(Some(self.vao));
             if upload {
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                let upload_started = timing.as_ref().map(|_| std::time::Instant::now());
                 gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.buffer));
                 // Arrays of f32 are contiguous and have no padding; GL copies
                 // these bytes before this immutable snapshot can be released.
@@ -378,6 +590,10 @@ impl Pipeline {
                 // orphan that allocation without synchronizing with the CPU.
                 gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STREAM_DRAW);
                 self.uploaded = Some(instances.clone());
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if let (Some(timing), Some(started)) = (timing, upload_started) {
+                    timing.upload_ms = started.elapsed().as_secs_f64() * 1_000.0;
+                }
             }
             if uniforms.viewport {
                 gl.uniform_4_f32(
@@ -446,6 +662,40 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_frame_time_uses_the_delayed_paint_clock_and_retains_the_state_base() {
+        use std::time::{Duration, Instant};
+        let epoch = Instant::now();
+        let time = FrameTime::Live {
+            epoch,
+            base_time: 0.025,
+        };
+        // An expensive UI frame must not freeze the shader at its queued age.
+        assert!((time.sample_at(epoch + Duration::from_millis(40)) - 0.015).abs() < 1e-6);
+        assert!((time.sample_at(epoch + Duration::from_millis(140)) - 0.115).abs() < 1e-6);
+        assert!(time.is_finite());
+        assert!(
+            !FrameTime::Live {
+                epoch,
+                base_time: f64::NAN
+            }
+            .is_finite()
+        );
+    }
+
+    #[test]
+    fn fixed_frame_time_is_independent_of_the_paint_clock() {
+        use std::time::{Duration, Instant};
+        let epoch = Instant::now();
+        let time = FrameTime::Fixed(0.14);
+        assert_eq!(time.sample(), 0.14);
+        assert_eq!(time.sample_at(epoch), 0.14);
+        assert_eq!(time.sample_at(epoch + Duration::from_secs(30)), 0.14);
+        assert!(time.is_finite());
+        assert!(!FrameTime::Fixed(f32::NAN).is_finite());
+        assert!(!FrameTime::Fixed(f32::INFINITY).is_finite());
+    }
 
     #[test]
     fn particle_quads_share_vertices_within_the_bounded_gpu_budget() {

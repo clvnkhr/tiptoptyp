@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 //! Real renderer coverage, kept separate from the particle simulation tests.
-use super::gpu::Renderer;
+use super::gpu::{FrameTime, Renderer};
 use crate::settings::ParticleStyle;
 use eframe::egui::{self, Color32, Pos2, Rect, Vec2};
 use std::sync::Arc;
@@ -60,24 +60,45 @@ fn empty_or_clipped_gpu_batches_do_not_add_render_callbacks() {
             ..Default::default()
         },
         |ui| {
-            renderer.submit(ui, ui.clip_rect(), Arc::from([]), 0.0, Color32::RED, false);
-            renderer.submit(ui, Rect::NOTHING, instances(), 0.0, Color32::RED, false);
+            renderer.submit(
+                ui,
+                ui.clip_rect(),
+                Arc::from([]),
+                FrameTime::Fixed(0.0),
+                Color32::RED,
+                false,
+            );
+            renderer.submit(
+                ui,
+                Rect::NOTHING,
+                instances(),
+                FrameTime::Fixed(0.0),
+                Color32::RED,
+                false,
+            );
             renderer.submit(
                 ui,
                 ui.clip_rect(),
                 vec![[0.0; 8]; super::LIMIT + 1].into(),
-                0.0,
+                FrameTime::Fixed(0.0),
                 Color32::RED,
                 false,
             );
             for time in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-                renderer.submit(ui, ui.clip_rect(), instances(), time, Color32::RED, false);
+                renderer.submit(
+                    ui,
+                    ui.clip_rect(),
+                    instances(),
+                    FrameTime::Fixed(time),
+                    Color32::RED,
+                    false,
+                );
             }
             renderer.submit(
                 ui,
                 Rect::from_min_max(Pos2::ZERO, egui::pos2(f32::INFINITY, 100.0)),
                 instances(),
-                0.0,
+                FrameTime::Fixed(0.0),
                 Color32::RED,
                 false,
             );
@@ -166,7 +187,14 @@ fn render_frame(
         if batch.is_empty() {
             renderer.warm(ui, clip);
         }
-        renderer.submit(ui, clip, batch.clone(), time, accent, dark);
+        renderer.submit(
+            ui,
+            clip,
+            batch.clone(),
+            FrameTime::Fixed(time),
+            accent,
+            dark,
+        );
         // Egui geometry after the custom callback must retain its normal
         // texture, blend and clip behavior. It also exposes an altered FBO.
         ui.painter().rect_filled(
@@ -184,6 +212,97 @@ fn counter(renderer: &Renderer, key: &str) -> u64 {
     renderer.inspected()[key]
         .as_u64()
         .unwrap_or_else(|| panic!("missing GPU counter: {key}"))
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "real Glow invisible one-time warm draws and unchanged translucent pixels"]
+fn gpu_prewarm_is_invisible_idempotent_and_keeps_first_effect_upload() {
+    use eframe::glow::{self, HasContext as _};
+    for dark in [false, true] {
+        for opacity in [0, 96, 255] {
+            let context = egui::Context::default();
+            let inert = Renderer::default();
+            inert.simulate_unavailable_for_tests();
+            let renderer = Renderer::default();
+            let mut framebuffer = crate::test_framebuffer::Framebuffer::new([360, 240]);
+            let gl = framebuffer.gl();
+            let baseline = render_frame(
+                &mut framebuffer,
+                &context,
+                &inert,
+                Arc::from([]),
+                (dark, 1.0, opacity),
+                0.0,
+                None,
+            );
+            let warmed = render_frame(
+                &mut framebuffer,
+                &context,
+                &renderer,
+                Arc::from([]),
+                (dark, 1.0, opacity),
+                0.01,
+                None,
+            );
+            assert_eq!(
+                baseline.pixels, warmed.pixels,
+                "warm-up must preserve destination RGB and alpha"
+            );
+            assert_eq!(
+                renderer.uniform_writes(),
+                6,
+                "warm-up must issue both real blend variants"
+            );
+            assert_eq!(counter(&renderer, "draws"), 0);
+            assert_eq!(counter(&renderer, "uploads"), 0);
+            let repeated = render_frame(
+                &mut framebuffer,
+                &context,
+                &renderer,
+                Arc::from([]),
+                (dark, 1.0, opacity),
+                0.02,
+                None,
+            );
+            assert_eq!(baseline.pixels, repeated.pixels);
+            assert_eq!(
+                renderer.uniform_writes(),
+                6,
+                "idle warm-up must be one-shot"
+            );
+            let batch = instances();
+            render_frame(
+                &mut framebuffer,
+                &context,
+                &renderer,
+                batch.clone(),
+                (dark, 1.0, opacity),
+                0.035,
+                None,
+            );
+            render_frame(
+                &mut framebuffer,
+                &context,
+                &renderer,
+                batch.clone(),
+                (dark, 1.0, opacity),
+                0.14,
+                None,
+            );
+            assert_eq!(counter(&renderer, "draws"), 2);
+            assert_eq!(counter(&renderer, "uploads"), 1);
+            assert_eq!(counter(&renderer, "uploaded_instances"), batch.len() as u64);
+            assert_eq!(
+                counter(&renderer, "uploaded_bytes_total"),
+                std::mem::size_of_val(&*batch) as u64
+            );
+            renderer.destroy(&gl);
+            unsafe {
+                assert_eq!(gl.get_error(), glow::NO_ERROR);
+            }
+        }
+    }
 }
 
 #[test]
@@ -709,7 +828,14 @@ fn gpu_uniform_cache_preserves_pixels_and_invalidates_theme_and_clip() {
                     0.0,
                     Color32::from_gray(if dark { 30 } else { 240 }),
                 );
-                renderer.submit(ui, clip, batch.clone(), time, accent, dark);
+                renderer.submit(
+                    ui,
+                    clip,
+                    batch.clone(),
+                    FrameTime::Fixed(time),
+                    accent,
+                    dark,
+                );
             },
         );
         framebuffer.render(context, output, None);
