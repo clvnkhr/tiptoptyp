@@ -2799,5 +2799,33 @@ class NativeImeContract(unittest.TestCase):
         self.assertTrue(callable(runner.Journey.ime))
 
 
+class PreviewDividerInputScopeContract(unittest.TestCase):
+    def test_divider_journey_covers_both_modes_without_reserved_zoom_input(self):
+        from desktop_ui_partial_journeys import PartialPreviewJourneys
+        class Fake(PartialPreviewJourneys):
+            def __init__(self): self.actions=[]
+            def partial_preview_default(self): self.actions.append("default")
+            def choose_backend(self, backend, save_pdf): self.actions.append((backend,save_pdf))
+            def wait(self, *args, **kwargs): pass
+            def cached_divider_resize(self, mode): self.actions.append(mode)
+            def native(self, *args): raise AssertionError("reserved input was not requested")
+        fake=Fake(); fake.partial_dividers()
+        self.assertEqual(fake.actions,["default","partial",("Interactive",False),"full"])
+
+    def test_system_scroll_zoom_is_unavailable_without_posting_input(self):
+        from desktop_ui_partial_journeys import PartialPreviewJourneys
+        class Fake(PartialPreviewJourneys):
+            def __init__(self): self.calls=[]
+            def native(self, command):
+                self.calls.append(command)
+                return {"system_scroll_zoom":True}
+            def record(self, *args, **kwargs): pass
+            def click(self, *args): raise AssertionError("input posted despite system zoom")
+        fake=Fake()
+        with self.assertRaisesRegex(RuntimeError,"unavailable"):
+            fake.cursor_wheel_zoom("full")
+        self.assertEqual(fake.calls,["preflight"])
+
+
 if __name__ == "__main__":
     unittest.main()

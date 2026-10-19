@@ -39,7 +39,7 @@ JOURNEY_NAMES = (
     "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
     "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding",
     "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing",
-    "partial_preview", "partial_zoom_stress", "partial_cache_edges", "controls",
+    "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "controls",
     "settings_search", "editor_preferences", "typing_particles", "effects_pacing", "background",
     "background_fades", "context_menu",
 )
@@ -988,7 +988,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
@@ -1109,7 +1109,7 @@ def main():
                     if state["build"] != result["version"]:
                         raise AssertionError("running build differs from tested binary")
                     result["initial_state"] = state
-                    if args.journey in ("partial_preview", "partial_zoom_stress", "partial_cache_edges") and not args.observe_only:
+                    if args.journey in ("partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers") and not args.observe_only:
                         journey.partial_preview_default()
                     if args.observe_only:
                         # A fresh reply must follow an actual UI pass, and the socket

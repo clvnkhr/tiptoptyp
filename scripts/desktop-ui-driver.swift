@@ -82,7 +82,9 @@ if command == "preflight" {
     let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     let locked = session?["CGSSessionScreenIsLocked"] as? Bool ?? false
     let desktop = NSWorkspace.shared.frontmostApplication != nil && !locked
-    emit(["accessibility": trusted, "input": input, "desktop": desktop, "locked": locked,
+    // Observation only: never modify the user's Accessibility Zoom preference.
+    let scrollZoom = UserDefaults(suiteName: "com.apple.universalaccess")?.object(forKey: "closeViewScrollWheelToggle") ?? NSNull()
+    emit(["accessibility": trusted, "input": input, "desktop": desktop, "locked": locked, "system_scroll_zoom": scrollZoom,
           "screens": NSScreen.screens.map { ["width": $0.frame.width, "height": $0.frame.height, "scale": $0.backingScaleFactor] }])
     exit(trusted && input && desktop ? 0 : 2)
 }

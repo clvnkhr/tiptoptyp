@@ -135,6 +135,15 @@ class PartialPreviewJourneys:
                     raise
                 time.sleep(0.05)
 
+    def partial_dividers(self):
+        """Independent divider coverage; never sends the system's Ctrl-wheel gesture."""
+        self.partial_preview_default()
+        for mode in ["partial", "full"]:
+            if mode == "full":
+                self.choose_backend("Interactive", save_pdf=False)
+                self.wait("full preview ready", lambda d: d["preview_backend"] == "Tinymist" and d["preview_native_ready"], timeout=30)
+            self.cached_divider_resize(mode)
+
     def partial_cache_edges(self):
         self.partial_preview_default()
         for mode in ["partial","full"]:
@@ -272,6 +281,11 @@ class PartialPreviewJourneys:
         self.record("partial.cached-edge-wheel",mode=mode,before=native,after=current)
 
     def cursor_wheel_zoom(self, mode):
+        environment = self.native("preflight")
+        if environment.get("system_scroll_zoom") is True:
+            reason = "macOS scroll-to-zoom is enabled; global Ctrl-wheel cannot establish app-only input delivery"
+            self.record("partial.cursor-wheel.unavailable", mode=mode, reason=reason)
+            raise RuntimeError("Native cursor-wheel check unavailable: " + reason + ". No zoom input was posted.")
         self.click("preview.page")
         self.key(115)
         self.wait("cursor zoom starts on page one",lambda d:d["preview_page"]==0)
