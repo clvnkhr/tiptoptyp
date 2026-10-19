@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-19",
+  "baseline_commit": "2582d0bb153118dbb18720ea280e192155643183",
+  "fixture": "scripts/fixtures/tinymist-zoom-serial.typ",
+  "profile": "optimized release; native-ui-tests",
+  "native_probes": {
+    "full": {
+      "passed": true,
+      "expected_injected_errors": 1,
+      "transition_steps": 13,
+      "binary_sha256": "ad2026e852cba4793cf918e9668a49aa9e2a3c64a461d7857f95459ad95a0e29",
+      "fixture_sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb",
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3,
+      "blocked_webcontent_ms": 800,
+      "responsive_during_block": true,
+      "final_vector_requests": 1,
+      "input_response_ms": [
+        0.3030000000000115,
+        0.14175000000000182,
+        0.15254200000001106,
+        0.13229200000000674
+      ]
+    },
+    "partial": {
+      "passed": true,
+      "expected_injected_errors": 1,
+      "transition_steps": 13,
+      "binary_sha256": "ad2026e852cba4793cf918e9668a49aa9e2a3c64a461d7857f95459ad95a0e29",
+      "fixture_sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb",
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3,
+      "blocked_webcontent_ms": 800,
+      "responsive_during_block": true,
+      "final_vector_requests": 1,
+      "input_response_ms": [
+        0.3414590000000004,
+        0.20262500000001182,
+        0.13875000000001592,
+        0.14074999999996862
+      ]
+    }
+  },
+  "real_app_journey": {
+    "run": "run-2edrh6mp",
+    "journey": "partial_dividers",
+    "passed": true,
+    "backend_modes": [
+      "full",
+      "partial"
+    ],
+    "divider_drags": 12,
+    "retained_bounds_lines": 1046
+  },
+  "checks": {
+    "javascript_passed": 244,
+    "python_contracts_passed": 151,
+    "rust_default_passed": 2336,
+    "rust_profiling_passed": 2344,
+    "xtask_passed": 32,
+    "formatting": "passed",
+    "clippy_default": "passed",
+    "clippy_profiling": "passed",
+    "clippy_desktop_ui": "passed"
+  },
+  "inspected_images": [
+    "native-full-checked-serial.png",
+    "native-partial-checked-serial.png"
+  ],
+  "limitations": [
+    "Native pinch phases were injected into the production handler; physical trackpad input was not automated.",
+    "Global Control-wheel was unavailable with macOS Accessibility scroll-to-zoom enabled; OS settings were unchanged.",
+    "Images are isolated native-layer captures, not composed desktop evidence.",
+    "Four callback latency samples are not presentation FPS or a broad performance guarantee.",
+    "Real-app divider checks establish functional behavior, not a latency benchmark.",
+    "The installed app was not replaced by this patch."
+  ]
+}

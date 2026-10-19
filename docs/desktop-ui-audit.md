@@ -2594,3 +2594,76 @@ The identical build passed that path on the next complete journey. This remains
 an unexplained intermittent click failure, not an excluded permission failure
 or an automatic retry inside the test. Investigate native event/focus ownership
 if it recurs; no speculative popup fix was included in the resize change.
+
+### Preview regression audit — 19 October 2026
+
+Reviewed the recent preview changes, particularly `54a3c8c` (off-thread raster
+preparation and capture deferral) and `2582d0b` (serial resize acknowledgements).
+The bounded worker is retained. Capture deferral also blocked the initial ready
+notification; three failing contracts established this for editor feedback,
+outstanding pixels and reveal beacons. Readiness now belongs to the live renderer
+and remains independent of warming. Four bounded-work contracts also require no
+repeated DOM reads after readiness has been reported while warming is blocked.
+
+The older "Preview render exceptions" follow-up is resolved: queued layout and
+partial-patch failures previously retained the native serial slot. Three failing
+contracts now require the original error to remain observable and the next zoom
+to recover. Failure callbacks carry a WebView owner and revision, so an obsolete
+callback cannot cancel a replacement preview with the same revision. There is no
+automatic retry loop. Native transition coverage injects the same queued failure
+into the pinned frontend and checks subsequent zoom input. Native pinch phase
+coverage includes ending outside the preview; physical trackpad input remains a
+separate manual check.
+
+Evidence for this audit is retained under
+`.tiptoptyp/preview-zoom-regression-2026-10-19/`. A comparison run using the
+preserved pre-worker build failed the divider handoff; the first current-build
+stress attempt instead failed its Home/top-edge step after passing cached zoom
+and a 20-input burst. Neither attempt is counted as a passing journey. Small
+owned-WebView full/partial probes and an isolated session with the 19-page user
+document passed repeated divider drags before the new changes. These observations
+separate cold-session success from failure recovery rather than asserting that a
+fresh preview proves an earlier stuck session was healthy.
+
+The open installed process also had a different loaded Mach-O UUID from the
+executable currently on disk. Reading `--version` from the file incorrectly
+identified that live process as current. A normal quit/relaunch restored a normal
+preview. For an existing non-inspection build, verify the loaded image identity
+(e.g. the app entry in a native CPU sample against `dwarfdump --uuid`) or restart
+it; do not substitute an on-disk version check for the running build. Feature
+journeys already report their compiled build identity from the live process.
+
+The first new owned-WebView run recovered from the injected exception but failed
+its overall gate: WebKit concealed the deliberate exception's Error object, and
+a page-18-specific observer extrapolated a negative page fraction when extra
+recovery transitions moved the viewport into page 17. The observer now follows
+the actual page or fixed gap under the viewport. Recomputing the retained failed
+receipt independently gave partial-mode source errors of 0.25 and 0.29 CSS pixels;
+its alleged 1.72-pixel error was not a renderer defect. The unnecessary production
+rounding adjustment was removed. Strict geometry tolerances remain unchanged.
+The test scopes its expected exception to the synchronously armed injection,
+requires exactly one observable intended error, and still rejects unexpected
+errors. Original failed receipts remain under `verified-serial/` and
+`handoff-serial/` rather than being overwritten.
+
+Final checks passed: 244 JavaScript contracts, 151 Python contracts, 2,336 default
+Rust tests, 2,344 profiling Rust tests and 32 packaging-task tests, plus formatting
+and strict default/profiling/desktop-UI lint checks. Both pinned frontend probes
+passed all 13 transitions, including exactly one deliberately injected renderer
+error per mode and recovery afterward. Fresh isolated native-layer PNGs were
+inspected; they are not composed desktop evidence.
+
+The real-app `partial_dividers` journey (`run-2edrh6mp`) passed twelve native
+divider drags across both modes, preserving source position and releasing the
+cached overlay. Its 1,046 preview-bounds trace lines are retained. The earlier
+`partial_cache_edges` attempt (`run-vp_y855n`) passed its divider steps but failed
+full-mode Control-wheel input; it is not counted as a passing journey. Read-only
+preflight subsequently found macOS Accessibility scroll-to-zoom enabled. The
+harness now marks global Control-wheel unavailable before posting input under
+that setting, and divider coverage has its own independent journey. No OS
+preferences were changed. Physical trackpad input remains a manual check.
+
+The checked-in performance receipt records the optimized native probe metadata
+and scope. These are functional recovery checks and four callback-latency
+samples, not a dense-document presentation benchmark. The installed app has not
+been replaced by this patch.
