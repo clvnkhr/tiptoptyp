@@ -907,6 +907,42 @@ impl Native {
         true
     }
 
+    fn reconcile_image(&mut self, position: &serde_json::Value, size: NSSize) {
+        let Some(geometry) = self
+            .geometry
+            .as_ref()
+            .filter(|g| self.token.is_some() && !g.pages.is_empty() && g.source_scale > 0.0)
+        else {
+            return;
+        };
+        let Some((x, y, scale, width, height)) = position["x"]
+            .as_f64()
+            .zip(position["y"].as_f64())
+            .zip(position["scale"].as_f64())
+            .zip(position["width"].as_f64())
+            .zip(position["height"].as_f64())
+            .map(|((((x, y), scale), width), height)| (x, y, scale, width, height))
+        else {
+            return;
+        };
+        if ![x, y, scale, width, height].iter().all(|v| v.is_finite())
+            || scale <= 0.0
+            || (width - size.width).abs() > 0.5
+            || (height - size.height).abs() > 0.5
+        {
+            return;
+        }
+        // Browser scroll is rounded independently from our compositor's
+        // prediction. Rebase retained pixels once at handoff, without a new
+        // screenshot or browser query on the next input.
+        let ratio = scale / geometry.source_scale;
+        let dx = x - geometry.paper[0] * ratio;
+        let dy = y - geometry.paper[1] * ratio;
+        if [ratio, dx, dy].iter().all(|v| v.is_finite()) {
+            self.transform = Transform { ratio, dx, dy };
+        }
+    }
+
     fn observe_frame(&mut self, scale: f64, size: NSSize) {
         self.initialized = true;
         if self.pipeline.flight.is_none() && self.pipeline.latest.is_none() {
@@ -1173,7 +1209,9 @@ impl Native {
             self.gate.input(Instant::now());
             self.arm_timer();
         } else {
-            self.gate.clear();
+            // No covered image means render immediately, but the gesture still
+            // owns its end event, including a release outside the viewport.
+            self.gate.due = None;
             self.stop_timer();
             if let Some(request) = next.or_else(|| self.pipeline.dispatch()) {
                 self.send(request);
@@ -1837,6 +1875,7 @@ impl CaptureState {
                     native.flush(false);
                 } else {
                     native.handoffs += 1;
+                    native.reconcile_image(&value["position"], web.bounds().size);
                     native.finish_handoff();
                 }
             }
@@ -2379,6 +2418,39 @@ impl CaptureState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_image_uses_completed_svg_position_and_rejects_stale_viewport() {
+        let mut native = Native::default();
+        native.token = Some("retained".into());
+        native.geometry = Some(Geometry {
+            paper: [0.0, -1000.0, 600.0, 4000.0],
+            viewport: [0.0, 0.0, 640.0, 420.0],
+            view: [640.0, 420.0],
+            scroll: [0.0, 1000.0],
+            source_scale: 1.0,
+            content_size: [600.0, 4000.0],
+            pixel_rounded: false,
+            pages: vec![[0.0, 4000.0]],
+        });
+        let size = NSSize::new(640.0, 420.0);
+        let position =
+            serde_json::json!({"x":-40.0,"y":-1300.0,"scale":1.25,"width":640.0,"height":420.0});
+        native.reconcile_image(&position, size);
+        assert_eq!(native.transform.ratio, 1.25);
+        assert_eq!(native.transform.dx, -40.0);
+        assert_eq!(native.transform.dy, -50.0);
+        let mut stale = position.clone();
+        stale["width"] = serde_json::json!(600);
+        stale["y"] = serde_json::json!(-2000);
+        native.reconcile_image(&stale, size);
+        assert_eq!(native.transform.dy, -50.0);
+        native.reconcile_image(&serde_json::Value::Null, size);
+        assert_eq!(native.transform.dy, -50.0);
+        native.token = None;
+        native.reconcile_image(&stale, NSSize::new(600.0, 420.0));
+        assert_eq!(native.transform.dy, -50.0);
+    }
+
     #[test]
     fn failed_renderer_releases_only_its_flight_and_accepts_future_zoom() {
         let mut native = Native::default();

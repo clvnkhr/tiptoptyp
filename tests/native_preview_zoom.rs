@@ -1438,8 +1438,13 @@ fn live_transition_regression(
         // Opposite off-center positions prove both proxy and sharp SVG preserve
         // the source point under the pointer. Divider input later discards this
         // pinch anchor and preserves the viewport's top instead.
-        for (point, factor) in [([56.0, 330.0], 1.04), ([590.0, 80.0], 1.0 / 1.04)] {
-            probe.idle_image("before-off-center-zoom", false)?;
+        state.set_capture_deferred(true);
+        for (point, factor) in [([525.0, 310.0], 1.35), ([110.0, 110.0], 1.0 / 1.35)]
+            .into_iter()
+            .cycle()
+            .take(24)
+        {
+            let original = probe.idle_image("before-off-center-zoom", false)?;
             let before = state.inspect();
             use objc2_app_kit::NSEventPhase;
             let cursor = Some((point[0], point[1]));
@@ -1463,6 +1468,37 @@ fn live_transition_regression(
                 failures.push(format!("off-center zoom used a different anchor: {source}"));
             }
             let shifted = probe.sharp(before["handoffs"].as_u64().unwrap(), "off-center-zoom")?;
+            // Independent source under the cursor BEFORE input. Agreement
+            // between proxy metadata and SVG alone can hide a shared bad anchor.
+            let geometry = &original["geometry"];
+            let scale = geometry["source_scale"].as_f64().unwrap();
+            let paper = &geometry["paper"];
+            let source_y = (point[1] - paper[1].as_f64().unwrap()) / scale;
+            let pages = geometry["pages"].as_array().unwrap();
+            let page = pages
+                .iter()
+                .rposition(|page| page[0].as_f64().unwrap() <= source_y)
+                .unwrap_or(0);
+            let end = pages[page][0].as_f64().unwrap() + pages[page][1].as_f64().unwrap();
+            let source = if page + 1 < pages.len() && source_y > end {
+                json!({"before":page,"after":page+1,
+                    "fraction":(source_y-end)/(pages[page+1][0].as_f64().unwrap()-end)})
+            } else {
+                json!({"page":page,"local":source_y-pages[page][0].as_f64().unwrap()})
+            };
+            let expected = json!({"source_anchor":{
+                "x":(point[0] - paper[0].as_f64().unwrap()) / scale,
+                "y":source,"clientX":point[0],"clientY":point[1]
+            }});
+            let original_error =
+                anchor_error(&expected, &shifted).ok_or("missing original cursor source")?;
+            // Zooming back to fit legitimately clamps horizontal scroll. The
+            // vertical point is mid-document and has room in both directions.
+            if original_error[1].abs() > 1.1 || (factor > 1.0 && original_error[0].abs() > 1.1) {
+                failures.push(format!(
+                    "original content moved under cursor {point:?}: {original_error:?}"
+                ));
+            }
             let error =
                 anchor_error(&image, &shifted).ok_or("missing off-center anchor geometry")?;
             if error.iter().any(|value| value.abs() > 1.1) {
@@ -1470,13 +1506,17 @@ fn live_transition_regression(
                     "off-center zoom jumped under pointer {point:?}: {error:?}"
                 ));
             }
-            if image["active"] != true {
-                failures.push("off-center zoom missed the idle raster".into());
+            if image["active"] != true && image["hits"] == before["hits"] && image["cached"] != true
+            {
+                failures.push("off-center zoom discarded the retained raster".into());
             }
-            steps.push(json!({"kind":"off-center-zoom","point":point,"image":image,"frame":shifted,"anchor_error_css_pixels":error,"native":state.inspect()}));
+            steps.push(json!({"kind":"off-center-zoom","point":point,"original":original,"original_source_error_css_pixels":original_error,"image":image,"frame":shifted,"anchor_error_css_pixels":error,"native":state.inspect()}));
             save(&steps, &failures, receipt, probe.capture_timings);
         }
-        probe.idle_image("before-real-divider", false)?;
+        state.set_capture_deferred(false);
+        // The long cursor sequence can leave the retained buffer. Subsequent
+        // divider coverage starts only once resumed idle warming has caught up.
+        probe.idle_image("before-real-divider", true)?;
 
         // Deterministically deliver the duplicate DOM notification between the
         // sharp DOM mutation and its next paint/ready callback. AppKit already

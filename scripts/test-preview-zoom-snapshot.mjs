@@ -577,3 +577,17 @@ for (const blocked of ['feedback','capture','admission','timer']) test(`reported
   assert.equal(f.reads,before);
   assert.equal(f.messages.filter(m=>m.op==='frame').length,1);
 });
+
+// Handoff geometry is live SVG geometry; the old bitmap stays retained.
+test('sharp handoff reports its actual position for the next retained-image gesture', () => {
+  const f = fixture(); f.tick(); f.admit();
+  const token = f.captures()[0].token;
+  f.cache.native({token, revision: 1, scale: 1.35});
+  f.current.scale = 1.35;
+  f.current.geometry = {paper: [-185.25, -13810.5, 1200, 45000], source_scale: 1.123};
+  f.cache.rendered(); f.paint();
+  const ready = f.messages.find(m => m.op === 'ready');
+  assert.deepEqual(JSON.parse(JSON.stringify(ready.position)),
+    {x: -185.25, y: -13810.5, scale: 1.123, width: 900, height: 700});
+  assert.equal(f.cache.inspect().cached, true);
+});

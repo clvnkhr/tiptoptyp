@@ -115,7 +115,12 @@
         expectedScroll = { doc: settled.doc, svg: settled.svg, left: settled.left, top: settled.top };
         active = false; nativeRequest = null; nativeOwner = null;
         if (cache?.token === request.token) cache = { ...cache, frame: settled, refresh: true };
-        post({ op: 'ready', token: request.token, revision: request.revision, scale: request.scale });
+        // Retained pixels start the next gesture from the actual rounded SVG
+        // position, not the previous gesture's predicted scroll position.
+        const geometry = settled.geometry;
+        post({ op: 'ready', token: request.token, revision: request.revision, scale: request.scale,
+          position: geometry && { x: geometry.paper?.[0], y: geometry.paper?.[1],
+            scale: geometry.source_scale, width: settled.width, height: settled.height } });
         counters.handoffs++; settle();
       });
     });

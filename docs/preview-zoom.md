@@ -703,3 +703,23 @@ probe injects a queued rescale exception into the actual pinned frontend and
 checks the next zoom, plus native Begin/Changed/End phases at opposite cursor
 positions (including an end outside the view). These injected phases exercise the
 production native gesture handler; they are not physical trackpad input.
+
+## Retained-image cursor anchoring
+
+A completed vector render reports its actual paper origin and ink scale with the
+existing ready acknowledgement. Native code reconciles the retained image's
+transform to that position before the next gesture. Browser scroll rounding can
+otherwise leave a fraction of a pixel between the predicted image and SVG, then
+amplify that difference through successive gestures using the same pixels. The
+acknowledgement adds five numbers; reconciliation uses constant work and performs
+no additional screenshot, browser evaluation, or input-time layout query.
+
+Pinch ownership also survives a zoom which leaves the buffered raster's coverage.
+That input renders immediately, and its eventual end or cancellation still belongs
+to the gesture even when released outside the preview.
+
+The native transition probe retains one raster through 24 alternating off-centre
+zoom gestures with new captures deferred. It checks the original live source
+point under the cursor independently of the proxy's reported anchor. Horizontal
+return-to-fit clamping is allowed; mid-document vertical anchors remain within
+the existing 1.1 CSS-pixel tolerance.
