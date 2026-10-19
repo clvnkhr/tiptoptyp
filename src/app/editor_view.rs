@@ -465,6 +465,7 @@ impl EditorApp {
         let indentation_guides = self.settings.indentation_guides;
         let indentation_guide_character = &self.settings.indentation_guide_character;
         let highlighter = &mut self.highlighter;
+        let source_rows = &mut self.source_rows;
         let active_tab = self
             .tabs
             .active_id()
@@ -682,7 +683,8 @@ impl EditorApp {
                 .cursor
                 .char_range()
                 .map(|range| range.primary.index.0);
-            let line_rows = logical_line_row_ranges(&output.galley.rows);
+            let row_index = source_rows.rows(&output.galley);
+            let line_rows = row_index.logical;
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             for (line, rows) in line_rows.iter().take(4).enumerate() {
                 if let Some(row) = output.galley.rows.get(rows.start) {
@@ -1097,38 +1099,11 @@ impl EditorApp {
                 output.response.has_focus(),
             )
             .unwrap_or(visuals.bg_stroke);
-            let sticky_context = sticky_context_enabled.then(|| {
-                let scroll_lines = sticky_context_scroll_lines(
-                    &line_rows,
-                    |index| {
-                        output
-                            .galley
-                            .rows
-                            .get(index)
-                            .map(|row| row.rect().top() + output.galley_pos.y)
-                    },
-                    |index| {
-                        output
-                            .galley
-                            .rows
-                            .get(index)
-                            .map(|row| row.char_count_including_newline().0)
-                    },
-                    |index| {
-                        output
-                            .galley
-                            .rows
-                            .get(index)
-                            .map(|row| row.ends_with_newline)
-                    },
-                )
-                .unwrap_or_default();
-                StickyContextEditorSnapshot {
-                    galley: Arc::clone(&output.galley),
-                    galley_pos: output.galley_pos,
-                    line_rows,
-                    scroll_lines,
-                }
+            let sticky_context = sticky_context_enabled.then(|| StickyContextEditorSnapshot {
+                galley: Arc::clone(&output.galley),
+                galley_pos: output.galley_pos,
+                line_rows,
+                scroll_lines: row_index.sticky,
             });
             let viewport_snapshot = editor_scroll::Snapshot {
                 document: document.key(),

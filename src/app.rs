@@ -52,6 +52,9 @@ use package_browser::{PackageBrowserAction, PackageFilter, show_package_browser_
 #[cfg(test)]
 mod editor_effect_tests;
 #[cfg(test)]
+mod editor_frame_tests;
+mod editor_layout;
+#[cfg(test)]
 mod editor_particle_action_tests;
 mod editor_particles;
 pub(crate) use editor_particles::Renderer as ParticleRenderer;
@@ -1391,6 +1394,7 @@ pub struct EditorApp {
     lifecycle: DocumentLifecycle,
     process_close_pending: bool,
     highlighter: SyntaxHighlighter,
+    source_rows: editor_layout::RowIndex,
     auto_pair_syntax: crate::auto_pairs::PairSyntax,
     guide_levels: crate::editor_decoration::GuideLevels,
     generic_highlighter: GenericSyntaxHighlighter,
@@ -1720,6 +1724,7 @@ impl EditorApp {
             lifecycle,
             process_close_pending: false,
             highlighter,
+            source_rows: Default::default(),
             auto_pair_syntax: crate::auto_pairs::PairSyntax::default(),
             guide_levels: crate::editor_decoration::GuideLevels::default(),
             generic_highlighter,
@@ -10103,8 +10108,8 @@ fn editor_surface_rect(editor_rect: Rect, viewport_rect: Rect) -> Rect {
 struct StickyContextEditorSnapshot {
     galley: Arc<egui::Galley>,
     galley_pos: Pos2,
-    line_rows: Vec<Range<usize>>,
-    scroll_lines: Vec<StickyContextScrollLine>,
+    line_rows: Arc<[Range<usize>]>,
+    scroll_lines: Arc<[StickyContextScrollLine]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -10336,7 +10341,9 @@ fn sticky_context_rows_for_snapshot(
     let anchor = sticky_context_stacked_scroll_anchor(
         viewport_top,
         max_height,
-        |boundary| sticky_context_scroll_anchor(&snapshot.scroll_lines, boundary),
+        |boundary| {
+            sticky_context_scroll_anchor(&snapshot.scroll_lines, boundary - snapshot.galley_pos.y)
+        },
         |anchor| {
             let rows = rows_by_anchor
                 .entry(anchor)

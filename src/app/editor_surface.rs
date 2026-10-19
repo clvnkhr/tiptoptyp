@@ -134,10 +134,10 @@ mod tests {
                     .frame(egui::Frame::new())
                     .show(ui);
                 let snapshot = StickyContextEditorSnapshot {
-                    line_rows: logical_line_row_ranges(&output.galley.rows),
+                    line_rows: logical_line_row_ranges(&output.galley.rows).into(),
                     galley: Arc::clone(&output.galley),
                     galley_pos: Pos2::new(viewport.left() + 40.0, viewport.top() - 40.0),
-                    scroll_lines: Vec::new(),
+                    scroll_lines: Arc::from([]),
                 };
                 let rows = vec![StickyContextRow {
                     kind: crate::editor_features::StickyContextKind::Heading { level: 1 },
