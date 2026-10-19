@@ -12,6 +12,7 @@ use std::{
     cell::RefCell,
     ptr::NonNull,
     rc::{Rc, Weak},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -40,6 +41,7 @@ unsafe extern "C" {}
 unsafe extern "C" {}
 
 const MAX_PIXELS: f64 = 4_000_000.0;
+static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 const ZOOM_QUIET: Duration = Duration::from_millis(120);
 const LOST_PINCH_END: Duration = Duration::from_secs(1);
 
@@ -776,8 +778,20 @@ impl Drop for Mirror {
     }
 }
 
+#[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+#[derive(Clone, Copy, Default)]
+struct InputObservation {
+    count: u64,
+    window: isize,
+    point: Option<(f64, f64)>,
+    stage: &'static str,
+}
+
 #[derive(Default)]
 struct Native {
+    #[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+    input_observation: std::cell::Cell<InputObservation>,
+    owner_id: u64,
     owner: Weak<RefCell<Native>>,
     timer: Option<Retained<NSTimer>>,
     gate: RenderGate,
@@ -817,6 +831,7 @@ struct Native {
     transform: Transform,
     pipeline: Pipeline,
     inputs: u64,
+    render_failures: u64,
     hits: u64,
     handoffs: u64,
 }
@@ -971,6 +986,27 @@ impl Native {
         true
     }
 
+    fn fail_render(&mut self, revision: u64, owner: u64, scale: f64) -> bool {
+        if owner != self.owner_id
+            || !scale.is_finite()
+            || !(0.1..=10.0).contains(&scale)
+            || !self
+                .pipeline
+                .flight
+                .is_some_and(|request| request.revision == revision)
+        {
+            return false;
+        }
+        self.clear();
+        self.stop_capture();
+        // The same renderer still exists. Keep accepting gestures so a new
+        // input can recover a failed patch without requiring scroll or reload.
+        self.pipeline.scale = scale;
+        self.initialized = true;
+        self.render_failures += 1;
+        true
+    }
+
     fn stop_capture(&mut self) {
         self.deferred_raster = None;
         self.preparing_raster = false;
@@ -1042,7 +1078,7 @@ impl Native {
         let script = format!(
             "window.tiptoptypNativeZoom?.({});",
             serde_json::json!({
-                "revision":request.revision,"scale":request.scale,"x":request.x,"y":request.y,"panX":request.pan_x,"panY":request.pan_y,"token":self.token,"resize":request.resize,
+                "owner":self.owner_id,"revision":request.revision,"scale":request.scale,"x":request.x,"y":request.y,"panX":request.pan_x,"panY":request.pan_y,"token":self.token,"resize":request.resize,
                 "scroll":self.geometry.as_ref().filter(|g| self.token.is_some() && g.pages.is_empty()).map(|g| g.target(self.transform, web.bounds().size)),
                 "source":self.geometry.as_ref().filter(|_| self.token.is_some()).and_then(|g| g.point(self.transform,self.anchor))
             })
@@ -1082,6 +1118,24 @@ impl Native {
                 Some(&completion),
             );
         }
+    }
+
+    fn magnify(&mut self, delta: f64, phase: NSEventPhase, point: Option<(f64, f64)>) -> bool {
+        let owned = self.gate.pinch;
+        let ending = phase.intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
+        if point.is_some() && phase.intersects(NSEventPhase::Began | NSEventPhase::Changed) {
+            self.gate.pinch = true;
+        }
+        let accepted = point.is_some() && self.zoom(1.0 + delta, false, point);
+        if ending && (accepted || owned) {
+            // A gesture belongs to its starting view even when the pointer has
+            // left it by the final zero-delta event. Release its serial slot now.
+            self.gate.pinch = false;
+            self.flush(true);
+        } else if !accepted && !owned {
+            self.gate.pinch = false;
+        }
+        accepted || (ending && owned)
     }
 
     fn zoom(&mut self, factor: f64, reset: bool, point: Option<(f64, f64)>) -> bool {
@@ -1357,16 +1411,38 @@ impl CaptureState {
                 return event.as_ptr();
             };
             let mut native = state.borrow_mut();
-            if !native.enabled || !native.allowed || !native.initialized {
-                return event.as_ptr();
-            }
             let event = unsafe { event.as_ref() };
+            #[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+            let observed = event.r#type() == NSEventType::Magnify
+                || (event.r#type() == NSEventType::ScrollWheel
+                    && event
+                        .modifierFlags()
+                        .contains(NSEventModifierFlags::Control));
+            #[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+            if observed {
+                native.input_observation.set(InputObservation {
+                    count: native.input_observation.get().count + 1,
+                    window: event.windowNumber(),
+                    point: None,
+                    stage: "received",
+                });
+            }
+            if !native.enabled || !native.allowed || !native.initialized {
+                return event as *const NSEvent as *mut NSEvent;
+            }
             let Some(web) = &native.web else {
                 return event as *const NSEvent as *mut NSEvent;
             };
             let Some(window) = web.window() else {
                 return event as *const NSEvent as *mut NSEvent;
             };
+            #[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+            if observed {
+                native.input_observation.set(InputObservation {
+                    stage: "window-check",
+                    ..native.input_observation.get()
+                });
+            }
             if web.isHiddenOrHasHiddenAncestor()
                 || event
                     .window(
@@ -1395,19 +1471,22 @@ impl CaptureState {
                 web.convertPoint_fromView(input_position(kind, event_position, cursor), None);
             let point = viewport_point(pointer, web.bounds(), web.isFlipped());
             let inside = point.is_some();
-            let pinch_end = kind == NSEventType::Magnify
-                && inside
-                && event
-                    .phase()
-                    .intersects(NSEventPhase::Ended | NSEventPhase::Cancelled);
-            let pinch_start = kind == NSEventType::Magnify
-                && inside
-                && event
-                    .phase()
-                    .intersects(NSEventPhase::Began | NSEventPhase::Changed);
-            let factor = if kind == NSEventType::Magnify && inside {
-                Some((1.0 + event.magnification(), false, point))
-            } else if kind == NSEventType::ScrollWheel
+            #[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+            if observed {
+                native.input_observation.set(InputObservation {
+                    stage: "hit-test",
+                    point,
+                    ..native.input_observation.get()
+                });
+            }
+            if kind == NSEventType::Magnify {
+                return if native.magnify(event.magnification(), event.phase(), point) {
+                    std::ptr::null_mut()
+                } else {
+                    event as *const NSEvent as *mut NSEvent
+                };
+            }
+            let factor = if kind == NSEventType::ScrollWheel
                 && inside
                 && modifiers.contains(NSEventModifierFlags::Control)
             {
@@ -1459,16 +1538,9 @@ impl CaptureState {
                 }
                 None
             };
-            if pinch_start {
-                native.gate.pinch = true;
-            }
             if let Some((factor, reset, point)) = factor
                 && native.zoom(factor, reset, point)
             {
-                if pinch_end {
-                    native.gate.pinch = false;
-                    native.flush(true);
-                }
                 return std::ptr::null_mut();
             }
             event as *const NSEvent as *mut NSEvent
@@ -1484,6 +1556,7 @@ impl CaptureState {
         };
         let mut native = self.0.borrow_mut();
         native.owner = Rc::downgrade(&self.0);
+        native.owner_id = NEXT_OWNER.fetch_add(1, Ordering::Relaxed);
         native.web = Some(web);
         native.monitor = monitor;
         native.pipeline.scale = 1.0;
@@ -1613,6 +1686,17 @@ impl CaptureState {
         native.flush(true);
     }
 
+    #[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+    #[allow(dead_code)]
+    pub(crate) fn magnify_for_test(
+        &self,
+        delta: f64,
+        phase: NSEventPhase,
+        point: Option<(f64, f64)>,
+    ) -> bool {
+        self.0.borrow_mut().magnify(delta, phase, point)
+    }
+
     pub(crate) fn action(&self, action: &serde_json::Value) -> bool {
         let mut native = self.0.borrow_mut();
         match action["action"].as_str() {
@@ -1648,6 +1732,12 @@ impl CaptureState {
         match value["op"].as_str() {
             Some("configure") => {
                 let next = value["enabled"] == true;
+                // One zoom system owns the view. Letting a cold gesture fall
+                // through to WebKit magnification changes its CSS viewport and
+                // breaks the cached SVG geometry used by later native inputs.
+                unsafe {
+                    web.setAllowsMagnification(!next);
+                }
                 if next && !native.enabled {
                     unsafe {
                         web.setMagnification(1.0);
@@ -1694,6 +1784,15 @@ impl CaptureState {
                 } else {
                     native.retire_image();
                     native.flush(true);
+                }
+            }
+            Some("render-failed") => {
+                if let (Some(revision), Some(owner), Some(scale)) = (
+                    value["revision"].as_u64(),
+                    value["owner"].as_u64(),
+                    value["scale"].as_f64(),
+                ) {
+                    native.fail_render(revision, owner, scale);
                 }
             }
             Some("abandon") => {
@@ -2259,10 +2358,16 @@ impl CaptureState {
             .web
             .as_ref()
             .map(|web| [web.bounds().size.width, web.bounds().size.height]);
-        serde_json::json!({"mask_bounds":mask,"view_size":view_size,"enabled":native.enabled,"cached":native.token.is_some(),"active":native.overlay_visible,
+        let input = native.input_observation.get();
+        let window = native.web.as_ref().and_then(|web| web.window());
+        serde_json::json!({"initialized":native.initialized,"allowed":native.allowed,
+            "monitor":native.monitor.is_some(),"native_window":window.as_ref().map(|window|window.windowNumber()),
+            "native_key_window":window.as_ref().is_some_and(|window|window.isKeyWindow()),
+            "last_input":{"count":input.count,"window":input.window,"point":input.point,"stage":input.stage},
+            "mask_bounds":mask,"view_size":view_size,"enabled":native.enabled,"cached":native.token.is_some(),"active":native.overlay_visible,
             "token":native.token.as_deref(),"source_pages":native.geometry.as_ref().map(|g|&g.pages),
             "source_scale":native.geometry.as_ref().map(|g|g.source_scale),
-            "inputs":native.inputs,"hits":native.hits,"handoffs":native.handoffs,"scale":native.pipeline.scale,
+            "inputs":native.inputs,"render_failures":native.render_failures,"hits":native.hits,"handoffs":native.handoffs,"scale":native.pipeline.scale,
             "revision":native.pipeline.revision,"in_flight":native.pipeline.flight.map(|request|request.revision),
             "pending":native.pipeline.latest.map(|request|request.revision),"deferred":native.gate.due.is_some(),"pinch":native.gate.pinch,"pixels":[native.pixels.0,native.pixels.1],"base_scale":native.base_scale,"source_paper":native.geometry.as_ref().map(|g|g.paper),
             "transform":[native.transform.ratio,native.transform.dx,native.transform.dy],
@@ -2274,6 +2379,59 @@ impl CaptureState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_renderer_releases_only_its_flight_and_accepts_future_zoom() {
+        let mut native = Native::default();
+        native.initialized = true;
+        native.pipeline.scale = 1.0;
+        let failed = native.pipeline.input(1.2, false, 50.0, 70.0).unwrap();
+        native.pipeline.queue(1.1, false, 50.0, 70.0, true);
+        assert!(!native.fail_render(failed.revision + 1, native.owner_id, 1.0));
+        assert!(!native.fail_render(failed.revision, native.owner_id, f64::NAN));
+        assert!(native.pipeline.flight.is_some() && native.pipeline.latest.is_some());
+        assert!(
+            !native.fail_render(failed.revision, native.owner_id + 1, 1.0),
+            "a discarded WebView cannot cancel a replacement's equal revision"
+        );
+        assert!(native.fail_render(failed.revision, native.owner_id, 1.0));
+        assert!(native.initialized);
+        assert!(native.pipeline.flight.is_none() && native.pipeline.latest.is_none());
+        assert!(native.gate.due.is_none());
+        let next = native.pipeline.input(1.1, false, 50.0, 70.0).unwrap();
+        assert_eq!(next.scale, 1.1);
+        assert!(!native.fail_render(failed.revision, native.owner_id, 1.2));
+        assert_eq!(native.pipeline.flight.unwrap().revision, next.revision);
+    }
+
+    #[test]
+    fn ending_pinch_outside_view_flushes_its_final_request() {
+        for phase in [NSEventPhase::Ended, NSEventPhase::Cancelled] {
+            let mut native = Native::default();
+            native.enabled = true;
+            native.allowed = true;
+            native.gate.pinch = true;
+            native.gate.input(Instant::now());
+            native.pipeline.scale = 1.0;
+            native.pipeline.queue(1.1, false, 50.0, 70.0, true);
+            assert!(native.magnify(0.0, phase, None));
+            assert!(!native.gate.pinch && native.gate.due.is_none());
+            assert!(native.pipeline.latest.is_none());
+            assert_eq!(native.pipeline.flight.unwrap().scale, 1.1);
+            assert!(
+                !native.magnify(0.0, phase, None),
+                "an unrelated view must not consume the end"
+            );
+        }
+    }
+
+    #[test]
+    fn unaccepted_cold_pinch_cannot_hold_the_render_gate() {
+        let mut native = Native::default();
+        assert!(!native.magnify(0.1, NSEventPhase::Began, Some((50.0, 70.0))));
+        assert!(!native.gate.pinch && native.gate.due.is_none());
+        assert!(native.pipeline.latest.is_none());
+    }
+
     #[test]
     fn native_reload_reuses_one_pixel_worker_instead_of_spawning_overlapping_jobs() {
         let mut state = CaptureState::default();

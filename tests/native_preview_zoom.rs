@@ -111,7 +111,15 @@ fn run() {
             r#"
             let requests=0;
             const send=m=>window.ipc.postMessage(JSON.stringify(m));
-            window.addEventListener('error',event=>send({{type:'frontend-error',kind:'error',message:String(event.message).slice(0,240),line:event.lineno,column:event.colno}}));
+            window.addEventListener('error',event=>{{
+                // WKWebView can conceal an injected script's Error object.
+                // Consume only this test's synchronously armed fault, once.
+                const expected=event.error?.tiptoptypNativeZoomTest===true ||
+                    (window.tiptoptypExpectedQueuedZoomError===true && event.message==='Script error.');
+                window.tiptoptypExpectedQueuedZoomError=false;
+                send({{type:'frontend-error',kind:'error',expected,message:String(event.message).slice(0,240),line:event.lineno,column:event.colno}});
+            }});
+            const reportError=console.error;console.error=(...args)=>{{send({{type:'frontend-error',kind:'console',expected:args[0]?.tiptoptypNativeZoomTest===true,message:String(args[0]).slice(0,240)}});if(args[0]?.tiptoptypNativeZoomTest===true)window.tiptoptypExpectedQueuedZoomError=false;reportError.apply(console,args);}};
             window.addEventListener('unhandledrejection',event=>send({{type:'frontend-error',kind:'rejection',message:String(event.reason?.message??event.reason).slice(0,240)}}));
             window.tiptoptypCaptureZoomSnapshot=m=>{{
                 let descriptor=null;
@@ -1024,6 +1032,49 @@ fn live_transition_regression(
     use std::time::{Duration, Instant};
     use wry::WebViewExtMacOS;
 
+    fn viewport_source_error(before: &Value, after: &Value) -> Option<f64> {
+        fn bounds(geometry: &Value, index: usize) -> Option<(f64, f64)> {
+            let page = geometry["pages"].get(index)?;
+            let scale = geometry["source_scale"].as_f64()?;
+            Some((
+                geometry["paper"][1].as_f64()? + page[0].as_f64()? * scale,
+                page[1].as_f64()? * scale,
+            ))
+        }
+        let y = before["viewport"][1].as_f64()?;
+        let target = after["viewport"][1].as_f64()?;
+        for index in 0..before["pages"].as_array()?.len() {
+            let (top, height) = bounds(before, index)?;
+            let (new_top, new_height) = bounds(after, index)?;
+            if y >= top && y <= top + height {
+                return Some(new_top + (y - top) / height * new_height - target);
+            }
+            if let Some((next, _)) = bounds(before, index + 1)
+                && y > top + height
+                && y < next
+            {
+                let (new_next, _) = bounds(after, index + 1)?;
+                let fraction = (y - top - height) / (next - top - height);
+                return Some(
+                    new_top + new_height + fraction * (new_next - new_top - new_height) - target,
+                );
+            }
+        }
+        None
+    }
+    // Guard the observer itself: page-tail and fixed-gap anchors are different
+    // from extrapolating a negative fraction of an arbitrarily selected page.
+    let before =
+        json!({"paper":[0,0],"viewport":[0,95],"source_scale":1,"pages":[[0,100],[110,100]]});
+    let after =
+        json!({"paper":[0,-47.5],"viewport":[0,0],"source_scale":0.5,"pages":[[0,100],[120,100]]});
+    assert_eq!(viewport_source_error(&before, &after), Some(0.0));
+    let mut before = before;
+    before["viewport"] = json!([0, 105]);
+    let mut after = after;
+    after["paper"] = json!([0, -55]);
+    assert_eq!(viewport_source_error(&before, &after), Some(0.0));
+
     fn anchor_error(image: &Value, sharp: &Value) -> Option<[f64; 2]> {
         let source_anchor = &image["source_anchor"];
         let geometry = &sharp["geometry"];
@@ -1194,7 +1245,7 @@ fn live_transition_regression(
         receipt["capture_timings"] = timings.inspect();
         receipt["transition_regression"] = json!({
             "passed":failures.is_empty(),
-            "input":"injected CaptureState zoom operations and owned WebView bounds; not physical pinch",
+            "input":"injected native pinch phases, CaptureState zoom operations and owned WebView bounds; not physical trackpad input",
             "scope":"native image availability and cached-to-sharp geometry; excludes GPU presentation",
             "observation_cadence_ms":50,
             "viewport_start":[640,420],"mid_document_page":18,"mid_document_fraction":0.15,
@@ -1343,17 +1394,67 @@ fn live_transition_regression(
         );
         probe.idle_image("native-rejection-restored-fit", true)?;
 
+        // Fail after native acceptance, inside the queued SVG update rather
+        // than the evaluateJavaScript callback. No scroll/reload may be needed.
+        let before_failure = state.inspect();
+        web.evaluate_script(r#"{
+            const doc=window.tiptoptypNativeZoomFrame().doc, rescale=doc.r.rescale;
+            doc.r.rescale=function(...args){doc.r.rescale=rescale;const error=Error('injected queued zoom failure');error.tiptoptypNativeZoomTest=true;window.tiptoptypExpectedQueuedZoomError=true;throw error;};
+        }"#).map_err(|error|error.to_string())?;
+        probe.observe("queued-failure-armed")?;
+        state.message(web, &json!({"op":"zoom","factor":1.01,"x":50,"y":50}), true);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let failed = loop {
+            probe.tick();
+            let current = state.inspect();
+            if current["render_failures"].as_u64().unwrap()
+                > before_failure["render_failures"].as_u64().unwrap()
+                && current["in_flight"].is_null()
+                && current["pending"].is_null()
+                && current["active"] == false
+            {
+                break current;
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "queued render failure stranded native input: {current}"
+                ));
+            }
+        };
+        state.message(web, &json!({"op":"zoom","factor":1.01,"x":50,"y":50}), true);
+        let recovered = probe.sharp(
+            failed["handoffs"].as_u64().unwrap(),
+            "queued-failure-next-zoom",
+        )?;
+        steps.push(json!({"kind":"queued-render-failure-recovery","before":before_failure,"failed":failed,"next_zoom":recovered,"after":state.inspect()}));
+        save(&steps, &failures, receipt, probe.capture_timings);
+        state.message(
+            web,
+            &json!({"op":"zoom","factor":1,"reset":true,"x":50,"y":50}),
+            true,
+        );
+        probe.idle_image("queued-failure-restored-fit", true)?;
+
         // Opposite off-center positions prove both proxy and sharp SVG preserve
         // the source point under the pointer. Divider input later discards this
         // pinch anchor and preserves the viewport's top instead.
         for (point, factor) in [([56.0, 330.0], 1.04), ([590.0, 80.0], 1.0 / 1.04)] {
             probe.idle_image("before-off-center-zoom", false)?;
             let before = state.inspect();
-            state.message(
-                web,
-                &json!({"op":"zoom","factor":factor,"x":point[0],"y":point[1]}),
-                true,
+            use objc2_app_kit::NSEventPhase;
+            let cursor = Some((point[0], point[1]));
+            assert!(state.magnify_for_test(0.0, NSEventPhase::Began, cursor));
+            assert!(state.magnify_for_test(factor - 1.0, NSEventPhase::Changed, cursor));
+            assert!(state.inspect()["pinch"].as_bool().unwrap());
+            // End the second gesture outside the view, as a real trackpad can.
+            let end = if factor < 1.0 { None } else { cursor };
+            assert!(state.magnify_for_test(0.0, NSEventPhase::Ended, end));
+            assert_eq!(state.inspect()["pinch"], false);
+            assert!(
+                !unsafe { web.webview().allowsMagnification() },
+                "cached zoom must not compete with WebKit magnification"
             );
+            assert_eq!(unsafe { web.webview().magnification() }, 1.0);
             let image = state.inspect();
             let source = &image["source_anchor"];
             if source["clientX"].as_f64() != Some(point[0])
@@ -1497,13 +1598,9 @@ fn live_transition_regression(
                 actual_ink[0] - expected_ink[0],
                 actual_ink[1] - expected_ink[1],
             ];
-            let top_source_error = (sharp["location"]["fraction"]
-                .as_f64()
-                .ok_or("missing sharp page fraction")?
-                - before_frame["location"]["fraction"]
-                    .as_f64()
-                    .ok_or("missing initial page fraction")?)
-                * actual_ink[1];
+            let top_source_error =
+                viewport_source_error(&before_frame["geometry"], &sharp["geometry"])
+                    .ok_or("viewport top did not map to an actual page or gap")?;
             // A root paper rectangle can match while page ink moves, because
             // physical page gaps don't scale. Check the admitted raster's actual
             // page projection and the source point at the viewport top.
@@ -1695,15 +1792,25 @@ fn live_transition_regression(
     if let Err(error) = run {
         failures.push(error);
     }
-    if probe
+    if probe.capture_timings.frontend.iter().any(|value| {
+        (value["type"] == "frontend-error" && value["expected"] != true)
+            || value["type"] == "reset-error"
+    }) {
+        failures.push("frontend exception during native transition regression".into());
+    }
+    let expected_errors = probe
         .capture_timings
         .frontend
         .iter()
-        .any(|value| value["type"] == "frontend-error" || value["type"] == "reset-error")
-    {
-        failures.push("frontend exception during native transition regression".into());
+        .filter(|value| value["type"] == "frontend-error" && value["expected"] == true)
+        .count();
+    if expected_errors != 1 {
+        failures.push(format!(
+            "expected exactly one observable injected render error, got {expected_errors}"
+        ));
     }
     save(&steps, &failures, receipt, probe.capture_timings);
+    receipt["transition_regression"]["expected_injected_errors"] = json!(expected_errors);
     receipt["transition_regression"]["latest_observation"] = serde_json::json!(probe.observation);
     receipt["transition_regression"]["last_handoff"] = serde_json::json!(probe.handoff);
     receipt["transition_regression"]["final_native"] = state.inspect();

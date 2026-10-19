@@ -30,10 +30,16 @@
     if (notify) post({ op: 'invalidate', abort: !!abort });
   };
   const settle = () => {
-    if (!enabled || captureDeferred || active || capture || admission || timer || !readFrame) return;
+    if (!enabled || active || !readFrame) return;
+    // Once reported, blocked warming must remain cheap through editor frames.
+    if (frameEpoch === epoch && (captureDeferred || capture || admission || timer)) return;
     const frame = readFrame();
-    if (!captureReady(frame)) return;
+    if (!usable(frame)) return;
+    // Gesture readiness belongs to the live renderer, not optional screenshots.
+    // Pixel preparation, editor feedback and reveal beacons may delay warming
+    // without leaving the native controller uninitialized on a ready document.
     if (frameEpoch !== epoch) { post({ op: 'frame', scale: frame.scale, width: frame.width, height: frame.height }); frameEpoch = epoch; if (currentOutline) post({op:'outline',...currentOutline}); }
+    if (captureDeferred || capture || admission || timer || !captureReady(frame)) return;
     if (same(cache?.frame, frame) && !cache.refresh) return;
     timer = setTimeout(() => {
       timer = 0;
@@ -185,6 +191,16 @@
     },
     owns(revision, owner) {
       return active && nativeRequest?.revision === revision && nativeOwner === owner;
+    },
+    failed(revision, owner) {
+      if (!this.owns(revision, owner)) return false;
+      // Preserve the live renderer's applied scale, even if its SVG update
+      // failed partway through. The next user input can retry; idle does not.
+      post({ op: 'render-failed', revision, owner: nativeRequest.owner, scale: owner.currentScaleRatio });
+      invalidate(true, false); settle(); return true;
+    },
+    failDocument(owner) {
+      return nativeRequest ? this.failed(nativeRequest.revision, owner) : false;
     },
     retireDocument(owner) {
       if (nativeOwner !== owner || !nativeRequest) return false;

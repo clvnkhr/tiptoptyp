@@ -675,3 +675,31 @@ node scripts/test-preview-reconnect.cjs
 Set `TIPTOPTYP_PLAYWRIGHT` to the installed Playwright module when it is outside
 Node's search path. The test owns and cleans its browser, server and fixture;
 its optional adapter override selects a preserved failing baseline.
+
+## Gesture readiness and failed-render recovery
+
+The live renderer reports readiness independently of optional screenshot warming.
+Editor feedback, a reveal beacon, or an outstanding bitmap conversion may delay
+pixels, but must not delay native zoom initialization. Readiness is reported once
+per epoch; while warming is blocked, subsequent calls avoid reading DOM layout.
+The raster worker and bounded image mailboxes remain unchanged.
+
+With smooth zoom enabled, the native controller owns magnification. WebKit's
+separate [page-magnification mechanism](https://developer.apple.com/documentation/webkit/wkwebview/allowsmagnification) is disabled so a cold gesture cannot alter
+the CSS viewport underneath the SVG cache. Disabling smooth zoom restores that
+mechanism. A pinch ending or being cancelled outside the preview still flushes
+the gesture that started inside it; unrelated end events are passed through.
+
+Queued layout/patch exceptions explicitly fail their native request. The failure
+includes its WebView owner, revision and actually applied scale. Only that owner
+and revision may release the serial slot, discard obsolete queued anchors, and
+retire the image. The next user input can recover without a reload or scroll.
+Full-render exceptions are rethrown and partial-render errors retain their console
+reporting. There is no automatic render retry or idle repaint loop.
+
+The focused JavaScript tests inject layout failures in both modes and a partial
+patch failure, then require the next zoom to complete. The owned-WebView transition
+probe injects a queued rescale exception into the actual pinned frontend and
+checks the next zoom, plus native Begin/Changed/End phases at opposite cursor
+positions (including an end outside the view). These injected phases exercise the
+production native gesture handler; they are not physical trackpad input.

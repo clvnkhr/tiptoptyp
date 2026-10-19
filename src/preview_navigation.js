@@ -512,6 +512,7 @@
       doc.sampledRenderTime = performance.now() - start;
     } catch (error) {
       state.coverage = null;
+      window.tiptoptypZoomSnapshot?.failDocument?.(doc);
       console.error(error);
       processed = true;
     } finally {
@@ -812,64 +813,69 @@
         return;
       }
       if (Number.isSafeInteger(input.nativeRevision) && window.tiptoptypZoomSnapshot?.owns?.(input.nativeRevision, doc) === false) return;
-      doc.cachedDOMState = doc.retrieveDOMState();
-      const scroll = doc.hookedElem.parentElement;
-      let zoomPoint = input.source ?? null, deferredView = null;
-      if (input.zoom) {
-        const rect = doc.hookedElem.firstElementChild.getBoundingClientRect();
-        const viewport = scroll.getBoundingClientRect();
-        const oldScale = doc.currentScaleRatio;
-        const x = input.x ?? (viewport.left + scroll.clientWidth / 2);
-        const y = input.y ?? (viewport.top + scroll.clientHeight / 2);
-        const contentX = x - rect.left;
-        const contentY = y - rect.top;
-        const partial = partialDocs.get(doc);
-        if (partial?.coverage?.svg === doc.hookedElem.firstElementChild && partial.offsets?.length) {
-          if (partialMode(doc)) zoomPoint = { x: contentX / partial.coverage.scale,
-            y: sourcePoint(pageGeometry(doc, partial), partial.offsets, contentY / partial.coverage.scale), clientX: x + (input.panX || 0), clientY: y + (input.panY || 0) };
-          else if (fullMode(doc)) {
-            const coordinates = svgCoordinates(doc.hookedElem.firstElementChild, partial.offsetScale);
-            zoomPoint = { x: (x - coordinates.x) / coordinates.sx,
-              y: sourcePoint(pageGeometry(doc, partial), partial.offsets, (y - coordinates.y) / coordinates.sy),
-              clientX: x + (input.panX || 0), clientY: y + (input.panY || 0) };
+      try {
+        doc.cachedDOMState = doc.retrieveDOMState();
+        const scroll = doc.hookedElem.parentElement;
+        let zoomPoint = input.source ?? null, deferredView = null;
+        if (input.zoom) {
+          const rect = doc.hookedElem.firstElementChild.getBoundingClientRect();
+          const viewport = scroll.getBoundingClientRect();
+          const oldScale = doc.currentScaleRatio;
+          const x = input.x ?? (viewport.left + scroll.clientWidth / 2);
+          const y = input.y ?? (viewport.top + scroll.clientHeight / 2);
+          const contentX = x - rect.left;
+          const contentY = y - rect.top;
+          const partial = partialDocs.get(doc);
+          if (partial?.coverage?.svg === doc.hookedElem.firstElementChild && partial.offsets?.length) {
+            if (partialMode(doc)) zoomPoint = { x: contentX / partial.coverage.scale,
+              y: sourcePoint(pageGeometry(doc, partial), partial.offsets, contentY / partial.coverage.scale), clientX: x + (input.panX || 0), clientY: y + (input.panY || 0) };
+            else if (fullMode(doc)) {
+              const coordinates = svgCoordinates(doc.hookedElem.firstElementChild, partial.offsetScale);
+              zoomPoint = { x: (x - coordinates.x) / coordinates.sx,
+                y: sourcePoint(pageGeometry(doc, partial), partial.offsets, (y - coordinates.y) / coordinates.sy),
+                clientX: x + (input.panX || 0), clientY: y + (input.panY || 0) };
+            }
           }
-        }
-        doc.currentScaleRatio = input.scale;
-        const fit = Math.abs(input.scale - 1) < 1e-6;
-        doc.hookedElem.classList.toggle('hide-scrollbar-x', fit);
-        scroll.classList.toggle('hide-scrollbar-x', fit);
-        if (input.source) zoomPoint = input.source;
-        if (partialMode(doc) && zoomPoint && input.scroll) {
-          const geometry = pageGeometry(doc, partial), scale = doc.cachedDOMState.width / geometry.width * input.scale;
-          const offsets = paperLayout(geometry, scale).positions.map(p => p.y);
-          zoomPoint = { x: input.scroll.left / scale, y: sourcePoint(geometry, offsets, input.scroll.top / scale), clientX: viewport.left, clientY: viewport.top };
-        }
-        if (partialMode(doc) && zoomPoint && !doc.patchQueue.length && !partial.force && !partial.running) {
-          deferredView = partialViewport(doc, partial, { domState: doc.cachedDOMState, viewport, paper: rect,
-            height: scroll.clientHeight, scrollTop: scroll.scrollTop });
-        } else {
+          doc.currentScaleRatio = input.scale;
+          const fit = Math.abs(input.scale - 1) < 1e-6;
+          doc.hookedElem.classList.toggle('hide-scrollbar-x', fit);
+          scroll.classList.toggle('hide-scrollbar-x', fit);
+          if (input.source) zoomPoint = input.source;
+          if (partialMode(doc) && zoomPoint && input.scroll) {
+            const geometry = pageGeometry(doc, partial), scale = doc.cachedDOMState.width / geometry.width * input.scale;
+            const offsets = paperLayout(geometry, scale).positions.map(p => p.y);
+            zoomPoint = { x: input.scroll.left / scale, y: sourcePoint(geometry, offsets, input.scroll.top / scale), clientX: viewport.left, clientY: viewport.top };
+          }
+          if (partialMode(doc) && zoomPoint && !doc.patchQueue.length && !partial.force && !partial.running) {
+            deferredView = partialViewport(doc, partial, { domState: doc.cachedDOMState, viewport, paper: rect,
+              height: scroll.clientHeight, scrollTop: scroll.scrollTop });
+          } else {
+            doc.r.rescale();
+            const after = doc.hookedElem.firstElementChild.getBoundingClientRect();
+            const ratio = input.scale / oldScale;
+            if (input.scroll) {
+              scroll.scrollTo({ ...input.scroll, behavior: 'instant' });
+              doc.clearSvgResizeAnchor?.();
+            }
+            else if (!(zoomPoint && fullMode(doc) && restorePartialZoomPoint(doc, partial, zoomPoint))) scroll.scrollBy(after.left + contentX * ratio - x - (input.panX || 0), after.top + contentY * ratio - y - (input.panY || 0));
+          }
+        } else if (input.resize) {
           doc.r.rescale();
-          const after = doc.hookedElem.firstElementChild.getBoundingClientRect();
-          const ratio = input.scale / oldScale;
           if (input.scroll) {
             scroll.scrollTo({ ...input.scroll, behavior: 'instant' });
             doc.clearSvgResizeAnchor?.();
           }
-          else if (!(zoomPoint && fullMode(doc) && restorePartialZoomPoint(doc, partial, zoomPoint))) scroll.scrollBy(after.left + contentX * ratio - x - (input.panX || 0), after.top + contentY * ratio - y - (input.panY || 0));
+          else if (input.source) restorePartialZoomPoint(doc, partialDocs.get(doc), input.source);
         }
-      } else if (input.resize) {
-        doc.r.rescale();
-        if (input.scroll) {
-          scroll.scrollTo({ ...input.scroll, behavior: 'instant' });
-          doc.clearSvgResizeAnchor?.();
+        if (doc.partialRendering && (input.demand || input.resize || input.zoom)) {
+          if (!requestPartialViewport(doc, true, input.resize || input.zoom, deferredView, zoomPoint)) doc.addViewportChange();
         }
-        else if (input.source) restorePartialZoomPoint(doc, partialDocs.get(doc), input.source);
+        updateControls();
+        window.tiptoptypZoomSnapshot?.rendered();
+      } catch (error) {
+        window.tiptoptypZoomSnapshot?.failed?.(input.nativeRevision, doc);
+        throw error;
       }
-      if (doc.partialRendering && (input.demand || input.resize || input.zoom)) {
-        if (!requestPartialViewport(doc, true, input.resize || input.zoom, deferredView, zoomPoint)) doc.addViewportChange();
-      }
-      updateControls();
-      window.tiptoptypZoomSnapshot?.rendered();
     };
     frame = requestAnimationFrame(flush);
   };

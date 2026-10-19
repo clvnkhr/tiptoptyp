@@ -1994,3 +1994,48 @@ test('reveal preferences set before DOM mount survive frontend startup without p
   f.advance(1500);f.flush();
   assert.equal(f.revealActive(),false);assert.equal(f.frames.size,0);
 });
+
+for (const partial of [false,true]) test(`${partial?'partial':'full'} failed queued zoom releases its serial owner and the next input recovers`,()=>{
+  let fail=false;
+  const expected=Error('injected zoom layout failure');
+  const f=partialFixture({partial,decorated:true,nativeSnapshot:true,layoutHook(){if(fail)throw expected;}});
+  f.start();f.flush();f.flush();
+  const cache=f.window.tiptoptypZoomSnapshot;cache.configure(true);
+  fail=true;
+  f.nativeZoom({revision:31,token:null,scale:1.2,x:120,y:90});
+  assert.throws(()=>f.flush(),error=>error===expected,'render errors must remain observable');
+  assert.equal(cache.inspect().active,false,'a failed RAF must release the serial request');
+  const failures=f.messages.filter(m=>m.op==='render-failed');
+  assert.equal(failures.length,1);
+  assert.equal(failures[0].revision,31);
+  assert.equal(failures[0].scale,f.doc.currentScaleRatio);
+  fail=false;
+  f.nativeZoom({revision:32,token:null,scale:1.3,x:120,y:90});
+  for(let i=0;i<6;i++)f.flush();
+  assert.equal(cache.inspect().active,false);
+  assert.equal(f.messages.filter(m=>m.op==='ready').at(-1).revision,32);
+  assert.equal(f.frames.size,0,'no retry or idle render loop');
+});
+
+test('partial patch failures release native zoom without hiding the reported error',()=>{
+  const f=partialFixture({decorated:true,nativeSnapshot:true});f.start();f.flush();f.flush();
+  const cache=f.window.tiptoptypZoomSnapshot;cache.configure(true);
+  // A real scroll element clamps zoom-out movement at its document edges.
+  for(const method of ['scrollTo','scrollBy']) {
+    const original=f.scroll[method];
+    f.scroll[method]=function(...args){original.apply(this,args);this.scrollTop=Math.max(0,this.scrollTop);this.scrollLeft=Math.max(0,this.scrollLeft);};
+  }
+  const render=f.doc.r.rerender, expected=Error('injected zoom patch failure');
+  f.doc.r.rerender=()=>{throw expected;};
+  f.nativeZoom({revision:41,token:null,scale:.4,x:120,y:90});f.flush();
+  assert.equal(f.errors.filter(error=>error===expected).length,1);
+  assert.equal(cache.inspect().active,false);
+  assert.equal(f.messages.filter(m=>m.op==='render-failed').at(-1).revision,41);
+  assert.equal(f.doc.isRendering,false);
+  assert.equal(f.frames.size,0);
+  f.doc.r.rerender=render;
+  f.nativeZoom({revision:42,token:null,scale:.5,x:120,y:90});
+  for(let i=0;i<6;i++)f.flush();
+  assert.equal(f.messages.filter(m=>m.op==='ready').at(-1)?.revision,42);
+  assert.ok(f.visibleComplete());
+});

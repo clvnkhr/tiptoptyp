@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../src/preview_zoom_snapshot.js', import.meta.url), 'utf8');
 function fixture({ provider = true, ready = true, density = 2 } = {}) {
-  let serial = 0;
+  let serial = 0, reads = 0;
   const timers = new Map(), frames = [], messages = [];
   const doc = {}, svg = { isConnected: true };
   const current = { doc, svg, scale: 1, width: 900, height: 700, fitWidth:880, x: 0, y: 0, left: 0, top: 100, ready };
@@ -18,7 +18,7 @@ function fixture({ provider = true, ready = true, density = 2 } = {}) {
     clearTimeout: id => timers.delete(id), requestAnimationFrame: fn => { frames.push(fn); return frames.length; },
   });
   const cache = window.tiptoptypZoomSnapshot;
-  cache.attach(() => ({ ...current })); cache.configure(true);
+  cache.attach(() => { reads++; return { ...current }; }); cache.configure(true);
   const tick = () => { const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(fn => fn()); };
   const nextFrame = () => { const callbacks = frames.splice(0); callbacks.forEach(fn => fn()); };
   const paint = () => { nextFrame(); nextFrame(); };
@@ -27,7 +27,7 @@ function fixture({ provider = true, ready = true, density = 2 } = {}) {
     cache.resolve(request.token, result);
     if (cache.inspect().admitting) cache.admitted(request.token, true);
   };
-  return { cache, current, svg, doc, messages, timers, frames, tick, paint, nextFrame, admit, captures, window };
+  return { cache, current, svg, doc, messages, timers, frames, tick, paint, nextFrame, admit, captures, window, get reads() { return reads; } };
 }
 
 test('idle capture is bounded and admits only metadata; no decoding, DOM overlay or idle RAF', () => {
@@ -526,4 +526,54 @@ test('held native admission settles once after feedback and invalidated results 
   assert.equal(f.cache.inspect().cached,false,'late admission cannot restore invalid pixels');
   f.cache.deferCaptures(false); f.tick();
   assert.equal(f.captures().length,2);
+});
+
+for (const blocked of ['feedback', 'capture', 'reveal']) test(`renderer readiness is independent of optional ${blocked} pixel warming`, () => {
+  const f = fixture({ready:false});
+  if (blocked === 'feedback') f.cache.deferCaptures(true);
+  if (blocked === 'capture') {
+    f.current.ready = true; f.cache.settle(); f.tick();
+    assert.equal(f.cache.inspect().capturing, true);
+    f.cache.invalidate(true);
+  }
+  if (blocked === 'reveal') f.window.tiptoptypPreviewRevealActive = () => true;
+  const before = f.messages.filter(m => m.op === 'frame').length;
+  f.current.ready = true;
+  f.current.scale = 1.3;
+  for (let i = 0; i < 100; i++) f.cache.settle();
+  const frames = f.messages.filter(m => m.op === 'frame');
+  assert.equal(frames.length, before + 1, 'native gestures must initialize without waiting for pixels');
+  assert.equal(frames.at(-1).scale, 1.3);
+  f.tick();
+  assert.equal(f.captures().length, blocked === 'capture' ? 1 : 0);
+  assert.equal(f.timers.size, 0);
+});
+
+test('failed render reports its applied scale and cannot cancel a newer revision or renderer',()=>{
+  const f=fixture();f.tick();f.admit();
+  const token=f.captures()[0].token;
+  f.cache.native({revision:7,owner:19,scale:1.3,token});f.doc.currentScaleRatio=1.3;
+  assert.equal(f.cache.failed(6,f.doc),false);
+  assert.equal(f.cache.failDocument({}),false);
+  assert.equal(f.cache.inspect().active,true);
+  assert.equal(f.cache.failed(7,f.doc),true);
+  const failures=f.messages.filter(m=>m.op==='render-failed');
+  assert.equal(failures.length,1);assert.equal(failures[0].scale,1.3);assert.equal(failures[0].owner,19);
+  f.cache.native({revision:8,scale:1.4,token:null});
+  assert.equal(f.cache.failed(7,f.doc),false);
+  assert.equal(f.cache.inspect().active,true);
+  f.current.scale=1.4;f.cache.rendered();f.paint();
+  assert.equal(f.cache.inspect().active,false);
+  assert.equal(f.frames.length,0);
+});
+
+for (const blocked of ['feedback','capture','admission','timer']) test(`reported readiness avoids repeated DOM reads during ${blocked}`,()=>{
+  const f=fixture();
+  if(blocked==='feedback') f.cache.deferCaptures(true);
+  if(blocked==='capture'||blocked==='admission') f.tick();
+  if(blocked==='admission') f.cache.resolve(f.captures()[0].token,{width:1000,height:1000});
+  const before=f.reads;
+  for(let i=0;i<1000;i++)f.cache.settle();
+  assert.equal(f.reads,before);
+  assert.equal(f.messages.filter(m=>m.op==='frame').length,1);
 });
