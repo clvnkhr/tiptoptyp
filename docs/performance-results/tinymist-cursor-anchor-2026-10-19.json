@@ -88,10 +88,28 @@
     "native-partial-confirmed.png"
   ],
   "limitations": [
-    "Pinch phases enter the production native handler; physical trackpad input is not automated.",
-    "The user-reported intermittent complete loss of zoom input was not reproduced in the diagnostic app and is not declared fixed.",
+    "Automated pinch phases enter the production native handler; the separate manual confirmation covers physical interaction in partial mode.",
     "Four callback samples do not establish presentation smoothness or a broad performance guarantee.",
     "Viewport/native-layer captures do not prove composed desktop pixels.",
     "The installed app has not been replaced; an updated disposable diagnostic app is open."
-  ]
+  ],
+  "manual_check": {
+    "user_report": "Pinch and divider both work in the updated disposable diagnostic app.",
+    "effective_backend": "Tinymist partial",
+    "observed_native_inputs": 143,
+    "observed_cached_image_updates": 219,
+    "completed_handoffs": 5,
+    "render_failures": 0,
+    "final_state": {
+      "initialized": true,
+      "enabled": true,
+      "allowed": true,
+      "cached": true,
+      "active": false,
+      "in_flight": null,
+      "pending": null,
+      "pinch": false
+    },
+    "scope": "User-confirmed physical interaction in one partial-mode session; no claim that every intermittent failure is eliminated."
+  }
 }

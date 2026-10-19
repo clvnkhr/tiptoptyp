@@ -2709,3 +2709,11 @@ The complete intermittent loss of input has not been reproduced in the disposabl
 diagnostic app, which has been updated with the fixes and left open for a
 physical pinch check. That report remains unresolved until an actual failing
 state can be inspected. The installed app was not overwritten.
+
+Manual follow-up: the user tried the updated `preview-zoom-stress.typ` diagnostic
+window and confirmed that both pinch and divider work. Live inspection verified
+Tinymist partial, 143 native zoom inputs, 219 cached-image updates, five completed
+handoffs and zero render failures. The controller was initialized and cached,
+with no active overlay, flight, pending request or owned pinch afterward. This
+adds physical interaction evidence for that partial-mode session; full-mode
+physical pinch and universal absence of the intermittent failure are not claimed.
