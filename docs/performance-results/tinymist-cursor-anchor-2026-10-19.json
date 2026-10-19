@@ -1,0 +1,97 @@
+{
+  "date": "2026-10-19",
+  "base_commit": "94124c8c2888",
+  "fixture": "scripts/fixtures/tinymist-zoom-serial.typ",
+  "build_profile": "release with desktop-ui-tests",
+  "native": {
+    "full": {
+      "passed": true,
+      "transition_steps": 35,
+      "retained_image_zooms": 24,
+      "maximum_original_cursor_y_error_css_pixels": 0.9393329213344259,
+      "original_cursor_tolerance_css_pixels": 1.1,
+      "binary_sha256": "57617d60138f9b54ab3f49df0947728bd6e5f19e54524bf20798e8c7132edbcc",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "fixture_sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb",
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3,
+      "before_input_response_ms": [
+        0.26845800000000963,
+        0.15483399999999392,
+        0.12945799999999963,
+        0.11674999999996771
+      ],
+      "after_input_response_ms": [
+        0.28358300000000725,
+        0.1444580000000144,
+        0.148083999999983,
+        0.14675000000005411
+      ],
+      "responsive_during_webcontent_stall": true,
+      "final_vector_requests": 1
+    },
+    "partial": {
+      "passed": true,
+      "transition_steps": 35,
+      "retained_image_zooms": 24,
+      "maximum_original_cursor_y_error_css_pixels": 0.9499999999898137,
+      "original_cursor_tolerance_css_pixels": 1.1,
+      "binary_sha256": "57617d60138f9b54ab3f49df0947728bd6e5f19e54524bf20798e8c7132edbcc",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "fixture_sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb",
+      "viewport": [
+        640,
+        420
+      ],
+      "warmup_seconds": 3,
+      "before_input_response_ms": [
+        0.2873340000000013,
+        0.13508300000000872,
+        0.1279999999999859,
+        0.12008300000002237
+      ],
+      "after_input_response_ms": [
+        0.31820899999999597,
+        0.13983400000000756,
+        0.12183299999998098,
+        0.11533400000001848
+      ],
+      "responsive_during_webcontent_stall": true,
+      "final_vector_requests": 1
+    }
+  },
+  "real_app": {
+    "journey": "partial_dividers",
+    "run": "run-m2dbyp2k",
+    "passed": true,
+    "modes": [
+      "partial",
+      "full"
+    ],
+    "native_divider_drags": 12,
+    "bounds_trace_lines": 823
+  },
+  "checks": {
+    "default_rust_passed": 2337,
+    "default_rust_ignored": 70,
+    "xtask_passed": 32,
+    "javascript_passed": 245,
+    "fmt": "passed",
+    "clippy_default": "passed",
+    "clippy_desktop_ui": "passed"
+  },
+  "images_inspected": [
+    "native-full-confirmed.png",
+    "native-partial-confirmed.png"
+  ],
+  "limitations": [
+    "Pinch phases enter the production native handler; physical trackpad input is not automated.",
+    "The user-reported intermittent complete loss of zoom input was not reproduced in the diagnostic app and is not declared fixed.",
+    "Four callback samples do not establish presentation smoothness or a broad performance guarantee.",
+    "Viewport/native-layer captures do not prove composed desktop pixels.",
+    "The installed app has not been replaced; an updated disposable diagnostic app is open."
+  ]
+}

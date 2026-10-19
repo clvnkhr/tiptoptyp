@@ -2667,3 +2667,45 @@ The checked-in performance receipt records the optimized native probe metadata
 and scope. These are functional recovery checks and four callback-latency
 samples, not a dense-document presentation benchmark. The installed app has not
 been replaced by this patch.
+
+### Retained screenshot cursor follow-up — 19 October 2026
+
+The next report described positional mismatch, followed by intermittent loss of
+both pinch input and cached divider feedback. The installed process's loaded
+Mach-O UUID matched the installed `94124c8` binary; the observed editor used
+Tinymist. This was not dismissed as an old executable.
+
+The stronger native regression defers recapture through 24 alternating cursor
+zooms. It projects the original live source point independently of the proxy's
+reported anchor. Before the fix, full-mode drift exceeded the existing 1.1-pixel
+tolerance, and both modes lost ownership of an outside pinch release once the
+viewport left the retained raster. Reconciliation now uses the completed SVG's
+actual position; losing buffer coverage only removes the render deadline, not
+the gesture's ownership.
+
+The final `confirmed/` probes passed 35 transitions per mode, including all
+24 cursor zooms each. Maximum original vertical source error was 0.940 CSS pixels
+in full mode and 0.950 in partial mode. An intermediate `reconciled/` run fixed
+the drift but still failed the outside release. A subsequent `final/` attempt
+passed all cursor zooms but failed downstream coverage assertions because that
+phase reused the deliberately exhausted buffer before idle warming caught up.
+The divider phase now waits for a fresh, matching idle raster after recapture is
+resumed. Earlier failed receipts remain preserved.
+
+The real-app divider journey `run-m2dbyp2k` passed twelve native drags in both
+modes after the owned native probes had exited. Its 823 `ui.preview.bounds` lines
+are retained. An earlier passing journey overlapped an owned probe; that run is
+not used as the final interaction evidence. Fresh full/partial isolated native
+PNGs were inspected; they are not proof of composed desktop geometry. Required
+formatting, strict default/desktop-UI lint, 2,337 default Rust tests, 32 xtask
+tests and 245 JavaScript contracts passed.
+
+Evidence is under `.tiptoptyp/preview-cursor-anchor-2026-10-19/` with a checked-in
+cursor-anchor receipt. Reconciliation is constant work at handoff and adds five
+numbers to the existing acknowledgement. It adds no input-time layout queries
+or screenshot work. Callback samples are not presentation timing measurements.
+
+The complete intermittent loss of input has not been reproduced in the disposable
+diagnostic app, which has been updated with the fixes and left open for a
+physical pinch check. That report remains unresolved until an actual failing
+state can be inspected. The installed app was not overwritten.
