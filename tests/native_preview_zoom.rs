@@ -8,6 +8,11 @@ mod native_window;
 #[allow(dead_code, unused_imports)]
 #[path = "../src/preview_zoom_snapshot.rs"]
 mod preview_zoom_snapshot;
+// The standalone harness uses the production mailbox without the app services.
+#[cfg(target_os = "macos")]
+#[allow(dead_code, unused_imports)]
+#[path = "../src/worker/latest_queue.rs"]
+mod worker;
 
 fn main() {
     if std::env::var("TIPTOPTYP_NATIVE_ZOOM_TEST").as_deref() != Ok("1") {
@@ -242,7 +247,10 @@ fn run() {
     let mut web_inputs = Vec::new();
     let mut requests = 0;
     let mut final_scale = 1.0;
+    let raster_context = eframe::egui::Context::default();
+    state.poll(&raster_context);
     let pump = || unsafe {
+        state.poll(&raster_context);
         let date: *mut AnyObject = msg_send![class!(NSDate),dateWithTimeIntervalSinceNow:0.005f64];
         let event: Option<objc2::rc::Retained<NSEvent>> = msg_send![&*app,nextEventMatchingMask:usize::MAX,untilDate:date,inMode:&*NSString::from_str("kCFRunLoopDefaultMode"),dequeue:true];
         if let Some(event) = event {

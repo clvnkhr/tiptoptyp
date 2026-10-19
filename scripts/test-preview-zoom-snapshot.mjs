@@ -463,3 +463,67 @@ test('pending and visible reveal beacons never enter the persistent zoom cache',
   assert.equal(f.cache.inspect().cached, true);
   assert.equal(f.frames.length, 0);
 });
+
+
+test('finite feedback defers capture timers without discarding warmed zoom pixels',()=>{
+  const f=fixture(); f.tick(); f.admit(); const token=f.captures()[0].token;
+  f.cache.deferCaptures(true); f.cache.deferCaptures(true);
+  assert.equal(f.cache.inspect().capture_deferred,true);
+  assert.equal(f.cache.inspect().cached,true);
+  f.cache.native({token,revision:1,scale:1.2});
+  f.current.scale=1.2; f.cache.rendered(); f.paint();
+  assert.equal(f.cache.inspect().active,false,'sharp acknowledgement is not deferred');
+  assert.equal(f.cache.inspect().cached,true);
+  for(let i=0;i<20;i++){f.cache.settle();f.tick();}
+  assert.equal(f.captures().length,1);
+  assert.equal(f.timers.size,0);
+  f.cache.deferCaptures(false); f.cache.deferCaptures(false);
+  assert.equal(f.timers.size,1,'resume schedules one refresh');
+  f.tick(); assert.equal(f.captures().length,2);
+  assert.equal(f.cache.inspect().cached,true);
+  f.admit(); assert.equal(f.cache.inspect().cached,true);
+  assert.equal(f.timers.size,0);
+});
+
+test('deferral stops cold capture before buffer serialization and retries queued native requests once',()=>{
+  const f=fixture(); let buffers=0;
+  f.window.tiptoptypSnapshotBuffer=()=>{buffers++;return null;};
+  f.cache.deferCaptures(true); f.tick();
+  assert.equal(buffers,0); assert.equal(f.captures().length,0);
+  for(let i=0;i<20;i++){f.cache.settle();f.tick();}
+  assert.equal(f.timers.size,0);
+  f.cache.deferCaptures(false); f.tick();
+  const old=f.captures()[0]; assert.equal(buffers,1);
+  // A timer can post IPC immediately before native deferral takes effect.
+  f.cache.deferCaptures(true); f.cache.deferred(old.token);
+  assert.equal(f.cache.inspect().capturing,false);
+  assert.equal(f.cache.inspect().failures,0);
+  f.cache.deferred('stale-token'); f.tick();
+  assert.equal(f.captures().length,1);
+  f.current.top=220; f.cache.scrolled();
+  f.cache.deferCaptures(false); f.tick();
+  assert.equal(f.captures().length,2);
+  assert.equal(f.cache.inspect().capturing,true);
+  assert.equal(f.captures()[1].token===old.token,false);
+  f.admit(); assert.equal(f.cache.inspect().cached,true);
+  assert.equal(f.timers.size,0);
+});
+
+test('held native admission settles once after feedback and invalidated results remain stale',()=>{
+  const f=fixture(); f.tick(); const request=f.captures()[0];
+  f.cache.deferCaptures(true);
+  f.cache.resolve(request.token,{width:1000,height:1000});
+  assert.equal(f.cache.inspect().admitting,true);
+  f.cache.deferCaptures(false);
+  assert.equal(f.timers.size,0,'held admission owns the capture slot');
+  f.cache.admitted(request.token,true);
+  assert.equal(f.cache.inspect().cached,true);
+  assert.equal(f.timers.size,0);
+  f.cache.deferCaptures(true); f.cache.invalidate(); f.cache.settle(); f.tick();
+  assert.equal(f.cache.inspect().cached,false);
+  assert.equal(f.captures().length,1);
+  f.cache.admitted(request.token,true);
+  assert.equal(f.cache.inspect().cached,false,'late admission cannot restore invalid pixels');
+  f.cache.deferCaptures(false); f.tick();
+  assert.equal(f.captures().length,2);
+});

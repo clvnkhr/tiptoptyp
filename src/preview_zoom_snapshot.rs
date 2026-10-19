@@ -1,6 +1,13 @@
 //! Idle snapshots and input-driven Core Animation transforms. AppKit's main
 //! thread is independent of the WebContent thread running Tinymist's WASM/SVG.
 //! No CPU image resizing, decoding, JS evaluation wait, or pixel IPC on input.
+#[path = "preview_zoom_snapshot/raster.rs"]
+mod raster;
+
+use eframe::egui::{Context, ViewportId};
+use objc2_core_foundation::CFRetained;
+use objc2_core_graphics::{CGColorSpace, CGImage};
+
 use std::{
     cell::RefCell,
     ptr::NonNull,
@@ -641,7 +648,14 @@ define_class!(
         #[unsafe(method(webView:didFinishNavigation:))]
         fn finished(&self, _web: &WKWebView, navigation: Option<&WKNavigation>) {
             if let Some(owner) = self.ivars().upgrade() {
-                let current=owner.borrow().mirror.as_ref().is_some_and(|m|m.matches(navigation));
+                let current = {
+                    let mut native = owner.borrow_mut();
+                    native.mirror.as_mut().is_some_and(|mirror| {
+                        if !mirror.matches(navigation) { return false; }
+                        mirror.ready = true;
+                        true
+                    })
+                };
                 if current { CaptureState(owner).capture_ready(); }
             }
         }
@@ -667,6 +681,7 @@ impl SnapshotNavigation {
                 return;
             }
             let capture = native.busy.take();
+            native.deferred_raster = None;
             if let Some(mirror) = native.mirror.as_mut() {
                 mirror.park();
             }
@@ -683,6 +698,7 @@ struct Mirror {
     web: Retained<WKWebView>,
     _navigation: Retained<SnapshotNavigation>,
     active: Option<Retained<WKNavigation>>,
+    ready: bool,
 }
 impl Mirror {
     fn new(
@@ -712,6 +728,7 @@ impl Mirror {
                 web,
                 _navigation: navigation,
                 active: None,
+                ready: false,
             };
             mirror.load(size, html).then_some(mirror)
         }
@@ -726,6 +743,7 @@ impl Mirror {
         // The admitted CGImage owns its pixels independently of WebKit. Drop
         // the copied SVG DOM and its large backing surface between captures.
         self.active = None;
+        self.ready = false;
         unsafe {
             self.web.stopLoading();
             self.web
@@ -737,6 +755,7 @@ impl Mirror {
         }
     }
     fn load(&mut self, size: NSSize, html: &str) -> bool {
+        self.ready = false;
         unsafe {
             self.web
                 .setFrame(NSRect::new(NSPoint::new(-100_000.0, 0.0), size));
@@ -776,6 +795,12 @@ struct Native {
     busy: Option<Capture>,
     mirror: Option<Mirror>,
     rasterizing: bool,
+    capture_deferred: bool,
+    preparing_raster: bool,
+    raster_worker: Option<raster::Worker>,
+    repaint: Option<(Context, ViewportId)>,
+    deferred_raster: Option<(String, raster::Prepared)>,
+    deferred_admission: Option<(String, f64)>,
     geometry: Option<Geometry>,
     image_origin: NSPoint,
     image_size: NSSize,
@@ -892,6 +917,7 @@ impl Native {
     }
 
     fn retire_image(&mut self) {
+        self.deferred_admission = None;
         self.token = None;
         self.candidate = None;
         self.transform = Transform::default();
@@ -946,6 +972,8 @@ impl Native {
     }
 
     fn stop_capture(&mut self) {
+        self.deferred_raster = None;
+        self.preparing_raster = false;
         if let Some(capture) = self.busy.take()
             && let Some(web) = &self.web
         {
@@ -1276,9 +1304,43 @@ fn snapshot_width(width: f64, height: f64, backing: f64, density: f64) -> Option
     (pixel_width >= 1.0).then_some(pixel_width / backing)
 }
 
+fn target_color_space(web: &WKWebView) -> Option<CFRetained<CGColorSpace>> {
+    let display = web
+        .window()
+        .and_then(|window| {
+            window
+                .colorSpace()
+                .or_else(|| window.screen().and_then(|screen| screen.colorSpace()))
+        })
+        .and_then(|space| space.CGColorSpace());
+    display
+        .map(|space| unsafe { CFRetained::retain(NonNull::from(&*space)) })
+        .or_else(|| {
+            CGColorSpace::with_name(Some(unsafe { objc2_core_graphics::kCGColorSpaceSRGB }))
+        })
+}
+
+// A completed raster remains one bounded slot and belongs to exactly the
+// capture which produced it; a canceled token can never claim its successor.
+fn take_current_capture<T>(pending: &mut Option<(String, T)>, token: &str) -> Option<T> {
+    pending
+        .take()
+        .and_then(|(owner, image)| (owner == token).then_some(image))
+}
+
 impl CaptureState {
     pub(crate) fn invalidate(&mut self) {
+        // Reset native ownership without creating overlapping pixel workers
+        // during rapid backend/reload transitions. Token checks discard old
+        // replies; the existing mailbox still bounds active/pending work.
+        let (worker, repaint) = {
+            let mut native = self.0.borrow_mut();
+            (native.raster_worker.take(), native.repaint.take())
+        };
         *self = Self::default();
+        let mut native = self.0.borrow_mut();
+        native.raster_worker = worker;
+        native.repaint = repaint;
     }
 
     pub(crate) fn bind(&self, view: &wry::WebView) {
@@ -1425,6 +1487,87 @@ impl CaptureState {
         native.web = Some(web);
         native.monitor = monitor;
         native.pipeline.scale = 1.0;
+        if native.capture_deferred {
+            unsafe {
+                native
+                    .web
+                    .as_ref()
+                    .unwrap()
+                    .evaluateJavaScript_completionHandler(
+                        &NSString::from_str("window.tiptoptypZoomSnapshot?.deferCaptures(true);"),
+                        None,
+                    );
+            }
+        }
+    }
+
+    /// Record the owning viewport and admit at most one worker completion.
+    /// Idle frames never request work; each finished raster wakes this viewport.
+    pub(crate) fn poll(&self, context: &Context) {
+        let (prepared, failed) = {
+            let mut native = self.0.borrow_mut();
+            native.repaint = Some((context.clone(), context.viewport_id()));
+            match native.raster_worker.as_ref().map(raster::Worker::poll) {
+                Some(Ok(prepared)) => (prepared, None),
+                Some(Err(())) => {
+                    native.raster_worker = None;
+                    let failed = if native.preparing_raster {
+                        native.busy.take()
+                    } else {
+                        None
+                    };
+                    native.preparing_raster = false;
+                    (
+                        None,
+                        failed
+                            .and_then(|capture| native.web.clone().map(|web| (capture.token, web))),
+                    )
+                }
+                None => (None, None),
+            }
+        };
+        if let Some((token, web)) = failed {
+            Self::resolve_failure(&web, &token);
+        }
+        if let Some(prepared) = prepared {
+            self.raster_finished(prepared);
+        }
+    }
+
+    /// Delay optional pixel warming through finite editor feedback, retaining
+    /// the accepted raster and all live zoom/resize requests.
+    pub(crate) fn set_capture_deferred(&self, deferred: bool) {
+        let (web, admission) = {
+            let mut native = self.0.borrow_mut();
+            if native.capture_deferred == deferred {
+                return;
+            }
+            native.capture_deferred = deferred;
+            let admission = if deferred {
+                None
+            } else {
+                native.deferred_admission.take()
+            };
+            (native.web.clone(), admission)
+        };
+        if let Some(web) = web {
+            unsafe {
+                web.evaluateJavaScript_completionHandler(
+                    &NSString::from_str(if deferred {
+                        "window.tiptoptypZoomSnapshot?.deferCaptures(true);"
+                    } else {
+                        "window.tiptoptypZoomSnapshot?.deferCaptures(false);"
+                    }),
+                    None,
+                );
+            }
+            if let Some((token, scale)) = admission {
+                self.acknowledge_admission(&web, Some(&token), Some(scale));
+            }
+        }
+        if !deferred {
+            self.capture_ready();
+        }
     }
 
     /// Disable synchronously on hiding/reloading/settings changes. An IPC
@@ -1511,6 +1654,18 @@ impl CaptureState {
                     }
                 }
                 native.enabled = next;
+                // A navigation recreates the JS controller while native state
+                // survives; replay the capture gate once on configuration.
+                if native.capture_deferred {
+                    unsafe {
+                        web.evaluateJavaScript_completionHandler(
+                            &NSString::from_str(
+                                "window.tiptoptypZoomSnapshot?.deferCaptures(true);",
+                            ),
+                            None,
+                        );
+                    }
+                }
                 if !native.enabled {
                     native.clear();
                     native.stop_capture();
@@ -1561,27 +1716,8 @@ impl CaptureState {
                 let scale = value["scale"]
                     .as_f64()
                     .filter(|s| s.is_finite() && (0.1..=10.0).contains(s));
-                let accepted = native.enabled
-                    && allowed
-                    && token.is_some()
-                    && native.pipeline.flight.is_none()
-                    && native.pipeline.latest.is_none()
-                    && native.candidate_token() == token
-                    && native
-                        .candidate
-                        .as_ref()
-                        .is_some_and(|image| image.capture.revision == native.pipeline.revision)
-                    && scale.is_some_and(|scale| native.admit(scale, &web));
-                unsafe {
-                    web.evaluateJavaScript_completionHandler(
-                        &NSString::from_str(&format!(
-                            "window.tiptoptypZoomSnapshot?.admitted({},{});",
-                            serde_json::json!(token),
-                            accepted
-                        )),
-                        None,
-                    );
-                }
+                drop(native);
+                self.acknowledge_admission(&web, token, scale);
             }
             Some("resize") if allowed => {
                 native.resize_view(web.bounds());
@@ -1609,10 +1745,54 @@ impl CaptureState {
         }
     }
 
+    fn acknowledge_admission(&self, web: &WKWebView, token: Option<&str>, scale: Option<f64>) {
+        let mut native = self.0.borrow_mut();
+        if native.capture_deferred
+            && let (Some(token), Some(scale)) = (token, scale)
+            && native.candidate_token() == Some(token)
+        {
+            native.deferred_admission = Some((token.to_owned(), scale));
+            return;
+        }
+        let accepted = native.enabled
+            && native.allowed
+            && token.is_some()
+            && native.pipeline.flight.is_none()
+            && native.pipeline.latest.is_none()
+            && native.candidate_token() == token
+            && native
+                .candidate
+                .as_ref()
+                .is_some_and(|image| image.capture.revision == native.pipeline.revision)
+            && scale.is_some_and(|scale| native.admit(scale, web));
+        unsafe {
+            web.evaluateJavaScript_completionHandler(
+                &NSString::from_str(&format!(
+                    "window.tiptoptypZoomSnapshot?.admitted({},{});",
+                    serde_json::json!(token),
+                    accepted
+                )),
+                None,
+            );
+        }
+    }
+
     fn capture(&self, web: Retained<WKWebView>, request: &serde_json::Value, allowed: bool) {
         let Some(token) = request["token"].as_str().filter(|token| token.len() <= 128) else {
             return;
         };
+        if self.0.borrow().capture_deferred {
+            unsafe {
+                web.evaluateJavaScript_completionHandler(
+                    &NSString::from_str(&format!(
+                        "window.tiptoptypZoomSnapshot?.deferred({});",
+                        serde_json::json!(token)
+                    )),
+                    None,
+                );
+            }
+            return;
+        }
         let Some(marker) = MainThreadMarker::new() else {
             return;
         };
@@ -1746,7 +1926,7 @@ impl CaptureState {
 
     fn capture_ready(&self) {
         let mut native = self.0.borrow_mut();
-        if native.rasterizing {
+        if native.capture_deferred || native.rasterizing || native.preparing_raster {
             return;
         }
         let Some(capture) = native.busy.clone() else {
@@ -1755,10 +1935,18 @@ impl CaptureState {
         let Some(web) = native.web.clone() else {
             return;
         };
+        if let Some(prepared) = take_current_capture(&mut native.deferred_raster, &capture.token) {
+            drop(native);
+            self.raster_finished(prepared);
+            return;
+        }
         let capture_web = if capture.buffered {
             let Some(mirror) = &native.mirror else {
                 return;
             };
+            if !mirror.ready {
+                return;
+            }
             mirror.web.clone()
         } else {
             web.clone()
@@ -1786,130 +1974,207 @@ impl CaptureState {
             let Some(state) = weak.upgrade() else {
                 return;
             };
-            let mut native = state.borrow_mut();
-            if native.busy.as_ref().map(|c| c.token.as_str()) != Some(token.as_str()) {
-                return;
-            }
-            native.busy = None;
-            native.rasterizing = false;
-            let mut result = serde_json::Value::Null;
-            if error.is_null()
-                && native.allowed
-                && native.enabled
-                && native.pipeline.revision == capture.revision
-                && native.pipeline.flight.is_none()
-                && native.pipeline.latest.is_none()
-                && web.bounds().size == capture.viewport
-                && let Some(image) = unsafe { image.as_ref() }
-            {
-                // WebKit already produced the raster. Obtain its CGImage during
-                // idle, and let CALayer retain it. No base64/PNG/DOM image copy.
-                unsafe {
-                    let cg: *mut AnyObject = msg_send![image, CGImageForProposedRect: std::ptr::null_mut::<NSRect>(), context: std::ptr::null::<AnyObject>(), hints: std::ptr::null::<AnyObject>()];
-                    if let Some(cg) = cg.as_ref() {
-                        unsafe extern "C" {
-                            fn CGImageGetWidth(image: *const AnyObject) -> usize;
-                            fn CGImageGetHeight(image: *const AnyObject) -> usize;
-                        }
-                        let pixels = (CGImageGetWidth(cg), CGImageGetHeight(cg));
-                        if pixels.0 > 0
-                            && pixels.1 > 0
-                            && (pixels.0 as f64) * (pixels.1 as f64) <= MAX_PIXELS
-                        {
-                            let clip: Retained<AnyObject> = msg_send![class!(CALayer), layer];
-                            let slices = image_slices(
-                                capture.geometry.as_ref(),
-                                capture.origin,
-                                capture.size,
-                            );
-                            // NSView.layer requires the newer Quartz bindings;
-                            // these public selectors keep the boundary local.
-                            let parent: Option<Retained<AnyObject>> = msg_send![&*web, layer];
-                            if parent.is_some() && !slices.is_empty() {
-                                let _: () = msg_send![class!(CATransaction), begin];
-                                let _: () =
-                                    msg_send![class!(CATransaction), setDisableActions: true];
-                                let _: () = msg_send![&*clip, setFrame: clip_bounds(web.bounds())];
-                                // WKWebView's backing layer already supplies
-                                // AppKit's flipped coordinates. A standalone
-                                // child must not apply that flip a second time.
-                                let _: () = msg_send![&*clip, setMasksToBounds: true];
-                                let _: () = msg_send![&*clip, setZPosition: 1_000_000.0f64];
-                                unsafe extern "C" {
-                                    static kCGColorSpaceSRGB: *const std::ffi::c_void;
-                                    fn CGColorSpaceCreateWithName(
-                                        name: *const std::ffi::c_void,
-                                    ) -> *mut std::ffi::c_void;
-                                    fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
-                                    fn CGColorCreate(
-                                        space: *const std::ffi::c_void,
-                                        components: *const f64,
-                                    ) -> *mut std::ffi::c_void;
-                                    fn CGColorRelease(color: *mut std::ffi::c_void);
-                                }
-                                // CSS RGB is sRGB. GenericRGB changes its gamma
-                                // and leaves a seam beside the captured paper.
-                                let space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-                                let color = CGColorCreate(space, capture.background.as_ptr());
-                                let _: () = msg_send![&*clip, setBackgroundColor: color];
-                                CGColorRelease(color);
-                                let paper_layer: Retained<AnyObject> =
-                                    msg_send![class!(CALayer), layer];
-                                let paper_color =
-                                    CGColorCreate(space, capture.paper_background.as_ptr());
-                                let _: () = msg_send![&*paper_layer,setBackgroundColor:paper_color];
-                                let _: () = msg_send![&*paper_layer,setHidden:true];
-                                let _: () = msg_send![&*clip,addSublayer:&*paper_layer];
-                                CGColorRelease(paper_color);
-                                CGColorSpaceRelease(space);
-                                let _: () = msg_send![&*clip, setHidden: true];
-                                let mut layers = Vec::with_capacity(slices.len());
-                                for slice in slices {
-                                    let layer: Retained<AnyObject> =
-                                        msg_send![class!(CALayer), layer];
-                                    let _: () = msg_send![&*layer,setContents:cg];
-                                    let _: () = msg_send![&*layer,setHidden:true];
-                                    let _: () = msg_send![&*clip,addSublayer:&*layer];
-                                    layers.push(ImageLayer { layer, slice });
-                                }
-                                let outline_layer: Retained<AnyObject> =
-                                    msg_send![class!(CALayer), layer];
-                                let _: () = msg_send![&*outline_layer,setFrame:NSRect::new(NSPoint::new(0.0,0.0),clip_bounds(web.bounds()).size)];
-                                let _: () = msg_send![&*clip,addSublayer:&*outline_layer];
-                                let _: () = msg_send![class!(CATransaction), commit];
-                                native.candidate = Some(PreparedImage {
-                                    capture: capture.clone(),
-                                    clip,
-                                    layers,
-                                    paper_layer,
-                                    outline_layer,
-                                    pixels,
-                                });
-                                result = serde_json::json!({"width":pixels.0,"height":pixels.1});
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(mirror) = native.mirror.as_mut() {
-                mirror.park();
-            }
-            unsafe {
-                web.evaluateJavaScript_completionHandler(
-                    &NSString::from_str(&format!(
-                        "window.tiptoptypZoomSnapshot?.resolve({}, {});",
-                        serde_json::json!(token),
-                        result
-                    )),
-                    None,
-                );
-            }
+            let image = if error.is_null() {
+                unsafe { Retained::retain(image) }
+            } else {
+                None
+            };
+            CaptureState(state).capture_finished(&token, image);
         });
         unsafe {
             capture_web
                 .takeSnapshotWithConfiguration_completionHandler(Some(&configuration), &completion);
         }
     }
+    fn capture_finished(&self, token: &str, image: Option<Retained<NSImage>>) {
+        let mut native = self.0.borrow_mut();
+        let Some(capture) = native
+            .busy
+            .as_ref()
+            .filter(|capture| capture.token == token)
+            .cloned()
+        else {
+            return;
+        };
+        native.rasterizing = false;
+        let Some(web) = native.web.clone() else {
+            return;
+        };
+        let source = image.as_deref().and_then(|image| unsafe {
+            // AppKit owns this lookup; only its immutable CGImage enters the worker.
+            let cg: *mut CGImage = msg_send![image, CGImageForProposedRect: std::ptr::null_mut::<NSRect>(), context: std::ptr::null::<AnyObject>(), hints: std::ptr::null::<AnyObject>()];
+            NonNull::new(cg).map(|cg| CFRetained::retain(cg))
+        });
+        if native.allowed
+            && native.enabled
+            && native.pipeline.revision == capture.revision
+            && native.pipeline.flight.is_none()
+            && native.pipeline.latest.is_none()
+            && web.bounds().size == capture.viewport
+            && let (Some(source), Some(space)) = (source, target_color_space(&web))
+        {
+            let request = raster::Request {
+                token: token.to_owned(),
+                revision: capture.revision,
+                source,
+                space,
+                wake: native.repaint.clone(),
+            };
+            if native.raster_worker.is_none() {
+                native.raster_worker = raster::Worker::new().ok();
+            }
+            if native
+                .raster_worker
+                .as_ref()
+                .is_some_and(|worker| worker.request(request))
+            {
+                native.preparing_raster = true;
+                if let Some(mirror) = native.mirror.as_mut() {
+                    mirror.park();
+                }
+                return;
+            }
+        }
+        native.busy = None;
+        if let Some(mirror) = native.mirror.as_mut() {
+            mirror.park();
+        }
+        drop(native);
+        Self::resolve_failure(&web, token);
+    }
+
+    fn raster_finished(&self, prepared: raster::Prepared) {
+        let mut native = self.0.borrow_mut();
+        let Some(capture) = native
+            .busy
+            .as_ref()
+            .filter(|capture| {
+                capture.token == prepared.token && capture.revision == prepared.revision
+            })
+            .cloned()
+        else {
+            return;
+        };
+        native.preparing_raster = false;
+        if native.capture_deferred {
+            native.deferred_raster = Some((prepared.token.clone(), prepared));
+            return;
+        }
+        let Some(web) = native.web.clone() else {
+            return;
+        };
+        let mut result = serde_json::Value::Null;
+        if native.allowed
+            && native.enabled
+            && native.pipeline.revision == capture.revision
+            && native.pipeline.flight.is_none()
+            && native.pipeline.latest.is_none()
+            && web.bounds().size == capture.viewport
+            && let Some(space) = target_color_space(&web)
+            && let Some(image) = prepared.image.as_ref()
+        {
+            // A display/profile change during the job needs the original pixels,
+            // not another quantized conversion of the previous output.
+            if *space != *prepared.space {
+                let request = raster::Request {
+                    token: prepared.token,
+                    revision: capture.revision,
+                    source: prepared.source,
+                    space,
+                    wake: native.repaint.clone(),
+                };
+                if native
+                    .raster_worker
+                    .as_ref()
+                    .is_some_and(|worker| worker.request(request))
+                {
+                    native.preparing_raster = true;
+                    return;
+                }
+            } else {
+                let pixels = (CGImage::width(Some(image)), CGImage::height(Some(image)));
+                // CALayer's contents retain this immutable prepared image.
+                let cg = CFRetained::as_ptr(image).as_ptr().cast::<AnyObject>();
+                unsafe {
+                    let clip: Retained<AnyObject> = msg_send![class!(CALayer), layer];
+                    let slices =
+                        image_slices(capture.geometry.as_ref(), capture.origin, capture.size);
+                    // NSView.layer requires the newer Quartz bindings;
+                    // these public selectors keep the boundary local.
+                    let parent: Option<Retained<AnyObject>> = msg_send![&*web, layer];
+                    if parent.is_some() && !slices.is_empty() {
+                        let _: () = msg_send![class!(CATransaction), begin];
+                        let _: () = msg_send![class!(CATransaction), setDisableActions: true];
+                        let _: () = msg_send![&*clip, setFrame: clip_bounds(web.bounds())];
+                        // WKWebView's backing layer already supplies
+                        // AppKit's flipped coordinates. A standalone
+                        // child must not apply that flip a second time.
+                        let _: () = msg_send![&*clip, setMasksToBounds: true];
+                        let _: () = msg_send![&*clip, setZPosition: 1_000_000.0f64];
+                        unsafe extern "C" {
+                            static kCGColorSpaceSRGB: *const std::ffi::c_void;
+                            fn CGColorSpaceCreateWithName(
+                                name: *const std::ffi::c_void,
+                            ) -> *mut std::ffi::c_void;
+                            fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+                            fn CGColorCreate(
+                                space: *const std::ffi::c_void,
+                                components: *const f64,
+                            ) -> *mut std::ffi::c_void;
+                            fn CGColorRelease(color: *mut std::ffi::c_void);
+                        }
+                        // CSS RGB is sRGB. GenericRGB changes its gamma
+                        // and leaves a seam beside the captured paper.
+                        let space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+                        let color = CGColorCreate(space, capture.background.as_ptr());
+                        let _: () = msg_send![&*clip, setBackgroundColor: color];
+                        CGColorRelease(color);
+                        let paper_layer: Retained<AnyObject> = msg_send![class!(CALayer), layer];
+                        let paper_color = CGColorCreate(space, capture.paper_background.as_ptr());
+                        let _: () = msg_send![&*paper_layer,setBackgroundColor:paper_color];
+                        let _: () = msg_send![&*paper_layer,setHidden:true];
+                        let _: () = msg_send![&*clip,addSublayer:&*paper_layer];
+                        CGColorRelease(paper_color);
+                        CGColorSpaceRelease(space);
+                        let _: () = msg_send![&*clip, setHidden: true];
+                        let mut layers = Vec::with_capacity(slices.len());
+                        for slice in slices {
+                            let layer: Retained<AnyObject> = msg_send![class!(CALayer), layer];
+                            let _: () = msg_send![&*layer,setContents:cg];
+                            let _: () = msg_send![&*layer,setHidden:true];
+                            let _: () = msg_send![&*clip,addSublayer:&*layer];
+                            layers.push(ImageLayer { layer, slice });
+                        }
+                        let outline_layer: Retained<AnyObject> = msg_send![class!(CALayer), layer];
+                        let _: () = msg_send![&*outline_layer,setFrame:NSRect::new(NSPoint::new(0.0,0.0),clip_bounds(web.bounds()).size)];
+                        let _: () = msg_send![&*clip,addSublayer:&*outline_layer];
+                        let _: () = msg_send![class!(CATransaction), commit];
+                        native.candidate = Some(PreparedImage {
+                            capture: capture.clone(),
+                            clip,
+                            layers,
+                            paper_layer,
+                            outline_layer,
+                            pixels,
+                        });
+                        result = serde_json::json!({"width":pixels.0,"height":pixels.1});
+                    }
+                }
+            }
+        }
+        native.busy = None;
+        unsafe {
+            web.evaluateJavaScript_completionHandler(
+                &NSString::from_str(&format!(
+                    "window.tiptoptypZoomSnapshot?.resolve({}, {});",
+                    serde_json::json!(capture.token),
+                    result
+                )),
+                None,
+            );
+        }
+    }
+
     // Native-only deterministic layer capture; never used by ordinary rendering.
     #[cfg(any(feature = "native-ui-tests", feature = "desktop-ui-tests"))]
     #[allow(dead_code)]
@@ -2002,13 +2267,95 @@ impl CaptureState {
             "pending":native.pipeline.latest.map(|request|request.revision),"deferred":native.gate.due.is_some(),"pinch":native.gate.pinch,"pixels":[native.pixels.0,native.pixels.1],"base_scale":native.base_scale,"source_paper":native.geometry.as_ref().map(|g|g.paper),
             "transform":[native.transform.ratio,native.transform.dx,native.transform.dy],
             "source_anchor":native.geometry.as_ref().filter(|_|native.token.is_some()).and_then(|g|g.point(transform,native.anchor)),
-            "target_scroll":native.geometry.as_ref().filter(|_|native.token.is_some()).map(|g|g.target(transform,native.layout_size)),"image_origin":[native.image_origin.x,native.image_origin.y],"image_size":[native.image_size.width,native.image_size.height],"image_layers":native.image_layers.len(),"prepared":native.candidate.is_some(),"capturing":native.busy.is_some(),"capture_view":native.mirror.as_ref().map(|m|[m.web.frame().size.width,m.web.frame().size.height])})
+            "target_scroll":native.geometry.as_ref().filter(|_|native.token.is_some()).map(|g|g.target(transform,native.layout_size)),"image_origin":[native.image_origin.x,native.image_origin.y],"image_size":[native.image_size.width,native.image_size.height],"image_layers":native.image_layers.len(),"prepared":native.candidate.is_some(),"capturing":native.busy.is_some(),"capture_deferred":native.capture_deferred,"retained_capture":native.deferred_raster.is_some(),"raster_worker":native.raster_worker.is_some(),"preparing_raster":native.preparing_raster,"capture_view":native.mirror.as_ref().map(|m|[m.web.frame().size.width,m.web.frame().size.height])})
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_reload_reuses_one_pixel_worker_instead_of_spawning_overlapping_jobs() {
+        let mut state = CaptureState::default();
+        state.0.borrow_mut().raster_worker = Some(raster::Worker::new().unwrap());
+        let worker = state.0.borrow().raster_worker.as_ref().unwrap().thread_id();
+        for _ in 0..25 {
+            state.invalidate();
+            assert_eq!(
+                state.0.borrow().raster_worker.as_ref().unwrap().thread_id(),
+                worker
+            );
+            assert!(state.0.borrow().busy.is_none());
+        }
+    }
+
+    #[test]
+    fn deferred_capture_results_are_consumed_once_and_never_cross_tokens() {
+        let mut pending = Some(("current".into(), 42));
+        assert_eq!(take_current_capture(&mut pending, "current"), Some(42));
+        assert_eq!(take_current_capture(&mut pending, "current"), None);
+        pending = Some(("old".into(), 7));
+        assert_eq!(take_current_capture(&mut pending, "replacement"), None);
+        assert!(
+            pending.is_none(),
+            "a canceled raster must release its bounded slot"
+        );
+    }
+
+    #[test]
+    fn capture_deferral_preserves_warmed_pixels_and_queued_zoom_anchors() {
+        let state = CaptureState::default();
+        {
+            let mut native = state.0.borrow_mut();
+            native.token = Some("accepted-raster".into());
+            native.pipeline.scale = 1.2;
+            native.pipeline.revision = 7;
+            native.pipeline.flight = Some(Request {
+                revision: 6,
+                scale: 1.1,
+                x: 20.0,
+                y: 30.0,
+                pan_x: 4.0,
+                pan_y: 5.0,
+                resize: false,
+            });
+            native.pipeline.latest = Some(Request {
+                revision: 7,
+                scale: 1.2,
+                x: 40.0,
+                y: 50.0,
+                pan_x: 8.0,
+                pan_y: 9.0,
+                resize: true,
+            });
+            native.transform = Transform {
+                ratio: 1.2,
+                dx: 12.0,
+                dy: 34.0,
+            };
+        }
+        for deferred in [true, true, false, false] {
+            state.set_capture_deferred(deferred);
+            let native = state.0.borrow();
+            assert_eq!(native.capture_deferred, deferred);
+            assert_eq!(native.token.as_deref(), Some("accepted-raster"));
+            assert_eq!(native.pipeline.scale, 1.2);
+            assert_eq!(native.pipeline.revision, 7);
+            assert_eq!(native.pipeline.flight.unwrap().revision, 6);
+            assert_eq!(native.pipeline.latest.unwrap().revision, 7);
+            assert_eq!(native.pipeline.latest.unwrap().x, 40.0);
+            assert_eq!(native.pipeline.latest.unwrap().pan_y, 9.0);
+            assert_eq!(
+                (
+                    native.transform.ratio,
+                    native.transform.dx,
+                    native.transform.dy
+                ),
+                (1.2, 12.0, 34.0)
+            );
+        }
+    }
+
     #[test]
     fn scroll_phase_boundaries_retain_idle_pixels_until_content_actually_moves() {
         assert!(!manual_scroll(0.0, 0.0));

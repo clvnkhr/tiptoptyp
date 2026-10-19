@@ -223,6 +223,32 @@ pub(super) fn input_enabled(settings: EditorEffectSettings) -> bool {
             .any(|a| settings.actions.get(a).enabled())
 }
 
+#[cfg(any(test, target_os = "macos"))]
+pub(super) fn active(context: &egui::Context, editor: Id, document: DocumentKey) -> bool {
+    let Some(state) = context.data(|data| data.get_temp::<SharedState>(state_id(editor))) else {
+        return false;
+    };
+    let state = state.lock().unwrap();
+    let document = Identity::new(document, View::Source).document;
+    if state
+        .identity
+        .is_none_or(|identity| identity.document != document)
+        || state.last_frame != Some(context.cumulative_frame_nr())
+    {
+        return false;
+    }
+    let now = state.clock.now(context);
+    if !now.is_finite() {
+        return false;
+    }
+    // Births are ordered, so checking the newest particle bounds this query even
+    // at maximum density. Expired state need not wait for another editor paint.
+    state.particles.last().is_some_and(|particle| {
+        let end = particle.born + LIFETIME;
+        particle.born.is_finite() && end.is_finite() && particle.born <= now && now < end
+    }) || state.feedback.is_some_and(|pulse| pulse.alive(now))
+}
+
 pub(super) fn prepare_shake(
     ui: &Ui,
     editor: Id,
@@ -887,6 +913,168 @@ pub(super) mod tests {
             DocumentKey::new(WindowSessionId::new(1), epoch, revision),
             view,
         )
+    }
+
+    fn query_at(context: &egui::Context, editor: Id, document: DocumentKey, now: f64) -> bool {
+        let mut result = false;
+        // run_ui advances the frame counter; raw begin_pass/end_pass only
+        // advance passes and would keep every simulated paint in frame zero.
+        context
+            .run_ui(
+                egui::RawInput {
+                    time: Some(now),
+                    ..Default::default()
+                },
+                |_| {
+                    if let Some(state) =
+                        context.data(|data| data.get_temp::<SharedState>(state_id(editor)))
+                    {
+                        state.lock().unwrap().last_frame = Some(context.cumulative_frame_nr());
+                    }
+                    result = active(context, editor, document);
+                },
+            )
+            .drop_without_applying_deltas();
+        result
+    }
+
+    #[test]
+    fn active_query_does_not_create_state_clock_or_renderer() {
+        let context = egui::Context::default();
+        let editor = Id::new("absent-effects");
+        assert!(!active(
+            &context,
+            editor,
+            identity(1, 0, View::Source).document
+        ));
+        assert!(!active(
+            &context,
+            editor,
+            identity(1, 0, View::Diff).document
+        ));
+        context.data(|data| {
+            assert!(data.get_temp::<SharedState>(state_id(editor)).is_none());
+            assert!(
+                data.get_temp::<clock::Clock>(Id::new("editor-effects-clock"))
+                    .is_none()
+            );
+        });
+    }
+
+    #[test]
+    fn active_query_accepts_both_views_and_revisions_but_requires_current_document_and_paint() {
+        for view in [View::Source, View::Diff] {
+            let context = egui::Context::default();
+            let editor = Id::new("active-effects");
+            let key = identity(1, 0, view);
+            let mut state = State {
+                clock: clock::Clock::Manual,
+                ..Default::default()
+            };
+            state.update(key, 0, 10.0, Some(Pos2::ZERO), 2);
+            let state = Arc::new(Mutex::new(state));
+            context.data_mut(|data| data.insert_temp(state_id(editor), state.clone()));
+            assert!(!query_at(&context, editor, key.document, 9.9));
+            assert!(query_at(
+                &context,
+                editor,
+                identity(1, 99, view).document,
+                10.1
+            ));
+            context
+                .run_ui(
+                    egui::RawInput {
+                        time: Some(10.2),
+                        ..Default::default()
+                    },
+                    |_| {
+                        assert!(
+                            state.lock().unwrap().last_frame.unwrap()
+                                < context.cumulative_frame_nr()
+                        );
+                        assert!(
+                            !active(&context, editor, key.document),
+                            "an unpainted view must release capture"
+                        );
+                        state.lock().unwrap().last_frame = Some(context.cumulative_frame_nr());
+                        assert!(!active(&context, Id::new("other-editor"), key.document));
+                        assert!(!active(&context, editor, identity(2, 0, view).document));
+                        assert!(!active(
+                            &context,
+                            editor,
+                            DocumentKey::new(WindowSessionId::new(2), 1, 0)
+                        ));
+                        assert!(active(&context, editor, key.document));
+                    },
+                )
+                .drop_without_applying_deltas();
+            assert!(!query_at(&context, editor, key.document, 10.0 + LIFETIME));
+            assert_eq!(
+                state.lock().unwrap().particles.len(),
+                2,
+                "queries must not mutate retained state"
+            );
+        }
+    }
+
+    #[test]
+    fn active_query_uses_the_newest_finite_particle_deadline() {
+        let context = egui::Context::default();
+        let editor = Id::new("particle-deadlines");
+        let key = identity(1, 0, View::Source);
+        let mut state = State {
+            clock: clock::Clock::Manual,
+            ..Default::default()
+        };
+        state.update(key, 0, 10.0, Some(Pos2::ZERO), 1);
+        state.update(key, 1, 10.3, Some(Pos2::ZERO), 1);
+        let state = Arc::new(Mutex::new(state));
+        context.data_mut(|data| data.insert_temp(state_id(editor), state.clone()));
+        assert!(query_at(&context, editor, key.document, 10.7));
+        assert!(!query_at(&context, editor, key.document, 10.3 + LIFETIME));
+        state.lock().unwrap().particles.last_mut().unwrap().born = f64::NAN;
+        assert!(!query_at(&context, editor, key.document, 11.0));
+        state.lock().unwrap().particles.last_mut().unwrap().born = f64::INFINITY;
+        assert!(!query_at(&context, editor, key.document, 11.1));
+    }
+
+    #[test]
+    fn active_query_retains_captured_feedback_flags_until_each_envelope_expires() {
+        for (shake, flash, glow) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let context = egui::Context::default();
+            let editor = Id::new("feedback-deadlines");
+            let key = identity(1, 0, View::Diff);
+            let mut effects = ActionEffectSettings {
+                particles: None,
+                shake,
+                flash,
+                glow,
+            };
+            let mut state = State {
+                clock: clock::Clock::Manual,
+                ..Default::default()
+            };
+            state.update(key, 0, 10.0, None, 0);
+            state.update_feedback(Some(Pos2::ZERO), Some(effects), 10.0, 0);
+            effects.shake = false;
+            effects.flash = false;
+            effects.glow = false;
+            assert!(!effects.enabled());
+            let state = Arc::new(Mutex::new(state));
+            context.data_mut(|data| data.insert_temp(state_id(editor), state.clone()));
+            assert!(query_at(&context, editor, key.document, 10.1));
+            assert!(!query_at(
+                &context,
+                editor,
+                key.document,
+                10.0 + feedback::LIFETIME
+            ));
+            assert!(state.lock().unwrap().feedback.is_some());
+        }
     }
 
     #[test]

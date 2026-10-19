@@ -2,7 +2,7 @@
 // transforms belong to the native compositor, never this renderer's JS thread.
 (() => {
   const MAX_PIXELS = 4_000_000;
-  let enabled = false, readFrame, cache = null, capture = null, admission = null, timer = 0;
+  let enabled = false, captureDeferred = false, readFrame, cache = null, capture = null, admission = null, timer = 0;
   let active = false, epoch = 0, sourceEpoch = 0, serial = 0, nativeRequest = null, nativeOwner = null, expectedScroll = null, handoffEpoch = null, frameEpoch = null;
   const counters = { captures: 0, hits: 0, misses: 0, failures: 0, handoffs: 0 };
   let currentOutline=null;
@@ -30,14 +30,14 @@
     if (notify) post({ op: 'invalidate', abort: !!abort });
   };
   const settle = () => {
-    if (!enabled || active || capture || admission || timer || !readFrame) return;
+    if (!enabled || captureDeferred || active || capture || admission || timer || !readFrame) return;
     const frame = readFrame();
     if (!captureReady(frame)) return;
     if (frameEpoch !== epoch) { post({ op: 'frame', scale: frame.scale, width: frame.width, height: frame.height }); frameEpoch = epoch; if (currentOutline) post({op:'outline',...currentOutline}); }
     if (same(cache?.frame, frame) && !cache.refresh) return;
     timer = setTimeout(() => {
       timer = 0;
-      if (!enabled || active || capture || admission) return;
+      if (!enabled || captureDeferred || active || capture || admission) return;
       const start = readFrame();
       if (!captureReady(start)) return;
       const token = `${namespace}:${++serial}`;
@@ -127,6 +127,18 @@
   };
   window.tiptoptypZoomSnapshot = {
     attach(reader) { readFrame = reader; settle(); },
+    deferCaptures(value) {
+      const next = !!value;
+      if (next === captureDeferred) return;
+      captureDeferred = next;
+      clearTimeout(timer); timer = 0;
+      if (!next) settle();
+    },
+    deferred(token) {
+      if (capture?.token !== token) return;
+      capture = null;
+      settle();
+    },
     configure(value) {
       const next = !!value && typeof window.tiptoptypCaptureZoomSnapshot === 'function';
       if (next === enabled) return;
@@ -190,7 +202,7 @@
       invalidate(true, false); settle(); return true;
     },
     begin, rendered, settle, scrolled, invalidate, resolve, admitted,
-    inspect() { const frame = readFrame?.(); return { enabled, active, capturing: !!capture, admitting: !!admission, cached: !!cache,
+    inspect() { const frame = readFrame?.(); return { enabled, capture_deferred: captureDeferred, active, capturing: !!capture, admitting: !!admission, cached: !!cache,
       pixels: cache ? [cache.width, cache.height] : null, request: nativeRequest ? { revision: nativeRequest.revision, scale: nativeRequest.scale, token: nativeRequest.token } : null,
       frame_ready: !!usable(frame), frame_scale: frame?.scale ?? null, handoff_pending: handoffEpoch !== null, ...counters }; }
   };

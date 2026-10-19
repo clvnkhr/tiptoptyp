@@ -9865,6 +9865,19 @@ impl EditorApp {
         self.tick_preview_follow(&context);
         self.tick_autosave(&context);
         self.tick_compile(&context);
+        // Warming zoom pixels can synchronize WebKit/AppKit on this thread.
+        // Keep the accepted screenshot usable and warm its replacement after
+        // finite editor feedback ends, rather than interrupting the animation.
+        #[cfg(target_os = "macos")]
+        {
+            self.webview_snapshot
+                .set_capture_deferred(editor_particles::active(
+                    &context,
+                    source_editor_id(&context),
+                    self.document().key(),
+                ));
+            self.webview_snapshot.poll(&context);
+        }
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         self.publish_desktop_inspection(&context);
     }

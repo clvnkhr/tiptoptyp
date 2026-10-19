@@ -57,10 +57,12 @@ wry = "0.57.0"
 harfrust = "0.12.0"
 memmap2 = "0.9.11"
 objc2 = "0.6.4"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "objc2", "CGBitmapContext", "CGContext", "CGImage", "CGColorSpace", "CGDataProvider"] }
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
 objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKWebView", "WKSnapshotConfiguration", "WKNavigation", "WKNavigationDelegate", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKPreferences", "block2"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSGraphics", "NSImage", "NSGraphicsContext", "NSMenu", "NSMenuItem", "NSEvent", "NSView", "NSWindow", "NSColor", "NSVisualEffectView", "NSAppearance", "block2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSColorSpace", "NSScreen", "objc2-core-graphics", "NSApplication", "NSGraphics", "NSImage", "NSGraphicsContext", "NSMenu", "NSMenuItem", "NSEvent", "NSView", "NSWindow", "NSColor", "NSVisualEffectView", "NSAppearance", "block2"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSDate", "NSValue", "NSObject", "NSRunLoop", "NSTimer", "NSString", "NSURL", "block2"] }
 # Keep this exact: the application-open bridge augments this release's
 # existing delegate instead of replacing winit's lifecycle integration.
