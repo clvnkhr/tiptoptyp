@@ -163,6 +163,7 @@ fn run() {
                     available:!!frame&&!error,error,visibility:document.visibilityState,
                     scale:frame?.scale,geometry:frame?.geometry,location,
                     scroll_limits:frame?.doc?.hookedElem?.parentElement ? [frame.doc.hookedElem.parentElement.scrollWidth-frame.doc.hookedElem.parentElement.clientWidth,frame.doc.hookedElem.parentElement.scrollHeight-frame.doc.hookedElem.parentElement.clientHeight] : null,
+                    redundant_prefetch:window.tiptoptypNativeZoomRedundantPrefetch===true,
                     cache,request:window.tiptoptypLastNativeZoom}});
             }};
             {adapter}
@@ -1274,6 +1275,40 @@ fn live_transition_regression(
         );
         save(&steps, &failures, receipt, probe.capture_timings);
         probe.idle_image("no-op-page-cache-recovered", true)?;
+
+        if receipt["partial"] == true {
+            // A buffered viewport job can become redundant before its RAF.
+            // Queue it after the first ready observation, reproducing the
+            // busy/paint race over the actual partial renderer without input.
+            web.evaluate_script(
+                r#"{
+                const helper=window.tiptoptypZoomSnapshot, rendered=helper.rendered;
+                helper.rendered=function(...args){
+                    const result=rendered.apply(this,args);
+                    if(this.inspect().active&&this.inspect().frame_ready){
+                        helper.rendered=rendered;
+                        window.tiptoptypNativeZoomRedundantPrefetch=true;
+                        window.tiptoptypNativeZoomFrame().doc.triggerUpdate();
+                    }
+                    return result;
+                };
+            }"#,
+            )
+            .map_err(|error| error.to_string())?;
+            // Process the wrapper before native sends its zoom request.
+            probe.observe("prefetch-race-armed")?;
+            let handoffs = state.inspect()["handoffs"].as_u64().unwrap();
+            assert!(state.action(&json!({"action":"zoom-in"})));
+            let sharp = probe.sharp(handoffs, "redundant-prefetch-sharp")?;
+            if sharp["redundant_prefetch"] != true {
+                return Err("redundant partial prefetch was not injected".into());
+            }
+            steps.push(
+                json!({"kind":"redundant-prefetch-handoff","native":state.inspect(),"frame":sharp}),
+            );
+            save(&steps, &failures, receipt, probe.capture_timings);
+            probe.idle_image("redundant-prefetch-recovered", true)?;
+        }
 
         web.evaluate_script(
             r#"void (async()=>{

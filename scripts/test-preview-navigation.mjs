@@ -2039,3 +2039,23 @@ test('partial patch failures release native zoom without hiding the reported err
   assert.equal(f.messages.filter(m=>m.op==='ready').at(-1)?.revision,42);
   assert.ok(f.visibleComplete());
 });
+
+
+for(const paintPhase of [1,2]) test(`redundant partial prefetch cannot strand native zoom paint phase ${paintPhase}`,()=>{
+  const f=partialFixture({decorated:true,nativeSnapshot:true});f.start();f.flush();f.flush();
+  const cache=f.window.tiptoptypZoomSnapshot;cache.configure(true);
+  f.nativeZoom({revision:51,token:null,scale:1,resize:true});f.flush();
+  if(paintPhase===2)f.flush();
+  assert.equal(cache.owns(51,f.doc),true);
+  const renders=f.windows.length;
+  // A brief scroll approaches the buffered edge, then returns before the
+  // queued prefetch runs. Its busy flag races the sharp-frame observation.
+  f.scrollTo(250);assert.equal(f.doc.isRendering,true);
+  f.scrollTo(0);
+  for(let i=0;i<6;i++)f.flush();
+  assert.equal(f.windows.length,renders,'the returned viewport needs no patch');
+  assert.equal(f.doc.isRendering,false);
+  assert.equal(cache.inspect().active,false,'completion must retry after the redundant prefetch clears its busy flag');
+  assert.equal(f.messages.filter(m=>m.op==='ready').at(-1)?.revision,51);
+  assert.equal(f.frames.size,0,'completion cannot poll');
+});

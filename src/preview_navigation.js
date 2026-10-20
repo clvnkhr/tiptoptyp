@@ -522,6 +522,10 @@
       // Reentrant source messages are real work; viewport-only notifications
       // caused by rescale do not create an empty follow-up frame.
       if (doc.patchQueue.length || state.force) schedulePartial(doc, state);
+      // A prefetch can become unnecessary before its RAF runs. Its busy flag
+      // may have blocked the zoom's paint observation, so publish completion
+      // even when there was no patch/postprocessing to notify that observer.
+      if (!processed && !rendered) window.tiptoptypZoomSnapshot?.rendered();
     }
   };
   const requestPartialViewport = (doc, immediate = false, geometryInput = false, view = null, zoomPoint = null) => {
