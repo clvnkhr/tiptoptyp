@@ -21,10 +21,13 @@ lease. A second request with an obsolete baseline becomes a conflict, not a
 silent overwrite. A confirmed overwrite carries the disk observation the user
 approved; a later change requires a new confirmation.
 
-`AtomicFileWriter::write_checked` checks and persists under a single lease.
-Existing writer clients use the same lease via `write`. This is not an OS lock:
-external programs (including subprocesses not using this destination lease) can
-still race it. Save As/unknown explicit baselines remain explicitly unchecked;
+`file_versions::write_checked` checks and commits under that same canonical
+resource lease. On macOS it coordinates the transaction with `NSFileCoordinator`,
+uses metadata-preserving atomic replacement, and creates native file revisions.
+Other platforms retain `AtomicFileWriter::write_checked`; existing unrelated
+writer clients share the same resource lease via `AtomicFileWriter::write`.
+This is not a universal OS lock: external programs that ignore macOS file
+coordination (or the in-process destination lease) can still race the write. Save As/unknown explicit baselines remain explicitly unchecked;
 automatic saves require a known baseline. There is no automatic conflict merge.
 
 Save completion is now asynchronous; submission success does **not** mean bytes
@@ -120,3 +123,61 @@ Late language-service data is checked separately by document identity; it cannot
 release, overwrite or otherwise mutate another owner's save state. This is
 ownership evidence, not a new save timing claim; the integrated measurements
 and their CPU/GPU limitations are recorded in [`performance.md`](performance.md).
+
+## Native local versions (20 October 2026)
+
+The existing save worker now owns native macOS version creation too; no extra
+executor, per-frame filesystem polling, source queue, or repaint timer was added.
+Original disk contents are preserved before their first overwrite. Automatic
+snapshots coalesce to one per minute after that initial preservation, explicit
+saves preserve changed content immediately, and identical latest revisions are
+not copied. Ownership recognition is bounded to 128 metadata-only path records.
+A changed or unrecognized disk baseline still receives a safety snapshot.
+
+Both original and committed revisions remain associated with the source across
+`NSFileManager` replacement. The same lease covers checks, staging, replacement,
+and checkpoints. A callback URL redirected by file coordination is rejected
+before invoking the checked operation. Backup-store errors are separate from
+save receipts and appear in ordinary and detached completion notices. They
+cannot turn a successful source write into a false save failure.
+
+Restoring a historical version first checkpoints the current canonical buffer,
+including dirty text, without changing the disk file. Once the owner/key/path
+still match, the UI applies an undoable replacement and submits an ordinary
+explicit save. Normal conflict, durability, and receipt rules continue to apply.
+The comparison and its historical PDF never expose a private source mirror as
+an editable document. Historical PDF source is frozen; imported files and
+assets resolve from the current project. See
+[local-file-versions.md](local-file-versions.md) for the complete contract.
+
+### Save-worker cost
+
+An isolated optimized Rust harness includes the repository's actual
+`file_versions`, `private_workspace`, and `resource_lock` modules. It compares
+the prior atomic writer, native automatic saves, and native explicit saves with
+an identical 128-KiB file and one changed tail byte per write. Modes are
+interleaved within one process. Each mode has five warmups and ten measured
+samples; the first write is reported separately. There is no viewport/theme
+because the workload consists of background disk operations, not painting or
+foreground dispatch.
+
+A clean final run on an arm64 Mac, macOS 14.6.1, Rust 1.98.1 measured warm
+medians of 9.40 ms for the prior writer, 11.05 ms for native automatic saves
+(+1.65 ms of worker I/O), and 15.21 ms for explicit saves. Fifteen automatic
+writes created two revisions (original plus first captured save), while explicit
+writes created sixteen. First-write observations were 10.75 ms, 22.55 ms and
+14.69 ms respectively; these are separate from the warmed comparison. No build,
+gallery or native journey ran concurrently with this final measurement.
+
+The [checked-in receipt](performance-results/local-file-versions-2026-10-20.json)
+contains every measured sample, exact source/probe hashes, the isolated harness,
+run metadata and verification results. It supersedes the preliminary concurrent-
+build timing. Raw local receipts and the rebuilt probe are also retained under
+`.tiptoptyp/file-versions-audit/`. The harness includes production source modules;
+its path imports point at this checkout and can be adjusted when reproducing it
+elsewhere. It has no app viewport or theme.
+
+This measures source-save worker I/O on one local filesystem. It does not
+measure main-thread input latency, GUI FPS, cold application startup, revision
+storage on network volumes, or cross-platform behavior. Native version creation
+adds disk work; offloading keeps that work outside the editor's frame loop.

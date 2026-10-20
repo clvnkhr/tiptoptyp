@@ -193,6 +193,7 @@ impl EditorApp {
             .is_some_and(|doc| doc.key() == pending.key);
         let intent = result.completion.intent;
         self.activity.save_error = None;
+        let backup_warning = result.backup_warning;
         let committed = match result.completion.result {
             Ok(committed) => committed,
             Err(error) => {
@@ -347,6 +348,16 @@ impl EditorApp {
             ),
             kind: NoticeKind::Success,
         });
+        if let Some(warning) = backup_warning {
+            self.activity.save_error = Some(format!("Local backup unavailable: {warning}"));
+            self.notice = Some(Notice {
+                message: format!(
+                    "Saved {}, but local backup unavailable: {warning}",
+                    pending.path.display()
+                ),
+                kind: NoticeKind::Error,
+            });
+        }
         if active && unchanged && pending.format_after && self.document().kind().is_typst() {
             if pending.path_changed {
                 self.format_when_service_ready =

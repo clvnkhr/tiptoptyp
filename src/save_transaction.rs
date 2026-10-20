@@ -60,6 +60,9 @@ impl SaveInput {
     pub fn bytes(&self) -> &[u8] {
         self.request.source().as_bytes()
     }
+    pub fn intent(&self) -> SaveIntent {
+        self.intent
+    }
     pub fn expected_disk(&self) -> ExpectedDiskState {
         self.expected_disk
     }

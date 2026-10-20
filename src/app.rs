@@ -67,6 +67,7 @@ mod latexdiff;
 mod table_editor;
 mod table_samples;
 mod table_workbench;
+mod version_history;
 use crate::editor_data::TableTarget;
 use table_editor::show_table_editor_ui;
 use table_workbench::TableEditorDialog;
@@ -1522,6 +1523,7 @@ pub struct EditorApp {
     rename_overlay_had_focus: bool,
     rename_overlay_suspended: bool,
     latexdiff: Option<latexdiff::Dialog>,
+    version_history: Option<version_history::Dialog>,
     table_editor: Option<TableEditorDialog>,
     table_samples: table_samples::Job,
     table_edit_events: Vec<egui::Event>,
@@ -1856,6 +1858,7 @@ impl EditorApp {
             rename_overlay_had_focus: false,
             rename_overlay_suspended: false,
             latexdiff: None,
+            version_history: None,
             table_editor: None,
             table_samples: Default::default(),
             table_edit_events: Vec::new(),
@@ -2047,6 +2050,11 @@ impl EditorApp {
                         .is_some()
             }
             CommandRequirement::SavedDocument => self.document().path().is_some(),
+            CommandRequirement::LocalVersions => {
+                crate::file_versions::AVAILABLE
+                    && self.document().path().is_some()
+                    && self.document().kind().is_editable()
+            }
             // Undo/redo history is viewport-local egui state. Keep these menu
             // items enabled so the active viewport can make the final choice.
             CommandRequirement::Undo | CommandRequirement::Redo => true,
@@ -3120,6 +3128,13 @@ impl EditorApp {
         {
             return;
         }
+        if self.version_history.is_some() {
+            let shortcuts = self.settings.effective_shortcuts();
+            if !self.handle_terminal_shortcuts(context, shortcut_viewport, &shortcuts, frame) {
+                self.handle_version_history_shortcuts(context, shortcut_viewport);
+            }
+            return;
+        }
         if self.handle_shortcut_capture(context, shortcut_viewport) {
             return;
         }
@@ -3535,6 +3550,19 @@ impl EditorApp {
         context: &egui::Context,
         frame: Option<&eframe::Frame>,
     ) {
+        if self.version_history.is_some() {
+            let viewport = focused_input_viewport(context);
+            if viewport != context.viewport_id() {
+                self.route_edit_command_to_focused_widget(command, context, viewport);
+            } else if command == AppCommand::CloseTab {
+                self.close_version_history(context);
+            } else if command == AppCommand::Find {
+                self.open_preview_find(context);
+            } else if self.pdfium_preview_requested() {
+                self.pdfium_preview.command(command, context, false);
+            }
+            return;
+        }
         if self.latexdiff.is_some() {
             if command == AppCommand::CloseTab {
                 self.close_latexdiff(context);
@@ -3595,6 +3623,7 @@ impl EditorApp {
         match command {
             AppCommand::CommandPalette => self.toggle_command_palette(context),
             AppCommand::LatexDiff => self.begin_latexdiff(context),
+            AppCommand::RevertTo => self.begin_version_history(context),
             AppCommand::NewTable => self.begin_new_table(context),
             AppCommand::EditTable => {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;
@@ -3910,7 +3939,10 @@ impl EditorApp {
 
     fn document_flow_busy(&self) -> bool {
         self.document_workflow.is_busy(
-            self.rename_dialog.is_some() || self.table_editor.is_some() || self.latexdiff.is_some(),
+            self.rename_dialog.is_some()
+                || self.table_editor.is_some()
+                || self.latexdiff.is_some()
+                || self.version_history.is_some(),
             self.pending_tool_picker.is_some(),
         )
     }
@@ -6737,7 +6769,7 @@ impl EditorApp {
             && matches!(self.status_preview().status, PreviewStatus::Compiling)
     }
 
-    fn preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
+    fn live_preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
         self.preview.status_snapshot(
             self.preview_language_support().interactive_preview,
             self.preview_visible(),
@@ -6746,13 +6778,25 @@ impl EditorApp {
         )
     }
 
+    fn preview_status_snapshot(&self) -> PreviewStatusSnapshot<'_> {
+        let mut status = self.live_preview_status_snapshot();
+        if self.version_pdf_active() {
+            status.effective_backend = crate::preview::PreviewBackend::Pdfium;
+            status.native_ready = false;
+            status.should_attempt_native = false;
+        }
+        status
+    }
+
     fn interactive_preview_requested(&self) -> bool {
-        self.preview_status_snapshot().interactive_requested
+        self.live_preview_status_snapshot().interactive_requested
     }
 
     fn preview_processing_enabled(&self) -> bool {
         self.source_preview_available()
-            && (self.document_workflow.pending_export.is_some() || self.pdfium_preview_requested())
+            && (self.document_workflow.pending_export.is_some()
+                || self.live_preview_status_snapshot().effective_backend
+                    == crate::preview::PreviewBackend::Pdfium)
     }
 
     fn fail_local_webview(&mut self, message: String) {
@@ -6858,7 +6902,7 @@ impl EditorApp {
     }
 
     fn interactive_preview_active(&self) -> bool {
-        self.preview_status_snapshot().native_ready
+        !self.version_pdf_active() && self.preview_status_snapshot().native_ready
     }
 
     fn non_preview_fallback_details(&self, system_theme: Option<egui::Theme>) -> Vec<String> {
@@ -7105,6 +7149,7 @@ impl EditorApp {
             || !self.settings.editor_effects.actions.get(action).enabled()
             || self.table_editor.is_some()
             || self.latexdiff.is_some()
+            || self.version_history.is_some()
             || !self.document().kind().is_editable()
         {
             return;
@@ -9613,6 +9658,7 @@ impl EditorApp {
         self.execute_pending_app_popup_action(&context, frame);
         self.poll_hunk_action();
         self.poll_save(&context);
+        self.poll_version_history(&context);
         self.tick_parked_autosave(&context);
         let drop_id = viewport_scoped_id(&context, "file-drop-target");
         context.data_mut(|data| data.remove::<FileDropTarget>(drop_id));
@@ -12208,6 +12254,9 @@ impl CommandAvailability {
             CommandRequirement::NewTable => self.new_table,
             CommandRequirement::EditTable => self.edit_table,
             CommandRequirement::SavedDocument => self.saved_document,
+            CommandRequirement::LocalVersions => {
+                crate::file_versions::AVAILABLE && self.saved_document && !self.source_read_only
+            }
             CommandRequirement::Undo => self.can_undo,
             CommandRequirement::Redo => self.can_redo,
             CommandRequirement::TypesettingDocument => self.typesetting_document,

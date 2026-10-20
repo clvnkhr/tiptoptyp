@@ -29,6 +29,8 @@ mod embedded_structure;
 mod embedded_tex;
 mod explorer;
 mod file_icons;
+#[allow(unsafe_code)]
+mod file_versions;
 mod folding;
 mod font_catalog;
 mod font_preview;
@@ -90,6 +92,7 @@ mod tinymist_sync;
 mod tool_command;
 mod toolchain;
 mod unicode_fonts;
+mod version_render;
 mod viewport_fonts;
 mod window_background;
 mod window_host;

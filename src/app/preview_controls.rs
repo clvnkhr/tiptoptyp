@@ -168,6 +168,11 @@ impl Controls {
         self.drag_anchor = None;
     }
 
+    pub(super) fn close_for_version_history(&mut self) {
+        self.close();
+        self.query.clear();
+    }
+
     fn toggle(&mut self, target: Target) {
         if self.select(target) || !self.open {
             self.open = true;
@@ -518,6 +523,7 @@ impl EditorApp {
         if self.main_preview_controls_target() == Some(Target::Source)
             && ((self.pdfium_preview_requested() && self.pdfium_preview.has_focus(context))
                 || (self.interactive_preview_requested()
+                    && !self.version_pdf_active()
                     && self.preview_controls.web.focused
                     && context.memory(|memory| memory.focused().is_none())
                     && self.explorer.focused_section().is_none()

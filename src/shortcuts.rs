@@ -24,6 +24,7 @@ pub(crate) enum ShortcutAction {
     ChangeWorkspaceRoot,
     Save,
     SaveAs,
+    RevertTo,
     Rename,
     Packages,
     Git,
@@ -100,7 +101,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 84] = [
+    pub(crate) const ALL: [Self; 85] = [
         Self::Settings,
         Self::CommandPalette,
         Self::New,
@@ -112,6 +113,7 @@ impl ShortcutAction {
         Self::ChangeWorkspaceRoot,
         Self::Save,
         Self::SaveAs,
+        Self::RevertTo,
         Self::Rename,
         Self::Packages,
         Self::Git,
@@ -200,6 +202,7 @@ impl ShortcutAction {
             Self::ChangeWorkspaceRoot => "file.change_workspace_root",
             Self::Save => "file.save",
             Self::SaveAs => "file.save_as",
+            Self::RevertTo => "file.revert_to",
             Self::Rename => "file.rename",
             Self::Packages => "view.packages",
             Self::Git => "view.git",
@@ -293,6 +296,7 @@ impl ShortcutAction {
             Self::ChangeWorkspaceRoot => "Change workspace root",
             Self::Save => "Save",
             Self::SaveAs => "Save as",
+            Self::RevertTo => "Revert to…",
             Self::Rename => "Rename file",
             Self::Packages => "Packages",
             Self::Git => "Git",
@@ -386,6 +390,7 @@ impl ShortcutAction {
             | Self::ChangeWorkspaceRoot
             | Self::Save
             | Self::SaveAs
+            | Self::RevertTo
             | Self::Rename
             | Self::ExportPdf => "File",
             Self::Undo
@@ -1210,6 +1215,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::NewTable
         | Action::EditTable
         | Action::LatexDiff
+        | Action::RevertTo
         | Action::NewFromTemplate
         | Action::ComfyPreview => {
             return None;
@@ -1317,6 +1323,7 @@ mod tests {
                     || matches!(
                         action,
                         ShortcutAction::NewTable
+                            | ShortcutAction::RevertTo
                             | ShortcutAction::LatexDiff
                             | ShortcutAction::EditTable
                             | ShortcutAction::NewFromTemplate

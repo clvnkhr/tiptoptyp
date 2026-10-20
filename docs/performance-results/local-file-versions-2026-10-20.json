@@ -1,0 +1,116 @@
+{
+  "collected_at_utc": "2026-10-20T10:12:10.877696+00:00",
+  "architecture": "arm64",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "profile": "release",
+  "fixture_bytes": 131072,
+  "warmup_per_mode": 5,
+  "measured_per_mode": 10,
+  "workload": "one changed final byte, modes interleaved, temporary local filesystem",
+  "viewport_theme": "not applicable: background save I/O only",
+  "concurrent_build_or_native_journey": false,
+  "modes": {
+    "0": {
+      "description": "prior AtomicFileWriter baseline",
+      "warm_us": [
+        9126,
+        9276,
+        9140,
+        9876,
+        9743,
+        9518,
+        9673,
+        9899,
+        9035,
+        9147
+      ],
+      "warm_median_us": 9397.0,
+      "first_write_us": 10745
+    },
+    "1": {
+      "description": "native automatic saves",
+      "warm_us": [
+        11039,
+        11054,
+        11070,
+        11988,
+        11019,
+        11043,
+        11070,
+        12039,
+        10965,
+        10890
+      ],
+      "warm_median_us": 11048.5,
+      "first_write_us": 22547
+    },
+    "2": {
+      "description": "native explicit saves",
+      "warm_us": [
+        13648,
+        14766,
+        16005,
+        15218,
+        16393,
+        15209,
+        16013,
+        14893,
+        14882,
+        15369
+      ],
+      "warm_median_us": 15213.5,
+      "first_write_us": 14688
+    }
+  },
+  "native_revisions": {
+    "auto_revisions": "2",
+    "explicit_revisions": "16"
+  },
+  "source_hashes": {
+    "src/file_versions.rs": "8ed027bde043486307fd6752c9e4038457a77afcf7eab8f932703377722373e2",
+    "src/private_workspace.rs": "1952617d27e76b940bc1dda1b0e07dffc9d65214110c7ac55b7c119dacb85de5",
+    "src/resource_lock.rs": "7de52a0d6023213cf0dfd297aefc7eb9258ed08adcc84dd7ed02a81e06ff5722",
+    ".tiptoptyp/file-versions-audit/backend-probe.rs": "b69e7d05801b575b870fa29c39ec9b378b75a73fe7ebc4b60e4e7a7405d531af"
+  },
+  "probe_sha256": "a829a325aca8eb01a19a4ed16c554602b7ed44cd6ae17ed6e30736b35f063818",
+  "limitations": [
+    "Single arm64 Mac and local filesystem; not network-volume or cross-platform evidence.",
+    "Worker duration, not main-thread input latency or GUI FPS.",
+    "First writes are separate from warmed paired medians."
+  ],
+  "probe_source": "extern crate self as tiptoptyp;\npub mod save_transaction {\n    #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n    pub enum SaveIntent { Explicit, ExplicitConfirmed { observed: Option<u64> }, Auto }\n    #[derive(Debug)]\n    pub enum WriteDurability { Synchronized, Uncertain(String) }\n}\n#[path=\"/Users/calvinkhor/Documents/GitHub/mytypst/src/resource_lock.rs\"]\nmod resource_lock;\n#[path=\"/Users/calvinkhor/Documents/GitHub/mytypst/src/private_workspace.rs\"]\nmod private_workspace;\n#[path=\"/Users/calvinkhor/Documents/GitHub/mytypst/src/file_versions.rs\"]\nmod file_versions;\n\n#[cfg(test)]\nmod perf_probe {\n    use super::*;\n    #[test]\n    #[ignore]\n    fn save_backend_comparison() {\n        let roots: Vec<_>=(0..3).map(|_| tempfile::tempdir().unwrap()).collect();\n        let paths: Vec<_>=roots.iter().map(|r| r.path().join(\"save-probe.typ\")).collect();\n        let mut source=vec![b'a';128*1024];\n        for path in &paths {std::fs::write(path,&source).unwrap();}\n        println!(\"profile=release fixture=128KiB warmup=5 samples=15 measured=10 workload=changed-tail disk=temporary-local\");\n        println!(\"mode,sample,elapsed_us\");\n        for sample in 0..15 {\n            source[128*1024-1]=b'A'+sample;\n            for (mode,path) in paths.iter().enumerate() {\n                let started=std::time::Instant::now();\n                match mode {\n                    0=> {private_workspace::AtomicFileWriter::write(path,&source).unwrap();},\n                    1=> {let (_,warning)=file_versions::write_checked(path,&source,save_transaction::SaveIntent::Auto,||Ok(())).unwrap();assert!(warning.is_none());},\n                    _=> {let (_,warning)=file_versions::write_checked(path,&source,save_transaction::SaveIntent::Explicit,||Ok(())).unwrap();assert!(warning.is_none());},\n                }\n                println!(\"{mode},{sample},{}\",started.elapsed().as_micros());\n            }\n        }\n        println!(\"auto_revisions={} explicit_revisions={}\",file_versions::list(&paths[1]).unwrap().len(),file_versions::list(&paths[2]).unwrap().len());\n    }\n}\n",
+  "verification": {
+    "rust_tests": {
+      "passed": 2374,
+      "ignored": 70
+    },
+    "xtask": "32 passed, 1 ignored",
+    "fmt": "passed",
+    "clippy": "all-targets -D warnings passed",
+    "python_contracts": 190,
+    "gallery": {
+      "captured_and_validated": 25,
+      "inspected": [
+        "popup-file-menu--catppuccin-latte",
+        "popup-file-menu--catppuccin-mocha",
+        "main--catppuccin-latte",
+        "docked-history-main-framebuffer"
+      ]
+    },
+    "native": {
+      "file_versions": {
+        "result": "passed",
+        "run": "run-resek2ty",
+        "preview_bounds_lines": 829
+      },
+      "git_hunks": {
+        "result": "passed",
+        "run": "run-cxfp3h_4",
+        "preview_bounds_lines": 393
+      },
+      "binary_sha256": "04e4fbdbe45a167270834dd6c521efd21b2e4c262fc4e9c45315abd15646dece"
+    },
+    "limits": "No whole-window pixel claim for native Tinymist; history screenshot includes actual PDFium rendering in root framebuffer."
+  }
+}

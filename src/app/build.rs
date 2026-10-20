@@ -8,35 +8,8 @@ use crate::{
 };
 
 impl EditorApp {
-    pub(super) fn request_compile(&mut self) {
-        self.compile_deadline = None;
-        if !self.preview_processing_enabled() || !self.may_run_compilation() {
-            return;
-        }
-        let preview_path = self.preview_document_path();
-        let source = match self.preview_document_source() {
-            Ok(source) => source,
-            Err(error) => {
-                self.set_compile_error(error);
-                return;
-            }
-        };
-        let source_dir = self.preview_source_directory();
-        let display_name = preview_path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Untitled.typ".to_owned());
-        let Some(engine) = self.preview_language_support().build else {
-            return;
-        };
-        let Some(language) = self.preview_document_kind().typesetting_language() else {
-            return;
-        };
-        if engine == BuildEngineKind::Tex && !self.settings.tex.build_enabled {
-            self.set_compile_error("TeX builds are disabled in Settings".into());
-            return;
-        }
-        let engine = match engine {
+    pub(super) fn configured_build_engine(&self, engine: BuildEngineKind) -> EngineConfig {
+        match engine {
             BuildEngineKind::Typst => EngineConfig::Typst(TypstOptions {
                 command: self.typst_tool.command.clone().into(),
                 executable: self.typst_tool.program.clone(),
@@ -65,7 +38,37 @@ impl EditorApp {
                 only_cached: self.settings.tex.only_cached,
                 synctex: self.settings.tex.synctex,
             }),
+        }
+    }
+    pub(super) fn request_compile(&mut self) {
+        self.compile_deadline = None;
+        if !self.preview_processing_enabled() || !self.may_run_compilation() {
+            return;
+        }
+        let preview_path = self.preview_document_path();
+        let source = match self.preview_document_source() {
+            Ok(source) => source,
+            Err(error) => {
+                self.set_compile_error(error);
+                return;
+            }
         };
+        let source_dir = self.preview_source_directory();
+        let display_name = preview_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled.typ".to_owned());
+        let Some(engine) = self.preview_language_support().build else {
+            return;
+        };
+        let Some(language) = self.preview_document_kind().typesetting_language() else {
+            return;
+        };
+        if engine == BuildEngineKind::Tex && !self.settings.tex.build_enabled {
+            self.set_compile_error("TeX builds are disabled in Settings".into());
+            return;
+        }
+        let engine = self.configured_build_engine(engine);
         let request = CompileRequest {
             revision: self.preview_document_revision(),
             input: CompileInput {

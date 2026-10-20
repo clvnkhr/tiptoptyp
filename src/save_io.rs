@@ -1,5 +1,5 @@
 //! Protected disk transaction shared by active and parked document saves.
-use crate::{private_workspace::AtomicFileWriter, worker::OperationSummary};
+use crate::worker::OperationSummary;
 use std::{fs, io, path::PathBuf};
 use tiptoptyp::save_transaction::{
     ExpectedDiskState, SaveCompletion, SaveInput, WriteDurability, fingerprint,
@@ -9,11 +9,12 @@ pub(crate) struct SaveResult {
     pub path: PathBuf,
     pub completion: SaveCompletion,
     pub conflict: Option<ExpectedDiskState>,
+    pub backup_warning: Option<String>,
 }
 
 impl OperationSummary for SaveResult {
     fn completion_summary(&self) -> String {
-        match &self.completion.result {
+        let summary = match &self.completion.result {
             Ok(committed) => match &committed.durability {
                 WriteDurability::Synchronized => format!("Saved {}", self.path.display()),
                 WriteDurability::Uncertain(error) => format!(
@@ -22,6 +23,13 @@ impl OperationSummary for SaveResult {
                 ),
             },
             Err(error) => format!("Could not save {}: {error}", self.path.display()),
+        };
+        if self.completion.result.is_ok()
+            && let Some(warning) = &self.backup_warning
+        {
+            format!("{summary}; local backup unavailable: {warning}")
+        } else {
+            summary
         }
     }
 }
@@ -35,8 +43,9 @@ pub(crate) fn execute(input: SaveInput) -> SaveResult {
 fn execute_checked(input: SaveInput, before_check: impl FnOnce() -> io::Result<()>) -> SaveResult {
     let path = input.path().to_owned();
     let mut conflict = None;
+    let mut backup_warning = None;
     let completion = input.execute_with(|input| {
-        AtomicFileWriter::write_checked(input.path(), input.bytes(), || {
+        crate::file_versions::write_checked(input.path(), input.bytes(), input.intent(), || {
             before_check()?;
             if input.expected_disk() != ExpectedDiskState::Unchecked {
                 let observed = match fs::read(input.path()) {
@@ -53,12 +62,17 @@ fn execute_checked(input: SaveInput, before_check: impl FnOnce() -> io::Result<(
             }
             Ok(())
         })
+        .map(|(durability, warning)| {
+            backup_warning = warning;
+            durability
+        })
         .map_err(|error| error.to_string())
     });
     SaveResult {
         path,
         completion,
         conflict,
+        backup_warning,
     }
 }
 
@@ -203,6 +217,36 @@ mod tests {
                 .result
                 .is_err()
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_save_receipt_keeps_history_and_conflicts_do_not_add_versions() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("native-save.typ");
+        fs::write(&path, "original").unwrap();
+        let expected = ExpectedDiskState::Fingerprint(fingerprint(b"original"));
+        let saved = execute(input(&path, "saved", expected));
+        assert!(saved.completion.result.is_ok());
+        assert!(saved.backup_warning.is_none(), "{:?}", saved.backup_warning);
+        let versions = crate::file_versions::list(&path).unwrap();
+        let contents: Vec<_> = versions
+            .iter()
+            .map(|version| crate::file_versions::read(&path, &version.id).unwrap())
+            .collect();
+        assert!(
+            contents.iter().any(|source| source == "original"),
+            "{contents:?}"
+        );
+        assert!(
+            contents.iter().any(|source| source == "saved"),
+            "{contents:?}"
+        );
+        let rejected = execute(input(&path, "conflicting", expected));
+        assert!(rejected.completion.result.is_err());
+        assert!(rejected.backup_warning.is_none());
+        assert_eq!(crate::file_versions::list(&path).unwrap(), versions);
+        assert_eq!(fs::read_to_string(path).unwrap(), "saved");
     }
 
     #[test]

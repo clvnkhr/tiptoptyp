@@ -290,6 +290,16 @@ impl EditorApp {
             "preview_generation": format!("{:?}", self.tinymist_sync.generation),
             }).as_object().unwrap().clone(),
         );
+        interaction["version_history"] = self
+            .version_history
+            .as_ref()
+            .map(|dialog| dialog.inspect(&self.pdfium_preview))
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "visible": false, "loading": false, "count": 0, "left": null, "right": null,
+                    "selected": [null, null], "can_restore": [false, false], "rendering": false, "preview": null, "error": null,
+                })
+            });
         interaction["harper_dictionary_fingerprint"] = serde_json::json!(
             crate::desktop_test::fingerprint(&self.settings.harper_dictionary)
         );

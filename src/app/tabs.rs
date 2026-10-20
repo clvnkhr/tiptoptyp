@@ -746,6 +746,7 @@ impl EditorApp {
         if Some(id) == self.tabs.active_id() {
             return;
         }
+        self.close_version_history(context);
         let previous_kind = self.document().kind();
         let preserve_preview = self.source_preview_available();
         self.activate_record(id, context);

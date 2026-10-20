@@ -235,8 +235,20 @@ fn layout(
     settings: &AppSettings,
     dimensions: (f32, bool),
 ) -> Arc<Layout> {
-    let (width, mitex_dollars) = dimensions;
     diff.refresh(current);
+    cached_layout(ui, id, diff, current, extension, settings, dimensions)
+}
+
+fn cached_layout(
+    ui: &Ui,
+    id: Id,
+    diff: &DocumentDiff,
+    current: &str,
+    extension: &str,
+    settings: &AppSettings,
+    dimensions: (f32, bool),
+) -> Arc<Layout> {
+    let (width, mitex_dollars) = dimensions;
     let style = ui.style().clone();
     // Retained galleys contain glyph UVs into the current font atlas. Even
     // unchanged definitions/metrics can receive a rebuilt atlas. The empty
@@ -320,6 +332,162 @@ fn layout(
         )
     });
     result
+}
+
+/// A complete, immutable comparison using the same syntax, row alignment and
+/// change colors as the docked editor. Headers and actions belong to its caller.
+pub(crate) fn show_comparison(
+    ui: &mut Ui,
+    diff: &DocumentDiff,
+    id: Id,
+    path: &std::path::Path,
+    settings: &AppSettings,
+) -> Rect {
+    let extension = path.extension().and_then(|x| x.to_str()).unwrap_or("txt");
+    let available = ui.available_size();
+    ScrollArea::both()
+        .id_salt(id.with("version-comparison-scroll"))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.set_min_width(available.x);
+            let gap = theme::SPACE.small;
+            let minimum_column = (available.x - gap).max(2.0) / 2.0;
+            let font = theme::editor_font();
+            let muted = ui.visuals().weak_text_color();
+            let gutter = line_number_gutter(ui, &diff.before, &diff.current, settings);
+            let width = (minimum_column - gutter - 4.0).max(1.0);
+            let positioned = cached_layout(
+                ui,
+                id,
+                diff,
+                &diff.current,
+                extension,
+                settings,
+                (width, false),
+            );
+            let column = if settings.line_wrap {
+                minimum_column
+            } else {
+                minimum_column
+                    .max(positioned.old.size().x.max(positioned.new.size().x) + gutter + 4.0)
+            };
+            let (rect, _) = ui.allocate_exact_size(
+                vec2(column * 2.0 + gap, positioned.height.max(available.y)),
+                Sense::hover(),
+            );
+            let old_origin = rect.min + vec2(gutter, 0.0);
+            let origin = old_origin + vec2(column + gap, 0.0);
+            let backgrounds = change_backgrounds(
+                ui,
+                diff,
+                &positioned,
+                origin,
+                [rect.left(), rect.left() + column + gap],
+                column,
+                ui.clip_rect(),
+            );
+            ui.painter().add(Shape::Vec(backgrounds));
+            for (label, galley, rows, base, left) in [
+                (
+                    "Older version contents",
+                    &positioned.old,
+                    &positioned.old_rows,
+                    old_origin,
+                    rect.left(),
+                ),
+                (
+                    "Newer version contents",
+                    &positioned.new,
+                    &positioned.new_rows,
+                    origin,
+                    rect.left() + column + gap,
+                ),
+            ] {
+                let side = Rect::from_min_size(pos2(left, rect.top()), vec2(column, rect.height()));
+                let response = ui.interact(side, id.with(label), Sense::hover());
+                response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, label));
+                ui.painter()
+                    .with_clip_rect(ui.clip_rect().intersect(side))
+                    .galley(base, galley.clone(), ui.visuals().text_color());
+                if settings.line_numbers {
+                    paint_line_numbers(ui, galley, rows, base, &font, muted, ui.clip_rect());
+                }
+            }
+        })
+        .inner_rect
+}
+
+fn line_number_gutter(ui: &Ui, before: &str, current: &str, settings: &AppSettings) -> f32 {
+    if !settings.line_numbers {
+        return 22.0;
+    }
+    let digits = (before.lines().count().max(current.lines().count()) + 1).to_string();
+    ui.painter()
+        .layout_no_wrap(digits, theme::editor_font(), ui.visuals().weak_text_color())
+        .size()
+        .x
+        + theme::SPACE.small
+}
+
+fn change_backgrounds(
+    ui: &Ui,
+    diff: &DocumentDiff,
+    layout: &Layout,
+    origin: Pos2,
+    left: [f32; 2],
+    column: f32,
+    clip: Rect,
+) -> Vec<Shape> {
+    let palette = theme::palette(ui.ctx());
+    let visible = visible_pairs(layout, origin, clip);
+    let mut shapes = Vec::with_capacity(visible.len() * 2);
+    for i in visible {
+        let Some(pair) = diff.pairs.get(i) else { break };
+        if !pair.changed {
+            continue;
+        }
+        let y = origin.y + layout.tops[i];
+        for (present, x, color) in [
+            (pair.old.is_some(), left[0], palette.error),
+            (pair.new.is_some(), left[1], palette.success),
+        ] {
+            let rect = Rect::from_min_size(pos2(x, y), vec2(column, layout.heights[i]));
+            if present && clip.intersects(rect) {
+                shapes.push(Shape::rect_filled(rect, 0.0, color.gamma_multiply(0.12)));
+            }
+        }
+    }
+    shapes
+}
+
+fn paint_line_numbers(
+    ui: &Ui,
+    galley: &Galley,
+    groups: &[Range<usize>],
+    base: Pos2,
+    font: &FontId,
+    color: Color32,
+    clip: Rect,
+) {
+    if !clip.is_finite() || !clip.is_positive() || !base.is_finite() {
+        return;
+    }
+    let start = groups
+        .partition_point(|rows| galley.rows[rows.start].rect().bottom() + base.y < clip.top());
+    let end = groups
+        .partition_point(|rows| galley.rows[rows.start].rect().top() + base.y <= clip.bottom());
+    for (offset, rows) in groups[start..end].iter().enumerate() {
+        let row = &galley.rows[rows.start];
+        let rect = row.rect().translate(base.to_vec2());
+        if clip.intersects(rect) {
+            let number =
+                ui.painter()
+                    .layout_no_wrap((start + offset + 1).to_string(), font.clone(), color);
+            let position = crate::app::line_number_position(base.x - 4.0, rect.top(), row, &number);
+            ui.painter().galley(position, number, color);
+        }
+    }
 }
 
 pub(crate) struct ViewConfig<'a> {
@@ -433,22 +601,7 @@ pub(crate) fn show(
             let minimum_column = (available.x - gap) / 2.0;
             let font = theme::editor_font();
             let muted = ui.visuals().weak_text_color();
-            let gutter = if settings.line_numbers {
-                let digits = (diff
-                    .before
-                    .lines()
-                    .count()
-                    .max(source.as_str().lines().count())
-                    + 1)
-                .to_string();
-                ui.painter()
-                    .layout_no_wrap(digits, font.clone(), muted)
-                    .size()
-                    .x
-                    + theme::SPACE.small
-            } else {
-                22.0
-            };
+            let gutter = line_number_gutter(ui, &diff.before, source.as_str(), settings);
             let width = (minimum_column - gutter - 4.0).max(1.0);
             let backgrounds = ui.painter().add(Shape::Noop);
             let mut current_layout = layout(
@@ -509,7 +662,6 @@ pub(crate) fn show(
                     current_layout.old.clone(),
                     ui.visuals().text_color(),
                 );
-            let palette = theme::palette(ui.ctx());
             let clip = ui.clip_rect();
             let paint_clip = if clip.is_finite() && clip.is_positive() {
                 clip.expand(PAINT_GUARD)
@@ -517,7 +669,15 @@ pub(crate) fn show(
                 Rect::NOTHING
             };
             let visible = visible_pairs(&current_layout, origin, paint_clip);
-            let mut shapes = Vec::with_capacity(visible.len() * 2);
+            let shapes = change_backgrounds(
+                ui,
+                diff,
+                &current_layout,
+                origin,
+                [old_rect.left(), origin.x - gutter],
+                column,
+                paint_clip,
+            );
             for i in visible {
                 let Some(pair) = diff.pairs.get(i) else { break };
                 if !pair.changed {
@@ -525,17 +685,6 @@ pub(crate) fn show(
                 }
                 let y = origin.y + current_layout.tops[i];
                 let h = current_layout.heights[i];
-                for (present, x, color) in [
-                    (pair.old.is_some(), old_rect.left(), palette.error),
-                    (pair.new.is_some(), origin.x - gutter, palette.success),
-                ] {
-                    if present {
-                        let rect = Rect::from_min_size(pos2(x, y), vec2(column, h));
-                        if paint_clip.intersects(rect) {
-                            shapes.push(Shape::rect_filled(rect, 0.0, color.gamma_multiply(0.12)));
-                        }
-                    }
-                }
                 let rect = Rect::from_min_size(
                     pos2(old_rect.left() + column - 22.0, y),
                     vec2(22.0, h.min(22.0)),
@@ -573,42 +722,11 @@ pub(crate) fn show(
                 && old_origin.is_finite()
                 && origin.is_finite()
             {
-                for (g, groups, base, x) in [
-                    (
-                        &current_layout.old,
-                        &current_layout.old_rows,
-                        old_origin,
-                        old_origin.x - 4.0,
-                    ),
-                    (
-                        &output.galley,
-                        &current_layout.new_rows,
-                        origin,
-                        origin.x - 4.0,
-                    ),
+                for (g, groups, base) in [
+                    (&current_layout.old, &current_layout.old_rows, old_origin),
+                    (&output.galley, &current_layout.new_rows, origin),
                 ] {
-                    // Only the first visual row carries a logical line number.
-                    // Its row positions remain sorted even across inserted gaps.
-                    let start = groups.partition_point(|rows| {
-                        g.rows[rows.start].rect().bottom() + base.y < paint_clip.top()
-                    });
-                    let end = groups.partition_point(|rows| {
-                        g.rows[rows.start].rect().top() + base.y <= paint_clip.bottom()
-                    });
-                    for (offset, rows) in groups[start..end].iter().enumerate() {
-                        let row = &g.rows[rows.start];
-                        let rect = row.rect().translate(base.to_vec2());
-                        if paint_clip.intersects(rect) {
-                            let number = ui.painter().layout_no_wrap(
-                                (start + offset + 1).to_string(),
-                                font.clone(),
-                                muted,
-                            );
-                            let position =
-                                crate::app::line_number_position(x, rect.top(), row, &number);
-                            ui.painter().galley(position, number, muted);
-                        }
-                    }
+                    paint_line_numbers(ui, g, groups, base, &font, muted, paint_clip);
                 }
             }
             ui.set_min_height(current_layout.height.max(available.y));
@@ -654,6 +772,58 @@ mod tests {
             400,
             None,
         );
+    }
+
+    #[test]
+    fn immutable_version_comparison_keeps_full_sources_and_cached_alignment() {
+        let before = "#let old = 1\n".repeat(150);
+        let current = "#let newer = 2\n".repeat(160);
+        let mut harness = Harness::builder()
+            .with_size(vec2(900.0, 400.0))
+            .build_ui_state(
+                |ui, state: &mut (DocumentDiff, bool)| {
+                    if !state.1 {
+                        fonts(ui.ctx());
+                        state.1 = true;
+                        return;
+                    }
+                    show_comparison(
+                        ui,
+                        &state.0,
+                        Id::new("versions"),
+                        std::path::Path::new("version.typ"),
+                        &AppSettings::default(),
+                    );
+                },
+                (DocumentDiff::new(before.clone(), &current), false),
+            );
+        harness.run();
+        let old = harness.get_by_label("Older version contents");
+        let new = harness.get_by_label("Newer version contents");
+        assert!(old.rect().right() <= new.rect().left());
+        assert!(harness.query_by_label("Document diff contents").is_none());
+        assert!(harness.query_by_label("Close diff editor").is_none());
+        assert!(harness.query_by_label("Revert changed line 1").is_none());
+        harness.key_press(Key::A);
+        harness.run();
+        assert_eq!(harness.state().0.before, before);
+        assert_eq!(harness.state().0.current, current);
+        assert_eq!(harness.state().0.builds, 1);
+        let cache_id = Id::new("versions").with("full-diff-layout");
+        let first = harness
+            .ctx
+            .data(|data| data.get_temp::<Arc<LayoutCache>>(cache_id))
+            .unwrap();
+        assert_eq!(first.layout.old.job.text, before);
+        assert_eq!(first.layout.new.job.text, current);
+        harness.run_steps(3);
+        let next = harness
+            .ctx
+            .data(|data| data.get_temp::<Arc<LayoutCache>>(cache_id))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first.layout, &next.layout));
+        assert_eq!(first.layout.old_rows.len(), 151);
+        assert_eq!(first.layout.new_rows.len(), 161);
     }
 
     #[test]

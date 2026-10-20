@@ -24,6 +24,7 @@ python3 scripts/test-desktop-ui.py --journey arxiv_tables
 python3 scripts/test-desktop-ui.py --journey math_grids --capture-review
 python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey command_palette --capture-review
+python3 scripts/test-desktop-ui.py --journey file_versions --release --capture-review --trace-preview
 python3 scripts/test-desktop-ui.py --journey preview_jump --capture-review
 python3 scripts/test-desktop-ui.py --journey typing_particles --capture-review
 python3 scripts/test-desktop-ui.py --journey effects_pacing --release
@@ -140,6 +141,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | layout | Code/preview/split shortcuts and every compact Layout picker row with a live Tinymist child behind the native popup; Explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close and picker hide/reopen preserve manual height and selected tab; Appearance’s Compact layout controls toggle restores every separate toolbar action and retains panel state |
 | explorer_scroll | Native wheel input over long Files and Contents lists, then Files with Cmd+F's sticky search open; measured offsets advance and remain advanced across fresh frames |
 | git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; a thin right-edge overview includes the offscreen last hunk, stays inside the code pane and retains its global positions during real wheel scrolling without changing pane width; double-clicking the Git file row opens the docked whole-document diff without changing source or pane width; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor and an offscreen hunk receives its finite reveal pulse after scrolling into view, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, Escape preserves the pane width, independent/fixed-width divider settings are exercised by real drags, selected text survives right-click/Copy and direct math conversion in the docked editor, and a diff button tooltip opens in a native window with Tinymist active |
+| file_versions | Creates a fresh private named Typst file, edits and explicitly saves two- and three-page revisions through the actual editor, then opens File → Revert To. History opened from Code-only must occupy the code pane in Split view with its full diff beside a visible preview and no separate native history window. Real version selectors must identify the expected older/current fingerprints; typing into the read-only comparison leaves the buffer and disk untouched. Each side’s Preview PDF button must display that side’s fingerprint and exact page count in PDFium, hide the native Tinymist view, and preserve the current source. Restore replaces the complete buffer and disk; the pre-restore newer revision remains available for a second restore. Escape from a rendered older PDF returns to the current live preview; Cmd+W and Close also leave the source tab/window intact. Only the disposable tab is closed afterward. Optional fresh main-viewport framebuffer for separate visual inspection |
 | folding | Repeated shortcut and gutter collapse/expand without losing headers or source |
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
 | controls | Both engines: stable outline popup size, app-switch hide/restore, outline/history/pages/zoom/fit/search, minimize/reopen, detach/return |
@@ -223,6 +225,7 @@ python3 scripts/test-desktop-ui.py --prepare-only
 python3 scripts/test-desktop-ui.py --observe-only
 # Headless checks for the runner's drift detector:
 python3 scripts/test_desktop_ui_contract.py
+python3 scripts/test_desktop_ui_versions_contract.py
 ```
 
 `--prepare-only` and `--observe-only` deliberately leave `passed: false`.

@@ -8,6 +8,7 @@ on:
         type: choice
         options: [
           "all",
+          "file_versions",
           "command_palette",
           "preview_jump",
           "tex",
@@ -55,10 +56,12 @@ on:
           "partial_preview",
           "partial_zoom_stress",
           "partial_cache_edges",
+          "partial_dividers",
           "controls",
           "settings_search",
           "editor_preferences",
           "typing_particles",
+          "effects_pacing",
           "background",
           "background_fades",
           "context_menu"

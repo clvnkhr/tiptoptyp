@@ -33,6 +33,9 @@ The retained source tests remain the fast regression layer.
 | `app/tabs_tests.rs::empty_workspace_new_button_and_close_tab_workflow_are_reusable` | `empty`: keyboard path through close-last/new workflow (button-specific semantics retained) |
 | Plain launch without a saved history target | `startup_preview`: no-argument launch starts with the synthetic editing buffer, then opening the first `.typ` rebinds the preview target to that file |
 | Native file dialog routing | `dialogs`: Open selects a real `.tex` file through the macOS panel; Save As accepts an arbitrary extension |
+| `file_versions.rs` native checkpoint/save tests and `app/version_history_tests.rs` comparison/restore contracts | `file_versions`: real saved revisions are selected through File → Revert To, older/newer sides stay ordered, Restore changes the whole named buffer and disk, and the pre-restore current contents remain recoverable. Native execution status is recorded below; deterministic coordination, invalid-target and stale-owner tests remain |
+| `app/version_history_tests.rs` docked layout and historical preview ownership | `file_versions`: code-only opens into Split, the read-only comparison remains in the code pane beside a current-frame preview, each side renders its distinct page count/fingerprint, closing returns to the live preview, and typing cannot edit the source. No separate history native window is accepted |
+| `app/git_toolbar_tooltip_tests.rs::docked_diff_toolbar_hints_paint_in_the_native_tooltip_viewport` | `git_hunks`: a diff-toolbar hover opens the native tooltip above active Tinymist. The semantic test separately checks every concise hint, including unavailable actions, by executing its tooltip viewport callback |
 | Tab strip reorder behavior | `tab_drag`: native drag reorders scratch tabs and each tab remains selectable |
 | `app/tabs_tests.rs::closing_checks_dirty_background_tabs_without_discarding_on_cancel` | `closing`: active dirty tab cancellation preserves content; background-tab cases retained |
 | `app/tabs_tests.rs::all_dirty_tabs_must_be_approved_and_later_edits_revoke_window_close` | `closing`: repeated close asks again; Cancel/Escape preserve text; Discard closes only requested tab |
@@ -2773,3 +2776,89 @@ these button checks are not a physical trackpad pinch test. Its first launch
 refused reuse of the old settings store, and an early activation ran before the
 new window registered; those setup failures are preserved separately from the
 successful interaction evidence.
+
+
+### Local file versions and docked comparison (20 October 2026)
+
+The save worker now preserves revisions in macOS’s native file-version store.
+The first overwrite and explicit saves preserve history; automatic saves coalesce
+checkpoints instead of creating one per edit. Restore first preserves the current
+buffer, including unsaved contents, then uses the normal guarded save path. Native
+coordination and stale-revision checks remain deterministic tests; the native
+journey uses actual editor saves and the system revision store.
+
+File → Revert To uses the code panel’s full-document comparison layout. It is
+read-only, keeps the preview visible beside it, and orders saved revisions by
+time. Each side’s Preview PDF action compiles that immutable snapshot separately
+and displays it in PDFium; it does not export over a source document or replace
+the live preview’s source identity. Relative imports and assets come from the
+current project, rather than a historical snapshot of the whole project. Closing
+history restores the live preview and leaves the workspace in Split view.
+
+The `file_versions` journey opens a fresh private named Typst document and makes
+explicitly saved two- and three-page revisions. It selects known revisions using
+real dropdown rows, verifies their source fingerprints, and rejects stale or
+cross-viewport panel geometry. Native typing in the read-only comparison must
+leave both live buffer and disk unchanged. Both Preview PDF buttons must display
+the matching historical fingerprint and page count with the Tinymist child hidden.
+The journey restores the older revision, recovers the pre-restore newer revision,
+and checks Escape, Cmd+W and Close without closing the source tab. Closing a
+rendered older preview must restore the current three-page live preview. The
+optional capture is a fresh main framebuffer; composed native geometry is checked
+separately through current-frame bounds and actual native window observations.
+
+The prototype modal/export journey passed in `run-pbjcg_8a`, including a real
+10,125-byte PDF export, both restores and modal typing isolation. That evidence
+and its framebuffer describe the superseded prototype, not the requested docked
+layout. The subsequent `git_hunks` run `run-1kztj2p2` failed before opening the diff:
+Settings closed, but document focus did not return within the deadline. Seven
+foreign-foreground recoveries preceded the failure; cleanup then reactivated the
+app, so the final focused window does not prove the original stuck state. The
+runner now records the foreign PID/app on each recovery. The failure remains
+preserved and is not counted as a native diff-tooltip pass.
+
+The first docked run, `run-4p7uj97k`, reached the saved three-page live preview
+but hung immediately after File → Revert To from Code-only. The app stopped
+publishing frames while remaining foreground on an unlocked desktop. This caught
+a real context-lock re-entry: deriving the viewport-scoped source-editor ID inside
+`Context::memory_mut` tried to read the same context again. The ID is now derived
+before taking the memory write lock. The failed receipt remains preserved.
+
+The corrected optimized feature build passed `file_versions` in `run-resek2ty`
+and `git_hunks` in `run-cxfp3h_4` on macOS 14.6.1 ARM64, with Accessibility and
+native input available. Both used the preserved executable
+`docked-fixed-ui-journey-binary`, version
+`7ab81a2a7996-dirty.1792490582`, SHA-256
+`04e4fbdbe45a167270834dd6c521efd21b2e4c262fc4e9c45315abd15646dece`.
+The version journey passed both historical PDF sides with their distinct two-
+and three-page counts, both complete restores, read-only typing, code-pane bounds,
+absence of a separate history window, and return to the live preview after closing.
+Its 829 native preview-bounds lines remain in `app.log`. The Git run passed the
+existing editable whole-document, divider, Find, staging and native tooltip checks
+with Tinymist active, retained 393 bounds lines and recorded no foreign foreground
+recoveries. The earlier Settings-focus failure is not erased by that later pass.
+
+Fresh affected framebuffer `run-resek2ty/1792490829466-0002-main.png` was inspected:
+the source comparison stays in the code pane, older/newer syntax and change colors
+are aligned, controls and saved-time labels fit, and the older PDF remains visible
+beside it. This root framebuffer includes the PDFium page; it does not prove
+composition of a separate native Tinymist view. Git’s four fresh main framebuffers
+are retained in `run-cxfp3h_4` for separate review. Raw receipts, failed runs and
+preserved binaries are under `.tiptoptyp/file-versions-audit/` and the referenced
+`.tiptoptyp/desktop-ui-tests/run-*/` directories.
+
+All 190 Python detector/workflow contracts passed, including malformed
+history state, reversed comparisons, stale or overlapping pane geometry, wrong
+historical PDF identity and disk/buffer restore mismatches. This is headless
+failure-detector evidence, not execution of the native journey. No default idle
+polling or source-content logging was added.
+
+Final integrated checks passed: formatting, strict all-target Clippy, the full
+Rust suite (including the real focused-editor → Revert To opening regression),
+and packaging-task tests. The stable gallery was captured in one app session,
+then all 25 PNGs were decoded and validated; the updated File dropdown was
+inspected in both light and dark themes. The fresh docked comparison and main
+gallery frame were inspected too. Other refreshed main scenes bring the older
+gallery layout up to the current application; this feature does not change
+Explorer defaults or divider policy. Save-worker timing and exact final check
+counts are in [the version-history receipt](performance-results/local-file-versions-2026-10-20.json).

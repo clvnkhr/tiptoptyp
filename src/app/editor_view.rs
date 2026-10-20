@@ -53,7 +53,8 @@ impl EditorApp {
         context: &egui::Context,
         symbol: &crate::handwriting::Insertion,
     ) {
-        if self.table_editor.is_some() || self.latexdiff.is_some() {
+        if self.table_editor.is_some() || self.latexdiff.is_some() || self.version_history.is_some()
+        {
             return;
         }
         if self.document().kind() != DocumentKind::Tex {
@@ -212,6 +213,10 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
+        if self.version_history.is_some() {
+            self.show_version_history_panel(ui);
+            return;
+        }
         if self.document_diff.is_some()
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {

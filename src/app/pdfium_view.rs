@@ -1197,7 +1197,11 @@ impl EditorApp {
     }
 
     pub(super) fn pdfium_preview_requested(&self) -> bool {
-        self.preview_status_snapshot().effective_backend == crate::preview::PreviewBackend::Pdfium
+        self.version_history
+            .as_ref()
+            .is_some_and(|history| history.preview_pdf().is_some())
+            || self.preview_status_snapshot().effective_backend
+                == crate::preview::PreviewBackend::Pdfium
     }
     pub(super) fn pdfium_asset_requested(&self) -> bool {
         self.document().kind() == DocumentKind::Pdf
@@ -1209,6 +1213,10 @@ impl EditorApp {
         bytes: &Arc<[u8]>,
     ) -> bool {
         !asset
+            && !self
+                .version_history
+                .as_ref()
+                .is_some_and(|history| history.preview_pdf().is_some())
             && self.preview_document_kind() == DocumentKind::Tex
             && self.tex_tools.synctex.is_some()
             && self.synctex.artifact.as_ref().is_some_and(|artifact| {
@@ -1220,6 +1228,16 @@ impl EditorApp {
     }
 
     pub(super) fn show_pdfium_view(&mut self, ui: &mut egui::Ui, asset: bool) {
+        // History owns these bytes separately from the live preview. Closing
+        // the comparison restores its previous artifact and backend untouched.
+        let historical = if asset {
+            None
+        } else {
+            self.version_history
+                .as_ref()
+                .and_then(|history| history.preview_pdf())
+                .map(|(path, bytes)| (path.to_owned(), bytes.clone()))
+        };
         let viewport = ui.available_rect_before_wrap();
         let target = if asset {
             let key = self.document().key();
@@ -1231,6 +1249,8 @@ impl EditorApp {
         };
         let path = if asset {
             self.document().path().clone().unwrap_or_default()
+        } else if let Some((path, _)) = &historical {
+            path.clone()
         } else {
             self.preview_document_path()
         };
@@ -1239,7 +1259,11 @@ impl EditorApp {
         } else {
             &self.preview
         };
-        let Some(bytes) = preview.content.pdf().cloned() else {
+        let Some(bytes) = historical
+            .as_ref()
+            .map(|(_, bytes)| bytes.clone())
+            .or_else(|| preview.content.pdf().cloned())
+        else {
             show_centered_preview_message(
                 ui,
                 if self.compilation_paused {
