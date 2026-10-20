@@ -61,6 +61,8 @@ pub(crate) use editor_particles::Renderer as ParticleRenderer;
 mod editor_scroll;
 mod editor_surface;
 mod editor_view;
+#[cfg(test)]
+mod git_toolbar_tooltip_tests;
 mod latexdiff;
 mod table_editor;
 mod table_samples;

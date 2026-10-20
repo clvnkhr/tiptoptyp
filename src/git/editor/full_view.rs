@@ -348,40 +348,46 @@ pub(crate) fn show(
     ui.horizontal(|ui| {
         ui.strong("Changes since last commit");
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            for (icon, label, command, enabled) in [
+            for (icon, label, hint, command, enabled) in [
                 (
                     icons::UiIcon::Close,
                     "Close diff editor",
+                    "Close diff",
                     Action::Close,
                     true,
                 ),
                 (
                     icons::UiIcon::Revert,
                     "Revert hunk",
+                    "Discard change",
                     Action::Revert,
                     repository_ready,
                 ),
                 (
                     icons::UiIcon::Unstage,
                     "Unstage",
+                    "Unstage change",
                     Action::Unstage,
                     repository_ready,
                 ),
                 (
                     icons::UiIcon::Stage,
                     "Stage",
+                    "Stage change",
                     Action::Stage,
                     repository_ready,
                 ),
                 (
                     icons::UiIcon::Next,
                     "Next",
+                    "Next change",
                     Action::Next,
                     !diff.hunks.is_empty(),
                 ),
                 (
                     icons::UiIcon::Previous,
                     "Previous",
+                    "Previous change",
                     Action::Previous,
                     !diff.hunks.is_empty(),
                 ),
@@ -395,7 +401,15 @@ pub(crate) fn show(
                     settings.toolbar_style,
                     false,
                 );
-                let response = crate::app::native_hover_text(response, label);
+                // Disabled actions still need an explanation. Their button
+                // response cannot be hovered, so offer a hover-only target
+                // without making the action clickable or keyboard focusable.
+                let hover = if response.enabled() {
+                    response.clone()
+                } else {
+                    ui.interact(response.rect, response.id.with("hint"), Sense::hover())
+                };
+                crate::app::native_hover_text(hover, hint);
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe(&format!("git.hunk.{label}"), &response);
                 if response.clicked() {
