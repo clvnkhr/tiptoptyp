@@ -723,3 +723,28 @@ zoom gestures with new captures deferred. It checks the original live source
 point under the cursor independently of the proxy's reported anchor. Horizontal
 return-to-fit clamping is allowed; mid-document vertical anchors remain within
 the existing 1.1 CSS-pixel tolerance.
+
+
+## Idle cache ownership and partial completion
+
+Native image retirement now notifies the browser with the retired image and
+pending-admission tokens. A page action or incidental edge scroll can produce
+no DOM movement, so a scroll observer alone cannot tell the browser that its
+cached metadata no longer has native pixels. Only matching tokens are removed;
+a late retirement cannot erase a newer image or cancel a vector request. Idle
+warming resumes through the existing bounded capture timer. Browser-originated
+invalidations discard native pixels locally and do not echo a notification.
+
+Buffered viewport work also reports completion when its scheduled pass becomes
+unnecessary before running. Otherwise its temporary busy flag can block either
+of the zoom handoff's two paint observations, then clear without a patch or
+postprocess callback to retry that observation. This can strand the serial zoom
+request in partial mode. The no-work completion checks readiness once and adds
+no patch, polling, capture-on-input, or persistent animation frame.
+
+The deterministic tests cover both paint phases, pending admissions, stale token
+notifications and retirement during an active handoff. The owned native probe
+also covers no-op page retirement in both renderers and a redundant partial
+viewport pass queued against an actual zoom handoff. These reproduce concrete
+failure paths; they do not establish that every reported physical gesture
+failure had the same cause.

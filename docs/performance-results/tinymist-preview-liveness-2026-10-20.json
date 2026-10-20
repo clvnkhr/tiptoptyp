@@ -1,0 +1,157 @@
+{
+  "date": "2026-10-20",
+  "base_commit": "ce3787ad965625a299544a8df7b5f5752df0bd0e",
+  "fix_commits": [
+    "86b7ecd",
+    "ef7dc38"
+  ],
+  "environment": {
+    "platform": "macOS 14.6.1 arm64",
+    "build_profile": "release with desktop-ui-tests",
+    "viewport": [
+      640,
+      420
+    ],
+    "device_scale": 2,
+    "palette": "default light pinned frontend",
+    "warmup_seconds": 3,
+    "fixture": "scripts/fixtures/tinymist-zoom-serial.typ"
+  },
+  "native": {
+    "full": {
+      "actual_partial": false,
+      "baseline_failure": "No usable idle image after a no-op page action; later transition checks did not execute.",
+      "baseline_native_cached": false,
+      "baseline_browser_cached": true,
+      "after_passed": true,
+      "after_steps": 36,
+      "partial_redundant_prefetch_injected": false,
+      "before_binary_sha256": "10368a133b836a2451748aac3cb3cc216c192167c9d5f4069395231fe094a8ab",
+      "after_binary_sha256": "df560148baad409824174cd19ea2f7bc2664b8bde73048682285eef74be01aa7",
+      "fixture_sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "before_native_input_callback_ms": [
+        0.34670799999999247,
+        0.2281669999999849,
+        0.1737500000000125,
+        0.19879200000002584
+      ],
+      "after_native_input_callback_ms": [
+        0.3640839999999912,
+        0.16291700000002152,
+        0.16941700000000992,
+        0.20029199999999037
+      ],
+      "final_vector_requests": 1,
+      "responsive_during_800ms_webcontent_stall": true,
+      "final_state": {
+        "initialized": true,
+        "enabled": true,
+        "allowed": true,
+        "cached": true,
+        "active": false,
+        "in_flight": null,
+        "pending": null,
+        "pinch": false
+      }
+    },
+    "partial": {
+      "actual_partial": true,
+      "baseline_failure": "No usable idle image after a no-op page action; later transition checks did not execute.",
+      "baseline_native_cached": false,
+      "baseline_browser_cached": true,
+      "after_passed": true,
+      "after_steps": 37,
+      "partial_redundant_prefetch_injected": true,
+      "before_binary_sha256": "10368a133b836a2451748aac3cb3cc216c192167c9d5f4069395231fe094a8ab",
+      "after_binary_sha256": "df560148baad409824174cd19ea2f7bc2664b8bde73048682285eef74be01aa7",
+      "fixture_sha256": "233cbdea63afb34ccbdb8b1afab8247c94a66644edad74f1b7195acbfcbe57fb",
+      "tinymist_sha256": "37fe82e44a2e0bb213132449eb24fe119b918b8a4e4c86fa4faea3b09b9e23f2",
+      "before_native_input_callback_ms": [
+        0.3592080000000095,
+        0.1863750000000266,
+        0.1797499999999843,
+        0.14954199999999673
+      ],
+      "after_native_input_callback_ms": [
+        0.3606669999999923,
+        0.20074999999999932,
+        0.149833000000001,
+        0.14754199999998718
+      ],
+      "final_vector_requests": 1,
+      "responsive_during_800ms_webcontent_stall": true,
+      "final_state": {
+        "initialized": true,
+        "enabled": true,
+        "allowed": true,
+        "cached": true,
+        "active": false,
+        "in_flight": null,
+        "pending": null,
+        "pinch": false
+      }
+    }
+  },
+  "real_app": {
+    "journey": "partial_dividers",
+    "run": "run-colkfrsx",
+    "passed": true,
+    "modes": [
+      "partial",
+      "full"
+    ],
+    "native_divider_drags": 12,
+    "bounds_trace_lines": 719,
+    "binary_sha256": "2925de4d211b11c27631b6de7f2114400a1d0e01a5b99ec94e1bb5da3b3274fa"
+  },
+  "checks": {
+    "fmt": "passed",
+    "clippy_default": "passed",
+    "clippy_desktop_ui": "passed",
+    "rust_passed": 2337,
+    "rust_ignored": 70,
+    "xtask_passed": 32,
+    "xtask_ignored": 1,
+    "javascript_passed": 243,
+    "desktop_contracts_passed": 151
+  },
+  "manual_before_fix": {
+    "user_reports": {
+      "full": "Both still work",
+      "partial": "strangely it doesnt break"
+    },
+    "effective_backend_verified_by_inspector": true,
+    "installed_and_diagnostic_embedded_preview_scripts_match_baseline": true,
+    "toolbar": "Tinymist intentionally labels both modes; it cannot establish full versus partial."
+  },
+  "artifacts": ".tiptoptyp/preview-liveness-2026-10-20/",
+  "limitations": [
+    "The user-reported intermittent installed-app state was not captured; two concrete related failure paths were independently reproduced and fixed.",
+    "Native pinch phases are injected into the production handler, not physical trackpad gestures. User physical checks in this turn preceded the fixes.",
+    "Four callback samples do not establish GPU presentation smoothness or a speedup. The verified rerun had no competing builds; an earlier after run overlapped compilation and is excluded from timing comparison.",
+    "Fresh isolated native PNGs were inspected. They are not composed editor screenshots; the composed editor journey supplies interaction/geometry evidence.",
+    "The installed application is unchanged; the updated partial diagnostic uses copied settings and disabled autosave."
+  ],
+  "updated_diagnostic": {
+    "name": "tiptoptyp Partial Preview Probe",
+    "effective_backend": "Tinymist partial",
+    "actual_renderer_partial": true,
+    "binary_sha256": "2925de4d211b11c27631b6de7f2114400a1d0e01a5b99ec94e1bb5da3b3274fa",
+    "original_document_unchanged": true,
+    "auto_save": false,
+    "native_divider_drags": 6,
+    "native_zoom_button_actions": 12,
+    "final_state": {
+      "initialized": true,
+      "enabled": true,
+      "allowed": true,
+      "cached": true,
+      "active": false,
+      "in_flight": null,
+      "pending": null,
+      "pinch": false
+    },
+    "scope": "Actual native UI controls on the original document. This is not a physical trackpad pinch test."
+  }
+}

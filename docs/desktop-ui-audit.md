@@ -2717,3 +2717,59 @@ handoffs and zero render failures. The controller was initialized and cached,
 with no active overlay, flight, pending request or owned pinch afterward. This
 adds physical interaction evidence for that partial-mode session; full-mode
 physical pinch and universal absence of the intermittent failure are not claimed.
+
+
+### Partial preview liveness follow-up (20 October 2026)
+
+The installed app was verified as `ce3787ad9656.1792446246` with a matching live
+arm64 Mach-O UUID. Its embedded preview scripts and those in the previous
+instrumented diagnostic match the checked-in baseline. The toolbar label
+`Tinymist` intentionally covers both renderers; the earlier inference that this
+label proved full mode was incorrect. The user clarified that the reported
+failure used partial mode, with only pinch and divider interaction. Separate
+manual tests in the instrumented app did not reproduce the failure in either
+full or partial mode; actual partial mode was verified through the inspector.
+
+Two related failures were reproduced before fixing them. The owned real-frontend
+probe timed out rewarming after a no-op page action in both modes: native pixels
+were gone while browser cache metadata remained valid. A deterministic partial
+viewport test also stranded a zoom handoff when a brief buffered-edge excursion
+returned before its scheduled prefetch. The temporary rendering flag blocked a
+paint observation, then cleared without a completion notification. Both paint
+phases are covered. Cache retirement now exchanges only matching image/admission
+tokens; a no-work partial pass publishes completion once. Neither fix adds an
+idle loop, a new worker, input-time screenshot work, or a parallel vector render.
+
+The final optimized native rerun passed 36 full and 37 partial transition steps,
+including the no-op recovery and an injected redundant partial pass over actual
+Tinymist. Each mode retained one raster through 24 alternating native pinch-phase
+zooms, stayed responsive during the existing 800 ms WebContent stall, and
+submitted one final vector request. A prior passing run overlapped compilation;
+only the subsequent `verified/` run is used for the paired callback samples.
+Those four samples per mode are not GPU frame-rate or perceived-smoothness proof.
+
+The composed-editor `partial_dividers` journey `run-colkfrsx` passed twelve native
+drags across partial/full modes and retained 719 bounds traces. Fresh before/after
+isolated native PNGs were inspected; no composed desktop pixel verification is
+claimed. Required formatting, strict default/desktop-UI lint, 2,337 default Rust
+tests (70 ignored), 32 xtask tests (one ignored), 243 JavaScript tests and 151
+native-journey contract tests passed. The debug test link emitted the existing
+large unwind-table warning; no Rust test failed.
+
+Raw evidence and setup failures are retained under
+`.tiptoptyp/preview-liveness-2026-10-20/`, with a checked-in liveness receipt.
+The installed app was not overwritten. The original intermittent installed-app
+failure remains unobserved directly; these are fixes for reproduced failure
+paths, rather than a claim that every physical-input failure has been eliminated.
+
+
+The fixed `tiptoptyp Partial Preview Probe` was then configured with copied user
+preferences in a fresh isolated profile, with autosave disabled. It passed six
+more native divider drags and twelve alternating native preview zoom-button
+actions on the original document. Source fingerprint/dirty checks remained
+unchanged. The final actual renderer was partial, with warm native pixels and
+no active overlay, owned pinch, flight or pending request. This app is left open;
+these button checks are not a physical trackpad pinch test. Its first launch
+refused reuse of the old settings store, and an early activation ran before the
+new window registered; those setup failures are preserved separately from the
+successful interaction evidence.
