@@ -222,6 +222,14 @@
       // could cancel a newer flight whose script is still queued in WebContent.
       invalidate(true, false); settle(); return true;
     },
+    retired(tokens) {
+      // Native may retire pixels without DOM motion. Do not cancel an active
+      // vector request or echo invalidate: only matching image metadata is old.
+      let changed = false;
+      if (cache && tokens.includes(cache.token)) { cache = null; changed = true; }
+      if (admission && tokens.includes(admission.cache.token)) { admission = null; changed = true; }
+      if (changed) settle();
+    },
     begin, rendered, settle, scrolled, invalidate, resolve, admitted,
     inspect() { const frame = readFrame?.(); return { enabled, capture_deferred: captureDeferred, active, capturing: !!capture, admitting: !!admission, cached: !!cache,
       pixels: cache ? [cache.width, cache.height] : null, request: nativeRequest ? { revision: nativeRequest.revision, scale: nativeRequest.scale, token: nativeRequest.token } : null,

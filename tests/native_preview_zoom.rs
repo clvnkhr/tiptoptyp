@@ -1257,6 +1257,24 @@ fn live_transition_regression(
     };
     save(&steps, &failures, receipt, probe.capture_timings);
     let run = (|| -> Result<(), String> {
+        // Native navigation retires pixels before JS decides whether the
+        // request actually moves. Re-selecting the current page is a no-op,
+        // so no browser scroll can repair divergent cache ownership for us.
+        web.evaluate_script("window.tiptoptypPreviewAction({action:'page',value:0});")
+            .map_err(|error| error.to_string())?;
+        probe.idle_image("before-no-op-page", true)?;
+        let before_retirement = state.inspect();
+        assert!(!state.action(&json!({"action":"page","value":0})));
+        web.evaluate_script("window.tiptoptypPreviewAction({action:'page',value:0});")
+            .map_err(|error| error.to_string())?;
+        let after_retirement = probe.observe("after-no-op-page")?;
+        steps.push(
+            json!({"kind":"no-op-page-cache-retirement","before":before_retirement,
+            "after":state.inspect(),"frame":after_retirement}),
+        );
+        save(&steps, &failures, receipt, probe.capture_timings);
+        probe.idle_image("no-op-page-cache-recovered", true)?;
+
         web.evaluate_script(
             r#"void (async()=>{
                 const doc=window.tiptoptypNativeZoomFrame().doc;

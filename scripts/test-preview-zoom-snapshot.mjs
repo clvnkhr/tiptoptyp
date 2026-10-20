@@ -591,3 +591,30 @@ test('sharp handoff reports its actual position for the next retained-image gest
     {x: -185.25, y: -13810.5, scale: 1.123, width: 900, height: 700});
   assert.equal(f.cache.inspect().cached, true);
 });
+
+
+test('native pixel retirement rewarms a stationary frame once without echo or idle work', () => {
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  const invalidations=f.messages.filter(m=>m.op==='invalidate').length;
+  f.cache.retired([token,null]);assert.equal(f.cache.inspect().cached,false);
+  f.tick();assert.equal(f.captures().length,2);f.admit();
+  for(let i=0;i<50;i++){f.cache.retired([token,null]);f.cache.settle();f.tick();}
+  assert.equal(f.cache.inspect().cached,true);assert.equal(f.captures().length,2);
+  assert.equal(f.messages.filter(m=>m.op==='invalidate').length,invalidations);
+  assert.equal(f.frames.length,0);assert.equal(f.timers.size,0);
+});
+test('native retirement releases pending admission without rejecting a newer image', () => {
+  const f=fixture();f.tick();const old=f.captures()[0];f.cache.resolve(old.token,{width:100,height:100});
+  assert.equal(f.cache.inspect().admitting,true);f.cache.retired([null,old.token]);
+  assert.equal(f.cache.inspect().admitting,false);f.tick();assert.equal(f.captures().length,2);
+  f.admit();f.cache.admitted(old.token,true);f.cache.retired([old.token,null]);
+  assert.equal(f.cache.inspect().cached,true);f.tick();assert.equal(f.captures().length,2);
+});
+test('native pixel retirement preserves the vector owner and its pending sharp handoff', () => {
+  const f=fixture();f.tick();f.admit();const token=f.captures()[0].token;
+  f.cache.native({token,revision:1,scale:1.2});f.current.scale=1.2;f.cache.rendered();
+  f.cache.retired([token,null]);assert.equal(f.cache.inspect().active,true);
+  assert.equal(f.cache.owns(1,f.doc),true);f.tick();assert.equal(f.captures().length,1);
+  f.paint();assert.equal(f.cache.inspect().active,false);assert.equal(f.cache.inspect().handoffs,1);
+  f.tick();assert.equal(f.captures().length,2);f.admit();assert.equal(f.cache.inspect().cached,true);
+});

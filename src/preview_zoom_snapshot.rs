@@ -968,6 +968,32 @@ impl Native {
     }
 
     fn retire_image(&mut self) {
+        let tokens = [
+            self.token.clone(),
+            self.candidate_token().map(str::to_owned),
+        ];
+        self.discard_image();
+        // DOM scroll need not move (for example at a page edge). Explicitly
+        // retire the browser's matching metadata so idle warming can resume.
+        // Token scoping protects a newer admission or render from late scripts.
+        if self.enabled
+            && self.allowed
+            && tokens.iter().any(Option::is_some)
+            && let Some(web) = &self.web
+        {
+            unsafe {
+                web.evaluateJavaScript_completionHandler(
+                    &NSString::from_str(&format!(
+                        "window.tiptoptypZoomSnapshot?.retired({});",
+                        serde_json::json!(tokens)
+                    )),
+                    None,
+                );
+            }
+        }
+    }
+
+    fn discard_image(&mut self) {
         self.deferred_admission = None;
         self.token = None;
         self.candidate = None;
@@ -998,7 +1024,7 @@ impl Native {
     fn clear(&mut self) {
         self.stop_timer();
         self.gate.clear();
-        self.retire_image();
+        self.discard_image();
         self.pipeline.flight = None;
         self.pipeline.latest = None;
         self.pipeline.pending_transform = Transform::default();
@@ -1820,7 +1846,7 @@ impl CaptureState {
                 if value["abort"] == true {
                     native.clear();
                 } else {
-                    native.retire_image();
+                    native.discard_image();
                     native.flush(true);
                 }
             }
@@ -1843,7 +1869,7 @@ impl CaptureState {
                     if native.candidate_token() == Some(token) {
                         native.candidate = None;
                     } else if native.token.as_deref() == Some(token) {
-                        native.retire_image();
+                        native.discard_image();
                         native.flush(true);
                     }
                 }
