@@ -557,6 +557,111 @@ mod tests {
     }
 
     #[test]
+    fn pdf_and_image_layout_controls_preserve_tabs_and_hide_only_the_chosen_pane() {
+        use workspace_view::{ContentView, content_view};
+        for compact in [false, true] {
+            for (kind, extension) in [(DocumentKind::Pdf, "pdf"), (DocumentKind::Image, "png")] {
+                let root = tempfile::tempdir().unwrap();
+                let context = egui::Context::default();
+                let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+                app.document_mut().replace_loaded_unprojected(
+                    "= Designated paper\n".into(),
+                    root.path().join("paper.typ"),
+                    DocumentKind::Typst,
+                    None,
+                );
+                app.snapshot_scene = None;
+                app.select_preview_tab(app.tabs.active_id().unwrap(), &context);
+                app.prepare_asset_tab_fixture(
+                    &context,
+                    root.path().join(format!("asset.{extension}")),
+                    kind,
+                );
+                app.settings.compact_layout_controls = compact;
+                app.settings.toolbar_style = crate::settings::ToolbarStyle::TextAndIcons;
+                let ids = (app.tabs.active_id(), app.tabs.preview_id());
+                assert_ne!(ids.0, ids.1);
+                assert!(app.source_preview_available());
+                assert!(!app.native_command_enabled(AppCommand::Format));
+                assert!(!app.native_command_enabled(AppCommand::NewTable));
+                let mut fonts = false;
+                let mut harness = Harness::builder()
+                    .with_size(Vec2::new(1000.0, 400.0))
+                    .build_ui_state(
+                        move |ui, app: &mut EditorApp| {
+                            if !fonts {
+                                theme::configure_test_fonts(ui.ctx());
+                                fonts = true;
+                                return;
+                            }
+                            ui.horizontal(|ui| app.show_layout_toolbar(ui, None));
+                            show_test_popup(ui, app);
+                        },
+                        app,
+                    );
+                harness.run();
+                for (command, mode, expected) in [
+                    (AppCommand::Code, ViewMode::Code, ContentView::Asset),
+                    (AppCommand::Preview, ViewMode::Preview, ContentView::Preview),
+                    (AppCommand::Split, ViewMode::Split, ContentView::SplitAsset),
+                ] {
+                    assert!(harness.state().native_command_enabled(command));
+                    let label = if compact {
+                        harness.get_by_label("Layout").click();
+                        harness.run();
+                        harness.run_steps(2);
+                        let right = row_shortcut(
+                            &harness.ctx,
+                            &harness.state().settings.effective_shortcuts(),
+                            command,
+                        );
+                        if right.is_empty() {
+                            command_spec(command).title.to_owned()
+                        } else {
+                            format!("{} {right}", command_spec(command).title)
+                        }
+                    } else {
+                        command_spec(command).title.to_owned()
+                    };
+                    let button = harness.get_by_label(&label);
+                    assert!(!button.accesskit_node().is_disabled());
+                    button.click();
+                    harness.run();
+                    let app = harness.state();
+                    assert_eq!(app.view_mode, mode);
+                    assert_eq!(
+                        content_view(false, kind, app.source_preview_available(), mode, false),
+                        expected
+                    );
+                    assert!(
+                        app.preview_visible(),
+                        "the opened PDF remains a viewer in Code mode"
+                    );
+                    let target = if mode == ViewMode::Code {
+                        preview_controls::Target::Asset(app.document().key())
+                    } else {
+                        preview_controls::Target::Source
+                    };
+                    assert_eq!(
+                        app.main_preview_controls_target(),
+                        if kind == DocumentKind::Image && mode == ViewMode::Code {
+                            None
+                        } else {
+                            Some(target)
+                        }
+                    );
+                    assert_eq!((app.tabs.active_id(), app.tabs.preview_id()), ids);
+                    assert_eq!(app.document().kind(), kind);
+                    assert_eq!(
+                        app.tab_preview_document().unwrap().source(),
+                        "= Designated paper\n"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn changing_layout_control_setting_preserves_view_panels_and_saved_sizes() {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();

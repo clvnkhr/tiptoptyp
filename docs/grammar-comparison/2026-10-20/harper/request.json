@@ -1,0 +1,900 @@
+{
+  "samples": 3,
+  "documents": [
+    {
+      "id": "inline-agreement-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese estimates $A$ and $B$ is uniform.\n\\end{document}\n"
+    },
+    {
+      "id": "inline-agreement-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese estimates $A$ and $B$ are uniform.\n\\end{document}\n"
+    },
+    {
+      "id": "inline-agreement-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThese estimates $A$ and $B$ is uniform.\n"
+    },
+    {
+      "id": "inline-agreement-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThese estimates $A$ and $B$ are uniform.\n"
+    },
+    {
+      "id": "inline-control-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe norm $\\lVert u\\rVert$ is finite.\n\\end{document}\n"
+    },
+    {
+      "id": "inline-control-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe norm $norm(u)$ is finite.\n"
+    },
+    {
+      "id": "display-comma-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe use the identity\n\\[\n  x = y,\n\\]\nwhich imply the result.\n\\end{document}\n"
+    },
+    {
+      "id": "display-comma-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe use the identity\n\\[\n  x = y,\n\\]\nwhich implies the result.\n\\end{document}\n"
+    },
+    {
+      "id": "display-comma-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe use the identity\n$\n  x = y,\n$\nwhich imply the result.\n"
+    },
+    {
+      "id": "display-comma-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe use the identity\n$\n  x = y,\n$\nwhich implies the result.\n"
+    },
+    {
+      "id": "display-semicolon-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe estimate gives\n\\begin{equation}\n  z = x;\n\\end{equation}\ntherefore, the conclusion follow.\n\\end{document}\n"
+    },
+    {
+      "id": "display-semicolon-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe estimate gives\n\\begin{equation}\n  z = x;\n\\end{equation}\ntherefore, the conclusion follows.\n\\end{document}\n"
+    },
+    {
+      "id": "display-semicolon-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe estimate gives\n$\n  z = x;\n$\ntherefore, the conclusion follow.\n"
+    },
+    {
+      "id": "display-semicolon-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe estimate gives\n$\n  z = x;\n$\ntherefore, the conclusion follows.\n"
+    },
+    {
+      "id": "display-period-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[x=y.\\]\nThese estimate is useful.\n\\end{document}\n"
+    },
+    {
+      "id": "display-period-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[x=y.\\]\nThis estimate is useful.\n\\end{document}\n"
+    },
+    {
+      "id": "display-period-tex--accepted-0",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[x=y.\\]\nThese estimates are useful.\n\\end{document}\n"
+    },
+    {
+      "id": "display-period-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$ x=y. $\nThese estimate is useful.\n"
+    },
+    {
+      "id": "display-period-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$ x=y. $\nThis estimate is useful.\n"
+    },
+    {
+      "id": "display-period-typst--accepted-0",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$ x=y. $\nThese estimates are useful.\n"
+    },
+    {
+      "id": "display-colon-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe use the identity\n\\[x=y:\\]\nthe theorem then follows.\n\\end{document}\n"
+    },
+    {
+      "id": "display-colon-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe use the identity\n$ x=y: $\nthe theorem then follows.\n"
+    },
+    {
+      "id": "formatting-agreement-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese \\emph{estimates} is uniform.\n\\end{document}\n"
+    },
+    {
+      "id": "formatting-agreement-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese \\emph{estimates} are uniform.\n\\end{document}\n"
+    },
+    {
+      "id": "formatting-agreement-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThese #emph[estimates] is uniform.\n"
+    },
+    {
+      "id": "formatting-agreement-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThese #emph[estimates] are uniform.\n"
+    },
+    {
+      "id": "formatting-word-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe proof contains a \\textbf{misspelld} word.\n\\end{document}\n"
+    },
+    {
+      "id": "formatting-word-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe proof contains a \\textbf{misspelled} word.\n\\end{document}\n"
+    },
+    {
+      "id": "formatting-word-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe proof contains a #strong[misspelld] word.\n"
+    },
+    {
+      "id": "formatting-word-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe proof contains a #strong[misspelled] word.\n"
+    },
+    {
+      "id": "math-text-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\[x=y\\quad\\text{This is is the result.}\\]\n\\end{document}\n"
+    },
+    {
+      "id": "math-text-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\[x=y\\quad\\text{This is the result.}\\]\n\\end{document}\n"
+    },
+    {
+      "id": "math-text-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n$ x=y quad text(\"This is is the result.\") $\n"
+    },
+    {
+      "id": "technical-payloads-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\newcommand{\\technicalname}{NonsensicalTechnicalToken}\nThe theorem applies.\n\\end{document}\n"
+    },
+    {
+      "id": "technical-payloads-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n#let technical_fn(name, value: \"NonsensicalTechnicalToken\") = name\n#technical_fn(\"NonsensicalArgumentToken\", value: \"NonsensicalValueToken\")\nThe theorem applies.\n"
+    },
+    {
+      "id": "heading-fragment-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\section{A priori estimates}\n\\end{document}\n"
+    },
+    {
+      "id": "heading-fragment-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n= A priori estimates\n"
+    },
+    {
+      "id": "heading-typo-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\section{Asymptotic behaviour and regularity estmates}\n\\end{document}\n"
+    },
+    {
+      "id": "heading-typo-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\section{Asymptotic behaviour and regularity estimates}\n\\end{document}\n"
+    },
+    {
+      "id": "heading-typo-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n= Asymptotic behaviour and regularity estmates\n"
+    },
+    {
+      "id": "heading-typo-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n= Asymptotic behaviour and regularity estimates\n"
+    },
+    {
+      "id": "caption-fragment-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\begin{figure}\n\\caption{Comparison of the two bounds}\n\\end{figure}\n\\end{document}\n"
+    },
+    {
+      "id": "caption-fragment-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n#figure(rect(), caption: [Comparison of the two bounds])\n"
+    },
+    {
+      "id": "caption-repeat-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\begin{figure}\n\\caption{The the two bounds agree.}\n\\end{figure}\n\\end{document}\n"
+    },
+    {
+      "id": "caption-repeat-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\begin{figure}\n\\caption{The two bounds agree.}\n\\end{figure}\n\\end{document}\n"
+    },
+    {
+      "id": "caption-repeat-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n#figure(rect(), caption: [The the two bounds agree.])\n"
+    },
+    {
+      "id": "caption-repeat-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n#figure(rect(), caption: [The two bounds agree.])\n"
+    },
+    {
+      "id": "names-possessives-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n\\end{document}\n"
+    },
+    {
+      "id": "names-possessives-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n"
+    },
+    {
+      "id": "math-compounds-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe nonautonomous semigroup has local well-posedness.\nThis result does not imply ill-posedness.\n\\end{document}\n"
+    },
+    {
+      "id": "math-compounds-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe nonautonomous semigroup has local well-posedness.\nThis result does not imply ill-posedness.\n"
+    },
+    {
+      "id": "math-compound-typo-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe nonautonmous semigroup is continuous.\n\\end{document}\n"
+    },
+    {
+      "id": "math-compound-typo-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe nonautonomous semigroup is continuous.\n\\end{document}\n"
+    },
+    {
+      "id": "math-compound-typo-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe nonautonmous semigroup is continuous.\n"
+    },
+    {
+      "id": "math-compound-typo-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe nonautonomous semigroup is continuous.\n"
+    },
+    {
+      "id": "unicode-location-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nÉtale cohomology is discussed here. The next \\emph{misspelld} word follows $\\alpha$.\n\\end{document}\n"
+    },
+    {
+      "id": "unicode-location-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nÉtale cohomology is discussed here. The next \\emph{misspelled} word follows $\\alpha$.\n\\end{document}\n"
+    },
+    {
+      "id": "unicode-location-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nÉtale cohomology is discussed here. The next #emph[misspelld] word follows $alpha$.\n"
+    },
+    {
+      "id": "unicode-location-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nÉtale cohomology is discussed here. The next #emph[misspelled] word follows $alpha$.\n"
+    },
+    {
+      "id": "literal-code-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nLiteral code \\verb|misspelld is is| is not prose.\n\\end{document}\n"
+    },
+    {
+      "id": "literal-code-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nLiteral code `misspelld is is` is not prose.\n"
+    },
+    {
+      "id": "word-split-formatting-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe non\\emph{autonmous} equation is stable.\n\\end{document}\n"
+    },
+    {
+      "id": "word-split-formatting-tex--expected",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe non\\emph{autonomous} equation is stable.\n\\end{document}\n"
+    },
+    {
+      "id": "word-split-formatting-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe non#emph[autonmous] equation is stable.\n"
+    },
+    {
+      "id": "word-split-formatting-typst--expected",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe non#emph[autonomous] equation is stable.\n"
+    },
+    {
+      "id": "word-01-word",
+      "kind": "tex",
+      "source": "sentnce"
+    },
+    {
+      "id": "word-01-word--expected",
+      "kind": "tex",
+      "source": "sentence"
+    },
+    {
+      "id": "word-01-context",
+      "kind": "tex",
+      "source": "This sentnce states the main result."
+    },
+    {
+      "id": "word-01-context--expected",
+      "kind": "tex",
+      "source": "This sentence states the main result."
+    },
+    {
+      "id": "word-02-word",
+      "kind": "typst",
+      "source": "misspelld"
+    },
+    {
+      "id": "word-02-word--expected",
+      "kind": "typst",
+      "source": "misspelled"
+    },
+    {
+      "id": "word-02-context",
+      "kind": "typst",
+      "source": "This is a misspelld word."
+    },
+    {
+      "id": "word-02-context--expected",
+      "kind": "typst",
+      "source": "This is a misspelled word."
+    },
+    {
+      "id": "word-03-word",
+      "kind": "tex",
+      "source": "estmates"
+    },
+    {
+      "id": "word-03-word--expected",
+      "kind": "tex",
+      "source": "estimates"
+    },
+    {
+      "id": "word-03-context",
+      "kind": "tex",
+      "source": "These estmates hold uniformly."
+    },
+    {
+      "id": "word-03-context--expected",
+      "kind": "tex",
+      "source": "These estimates hold uniformly."
+    },
+    {
+      "id": "word-04-word",
+      "kind": "typst",
+      "source": "nonautonmous"
+    },
+    {
+      "id": "word-04-word--expected",
+      "kind": "typst",
+      "source": "nonautonomous"
+    },
+    {
+      "id": "word-04-context",
+      "kind": "typst",
+      "source": "The nonautonmous equation has a mild solution."
+    },
+    {
+      "id": "word-04-context--expected",
+      "kind": "typst",
+      "source": "The nonautonomous equation has a mild solution."
+    },
+    {
+      "id": "word-05-word",
+      "kind": "tex",
+      "source": "continous"
+    },
+    {
+      "id": "word-05-word--expected",
+      "kind": "tex",
+      "source": "continuous"
+    },
+    {
+      "id": "word-05-context",
+      "kind": "tex",
+      "source": "The function is continous."
+    },
+    {
+      "id": "word-05-context--expected",
+      "kind": "tex",
+      "source": "The function is continuous."
+    },
+    {
+      "id": "word-06-word",
+      "kind": "typst",
+      "source": "teh"
+    },
+    {
+      "id": "word-06-word--expected",
+      "kind": "typst",
+      "source": "the"
+    },
+    {
+      "id": "word-06-context",
+      "kind": "typst",
+      "source": "We prove teh main theorem."
+    },
+    {
+      "id": "word-06-context--expected",
+      "kind": "typst",
+      "source": "We prove the main theorem."
+    },
+    {
+      "id": "word-07-word",
+      "kind": "tex",
+      "source": "recieve"
+    },
+    {
+      "id": "word-07-word--expected",
+      "kind": "tex",
+      "source": "receive"
+    },
+    {
+      "id": "word-07-context",
+      "kind": "tex",
+      "source": "We recieve a uniform bound."
+    },
+    {
+      "id": "word-07-context--expected",
+      "kind": "tex",
+      "source": "We receive a uniform bound."
+    },
+    {
+      "id": "word-08-word",
+      "kind": "typst",
+      "source": "seperate"
+    },
+    {
+      "id": "word-08-word--expected",
+      "kind": "typst",
+      "source": "separate"
+    },
+    {
+      "id": "word-08-context",
+      "kind": "typst",
+      "source": "The two estimates are seperate."
+    },
+    {
+      "id": "word-08-context--expected",
+      "kind": "typst",
+      "source": "The two estimates are separate."
+    },
+    {
+      "id": "word-09-word",
+      "kind": "tex",
+      "source": "semigroup"
+    },
+    {
+      "id": "word-09-context",
+      "kind": "tex",
+      "source": "The semigroup preserves positivity."
+    },
+    {
+      "id": "word-10-word",
+      "kind": "typst",
+      "source": "nonautonomous"
+    },
+    {
+      "id": "word-10-context",
+      "kind": "typst",
+      "source": "The nonautonomous equation is well posed."
+    },
+    {
+      "id": "word-11-word",
+      "kind": "tex",
+      "source": "well-posedness"
+    },
+    {
+      "id": "word-11-context",
+      "kind": "tex",
+      "source": "We prove local well-posedness."
+    },
+    {
+      "id": "word-12-word",
+      "kind": "typst",
+      "source": "ill-posedness"
+    },
+    {
+      "id": "word-12-context",
+      "kind": "typst",
+      "source": "This example establishes ill-posedness."
+    },
+    {
+      "id": "word-13-word",
+      "kind": "tex",
+      "source": "Tao"
+    },
+    {
+      "id": "word-13-context",
+      "kind": "tex",
+      "source": "The theorem of Tao applies here."
+    },
+    {
+      "id": "word-14-word",
+      "kind": "typst",
+      "source": "Tao's"
+    },
+    {
+      "id": "word-14-context",
+      "kind": "typst",
+      "source": "Tao's argument gives the estimate."
+    },
+    {
+      "id": "word-15-word",
+      "kind": "tex",
+      "source": "Tao’s"
+    },
+    {
+      "id": "word-15-context",
+      "kind": "tex",
+      "source": "Tao’s argument gives the estimate."
+    },
+    {
+      "id": "word-16-word",
+      "kind": "typst",
+      "source": "Barbato"
+    },
+    {
+      "id": "word-16-context",
+      "kind": "typst",
+      "source": "The result of Barbato applies here."
+    },
+    {
+      "id": "word-17-word",
+      "kind": "tex",
+      "source": "Romito"
+    },
+    {
+      "id": "word-17-context",
+      "kind": "tex",
+      "source": "The result of Romito applies here."
+    },
+    {
+      "id": "word-18-word",
+      "kind": "typst",
+      "source": "Romito’s"
+    },
+    {
+      "id": "word-18-context",
+      "kind": "typst",
+      "source": "Romito’s proof gives the bound."
+    },
+    {
+      "id": "word-19-word",
+      "kind": "tex",
+      "source": "colour"
+    },
+    {
+      "id": "word-19-context",
+      "kind": "tex",
+      "source": "The colour of the curve indicates its sign."
+    },
+    {
+      "id": "word-20-word",
+      "kind": "typst",
+      "source": "behaviour"
+    },
+    {
+      "id": "word-20-context",
+      "kind": "typst",
+      "source": "We study the asymptotic behaviour."
+    },
+    {
+      "id": "word-21-word",
+      "kind": "tex",
+      "source": "centre"
+    },
+    {
+      "id": "word-21-context",
+      "kind": "tex",
+      "source": "The centre of the ball is fixed."
+    },
+    {
+      "id": "word-22-word",
+      "kind": "typst",
+      "source": "minimise"
+    },
+    {
+      "id": "word-22-context",
+      "kind": "typst",
+      "source": "We minimise the energy."
+    },
+    {
+      "id": "word-23-word",
+      "kind": "tex",
+      "source": "form"
+    },
+    {
+      "id": "word-23-context",
+      "kind": "tex",
+      "source": "We derive the estimate form the energy identity."
+    },
+    {
+      "id": "word-23-context--expected",
+      "kind": "tex",
+      "source": "We derive the estimate from the energy identity."
+    },
+    {
+      "id": "word-24-word",
+      "kind": "typst",
+      "source": "their"
+    },
+    {
+      "id": "word-24-context",
+      "kind": "typst",
+      "source": "Their is a unique solution."
+    },
+    {
+      "id": "word-24-context--expected",
+      "kind": "typst",
+      "source": "There is a unique solution."
+    },
+    {
+      "id": "word-25-word",
+      "kind": "tex",
+      "source": "there"
+    },
+    {
+      "id": "word-25-context",
+      "kind": "tex",
+      "source": "We use there estimates."
+    },
+    {
+      "id": "word-25-context--expected",
+      "kind": "tex",
+      "source": "We use their estimates."
+    },
+    {
+      "id": "word-26-word",
+      "kind": "typst",
+      "source": "affect"
+    },
+    {
+      "id": "word-26-context",
+      "kind": "typst",
+      "source": "The estimate has an affect on the proof."
+    },
+    {
+      "id": "word-26-context--expected",
+      "kind": "typst",
+      "source": "The estimate has an effect on the proof."
+    },
+    {
+      "id": "word-27-word",
+      "kind": "tex",
+      "source": "prove"
+    },
+    {
+      "id": "word-27-context",
+      "kind": "tex",
+      "source": "This argument provides a prove of the theorem."
+    },
+    {
+      "id": "word-27-context--expected",
+      "kind": "tex",
+      "source": "This argument provides a proof of the theorem."
+    },
+    {
+      "id": "word-28-word",
+      "kind": "typst",
+      "source": "proof"
+    },
+    {
+      "id": "word-28-context",
+      "kind": "typst",
+      "source": "We proof the main theorem."
+    },
+    {
+      "id": "word-28-context--expected",
+      "kind": "typst",
+      "source": "We prove the main theorem."
+    },
+    {
+      "id": "original-source-0910.0311v1",
+      "kind": "tex",
+      "source": "Section 2 is devoted to present some\npreparatory results on Besov spaces."
+    },
+    {
+      "id": "original-source-0910.0311v1--expected",
+      "kind": "tex",
+      "source": "Section 2 is devoted to presenting some\npreparatory results on Besov spaces."
+    },
+    {
+      "id": "original-source-1811.07239v1",
+      "kind": "tex",
+      "source": "Remarkably, an interaction Morawetz-type estimate are applied."
+    },
+    {
+      "id": "original-source-1811.07239v1--expected",
+      "kind": "tex",
+      "source": "Remarkably, an interaction Morawetz-type estimate is applied."
+    },
+    {
+      "id": "original-source-2312.17035v1",
+      "kind": "tex",
+      "source": "We will introduce some notations and conventions in next subsection."
+    },
+    {
+      "id": "original-source-2312.17035v1--expected",
+      "kind": "tex",
+      "source": "We will introduce some notations and conventions in the next subsection."
+    },
+    {
+      "id": "original-source-2507.15139v2",
+      "kind": "tex",
+      "source": "Let $k$ be an integers with $k\\geq2$, and let $G$ be a connected graph."
+    },
+    {
+      "id": "original-source-2507.15139v2--expected",
+      "kind": "tex",
+      "source": "Let $k$ be an integer with $k\\geq2$, and let $G$ be a connected graph."
+    },
+    {
+      "id": "existing-clean-inline-math",
+      "kind": "tex",
+      "source": "The norm $\\lVert u\\rVert_{H^s}$ is finite."
+    },
+    {
+      "id": "existing-clean-tex-display-comma",
+      "kind": "tex",
+      "source": "If\n\\[\n  \\lVert u\\rVert_{H^s} \\leq C,\n\\]\nthen the solution exists."
+    },
+    {
+      "id": "existing-clean-typst-display-comma",
+      "kind": "typst",
+      "source": "If\n$\n  norm(u)_(H^s) <= C,\n$\nthen the solution exists."
+    },
+    {
+      "id": "existing-clean-tex-display-period",
+      "kind": "tex",
+      "source": "The energy satisfies\n\\begin{equation}\n  E(t) \\leq E(0).\n\\end{equation}\nTherefore, the solution is bounded."
+    },
+    {
+      "id": "existing-clean-typst-display-period",
+      "kind": "typst",
+      "source": "The energy satisfies\n$\n  E(t) <= E(0).\n$\nTherefore, the solution is bounded."
+    },
+    {
+      "id": "existing-clean-tex-text-in-math",
+      "kind": "tex",
+      "source": "\\[\\text{The operator is bounded and the solution is unique.}\\]"
+    },
+    {
+      "id": "existing-clean-typst-text-in-math",
+      "kind": "typst",
+      "source": "$ text(\"The operator is bounded and the solution is unique.\") $"
+    },
+    {
+      "id": "existing-clean-math-clause",
+      "kind": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe estimate follows."
+    },
+    {
+      "id": "existing-clean-tex-macro",
+      "kind": "tex",
+      "source": "We use the estimate $\\energyBound$ throughout this proof."
+    },
+    {
+      "id": "existing-clean-typst-macro",
+      "kind": "typst",
+      "source": "For $energy-bound$, the nonautonomous equation is well-posed."
+    },
+    {
+      "id": "existing-tex-display-article",
+      "kind": "tex",
+      "source": "We obtain an unique solution from\n\\[\n  E(t) \\leq C.\n\\]"
+    },
+    {
+      "id": "existing-tex-display-article--expected",
+      "kind": "tex",
+      "source": "We obtain a unique solution from\n\\[\n  E(t) \\leq C.\n\\]"
+    },
+    {
+      "id": "existing-typst-display-article",
+      "kind": "typst",
+      "source": "We obtain an unique solution from\n$\n  E(t) <= C.\n$"
+    },
+    {
+      "id": "existing-typst-display-article--expected",
+      "kind": "typst",
+      "source": "We obtain a unique solution from\n$\n  E(t) <= C.\n$"
+    },
+    {
+      "id": "existing-tex-display-agreement",
+      "kind": "tex",
+      "source": "The estimates\n\\begin{align}\n  E(t) &\\leq C, & D(t) &\\leq C\n\\end{align}\nholds uniformly in time."
+    },
+    {
+      "id": "existing-tex-display-agreement--expected",
+      "kind": "tex",
+      "source": "The estimates\n\\begin{align}\n  E(t) &\\leq C, & D(t) &\\leq C\n\\end{align}\nhold uniformly in time."
+    },
+    {
+      "id": "existing-typst-display-agreement",
+      "kind": "typst",
+      "source": "The estimates\n$\n  E(t) &<= C, & D(t) &<= C\n$\nholds uniformly in time."
+    },
+    {
+      "id": "existing-typst-display-agreement--expected",
+      "kind": "typst",
+      "source": "The estimates\n$\n  E(t) &<= C, & D(t) &<= C\n$\nhold uniformly in time."
+    },
+    {
+      "id": "existing-tex-display-clause",
+      "kind": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe solution remain bounded."
+    },
+    {
+      "id": "existing-tex-display-clause--expected",
+      "kind": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe solution remains bounded."
+    },
+    {
+      "id": "existing-typst-display-clause",
+      "kind": "typst",
+      "source": "Since\n$\n  E(t) <= C,\n$\nthe solution remain bounded."
+    },
+    {
+      "id": "existing-typst-display-clause--expected",
+      "kind": "typst",
+      "source": "Since\n$\n  E(t) <= C,\n$\nthe solution remains bounded."
+    },
+    {
+      "id": "existing-tex-text-in-math-agreement",
+      "kind": "tex",
+      "source": "\\[\\text{The operator are bounded.}\\]"
+    },
+    {
+      "id": "existing-tex-text-in-math-agreement--expected",
+      "kind": "tex",
+      "source": "\\[\\text{The operator is bounded.}\\]"
+    },
+    {
+      "id": "existing-typst-inline-article",
+      "kind": "typst",
+      "source": "We obtain a estimate from $norm(u) <= C$."
+    },
+    {
+      "id": "existing-typst-inline-article--expected",
+      "kind": "typst",
+      "source": "We obtain an estimate from $norm(u) <= C$."
+    },
+    {
+      "id": "real-repo-math-prose-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[\n  x = y,\n\\]\nwhich proves well-posedness for this equation.\n\nThe estimate gives\n\\begin{equation}\n  z = x;\n\\end{equation}\ntherefore, the conclusion follows from the estimate.\n\nWe have\n\\begin{align}\n  x &= y.\n\\end{align}\nThis proves ill-posedness.\n\nFor a nonautonomous equation, we have\n$$\n  a = b\n$$,\nwhich is useful.\n\nWe use the identity\n\\[\n  z = x:\n\\]\nthe theorem then follows.\n\nThe estimate holds\n\\[x=1,\\]\nwhere\n    \\emph{the theorem gives several solutions to this equation.}\n\nThe semigroup satisfies $x = y$, which is useful.\nThe Leray theorem applies to this semigroup.\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n\\end{document}\n"
+    },
+    {
+      "id": "real-repo-math-prose-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$\n  x = y,\n$\nwhich proves well-posedness for this equation.\n\nThe estimate gives\n$\n  z = x;\n$\ntherefore, the conclusion follows from the estimate.\n\nWe have\n$\n  x = y.\n$\nThis proves ill-posedness.\n\nFor a nonautonomous equation, we have\n$\n  a = b\n$,\nwhich is useful.\n\nWe use the identity\n$\n  z = x:\n$\nthe theorem then follows.\n\nThe semigroup satisfies $x = y$, which is useful.\nThe Leray theorem applies to this semigroup.\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n"
+    }
+  ]
+}

@@ -36,3 +36,8 @@ The Leray theorem applies to this semigroup.
 Barbato and Romito prove this result.
 Tao's argument agrees with Tao's conclusion.
 Tao’s proof agrees with Romito’s result.
+
+These #emph[estimates] are uniform.
+These #strong[estimates] are uniform.
+The #emph[proof] gives #strong[these estimates].
+These #text(fill: blue)[estimates] are uniform.

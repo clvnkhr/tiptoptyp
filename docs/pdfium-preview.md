@@ -6,6 +6,12 @@ backend → PDFium** to view its compiled PDF instead. A selected backend failur
 is reported explicitly and never switches renderers. There are no PDF.js or
 legacy raster-viewer settings, adapters or assets.
 
+Opened PDFs remain in the document pane beside any designated source preview.
+The existing Layout controls apply to them too: Code shows only the opened PDF,
+Split shows both, and Preview shows only the designated source preview. Without
+a designated source preview, the opened PDF remains visible in every mode.
+Changing layout preserves both tabs and never rewrites the PDF.
+
 Export uses the original compiler PDF bytes. PDFium paints in the egui viewport,
 so framebuffer captures include the actual PDF viewer. Native libraries are
 pinned for macOS, Linux and Windows, arm64 and x64. The implementation has been

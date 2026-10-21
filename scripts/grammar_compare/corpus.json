@@ -1,0 +1,562 @@
+{
+  "version": 1,
+  "description": "Reviewed developer comparison of grammar-only corrections in mathematical prose. Not a held-out scientific benchmark. Models receive text, never source metadata; TeX/Typst cases use explicit reviewed prose projections.",
+  "cases": [
+    {
+      "id": "clean-agreement",
+      "category": "unchanged",
+      "text": "These estimates hold for every bounded operator.",
+      "expected": "These estimates hold for every bounded operator.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-an",
+      "category": "unchanged",
+      "text": "An unbounded operator need not be continuous.",
+      "expected": "An unbounded operator need not be continuous.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-a-unique",
+      "category": "unchanged",
+      "text": "The equation has a unique solution.",
+      "expected": "The equation has a unique solution.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-a-one",
+      "category": "unchanged",
+      "text": "We construct a one-parameter semigroup.",
+      "expected": "We construct a one-parameter semigroup.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-tao-straight",
+      "category": "unchanged",
+      "text": "Tao's argument applies to this operator.",
+      "expected": "Tao's argument applies to this operator.",
+      "format": "plain",
+      "protected": [
+        "Tao's"
+      ]
+    },
+    {
+      "id": "clean-tao-curly",
+      "category": "unchanged",
+      "text": "Tao’s argument applies to this operator.",
+      "expected": "Tao’s argument applies to this operator.",
+      "format": "plain",
+      "protected": [
+        "Tao’s"
+      ]
+    },
+    {
+      "id": "clean-mathematicians",
+      "category": "unchanged",
+      "text": "Barbato and Romito proved the corresponding result.",
+      "expected": "Barbato and Romito proved the corresponding result.",
+      "format": "plain",
+      "protected": [
+        "Barbato",
+        "Romito"
+      ]
+    },
+    {
+      "id": "clean-semigroup",
+      "category": "unchanged",
+      "text": "The semigroup preserves nonnegative functions.",
+      "expected": "The semigroup preserves nonnegative functions.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-nonautonomous",
+      "category": "unchanged",
+      "text": "The nonautonomous equation admits a mild solution.",
+      "expected": "The nonautonomous equation admits a mild solution.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-well-posedness",
+      "category": "unchanged",
+      "text": "We establish local well-posedness in the energy space.",
+      "expected": "We establish local well-posedness in the energy space.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-british-behaviour",
+      "category": "unchanged",
+      "text": "We minimise the energy to characterise the asymptotic behaviour.",
+      "expected": "We minimise the energy to characterise the asymptotic behaviour.",
+      "format": "plain",
+      "notes": "British spelling is intentional; dialect conversion is not a grammar correction."
+    },
+    {
+      "id": "clean-british-centre",
+      "category": "unchanged",
+      "text": "We recognise the centre of the ball by its symmetry.",
+      "expected": "We recognise the centre of the ball by its symmetry.",
+      "format": "plain",
+      "notes": "British spelling is intentional; dialect conversion is not a grammar correction."
+    },
+    {
+      "id": "clean-hypotheses",
+      "category": "unchanged",
+      "text": "These hypotheses imply that the solution is smooth.",
+      "expected": "These hypotheses imply that the solution is smooth.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-zero-article",
+      "category": "unchanged",
+      "text": "We prove uniqueness without assuming compactness.",
+      "expected": "We prove uniqueness without assuming compactness.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-chosen",
+      "category": "unchanged",
+      "text": "The basis has been chosen independently of the parameter.",
+      "expected": "The basis has been chosen independently of the parameter.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-legitimate-repetition",
+      "category": "unchanged",
+      "text": "We show that that operator is bounded.",
+      "expected": "We show that that operator is bounded.",
+      "format": "plain",
+      "notes": "Both occurrences of that are grammatical: the first introduces a clause and the second modifies operator. Removing an optional clause introducer is unnecessary rewriting, not a required grammar correction."
+    },
+    {
+      "id": "clean-its",
+      "category": "unchanged",
+      "text": "The operator is bounded, and its norm is finite.",
+      "expected": "The operator is bounded, and its norm is finite.",
+      "format": "plain"
+    },
+    {
+      "id": "clean-plural-possessive",
+      "category": "unchanged",
+      "text": "The authors' estimates agree.",
+      "expected": "The authors' estimates agree.",
+      "format": "plain",
+      "protected": [
+        "authors'"
+      ]
+    },
+    {
+      "id": "clean-name-reference",
+      "category": "unchanged",
+      "text": "The result of Leray remains valid in this setting.",
+      "expected": "The result of Leray remains valid in this setting.",
+      "format": "plain",
+      "protected": [
+        "Leray"
+      ]
+    },
+    {
+      "id": "clean-inline-math",
+      "category": "unchanged",
+      "text": "The norm MATH is finite.",
+      "expected": "The norm MATH is finite.",
+      "format": "tex",
+      "source": "The norm $\\lVert u\\rVert_{H^s}$ is finite.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "clean-bound-control",
+      "category": "unchanged",
+      "text": "If this bound holds, then the solution exists.",
+      "expected": "If this bound holds, then the solution exists.",
+      "format": "plain",
+      "notes": "Plain-language control for the following display-math projection cases."
+    },
+    {
+      "id": "clean-tex-display-comma",
+      "category": "unchanged",
+      "text": "If MATH, then the solution exists.",
+      "expected": "If MATH, then the solution exists.",
+      "format": "tex",
+      "source": "If\n\\[\n  \\lVert u\\rVert_{H^s} \\leq C,\n\\]\nthen the solution exists.",
+      "protected": [
+        "MATH"
+      ],
+      "notes": "The comma inside display math remains sentence punctuation in the reviewed projection."
+    },
+    {
+      "id": "clean-typst-display-comma",
+      "category": "unchanged",
+      "text": "If MATH, then the solution exists.",
+      "expected": "If MATH, then the solution exists.",
+      "format": "typst",
+      "source": "If\n$\n  norm(u)_(H^s) <= C,\n$\nthen the solution exists.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "clean-tex-display-period",
+      "category": "unchanged",
+      "text": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "expected": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "format": "tex",
+      "source": "The energy satisfies\n\\begin{equation}\n  E(t) \\leq E(0).\n\\end{equation}\nTherefore, the solution is bounded.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "clean-typst-display-period",
+      "category": "unchanged",
+      "text": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "expected": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "format": "typst",
+      "source": "The energy satisfies\n$\n  E(t) <= E(0).\n$\nTherefore, the solution is bounded.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "clean-tex-text-in-math",
+      "category": "unchanged",
+      "text": "The operator is bounded and the solution is unique.",
+      "expected": "The operator is bounded and the solution is unique.",
+      "format": "tex",
+      "source": "\\[\\text{The operator is bounded and the solution is unique.}\\]",
+      "notes": "Natural-language content inside a math text command is retained, with no placeholder."
+    },
+    {
+      "id": "clean-typst-text-in-math",
+      "category": "unchanged",
+      "text": "The operator is bounded and the solution is unique.",
+      "expected": "The operator is bounded and the solution is unique.",
+      "format": "typst",
+      "source": "$ text(\"The operator is bounded and the solution is unique.\") $",
+      "notes": "Natural-language content inside math text is retained, with no placeholder."
+    },
+    {
+      "id": "clean-math-clause",
+      "category": "unchanged",
+      "text": "Since MATH, the estimate follows.",
+      "expected": "Since MATH, the estimate follows.",
+      "format": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe estimate follows.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "clean-tex-macro",
+      "category": "unchanged",
+      "text": "We use the estimate MATH throughout this proof.",
+      "expected": "We use the estimate MATH throughout this proof.",
+      "format": "tex",
+      "source": "We use the estimate $\\energyBound$ throughout this proof.",
+      "protected": [
+        "MATH"
+      ],
+      "notes": "The macro is represented by the protected math placeholder, not passed to the grammar model as prose."
+    },
+    {
+      "id": "clean-number",
+      "category": "unchanged",
+      "text": "The constant 3.14159 is positive.",
+      "expected": "The constant 3.14159 is positive.",
+      "format": "plain",
+      "protected": [
+        "3.14159"
+      ]
+    },
+    {
+      "id": "clean-equation-reference",
+      "category": "unchanged",
+      "text": "Equation (12) gives the required estimate.",
+      "expected": "Equation (12) gives the required estimate.",
+      "format": "plain",
+      "protected": [
+        "(12)"
+      ]
+    },
+    {
+      "id": "clean-typst-macro",
+      "category": "unchanged",
+      "text": "For MATH, the nonautonomous equation is well-posed.",
+      "expected": "For MATH, the nonautonomous equation is well-posed.",
+      "format": "typst",
+      "source": "For $energy-bound$, the nonautonomous equation is well-posed.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "missing-indefinite-article",
+      "category": "article",
+      "text": "Let T be bounded operator on this space.",
+      "expected": "Let T be a bounded operator on this space.",
+      "format": "plain",
+      "protected": [
+        "T"
+      ]
+    },
+    {
+      "id": "article-before-unbounded",
+      "category": "article",
+      "text": "We construct a unbounded operator.",
+      "expected": "We construct an unbounded operator.",
+      "format": "plain"
+    },
+    {
+      "id": "article-before-unique",
+      "category": "article",
+      "text": "The equation has an unique solution.",
+      "expected": "The equation has a unique solution.",
+      "format": "plain",
+      "notes": "Plain-language control for the projected-math article cases."
+    },
+    {
+      "id": "article-before-one",
+      "category": "article",
+      "text": "This is an one-parameter semigroup.",
+      "expected": "This is a one-parameter semigroup.",
+      "format": "plain"
+    },
+    {
+      "id": "agreement-estimates",
+      "category": "agreement",
+      "text": "These estimates holds for every bounded operator.",
+      "expected": "These estimates hold for every bounded operator.",
+      "format": "plain",
+      "notes": "Plain-language control for the projected-math agreement cases."
+    },
+    {
+      "id": "agreement-theorems",
+      "category": "agreement",
+      "text": "The two theorems has the same conclusion.",
+      "expected": "The two theorems have the same conclusion.",
+      "format": "plain"
+    },
+    {
+      "id": "agreement-operator",
+      "category": "agreement",
+      "text": "This operator commute with the projection.",
+      "expected": "This operator commutes with the projection.",
+      "format": "plain"
+    },
+    {
+      "id": "agreement-each",
+      "category": "agreement",
+      "text": "Each operator are bounded.",
+      "expected": "Each operator is bounded.",
+      "format": "plain"
+    },
+    {
+      "id": "agreement-exist",
+      "category": "agreement",
+      "text": "There exists two distinct solutions.",
+      "expected": "There exist two distinct solutions.",
+      "format": "plain"
+    },
+    {
+      "id": "verb-perfect",
+      "category": "verb",
+      "text": "We have prove the estimate.",
+      "expected": "We have proved the estimate.",
+      "format": "plain",
+      "accepted": [
+        "We have proven the estimate."
+      ]
+    },
+    {
+      "id": "verb-passive",
+      "category": "verb",
+      "text": "The estimate has been prove.",
+      "expected": "The estimate has been proved.",
+      "format": "plain",
+      "accepted": [
+        "The estimate has been proven."
+      ]
+    },
+    {
+      "id": "verb-chosen",
+      "category": "verb",
+      "text": "The parameter can be chose independently.",
+      "expected": "The parameter can be chosen independently.",
+      "format": "plain"
+    },
+    {
+      "id": "verb-did",
+      "category": "verb",
+      "text": "The constant did not depended on time.",
+      "expected": "The constant did not depend on time.",
+      "format": "plain"
+    },
+    {
+      "id": "verb-does",
+      "category": "verb",
+      "text": "The bound does not depends on the parameter.",
+      "expected": "The bound does not depend on the parameter.",
+      "format": "plain"
+    },
+    {
+      "id": "number-solutions",
+      "category": "number",
+      "text": "We obtain two distinct solution.",
+      "expected": "We obtain two distinct solutions.",
+      "format": "plain"
+    },
+    {
+      "id": "number-estimates",
+      "category": "number",
+      "text": "Several estimate are needed.",
+      "expected": "Several estimates are needed.",
+      "format": "plain"
+    },
+    {
+      "id": "number-bounds",
+      "category": "number",
+      "text": "These bound hold uniformly in time.",
+      "expected": "These bounds hold uniformly in time.",
+      "format": "plain"
+    },
+    {
+      "id": "number-hypotheses",
+      "category": "number",
+      "text": "These hypothesis imply uniqueness.",
+      "expected": "These hypotheses imply uniqueness.",
+      "format": "plain"
+    },
+    {
+      "id": "possessive-its",
+      "category": "possessive",
+      "text": "The operator is bounded, and it's norm is finite.",
+      "expected": "The operator is bounded, and its norm is finite.",
+      "format": "plain"
+    },
+    {
+      "id": "contraction-it-is",
+      "category": "possessive",
+      "text": "Its clear that the solution exists.",
+      "expected": "It's clear that the solution exists.",
+      "format": "plain",
+      "accepted": [
+        "It is clear that the solution exists."
+      ]
+    },
+    {
+      "id": "repetition-the",
+      "category": "repetition",
+      "text": "The the operator is bounded.",
+      "expected": "The operator is bounded.",
+      "format": "plain"
+    },
+    {
+      "id": "repetition-of",
+      "category": "repetition",
+      "text": "The norm of of the solution is finite.",
+      "expected": "The norm of the solution is finite.",
+      "format": "plain"
+    },
+    {
+      "id": "repetition-we",
+      "category": "repetition",
+      "text": "In this section, we we prove uniqueness.",
+      "expected": "In this section, we prove uniqueness.",
+      "format": "plain"
+    },
+    {
+      "id": "repetition-since",
+      "category": "repetition",
+      "text": "Since since the operator is bounded, the norm is finite.",
+      "expected": "Since the operator is bounded, the norm is finite.",
+      "format": "plain"
+    },
+    {
+      "id": "tex-display-article",
+      "category": "article",
+      "text": "We obtain an unique solution from MATH.",
+      "expected": "We obtain a unique solution from MATH.",
+      "format": "tex",
+      "source": "We obtain an unique solution from\n\\[\n  E(t) \\leq C.\n\\]",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "typst-display-article",
+      "category": "article",
+      "text": "We obtain an unique solution from MATH.",
+      "expected": "We obtain a unique solution from MATH.",
+      "format": "typst",
+      "source": "We obtain an unique solution from\n$\n  E(t) <= C.\n$",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "tex-display-agreement",
+      "category": "agreement",
+      "text": "The estimates MATH holds uniformly in time.",
+      "expected": "The estimates MATH hold uniformly in time.",
+      "format": "tex",
+      "source": "The estimates\n\\begin{align}\n  E(t) &\\leq C, & D(t) &\\leq C\n\\end{align}\nholds uniformly in time.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "typst-display-agreement",
+      "category": "agreement",
+      "text": "The estimates MATH holds uniformly in time.",
+      "expected": "The estimates MATH hold uniformly in time.",
+      "format": "typst",
+      "source": "The estimates\n$\n  E(t) &<= C, & D(t) &<= C\n$\nholds uniformly in time.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "tex-display-clause",
+      "category": "agreement",
+      "text": "Since MATH, the solution remain bounded.",
+      "expected": "Since MATH, the solution remains bounded.",
+      "format": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe solution remain bounded.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "typst-display-clause",
+      "category": "agreement",
+      "text": "Since MATH, the solution remain bounded.",
+      "expected": "Since MATH, the solution remains bounded.",
+      "format": "typst",
+      "source": "Since\n$\n  E(t) <= C,\n$\nthe solution remain bounded.",
+      "protected": [
+        "MATH"
+      ]
+    },
+    {
+      "id": "tex-text-in-math-agreement",
+      "category": "agreement",
+      "text": "The operator are bounded.",
+      "expected": "The operator is bounded.",
+      "format": "tex",
+      "source": "\\[\\text{The operator are bounded.}\\]",
+      "notes": "The error is in natural-language content inside math, not in the formula."
+    },
+    {
+      "id": "typst-inline-article",
+      "category": "article",
+      "text": "We obtain a estimate from MATH.",
+      "expected": "We obtain an estimate from MATH.",
+      "format": "typst",
+      "source": "We obtain a estimate from $norm(u) <= C$.",
+      "protected": [
+        "MATH"
+      ]
+    }
+  ]
+}

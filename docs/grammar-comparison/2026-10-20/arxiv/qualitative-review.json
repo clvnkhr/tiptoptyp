@@ -1,0 +1,1522 @@
+{
+  "version": 1,
+  "created_utc": "2026-10-20T13:04:58.443928+00:00",
+  "corpus_sha256": "4fa955e37d2fe7327cc16f270d06d8158442e1e742416c0a8bfeb206aeb00adc",
+  "results_sha256": "2b2ae51a8c64fa7a7604283b2b087c394f0f0ecdea4e56ded69f7a619215c015",
+  "method": "Supplementary assistant review by model, with original input, frozen references and output visible. Not blinded, not independent human annotation and not an authoritative accuracy benchmark. Exact scores, inference outputs and pre-inference targets remain unchanged.",
+  "scope": "Only56 scored arXiv sentences;38 exploratory passages and64 baseline cases excluded.",
+  "interpretation": "Complete grammatical repairs may still have mathematical typography defects. These counts must not be interpreted as safe source edits. No model is integrated into the editor by this comparison.",
+  "verdicts": {
+    "exact_reference": "Matches a reference fixed before inference.",
+    "full_valid_alternative": "Assistant judges grammar repaired with meaning retained; protected typography may still need restoration.",
+    "partial": "Some required grammar repairs are missing.",
+    "unchanged": "Substantive grammar issue remains, even if a cosmetic edit was made.",
+    "meaning_changed": "Harmful or unreliable rewrite, including mathematical symbol loss or a new grammatical construction error.",
+    "uncertain": "The evidence does not support a definite success/failure judgement."
+  },
+  "models": [
+    {
+      "name": "liquid",
+      "label": "Liquid LFM2.5 Encoder 350M (tagger only)",
+      "totals": {
+        "meaning_changed": 2,
+        "exact_reference": 18,
+        "unchanged": 22,
+        "partial": 5,
+        "uncertain": 1,
+        "full_valid_alternative": 8
+      },
+      "exact_reference": 18,
+      "grammar_complete_including_alternatives": 26,
+      "alternatives_with_protected_typography_flags": 8,
+      "records": [
+        {
+          "id": "arxiv-041",
+          "verdict": "unchanged",
+          "rationale": "Leaves the incompatible passive/active coordination can be exploited and get unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-044",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-046",
+          "verdict": "partial",
+          "rationale": "Fixes addtion→addition but leaves the comma splice before the imperative “please refer”.",
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-047",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-049",
+          "verdict": "unchanged",
+          "rationale": "Leaves the comma splice between the two independent clauses unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-050",
+          "verdict": "unchanged",
+          "rationale": "Leaves a since-clause with no matrix continuation after it is worth noting that.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-053",
+          "verdict": "partial",
+          "rationale": "Fixes filed→field but leaves the nonparallel apply…and using construction. The comma before “see for example” alone is not the basis of the failure.",
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-055",
+          "verdict": "partial",
+          "rationale": "Fixes one…pose agreement and changes be→to be, but “poses the initial data … to be in L1” remains a defective lexical/complement construction for imposing this condition. u(0) spacing is not semantic damage.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "u(0)"
+          ]
+        },
+        {
+          "id": "arxiv-057",
+          "verdict": "unchanged",
+          "rationale": "Leaves we suffice to prove unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-058",
+          "verdict": "unchanged",
+          "rationale": "Leaves obtained in, see, e.g. unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-060",
+          "verdict": "meaning_changed",
+          "rationale": "Removes that correctly, but inserts unsupported “higher” before potential, adding a mathematical qualifier absent from the input.",
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-063",
+          "verdict": "unchanged",
+          "rationale": "Leaves devote without its reflexive object unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-069",
+          "verdict": "partial",
+          "rationale": "Removes the unnecessary article before geophysics but leaves various…background in the singular.",
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-071",
+          "verdict": "unchanged",
+          "rationale": "Leaves plural solutions followed by singular does it unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-075",
+          "verdict": "full_valid_alternative",
+          "rationale": "Fixes except of→except for. s=s_c→s = s _ c changes whitespace only; no mathematical variable is removed or substituted.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "s=s_c"
+          ]
+        },
+        {
+          "id": "arxiv-077",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-079",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-080",
+          "verdict": "full_valid_alternative",
+          "rationale": "Fixes compound-subject agreement is→are. B*→B * is only spacing of the dual-space marker.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "B*"
+          ]
+        },
+        {
+          "id": "arxiv-082",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-084",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-085",
+          "verdict": "unchanged",
+          "rationale": "Leaves the missing passive be after can unchanged; articles for torus/lattice are not required by this verdict.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-086",
+          "verdict": "full_valid_alternative",
+          "rationale": "Fixes was overcame→was overcome. ∂ₜu/u is respaced without loss or substitution of its symbols; preserve original formula typography on application.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "∂ₜu/u"
+          ]
+        },
+        {
+          "id": "arxiv-087",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-088",
+          "verdict": "full_valid_alternative",
+          "rationale": "Replaces malformed functions of taking with the grammatical relative clause functions that take. A(R)/B(R) spacing is cosmetic. It preserves the stated non-negativity without inventing a missing parameter.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "A(R)",
+            "B(R)"
+          ]
+        },
+        {
+          "id": "arxiv-0910-0311",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-092",
+          "verdict": "unchanged",
+          "rationale": "Leaves nonuniqueness…are agreement unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-093",
+          "verdict": "unchanged",
+          "rationale": "Leaves singular count-noun oscillatory integral operator without a determiner.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-094",
+          "verdict": "unchanged",
+          "rationale": "Leaves bounds…corresponds agreement unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1111-2203",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1212-0499",
+          "verdict": "uncertain",
+          "rationale": "Fixes combines→combine. The reference also pluralizes Region; singular Region before a list of numeric labels may be interpreted as ellipsis of a repeated label. Do not count this as a definite remaining grammatical error without adopting an explicit label-number convention.",
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1303-1600",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1309-6940",
+          "verdict": "full_valid_alternative",
+          "rationale": "Fixes an continuous→a continuous. Adds spaces around the formula and separates combining diacritics/subscripts in display text. All mathematical tokens remain in order; typography needs preservation, but this is not evidence of changed mathematical meaning.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "n>0",
+            "ϕ̃ₙ",
+            "μₙ{y∈Sₙ;ϕₙ(y)≠ϕ̃ₙ(y)}<2⁻ⁿ"
+          ]
+        },
+        {
+          "id": "arxiv-1608-02048",
+          "verdict": "unchanged",
+          "rationale": "Leaves this results was unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1611-04074",
+          "verdict": "unchanged",
+          "rationale": "Leaves the incorrect past participle casted unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1803-00075",
+          "verdict": "meaning_changed",
+          "rationale": "Changes a locative/domain qualifier into an agentive “while focusing” clause, ill-attached to the estimate; also changes plural estimates to singular. It does not preserve the intended contrast or deliver a reliable complete repair.",
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1901-01489",
+          "verdict": "unchanged",
+          "rationale": "Leaves the missing relative pronoun before does not vanish.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1910-11150",
+          "verdict": "unchanged",
+          "rationale": "Leaves the incompatible coordination fix p…and Ω…is determined.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2010-14390",
+          "verdict": "unchanged",
+          "rationale": "Leaves numerology…are agreement unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2012-04805",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2106-10501",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2107-05299",
+          "verdict": "unchanged",
+          "rationale": "Leaves call the solution u is global instead of the call-object-complement construction.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2107-05350",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2201-01021",
+          "verdict": "partial",
+          "rationale": "Replaces the comma splice with a period but leaves “one” lowercase after the new sentence boundary.",
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2212-05273",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2307-12197",
+          "verdict": "unchanged",
+          "rationale": "Leaves used to other related models unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2310-14646",
+          "verdict": "unchanged",
+          "rationale": "Leaves with u₀…is radial without a grammatical complement linkage.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2312-15845",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2312-17035",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2410-00648",
+          "verdict": "full_valid_alternative",
+          "rationale": "Fixes by proved→by proving. Spaces added within f(k) and the ceiling expression preserve the symbols and mathematical relationship; classify as formatting changes, not semantic damage.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "f(k)",
+            "3⌈k/2⌉"
+          ]
+        },
+        {
+          "id": "arxiv-2412-10013",
+          "verdict": "unchanged",
+          "rationale": "Leaves the field denotation complex number ℂ in the singular.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2504-09794",
+          "verdict": "unchanged",
+          "rationale": "Leaves have the directed shown unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2504-15314",
+          "verdict": "full_valid_alternative",
+          "rationale": "Fixes is disconnects→is disconnected. V(G)→V (G) is harmless mathematical spacing.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "V(G)"
+          ]
+        },
+        {
+          "id": "arxiv-2507-11078",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2507-15139",
+          "verdict": "exact_reference",
+          "rationale": "Matches the frozen reference or an explicitly accepted reference exactly.",
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2509-12640",
+          "verdict": "unchanged",
+          "rationale": "Leaves repeated the the unchanged.",
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2510-10945",
+          "verdict": "full_valid_alternative",
+          "rationale": "Adds the missing article. Spaces split the combining tilde from g in plain text; this is undesirable mathematical typography and would need safe reinsertion, but no symbol or mathematical claim is deleted or changed.",
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "g̃(xₜ)"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "gector",
+      "label": "GECToR-2024 (official RoBERTa-large)",
+      "totals": {
+        "meaning_changed": 1,
+        "exact_reference": 19,
+        "full_valid_alternative": 8,
+        "partial": 6,
+        "unchanged": 21,
+        "uncertain": 1
+      },
+      "exact_reference": 19,
+      "grammar_complete_including_alternatives": 27,
+      "alternatives_with_protected_typography_flags": 5,
+      "records": [
+        {
+          "id": "arxiv-041",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-044",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-046",
+          "verdict": "partial",
+          "rationale": "Corrects the typo addtion, but retains the comma splice before the independent imperative please refer. Citation spacing is cosmetic.",
+          "formatting_only": false,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "[2, 12]"
+          ]
+        },
+        {
+          "id": "arxiv-047",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-049",
+          "verdict": "full_valid_alternative",
+          "rationale": "Replaces the comma splice with a period and capitalizes the new sentence. Its added comma after In this case is grammatical and meaning preserving.",
+          "formatting_only": false,
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-050",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-053",
+          "verdict": "partial",
+          "rationale": "Repairs the coordinated infinitive using to use, but leaves filed instead of field. The sentence therefore is not fully corrected.",
+          "formatting_only": false,
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-055",
+          "verdict": "partial",
+          "rationale": "Adds the infinitive marker to be but retains one further pose instead of poses/requires/assumes; the malformed condition is not repaired.",
+          "formatting_only": false,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "u(0)"
+          ]
+        },
+        {
+          "id": "arxiv-057",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-058",
+          "verdict": "partial",
+          "rationale": "Only citation spacing changes. The malformed construction obtained in, see, e.g. is untouched; no substantive grammar repair.",
+          "formatting_only": false,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "[15, 19]"
+          ]
+        },
+        {
+          "id": "arxiv-060",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-063",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-069",
+          "verdict": "partial",
+          "rationale": "Removing the article before geophysics is acceptable, but various physical background still needs plural backgrounds.",
+          "formatting_only": false,
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-071",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-075",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-077",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-079",
+          "verdict": "full_valid_alternative",
+          "rationale": "Repairs known to know. Adding the before sign-changing solutions is grammatical in the stated problem context and does not require rejecting this valid repair.",
+          "formatting_only": false,
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-080",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-082",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-084",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-085",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-086",
+          "verdict": "full_valid_alternative",
+          "rationale": "Repairs overcame to overcome. The derivative is spaced as the same ordered glyphs; this is a typography-preservation flag rather than a demonstrated change to the differentiated quantity.",
+          "formatting_only": true,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "∂ₜu/u"
+          ]
+        },
+        {
+          "id": "arxiv-087",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-088",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-0910-0311",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-092",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-093",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-094",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1111-2203",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1212-0499",
+          "verdict": "uncertain",
+          "rationale": "The verb is changed to a grammatical past tense, whose suitability depends on source context. Singular Region before a list of numeric labels may be conventional ellipsis. Keep this uncertain rather than demanding a plural label for only this model.",
+          "formatting_only": false,
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1303-1600",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1309-6940",
+          "verdict": "full_valid_alternative",
+          "rationale": "Corrects an continuous to a continuous. The remaining differences are whitespace in the formulas, including detached combining/subscript/superscript glyphs; flag for typography cleanup, not a changed inequality.",
+          "formatting_only": true,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "n>0",
+            "ϕ̃ₙ",
+            "μₙ{y∈Sₙ;ϕₙ(y)≠ϕ̃ₙ(y)}<2⁻ⁿ"
+          ]
+        },
+        {
+          "id": "arxiv-1608-02048",
+          "verdict": "full_valid_alternative",
+          "rationale": "Repairs results to result. Recently is a valid near-synonymous replacement for Lately, although not necessary for grammar.",
+          "formatting_only": false,
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1611-04074",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1803-00075",
+          "verdict": "meaning_changed",
+          "rationale": "Retains the subordinate-clause fragment, adds an inappropriate focus-on construction, and changes the plural estimates to a single estimate rather than repairing the original agreement.",
+          "formatting_only": false,
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1901-01489",
+          "verdict": "full_valid_alternative",
+          "rationale": "Adds the missing relative connector. Formula glyphs remain in order; extra spaces around membership and the subscript are typography changes, requiring preservation cleanup rather than a grammar rejection.",
+          "formatting_only": true,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "ζ∈Γz₀"
+          ]
+        },
+        {
+          "id": "arxiv-1910-11150",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2010-14390",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2012-04805",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2106-10501",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2107-05299",
+          "verdict": "partial",
+          "rationale": "Adds a copula before the interval notation, but leaves the invalid object complement call the solution u is global.",
+          "formatting_only": false,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "Imax=(T−(u),T+(u))=ℝ"
+          ]
+        },
+        {
+          "id": "arxiv-2107-05350",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2201-01021",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2212-05273",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2307-12197",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2310-14646",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2312-15845",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2312-17035",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2410-00648",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2412-10013",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2504-09794",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2504-15314",
+          "verdict": "full_valid_alternative",
+          "rationale": "Repairs disconnects to disconnected. V (G) merely spaces the same function notation; no mathematical glyph is lost or substituted.",
+          "formatting_only": true,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "V(G)"
+          ]
+        },
+        {
+          "id": "arxiv-2507-11078",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2507-15139",
+          "verdict": "exact_reference",
+          "rationale": "Matches a frozen pre-inference expected or accepted reference.",
+          "formatting_only": false,
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2509-12640",
+          "verdict": "unchanged",
+          "rationale": "Returns the original sentence, leaving its identified grammar error unchanged.",
+          "formatting_only": false,
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2510-10945",
+          "verdict": "full_valid_alternative",
+          "rationale": "Adds the missing article. Spacing around the combining tilde and parentheses damages typographic attachment but preserves the formula glyph sequence and mathematical interpretation.",
+          "formatting_only": true,
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "g̃(xₜ)"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "coedit",
+      "label": "CoEdIT Small (community FLAN-T5)",
+      "totals": {
+        "partial": 3,
+        "unchanged": 28,
+        "meaning_changed": 15,
+        "uncertain": 1,
+        "full_valid_alternative": 1,
+        "exact_reference": 8
+      },
+      "exact_reference": 8,
+      "grammar_complete_including_alternatives": 9,
+      "alternatives_with_protected_typography_flags": 0,
+      "records": [
+        {
+          "id": "arxiv-041",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-044",
+          "verdict": "unchanged",
+          "rationale": "Only normalizes the apostrophe; the double negation remains.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-046",
+          "verdict": "partial",
+          "rationale": "Corrects addtion to addition but leaves the comma splice connecting the result statement and request.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-047",
+          "verdict": "meaning_changed",
+          "rationale": "Repairs the call construction but deletes µ from the sign condition.",
+          "formatting_only": false,
+          "protected_flags": [
+            "µ = 1"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "µ = 1"
+          ]
+        },
+        {
+          "id": "arxiv-049",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-050",
+          "verdict": "meaning_changed",
+          "rationale": "Turns the Sobolev-space symbol Ḣ½ into 12, while leaving the since-clause fragment.",
+          "formatting_only": false,
+          "protected_flags": [
+            "Ḣ½"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "Ḣ½"
+          ]
+        },
+        {
+          "id": "arxiv-053",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-055",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-057",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes ν from both variables in the positivity condition; we suffice remains uncorrected.",
+          "formatting_only": false,
+          "protected_flags": [
+            "ν₁, ν₂ > 0"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "ν₁, ν₂ > 0"
+          ]
+        },
+        {
+          "id": "arxiv-058",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-060",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-063",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes ≥ from the order constraint and leaves devote without its required reflexive object.",
+          "formatting_only": false,
+          "protected_flags": [
+            "k≥3",
+            "𝕋"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "k≥3",
+            "𝕋"
+          ]
+        },
+        {
+          "id": "arxiv-069",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-071",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes ∈ from the time-domain condition; plural antecedent versus does it remains uncorrected.",
+          "formatting_only": false,
+          "protected_flags": [
+            "t ∈ R"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "t ∈ R"
+          ]
+        },
+        {
+          "id": "arxiv-075",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-077",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-079",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-080",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-082",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-084",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-085",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-086",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes the partial-derivative operator from ∂ₜu/u; overcame remains uncorrected.",
+          "formatting_only": false,
+          "protected_flags": [
+            "∂ₜu/u"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "∂ₜu/u"
+          ]
+        },
+        {
+          "id": "arxiv-087",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-088",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-0910-0311",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-092",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-093",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-094",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1111-2203",
+          "verdict": "full_valid_alternative",
+          "rationale": "Pluralizing similar results repairs the bare singular count noun; the generic mathematical question is preserved.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1212-0499",
+          "verdict": "uncertain",
+          "rationale": "Fixes combines to combine. Singular Region before coordinated numbered labels may be acceptable mathematical label shorthand, although the fixed references use Regions.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1303-1600",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1309-6940",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes multiple mathematical variables, relations, and operators; an continuous remains uncorrected.",
+          "formatting_only": false,
+          "protected_flags": [
+            "ϕ̃ₙ",
+            "μₙ{y∈Sₙ;ϕₙ(y)≠ϕ̃ₙ(y)}<2⁻ⁿ"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "ϕ̃ₙ",
+            "μₙ{y∈Sₙ;ϕₙ(y)≠ϕ̃ₙ(y)}<2⁻ⁿ"
+          ]
+        },
+        {
+          "id": "arxiv-1608-02048",
+          "verdict": "partial",
+          "rationale": "Changes was to were but retains this results; Lᵖ to Lp is typographical flattening in this conventional context.",
+          "formatting_only": true,
+          "protected_flags": [
+            "Lᵖ"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "Lᵖ"
+          ]
+        },
+        {
+          "id": "arxiv-1611-04074",
+          "verdict": "unchanged",
+          "rationale": "Only adds spacing before the parenthetical abbreviation; casted remains uncorrected.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1803-00075",
+          "verdict": "partial",
+          "rationale": "Repairs plural agreement but leaves the dependent While opener as a sentence fragment.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-1901-01489",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes the quantified variable and set-membership condition; missing relative-clause connector also remains.",
+          "formatting_only": false,
+          "protected_flags": [
+            "ζ∈Γz₀"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "ζ∈Γz₀"
+          ]
+        },
+        {
+          "id": "arxiv-1910-11150",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes Ω and γ and strips the exponent, corrupting the defining relation; coordination remains defective.",
+          "formatting_only": false,
+          "protected_flags": [
+            "Ω=Ω(p,γ)>γ²/4"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "Ω=Ω(p,γ)>γ²/4"
+          ]
+        },
+        {
+          "id": "arxiv-2010-14390",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2012-04805",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2106-10501",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2107-05299",
+          "verdict": "meaning_changed",
+          "rationale": "Drops the minus sign distinguishing the lower endpoint T− and leaves the defective call construction.",
+          "formatting_only": false,
+          "protected_flags": [
+            "Imax=(T−(u),T+(u))=ℝ"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "Imax=(T−(u),T+(u))=ℝ"
+          ]
+        },
+        {
+          "id": "arxiv-2107-05350",
+          "verdict": "unchanged",
+          "rationale": "Deletes optional articles without correcting relative to relatively.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2201-01021",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2212-05273",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2307-12197",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2310-14646",
+          "verdict": "meaning_changed",
+          "rationale": "Strips the membership relation, Sobolev-space symbol, and superscripts; defective with construction remains.",
+          "formatting_only": false,
+          "protected_flags": [
+            "u₀∈Ḣ¹(ℝᴺ)",
+            "E(u₀)=E(W)"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "u₀∈Ḣ¹(ℝᴺ)",
+            "E(u₀)=E(W)"
+          ]
+        },
+        {
+          "id": "arxiv-2312-15845",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2312-17035",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2410-00648",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes the inequality and ceiling operators; by proved also remains uncorrected.",
+          "formatting_only": false,
+          "protected_flags": [
+            "3⌈k/2⌉"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "3⌈k/2⌉"
+          ]
+        },
+        {
+          "id": "arxiv-2412-10013",
+          "verdict": "unchanged",
+          "rationale": "Only flattens the conventional complex-field glyph ℂ to C; singular complex number remains uncorrected.",
+          "formatting_only": true,
+          "protected_flags": [
+            "ℂ"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "ℂ"
+          ]
+        },
+        {
+          "id": "arxiv-2504-09794",
+          "verdict": "unchanged",
+          "rationale": "Leaves the original grammatical issue unchanged.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "missed",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2504-15314",
+          "verdict": "meaning_changed",
+          "rationale": "Repairs disconnects to disconnected but deletes set membership ∈ from the vertex condition.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2507-11078",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2507-15139",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes ≥, destroying the lower-bound condition; an integers also remains.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "other_edit",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2509-12640",
+          "verdict": "exact_reference",
+          "rationale": "Matches a reference fixed before inference.",
+          "formatting_only": false,
+          "protected_flags": [],
+          "strict_status": "corrected",
+          "protected_changes": []
+        },
+        {
+          "id": "arxiv-2510-10945",
+          "verdict": "meaning_changed",
+          "rationale": "Deletes the tilde distinguishing g̃ and flattens the argument notation; the missing article remains.",
+          "formatting_only": false,
+          "protected_flags": [
+            "g̃(xₜ)"
+          ],
+          "strict_status": "unsafe",
+          "protected_changes": [
+            "g̃(xₜ)"
+          ]
+        }
+      ]
+    }
+  ]
+}

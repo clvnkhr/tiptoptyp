@@ -5,6 +5,7 @@ TEX_SOURCE = "\\documentclass{article}\n\\begin{document}\nA sample with $\\alph
 
 
 HARPER_TYPOS = "This sentence contains a misspelld word.\nThis is the the simple result.\n"
+HARPER_FORMATTED_REPETITION = "This is the #emph[the] result.\n"
 
 
 def harper_fresh(document, source, path, locations):
@@ -37,7 +38,31 @@ def assert_harper_stale(document, previous):
             raise AssertionError("Harper discarded or changed stale diagnostics before refreshing")
 
 
+def settings_json_query_selected(state):
+    """A fresh focused field acknowledges Select All before native typing starts."""
+    query = state.get("document", {}).get("settings_json", {}).get("query")
+    target = state.get("targets", {}).get("settings.json.find")
+    if not isinstance(query, str) or not isinstance(target, dict):
+        return False
+    selection = target.get("selection")
+    age = target.get("age_ms")
+    return (target.get("enabled") is True and target.get("focused") is True
+            and type(age) in (int, float) and 0 <= age <= 500
+            and isinstance(selection, list) and len(selection) == 2
+            and all(type(position) is int for position in selection)
+            and sorted(selection) == [0, len(query)])
+
+
 class TexJourneys:
+    def wait_settings_json_query_selection(self):
+        import time
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            if settings_json_query_selected(self.snapshot()):
+                return
+            time.sleep(0.05)
+        raise AssertionError("settings JSON query did not acknowledge Select All")
+
     def tex_document(self):
         from pathlib import Path
         import time
@@ -66,11 +91,19 @@ class TexJourneys:
         self.wait("JSON settings ready", lambda d: d["settings_json"]["visible"])
         for old, new in replacements:
             self.key(3)
-            self.wait_target("settings.json.find")
-            self.key(0)
+            self.wait_target("settings.json.find", focused=True)
+            state = self.snapshot()
+            query = state["document"]["settings_json"]["query"]
+            # Native menu commands are asynchronous. Do not send text until
+            # the existing query's selection confirms Cmd+A was consumed.
+            # Empty/already-selected queries need no additional command.
+            if query and not settings_json_query_selected(state):
+                self.key(0)
+                self.wait_settings_json_query_selection()
             self.native("text", old)
             self.wait("settings query entered", lambda d: d["settings_json"]["query"] == old)
             self.key(36, "none")
+            self.wait_target("settings.json", focused=True)
             before = self.snapshot()["document"]["settings_json"]["fingerprint"]
             self.paste_source(new, lambda: self.wait("TeX settings edit validates", lambda d: d["settings_json"]["fingerprint"] != before and d["settings_json"]["valid"]))
         self.click("settings.json.save")
@@ -111,24 +144,27 @@ class TexJourneys:
                       lambda d: harper_fresh(d, source, path, []), timeout=30)
             self.stable_state(lambda d: harper_fresh(d, source, path, []))
             self.key(125, "cmd")
+            typos = HARPER_TYPOS + (HARPER_FORMATTED_REPETITION if suffix == "typ" else "")
             if suffix == "tex":
                 # The final newline leaves the caret below \end{document}.
                 # Move to that line's beginning before typing ordinary prose.
                 self.key(126, "none")
                 self.key(123, "cmd")
                 prefix = source.removesuffix("\\end{document}\n")
-                expected = prefix + HARPER_TYPOS + "\\end{document}\n"
+                expected = prefix + typos + "\\end{document}\n"
             else:
                 prefix = source
-                expected = source + HARPER_TYPOS
+                expected = source + typos
             self.wait("Harper typo insertion caret is exact",
                       lambda d: d["cursor"] == [len(prefix), len(prefix)])
-            for line in HARPER_TYPOS.splitlines():
+            for line in typos.splitlines():
                 self.native("text", line)
                 self.key(36, "none")  # Return is a real editor key, not pasted text.
             self.source_is(expected)
             first_line = prefix.count("\n") + 1
             locations = [[first_line, 26], [first_line + 1, 9]]
+            if suffix == "typ":
+                locations.append([first_line + 2, 9])
             errors = self.wait("Harper reports only the intentional " + suffix + " typo and repetition",
                                lambda d: harper_fresh(d, expected, path, locations), timeout=30)["document"]
             self.stable_state(lambda d: harper_fresh(d, expected, path, locations))

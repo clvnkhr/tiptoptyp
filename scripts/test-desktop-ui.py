@@ -29,11 +29,18 @@ from desktop_ui_image_journeys import IMAGE_JOURNEYS
 from desktop_ui_terminal_theme import terminal_theme
 from desktop_ui_newest_journeys import NEWEST_JOURNEYS
 from desktop_ui_effects_journeys import effects_pacing_fixture
+from desktop_ui_liquid_journeys import LIQUID_JOURNEYS, liquid_model_directory
+from desktop_ui_ltex_journeys import LTEX_JOURNEYS, ltex_program
+from desktop_ui_latexdiff_journeys import LATEXDIFF_JOURNEYS
+from desktop_ui_texdoc_journeys import TEXDOC_JOURNEYS, texdoc_program
+from desktop_ui_citation_journeys import CITATION_JOURNEYS, CITATION_METADATA, CITATION_EXISTING, CITATION_SOURCE
+from desktop_ui_asset_layout_journeys import ASSET_LAYOUT_JOURNEYS
+from desktop_ui_inactive_preview_journeys import INACTIVE_PREVIEW_JOURNEYS
 
 ROOT = Path(__file__).resolve().parent.parent
 
 JOURNEY_NAMES = (
-    "all", "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
+    "all", *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
     *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find",
     "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview",
     "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
@@ -43,6 +50,13 @@ JOURNEY_NAMES = (
     "settings_search", "editor_preferences", "typing_particles", "effects_pacing", "background",
     "background_fades", "context_menu",
 )
+
+
+def selected_journeys(name):
+    # Optional local ML must never become a hidden prerequisite of "all".
+    if name == 'all':
+        return [*NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS]
+    return list(TEX_JOURNEYS) if name == 'tex' else [name]
 
 
 def height(document):
@@ -143,13 +157,14 @@ class Journey(EditorJourneys):
             raise RuntimeError(result.stderr or result.stdout)
         return json.loads(result.stdout)
 
-    def snapshot(self):
+    def snapshot(self, viewport=None):
         if self.process.poll() is not None:
             raise RuntimeError(f"app exited unexpectedly: {self.process.returncode}")
         with socket.socket(socket.AF_UNIX) as connection:
             connection.settimeout(4)
             connection.connect(str(self.directory / "inspect.sock"))
-            connection.sendall(b"snapshot\n")
+            command = "snapshot" if viewport is None else f"snapshot {viewport}"
+            connection.sendall((command + "\n").encode("ascii"))
             data = connection.makefile("rb").readline(1_000_000)
         state = json.loads(data)
         self.record("snapshot", state=state)
@@ -158,7 +173,10 @@ class Journey(EditorJourneys):
         if state["pid"] != self.process.pid or state["request"] <= self.sequence:
             raise AssertionError("wrong process or stale inspection response")
         self.sequence = state["request"]
-        viewport = state["document"]["viewport"]
+        observed_viewport = state["document"]["viewport"]
+        if viewport is not None and observed_viewport != viewport:
+            raise AssertionError("targeted snapshot received another document owner")
+        viewport = observed_viewport
         if not self.multiple_windows and self.viewport is not None and viewport != self.viewport:
             raise AssertionError("single-window journey received another document owner")
         self.viewport = viewport
@@ -914,6 +932,8 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journey", choices=JOURNEY_NAMES, default="all")
+    parser.add_argument("--liquid-model-dir", type=Path, help="Liquid journeys only: read-only prepared model reference; prepares a temporary cache, never downloads")
+    parser.add_argument("--ltex-executable", type=Path, help="LTeX journey only: path to an installed ltex-ls-plus launcher")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--executable", type=Path, help="reuse a preserved build for paired benchmarks; record its version and binary hash")
     parser.add_argument("--review-preview", action="store_true", help="pause at affected native preview states for independent on-screen review; not an automated visual pass")
@@ -926,8 +946,27 @@ def main():
     modes.add_argument("--observe-only", action="store_true", help="check real-app inspection without input; does not pass the interaction suite")
     modes.add_argument("--prepare-only", action="store_true", help="build runner and editor without launching")
     args = parser.parse_args()
+    if args.journey in LTEX_JOURNEYS:
+        try:
+            args.ltex_executable = ltex_program(args.ltex_executable)
+        except ValueError as error:
+            parser.error(str(error))
+    elif args.ltex_executable is not None:
+        parser.error('--ltex-executable requires --journey ltex')
+    if args.journey in LIQUID_JOURNEYS:
+        try:
+            args.liquid_model_dir = liquid_model_directory(args.liquid_model_dir)
+        except ValueError as error:
+            parser.error(str(error))
+    elif args.liquid_model_dir is not None:
+        parser.error('--liquid-model-dir requires a Liquid journey (liquid_selection or liquid_streaming)')
     if args.journey != "effects_pacing" and args.effects_preview_snapshots != "on":
         parser.error("--effects-preview-snapshots off requires --journey effects_pacing")
+    if args.journey in TEXDOC_JOURNEYS:
+        try:
+            texdoc_program()
+        except ValueError as error:
+            parser.error(str(error))
     if sys.platform != "darwin":
         parser.error("requires macOS and a logged-in desktop; this is not a headless test")
     evidence_root = ROOT / ".tiptoptyp/desktop-ui-tests"
@@ -966,8 +1005,13 @@ def main():
             if args.release:
                 build_command.append("--release")
             build = subprocess.run(build_command,
-                                   cwd=ROOT, check=True, stdout=subprocess.PIPE, text=True, timeout=900)
+                                   cwd=ROOT, stdout=subprocess.PIPE, text=True, timeout=900)
             artifacts = [json.loads(line) for line in build.stdout.splitlines()]
+            if build.returncode:
+                for item in artifacts:
+                    if item.get("reason") == "compiler-message" and item.get("message", {}).get("rendered"):
+                        print(item["message"]["rendered"], file=sys.stderr, end="")
+                raise RuntimeError("editor build failed; compiler diagnostics are printed above")
             executable = next(item["executable"] for item in reversed(artifacts)
                               if item.get("reason") == "compiler-artifact" and item.get("executable") and item["target"]["name"] == "tiptoptyp")
         result["version"] = subprocess.check_output([executable, "--version"], text=True).strip()
@@ -988,7 +1032,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in TEX_JOURNEYS else "journey.typ" if args.journey in ("all", *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in (*TEX_JOURNEYS, *LTEX_JOURNEYS) else "journey.typ" if args.journey in ("all", *LIQUID_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
@@ -996,6 +1040,10 @@ def main():
                 if fixture.suffix == ".typ"
                 else "Desktop journey fixture.\n"
             )
+            if args.journey in CITATION_JOURNEYS:
+                fixture.write_text(CITATION_SOURCE, encoding="utf-8")
+                (directory / "references.bib").write_text(CITATION_EXISTING, encoding="utf-8")
+                (directory / "citation-metadata.bib").write_text(CITATION_METADATA, encoding="utf-8")
             if args.journey == "effects_pacing":
                 fixture = directory / "effects-pacing.txt"
                 fixture.write_text(effects_pacing_fixture())
@@ -1024,6 +1072,8 @@ def main():
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)
+            if args.journey in CITATION_JOURNEYS:
+                environment["TIPTOPTYP_UI_TEST_CITATION_METADATA"] = str(directory / "citation-metadata.bib")
             if args.journey == "effects_pacing":
                 environment["TIPTOPTYP_UI_TEST_FX_TIMING"] = "1"
             if args.trace_preview:
@@ -1050,6 +1100,8 @@ def main():
                     journey = Journey(process, driver, directory, evidence)
                     journey.review_preview = args.review_preview
                     journey.capture_review = args.capture_review
+                    journey.liquid_model_dir = args.liquid_model_dir
+                    journey.ltex_executable = args.ltex_executable
                     journey.effects_preview_snapshots = args.effects_preview_snapshots == "on"
                     journey.explorer_scroll_checks_contents = args.journey == "explorer_scroll"
                     journey.command_palette_check_empty = args.journey == "command_palette"
@@ -1128,7 +1180,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_initial_review()
-                    for name in ([*NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS] if args.journey == "all" else TEX_JOURNEYS if args.journey == "tex" else [args.journey]):
+                    for name in selected_journeys(args.journey):
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

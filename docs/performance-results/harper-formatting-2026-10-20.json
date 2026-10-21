@@ -1,0 +1,463 @@
+{
+  "schema": 1,
+  "date": "2026-10-20",
+  "platform": {
+    "cpu": "Apple M2 Max",
+    "os": "ProductName:\t\tmacOS\nProductVersion:\t\t14.6.1\nBuildVersion:\t\t23G93",
+    "architecture": "arm64",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8"
+  },
+  "head": "2dbfd7ee0834b2416ed4a1bc6a0e3512bb02cb7e",
+  "working_tree": "dirty; comparison export harness is test-only; only the Typst prose production adapter differs between measured binaries",
+  "profile": "release: opt-level 3, thin LTO, 1 codegen unit, strip true",
+  "binary_sha256": {
+    "before": "2595e5a1136539475c63f66cf081ded2d29c3b912b68e13bd0d05dc8f201f45a",
+    "after": "1e2eea4d569365e23e3354ae764ddad55fae84154227adf66efa9e4189853271"
+  },
+  "source_sha256": {
+    "src/writing/typst_prose.rs": "8172f769a8b32c7c2fe24c32e91e6e8abe1feabdaffc8dcc1530b19277a364b9",
+    "src/writing/cache.rs": "17bcd896ae8d243f956117c80f32dd0f8adf0e52fb57a13252f58b2c7e2cffd3",
+    "src/writing/cache/probe.rs": "170dd9402b2264d61e63c36c6a58cd467c313841ef217b49ca1138cb05ce8648",
+    "Cargo.toml": "b2e3222c1c0215a62549b37774e507e384138116bf94343f029891c93ac955d8",
+    "Cargo.lock": "fc896f4c87bbfe0a109ecadff599636eb68125680605d802331007779c786d49"
+  },
+  "before_production_typst_sha256": "780fba553faab16e9b3097ecbc8bb7f64efb31be4291ee8b90bb8d68981b5b89",
+  "request_sha256": "66b39234b5fd22a99cf0bd3f8200a4b557e737faab27571cafa89b2e9f6aab7f",
+  "command": "TIPTOPTYP_GRAMMAR_PROBE_INPUT=<request.json> TIPTOPTYP_GRAMMAR_PROBE_OUTPUT=<run.json> <optimized-test-binary> writing::cache::probe::export_production_harper_fragments --ignored --exact --nocapture --test-threads=1",
+  "run_order": [
+    {
+      "id": "before-a",
+      "started_utc": "2026-10-20T15:07:54.852453+00:00"
+    },
+    {
+      "id": "after-a",
+      "started_utc": "2026-10-20T15:08:03.482340+00:00"
+    },
+    {
+      "id": "after-b",
+      "started_utc": "2026-10-20T15:08:11.714518+00:00"
+    },
+    {
+      "id": "before-b",
+      "started_utc": "2026-10-20T15:08:18.875283+00:00"
+    }
+  ],
+  "samples_per_variant_per_workload": 14,
+  "scope": "Existing background writing-worker component: full syntax parsing, cache lookup/linting, and original-source diagnostic mapping. No GUI, viewport/theme, edit debounce, key-to-pixel latency, filesystem-cold startup, ML inference, or spelling-only inner-loop timings.",
+  "warmup": "One complete first check before seven cache-hit/fresh-Checker alternating samples in each process; process-first dictionary setup is recorded separately. Fresh Checker uses the process-resident dictionary. Four processes in before/after/after/before order.",
+  "concurrency": "Sequential single Rust test worker. No other repository builds, tests, or native journeys during measurements; ordinary macOS desktop services may remain active.",
+  "correctness": "Every probe asserts cold and cache-hit diagnostic equality and reconstructs the exact production diagnostics from its export. This receipt additionally verifies every admitted word and global original-source scalar span against the baseline; the plain control retains identical diagnostics. Formatting removes artificial paragraph breaks and false capitalization, rather than dropping visible words.",
+  "fixture_recipe": {
+    "header": "#set text(lang: \"en\", region: \"gb\")\n\n",
+    "paragraph_count": 160,
+    "separator": "\n\n",
+    "trailing_newline": true,
+    "tail": " The proof in paragraph {index} gives a uniform bound.",
+    "intros": {
+      "plain": "These estimates are uniform.",
+      "inline": "These #emph[estimates] are uniform.",
+      "multiline": "These\n#emph[\n  estimates\n]\nare uniform."
+    }
+  },
+  "artifacts": ".tiptoptyp/profiles/harper-formatting-2026-10-20",
+  "workloads": [
+    {
+      "id": "formatting-perf-plain",
+      "kind": "typst",
+      "bytes": 12726,
+      "scalars": 12726,
+      "source_sha256": "cab5c63cc521ec3a4c52c232d4bfc32091a50a7e4552b515d390cc575336ac69",
+      "prose_paragraphs": 160,
+      "admitted_words": 1920,
+      "effective_dialect": "British",
+      "original_word_spans_unchanged": true,
+      "before": {
+        "semantic_blocks": 161,
+        "diagnostics": 0,
+        "first_cache_hits_misses": [
+          [
+            0,
+            161
+          ],
+          [
+            0,
+            161
+          ]
+        ],
+        "first_check_ms": [
+          752.372417,
+          712.263291
+        ],
+        "samples": {
+          "production_cold_cache_ms": [
+            240.682708,
+            245.368042,
+            237.11575,
+            241.262625,
+            236.79316599999999,
+            234.565708,
+            234.546208,
+            240.821583,
+            238.265292,
+            239.877,
+            238.29775,
+            238.317417,
+            237.229417,
+            234.215
+          ],
+          "production_cache_hit_ms": [
+            2.054709,
+            1.924416,
+            1.968583,
+            1.9676670000000003,
+            2.121791,
+            1.943875,
+            1.9831660000000002,
+            2.001375,
+            1.9033749999999998,
+            1.996,
+            1.907708,
+            1.9255419999999999,
+            2.094459,
+            1.9013339999999999
+          ]
+        },
+        "median_ms": {
+          "production_cold_cache_ms": 238.281521,
+          "production_cache_hit_ms": 1.9681250000000001
+        }
+      },
+      "after": {
+        "semantic_blocks": 161,
+        "diagnostics": 0,
+        "first_cache_hits_misses": [
+          [
+            0,
+            161
+          ],
+          [
+            0,
+            161
+          ]
+        ],
+        "first_check_ms": [
+          728.162916,
+          726.399667
+        ],
+        "samples": {
+          "production_cold_cache_ms": [
+            241.764375,
+            241.644584,
+            239.779833,
+            240.81145800000002,
+            239.66750000000002,
+            239.574917,
+            241.715583,
+            238.41470900000002,
+            236.741583,
+            234.912667,
+            236.975417,
+            239.21025,
+            237.73408300000003,
+            234.121042
+          ],
+          "production_cache_hit_ms": [
+            1.9809580000000002,
+            1.928,
+            1.9616249999999997,
+            1.9698329999999997,
+            1.908666,
+            1.930125,
+            1.9636250000000002,
+            1.919459,
+            2.07775,
+            1.9220409999999999,
+            1.840083,
+            1.906083,
+            1.869792,
+            1.882583
+          ]
+        },
+        "median_ms": {
+          "production_cold_cache_ms": 239.3925835,
+          "production_cache_hit_ms": 1.9250205
+        }
+      }
+    },
+    {
+      "id": "formatting-perf-inline",
+      "kind": "typst",
+      "bytes": 13846,
+      "scalars": 13846,
+      "source_sha256": "cf23693d88dfbaad2263624fbdc7c848d2ecd10e083e60395621382828135abc",
+      "prose_paragraphs": 160,
+      "admitted_words": 1920,
+      "effective_dialect": "British",
+      "original_word_spans_unchanged": true,
+      "before": {
+        "semantic_blocks": 481,
+        "diagnostics": 160,
+        "first_cache_hits_misses": [
+          [
+            318,
+            163
+          ],
+          [
+            318,
+            163
+          ]
+        ],
+        "first_check_ms": [
+          250.599042,
+          244.336375
+        ],
+        "samples": {
+          "production_cold_cache_ms": [
+            244.22016699999998,
+            247.006792,
+            243.142625,
+            248.955084,
+            245.508542,
+            244.46300000000002,
+            244.951291,
+            244.552042,
+            242.268,
+            246.468458,
+            244.411375,
+            249.123709,
+            246.74633300000002,
+            250.384167
+          ],
+          "production_cache_hit_ms": [
+            13.385791,
+            13.172084,
+            13.083083,
+            13.058375,
+            13.186917,
+            13.382667,
+            13.014332999999999,
+            13.429,
+            13.202874999999999,
+            13.209709,
+            13.556917,
+            13.638875,
+            13.336292,
+            13.049750000000001
+          ]
+        },
+        "median_ms": {
+          "production_cold_cache_ms": 245.2299165,
+          "production_cache_hit_ms": 13.206292
+        }
+      },
+      "after": {
+        "semantic_blocks": 161,
+        "diagnostics": 0,
+        "first_cache_hits_misses": [
+          [
+            0,
+            161
+          ],
+          [
+            0,
+            161
+          ]
+        ],
+        "first_check_ms": [
+          243.891416,
+          243.949083
+        ],
+        "samples": {
+          "production_cold_cache_ms": [
+            247.554375,
+            245.763,
+            243.908458,
+            241.813083,
+            246.295209,
+            245.348541,
+            240.853791,
+            247.679917,
+            247.505541,
+            246.16454199999998,
+            246.47829199999998,
+            247.201583,
+            246.890458,
+            239.878541
+          ],
+          "production_cache_hit_ms": [
+            8.393625,
+            8.490083,
+            8.366375,
+            8.556083000000001,
+            8.243166,
+            8.480208,
+            8.322375,
+            8.239291,
+            8.243666000000001,
+            8.626458999999999,
+            8.544167,
+            8.326666,
+            8.427459,
+            8.410917
+          ]
+        },
+        "median_ms": {
+          "production_cold_cache_ms": 246.2298755,
+          "production_cache_hit_ms": 8.402270999999999
+        }
+      }
+    },
+    {
+      "id": "formatting-perf-multiline",
+      "kind": "typst",
+      "bytes": 14486,
+      "scalars": 14486,
+      "source_sha256": "a1b8497d35ee1256bfe7c4a9a91497b33108f4d47ba2c854bc7cd0f7056faa7b",
+      "prose_paragraphs": 160,
+      "admitted_words": 1920,
+      "effective_dialect": "British",
+      "original_word_spans_unchanged": true,
+      "before": {
+        "semantic_blocks": 481,
+        "diagnostics": 160,
+        "first_cache_hits_misses": [
+          [
+            318,
+            163
+          ],
+          [
+            318,
+            163
+          ]
+        ],
+        "first_check_ms": [
+          254.026875,
+          243.302917
+        ],
+        "samples": {
+          "production_cold_cache_ms": [
+            250.61737499999998,
+            250.228292,
+            255.185292,
+            253.281667,
+            256.417375,
+            256.973583,
+            261.147292,
+            242.457625,
+            245.618458,
+            246.70387499999998,
+            246.509166,
+            243.187875,
+            248.984959,
+            247.334916
+          ],
+          "production_cache_hit_ms": [
+            17.020625000000003,
+            17.11275,
+            17.024167,
+            16.751333,
+            16.974916999999998,
+            17.21125,
+            17.210541,
+            16.619041000000003,
+            16.920959,
+            16.782834,
+            16.52375,
+            17.056792,
+            16.542292,
+            17.128459
+          ]
+        },
+        "median_ms": {
+          "production_cold_cache_ms": 249.6066255,
+          "production_cache_hit_ms": 16.997771
+        }
+      },
+      "after": {
+        "semantic_blocks": 161,
+        "diagnostics": 0,
+        "first_cache_hits_misses": [
+          [
+            0,
+            161
+          ],
+          [
+            0,
+            161
+          ]
+        ],
+        "first_check_ms": [
+          241.451583,
+          243.522084
+        ],
+        "samples": {
+          "production_cold_cache_ms": [
+            241.757209,
+            240.635375,
+            237.14075000000003,
+            241.715583,
+            242.27725,
+            242.37924999999998,
+            243.077833,
+            236.98408400000002,
+            237.331083,
+            237.324167,
+            239.51233299999998,
+            240.03633399999998,
+            240.247333,
+            237.242458
+          ],
+          "production_cache_hit_ms": [
+            7.4003749999999995,
+            7.718667,
+            7.5365,
+            7.48625,
+            7.569792,
+            7.678,
+            7.535333,
+            7.7155000000000005,
+            7.44425,
+            7.364875,
+            7.420583,
+            7.6773750000000005,
+            7.6295,
+            7.476333
+          ]
+        },
+        "median_ms": {
+          "production_cold_cache_ms": 240.1418335,
+          "production_cache_hit_ms": 7.5359165
+        }
+      }
+    }
+  ],
+  "limitations": "Local CPU microbenchmark, not a cross-platform or app-start guarantee. Cold-cache timing changes reflect corrected semantic paragraphs as well as parsing work; all visible word spans are retained. No native pixel claim.",
+  "verification": {
+    "default_rust_tests": {
+      "passed": 2388,
+      "failed": 0,
+      "ignored": 71
+    },
+    "xtask_tests": {
+      "passed": 32,
+      "failed": 0,
+      "ignored": 1
+    },
+    "python_journey_contract_tests": 151,
+    "python_grammar_comparison_tests": 44,
+    "python_harper_mapping_tests": 32,
+    "format_check": "passed",
+    "clippy_all_targets_deny_warnings": "passed",
+    "native": {
+      "passed": true,
+      "journeys": [
+        "harper_math_prose"
+      ],
+      "build_profile": "debug",
+      "version": "tiptoptyp Dev 0.1.0 (2dbfd7ee0834-dirty.1792508653)",
+      "binary_sha256": "473f0f955f51d6e789fd76f5f12ea8489c5d74c3d1dd71fcb9c0b8a4e7aa4862"
+    },
+    "native_evidence": ".tiptoptyp/desktop-ui-tests/run-87icvdxd/result.json",
+    "visual_verification": "Not required for a prose-parsing change; no framebuffer or composed-window claim."
+  }
+}

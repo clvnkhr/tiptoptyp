@@ -13,6 +13,10 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.heading("Help & tips");
         ui.label("Shortcuts below reflect your custom bindings. Preview shortcuts require preview focus; its border shows focus. Escape returns to the editor.");
         tool_options::show(ui, settings);
+        ui.heading("TeX tools & citations");
+        ui.label("Search TeXdoc in the command palette or choose File → TeXdoc · Package Documentation. Enter a package or class such as amsmath to open its installed manual in a tab. Online manual opens the official TeXdoc copy when local documentation is unavailable.");
+        ui.label("Settings → Tools → TeX tools keeps the compiler, build driver, Build bibliography toggle and Clear Biber cache together. System pdfLaTeX, XeLaTeX and LuaLaTeX use finite latexmk builds by default; latexmk chooses BibTeX or Biber from the document. Direct engine runs basic TeX passes without bibliography automation. Tectonic manages its own BibTeX passes. Install missing tools through your TeX distribution, then refresh tools.");
+        ui.label("File → Import Citation, also in the command palette, accepts a DOI or arXiv identifier/URL. Choose a .bib file, look up the entry, review its citation key and BibTeX, then Import. Existing DOI/arXiv entries are reused; conflicting keys and bibliographies changed since review are rejected. Insert citation at selection adds a TeX or Typst citation in one undo step. Your document still controls bibliography placement and style.");
         ui.heading("10 useful shortcuts");
         shortcut_table(ui, "help-main-shortcuts", &bindings, &[A::Open, A::Save, A::Find, A::FindReplace, A::Undo, A::Redo, A::Compile, A::Format, A::ToggleComment, A::ToggleLineWrap]);
         ui.heading("Preview shortcuts");
@@ -57,6 +61,18 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
             ui.hyperlink_to("TeX LuaSnip examples", "https://github.com/iurimateus/luasnip-latex-snippets.nvim");
             ui.hyperlink_to("Typst LuaSnip examples", "https://github.com/pseudofractal/typst-notes.nvim/blob/main/snippets/typst.lua");
         });
+        ui.heading("Liquid selection grammar");
+        ui.label("Select prose in a Typst or TeX document, then right-click → Check selection with Liquid. It runs locally on demand and shows the whole selection before and after, with changes highlighted in your Git diff style. Apply changes the selected prose in one undo step; commands, math and the rest of the document are protected. Editing the document invalidates the review, so check the selection again.");
+        ui.label("Liquid runs locally through native ONNX Runtime, without Python. It supports Intel Macs on macOS 12 or later and Apple Silicon Macs on macOS 14 or later. The first check automatically prepares its bundled model; choose an optional model folder and CPU thread count under Writing. Nothing loads at app startup, and checking text after setup is offline. Long selections are split automatically at sentence boundaries where possible, or into the largest chunks that fit the model. Suggestions appear while later chunks are checked; Apply becomes available only after the complete selection is validated. Selections can contain up to 1 MiB of text.");
+        ui.label("Writing → Liquid selection grammar controls what reaches the model. Protected math, code and links can use a placeholder (x by default), or split the surrounding prose into separate checks. Recognized formatting bodies can be included or skipped. Commands themselves never reach the model. Expand Liquid input in the review to inspect the exact fragments, including before the optional model is prepared.");
+        ui.monospace(r"Typst: The #emph[result] $a=b$ hold. → The result x hold.
+TeX:   The \emph{result} \(a=b\) hold. → The result x hold.");
+        ui.label("TeX prose inside supported math-text commands such as \\text{...} is also checked. Typst equations are protected as a whole. Skipped formatting becomes protected content too. Placeholder changes and corrections across protected boundaries are rejected; splitting may remove useful sentence context.");
+        ui.hyperlink_to("Liquid model and licence", "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker");
+        ui.heading("LTeX+ spelling and grammar");
+        ui.label("Writing → LTeX+ enables the optional local LanguageTool checker for TeX and Typst. Download and extract the matching LTeX+ distribution (Mac builds include Java), set its bin/ltex-ls-plus launcher in setup, then enable it. Harper stays independent. No server or document upload is used by default.");
+        ui.label("The editor schedules live checks after a short typing pause. Keep checkFrequency set to manual: the editor owns scheduling to prevent stale results. Change language, dictionary, disabledRules and latex commands/environments in LTeX+ configuration, then Apply. Activity reports startup failures; Restart LTeX+ retries. Right-click a Problems result to apply a suggestion. After an edit, old results remain visible but cannot change source until refreshed.");
+        ui.hyperlink_to("LTeX+ configuration reference", "https://ltex-plus.github.io/ltex-plus/settings.html");
         ui.heading("Try these");
         for tip in [
             "Right-click code and choose Reveal in Preview; right-click the preview and choose Reveal in Source. Typst uses Tinymist; TeX needs its compiled SyncTeX map.",
@@ -66,7 +82,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
             "Layout in the title bar groups Code, Split, Preview, Explorer and the bottom panel. Their keyboard shortcuts still work, and toggling a panel keeps its chosen size. Turn off Appearance → Compact layout controls to restore the separate title-bar buttons.",
             "For literal Chinese and Japanese punctuation such as 。 and ！, leave Convert CJK punctuation to ASCII when typing off in Settings → Writing. This option changes committed keyboard input; pasted text is always preserved.",
             "Focus an Explorer subpanel and use Find to search just that panel. Its empty search bar scrolls away.",
-            "Edit → LaTeXdiff compares two TeX files or the current editor against its saved version. Generate a marked-up .tex file, then Save and open to build its PDF. Options are also under TeX tools.",
+            "File → Create LaTeX Diff, also in the command palette, guides you through older/newer TeX files, a new output name and options. Create runs in the background; Cancel stops it. Open diff selects the generated file for PDF preview. Existing files are never overwritten. Defaults are under TeX tools.",
             "Edit → Edit Table opens tables and mathematical grids: TeX arrays, matrices, cases and aligned formulas; Typst mat, vec and cases. Math cells contain formulas directly, with Tab/Shift+Tab navigation, dimension and delimiter controls. Computed table cells display locked compiler samples; generated geometry remains in the main code editor. TeX edits add missing package imports automatically; Undo restores both imports and inserted code.",
             "Draw a symbol in Explorer; choose TeX or Typst insertion preferences in Settings. TeX symbols automatically add their package imports.",
             "Use the Activity panel to see which services are stale, working or failing; hover an indicator for detail.",

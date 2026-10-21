@@ -178,3 +178,57 @@ and virtual messages anchor after the last one.
   source offset and break interactive preview navigation.
 - Bundling `tinymist-viewer` would add a second viewer executable but would not
   satisfy the existing LSP and source-navigation protocol.
+
+## Native Liquid model and runtime payload (2026-10-20)
+
+Liquid uses a separate native ONNX Runtime helper, started only when checking
+selected text. The inference library is not linked into the editor and incurs
+no application startup loading cost. Python is a developer export tool, not an
+application runtime requirement. The universal app includes one shared ONNX
+model and tokenizer, plus a signed helper and inference library for each Mac
+architecture. The model retains trained FP16 parameters losslessly and restores
+FP32 arithmetic through explicit casts; the optional reranker is not included.
+
+The model export and native runtime build recipe is documented in
+[grammar comparison](../grammar-comparison.md#native-liquid-export-and-packaging).
+`cargo xtask prepare-liquid --source PATH` accepts a raw directory containing
+`liquid.onnx`, `tokenizer.json`, the pinned `LICENSE.txt`, `PROVENANCE.json`,
+`licenses/<target>.txt`, and two native files under each `runtime/<target>/`
+directory. Inputs are checked before compression and are never modified.
+Provenance binds the maintained 268-case, 427-pass corpus to the exact
+model/tokenizer hashes, with all six dynamic-shape checks and lossless weight
+storage evidence passing. It also records both pinned official ONNX Runtime
+archives, post-signing native file hashes and runtime licence bundles.
+
+The generated `toolchain/liquid-source` tree contains exactly 11 files:
+
+- `manifest.json`: format 3, pinned model/revision, target-specific asset paths,
+  raw and compressed sizes and SHA-256 hashes.
+- `liquid.onnx.zst` and `tokenizer.json.zst`: shared assets stored once.
+- `liquid-onnx.zst` and `libonnxruntime.dylib.zst` in each `runtime/<target>/`.
+- `LICENSE.txt`, `PROVENANCE.json`, and the two `licenses/<target>.txt` bundles.
+
+The installer remains the production build entry point. Packaging checks these
+inputs before downloading sidecars or compiling, stages them atomically to
+`toolchain/liquid`, and includes that tree under `Resources/liquid`.
+`cargo xtask stage-liquid` stages and verifies it without building the app.
+Verification checks the complete file set, hashes, bounded decompression, native
+architectures and signatures. Missing model or runtime assets fail production
+packaging; ordinary development builds and tests do not require them.
+
+The first selected-text check automatically verifies and expands the bundled
+model and current Mac's runtime into its persistent app-data cache. No user
+installation, Python environment or download is needed. Later checks reuse those
+files offline. The bundled manifest is authoritative; an editable installed
+manifest cannot substitute different code or weights. Neither model loading nor
+archive hashing runs at application startup. The Intel helper uses ONNX Runtime
+1.19.2 and supports the app's macOS 12 floor; Apple Silicon uses ONNX Runtime
+1.31.0 and requires macOS 14. Other editor features keep their existing macOS
+support.
+
+Payload decoding uses a bounded 8 MiB history and rejects wrong sizes, hashes,
+trailing data and extra Zstandard frames. Model assets permit up to 2 GiB per
+file; the helper is capped at 64 MiB, native libraries at 1 GiB each, and the
+tokenizer at 32 MiB. Existing general sidecar payload limits remain unchanged.
+Hardware SHA-256 is enabled and its kernel stays optimized in ordinary debug
+builds so automatic preparation does not spend minutes hashing model files.

@@ -32,6 +32,16 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
             .validate()
             .map_err(|error| format!("{name}.{error}"))?;
     }
+    crate::liquid_runtime::validate_settings(
+        &settings.liquid_cache_directory,
+        settings.liquid_threads,
+    )?;
+    settings.liquid_input.validate()?;
+    settings
+        .tex_prose_rules
+        .validate()
+        .map_err(|e| format!("tex_prose_rules: {e}"))?;
+    settings.ltex.validate().map_err(|e| format!("ltex: {e}"))?;
     crate::writing::validate_dictionary(&settings.harper_dictionary)
         .map_err(|error| format!("harper_dictionary: {error}"))?;
     crate::snippets::validate(&settings.snippet_presets)
@@ -60,6 +70,7 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     {
         return Err("highlight_rules: use at most 100 rules, each matching a single line of up to 256 characters; font weights must be 1–1000".into());
     }
+    settings.tex.validate_build_settings()?;
     for (name, valid) in [
         (
             "ui_scale_percent (75–150)",
@@ -210,6 +221,66 @@ impl Draft {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn removed_python_setting_is_not_silently_accepted() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        assert!(value.get("liquid_python").is_none());
+        value["liquid_python"] = serde_json::json!("python3.12");
+        let error = super::parse(&value.to_string()).unwrap_err();
+        assert!(
+            error.starts_with("Unknown or invalid setting: settings.liquid_python"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn liquid_configuration_rejects_invalid_paths_and_thread_counts() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        assert!(super::parse(&value.to_string()).is_ok());
+        for (key, invalid, expected) in [
+            (
+                "liquid_cache_directory",
+                serde_json::json!("relative/model"),
+                "absolute folder",
+            ),
+            ("liquid_threads", serde_json::json!(0), "between 1 and 8"),
+            ("liquid_threads", serde_json::json!(9), "between 1 and 8"),
+        ] {
+            let before = value[key].clone();
+            value[key] = invalid;
+            let error = super::parse(&value.to_string()).unwrap_err();
+            assert!(error.contains(key) && error.contains(expected), "{error}");
+            value[key] = before;
+        }
+    }
+
+    #[test]
+    fn liquid_input_choices_reject_unknown_values_and_invalid_placeholders() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        for protected in ["placeholder", "split"] {
+            for formatted in ["include", "skip"] {
+                value["liquid_input"]["protected_content"] = serde_json::json!(protected);
+                value["liquid_input"]["formatted_text"] = serde_json::json!(formatted);
+                value["liquid_input"]["placeholder"] = serde_json::json!("MATH");
+                let parsed = super::parse(&value.to_string()).unwrap();
+                assert_eq!(parsed.liquid_input.placeholder, "MATH");
+            }
+        }
+        for (key, invalid) in [
+            ("protected_content", serde_json::json!("raw")),
+            ("formatted_text", serde_json::json!("sometimes")),
+            ("placeholder", serde_json::json!("")),
+            ("placeholder", serde_json::json!("$math$")),
+            ("placeholder", serde_json::json!("two words")),
+            ("placeholder", serde_json::json!("a".repeat(25))),
+        ] {
+            let mut invalid_settings = value.clone();
+            invalid_settings["liquid_input"][key] = invalid;
+            let error = super::parse(&invalid_settings.to_string()).unwrap_err();
+            assert!(error.contains(key), "{error}");
+        }
+    }
+
     #[test]
     fn motion_json_accepts_valid_options_and_rejects_impossible_or_out_of_range_values() {
         use crate::settings::{EditorAction, ParticleDensity, ParticleStyle, RevealStyle};
@@ -462,6 +533,7 @@ mod tests {
             ("/writing_language", "writing_language", "british"),
             ("/interface_theme", "interface_theme", "System"),
             ("/tex/build_engine", "tex.build_engine", "tectonic"),
+            ("/tex/build_driver", "tex.build_driver", "latexmk"),
             ("/tex/formatter", "tex.formatter", "badness"),
             ("/typst/mode", "typst.mode", "Bundled"),
             ("/light_theme/source", "light_theme", "builtin"),
@@ -641,5 +713,61 @@ mod editor_option_tests {
                 .unwrap_err()
                 .contains("highlight_rules")
         );
+    }
+}
+
+#[cfg(test)]
+mod writing_service_settings_tests {
+    use super::*;
+
+    #[test]
+    fn writing_defaults_roundtrip_with_full_prose_registry() {
+        let settings = AppSettings::default();
+        assert!(!settings.ltex.enabled);
+        assert!(
+            settings
+                .tex_prose_rules
+                .commands
+                .iter()
+                .any(|c| c.name == "footnote")
+        );
+        let text = serde_json::to_string(&settings).unwrap();
+        assert_eq!(parse(&text).unwrap(), settings);
+    }
+
+    #[test]
+    fn invalid_ltex_choices_and_prose_roles_have_setting_paths() {
+        for (field, value, expected) in [
+            (
+                "/ltex/configuration/checkFrequency",
+                serde_json::json!("edit"),
+                "checkFrequency",
+            ),
+            (
+                "/ltex/configuration/dictionary",
+                serde_json::json!(["word"]),
+                "dictionary",
+            ),
+            (
+                "/ltex/configuration/completionEnabled",
+                serde_json::json!("yes"),
+                "completionEnabled",
+            ),
+            (
+                "/tex_prose_rules/commands/0/arguments/0",
+                serde_json::json!("probably-prose"),
+                "tex_prose_rules.commands[0].arguments[0]",
+            ),
+        ] {
+            let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+            let (parent, name) = field.rsplit_once('/').unwrap();
+            if let Some(object) = settings.pointer_mut(parent).unwrap().as_object_mut() {
+                object.insert(name.into(), value);
+            } else {
+                *settings.pointer_mut(field).unwrap() = value;
+            }
+            let error = parse(&settings.to_string()).unwrap_err();
+            assert!(error.contains(expected), "{field}: {error}");
+        }
     }
 }

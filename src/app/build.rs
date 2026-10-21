@@ -21,7 +21,7 @@ impl EditorApp {
                 {
                     self.tex_tools.tectonic.command.clone()
                 } else {
-                    Default::default()
+                    self.settings.tex.system_command.clone()
                 }
                 .into(),
                 engine: self.settings.tex.build_engine,
@@ -37,6 +37,7 @@ impl EditorApp {
                 },
                 only_cached: self.settings.tex.only_cached,
                 synctex: self.settings.tex.synctex,
+                system: self.tex_tools.build_options(&self.settings.tex),
             }),
         }
     }

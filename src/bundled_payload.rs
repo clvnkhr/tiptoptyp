@@ -14,7 +14,7 @@ use std::{
 };
 
 #[path = "../build_support/payload_codec.rs"]
-mod codec;
+pub(crate) mod codec;
 
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_PAYLOAD_BYTES: u64 = 1024 * 1024 * 1024;

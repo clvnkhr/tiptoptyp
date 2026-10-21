@@ -36,6 +36,121 @@ impl BuildEngine {
     }
 }
 
+/// System engines can run once through latexmk or use the basic engine passes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum BuildDriver {
+    #[default]
+    Latexmk,
+    Direct,
+}
+impl BuildDriver {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Latexmk => "latexmk",
+            Self::Direct => "Direct engine",
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct SystemTool {
+    /// Blank uses the cached PATH/MacTeX discovery result.
+    pub(crate) executable: String,
+    pub(crate) arguments: String,
+}
+impl SystemTool {
+    pub(crate) fn validate(&self, name: &str) -> Result<(), String> {
+        if self.executable.contains('\0') {
+            return Err(format!("{name} executable cannot contain NUL"));
+        }
+        let tokens = shlex::split(&self.arguments)
+            .ok_or_else(|| format!("{name} arguments contain an unmatched quote"))?;
+        if tokens.iter().any(|token| token.contains('\0')) {
+            return Err(format!("{name} arguments cannot contain NUL"));
+        }
+        if name == "Biber"
+            && tokens.iter().any(|token| {
+                matches!(
+                    token
+                        .trim_start_matches('-')
+                        .split('=')
+                        .next()
+                        .unwrap_or(""),
+                    "output-directory" | "output_directory" | "output-file" | "output_file"
+                )
+            })
+        {
+            return Err("Biber output paths are managed by the app".into());
+        }
+        if name == "latexmk" {
+            validate_engine_arguments(&self.arguments)?;
+            for token in &tokens {
+                if let Some(option) = token.trim_start_matches('-').strip_prefix("latexoption=") {
+                    validate_engine_arguments(option)?;
+                }
+            }
+            for token in tokens {
+                let flag = token
+                    .trim_start_matches('-')
+                    .split('=')
+                    .next()
+                    .unwrap_or("");
+                if !token.starts_with('-')
+                    || matches!(
+                        flag,
+                        "pvc"
+                            | "pvc-"
+                            | "pv"
+                            | "pv-"
+                            | "p"
+                            | "view"
+                            | "new-viewer"
+                            | "c"
+                            | "C"
+                            | "CA"
+                            | "CF"
+                            | "gg"
+                            | "e"
+                            | "r"
+                            | "norc"
+                            | "cd"
+                            | "cd-"
+                            | "outdir"
+                            | "output-directory"
+                            | "auxdir"
+                            | "aux-directory"
+                            | "out2dir"
+                            | "jobname"
+                            | "latex"
+                            | "pdflatex"
+                            | "pdfxelatex"
+                            | "pdflualatex"
+                            | "dvilualatex"
+                            | "stdtexcmds"
+                            | "pretex"
+                            | "usepretex"
+                            | "use-make"
+                            | "dF"
+                            | "pF"
+                            | "h"
+                            | "help"
+                            | "v"
+                            | "version"
+                            | "dir-report-only"
+                    )
+                {
+                    return Err(format!(
+                        "latexmk option {token:?} is managed by the app; use finite build options such as -quiet or -bibtex-cond"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Formatter {
@@ -59,6 +174,12 @@ impl Formatter {
 pub(crate) struct TexSettings {
     pub(crate) build_enabled: bool,
     pub(crate) build_engine: BuildEngine,
+    pub(crate) build_driver: BuildDriver,
+    pub(crate) bibliography_enabled: bool,
+    pub(crate) system_command: crate::tool_command::CommandCustomization,
+    pub(crate) latexmk: SystemTool,
+    pub(crate) bibtex: SystemTool,
+    pub(crate) biber: SystemTool,
     pub(crate) only_cached: bool,
     /// Emit a SyncTeX map for source/preview navigation.
     pub(crate) synctex: bool,
@@ -90,6 +211,15 @@ impl Default for TexSettings {
         Self {
             build_enabled: true,
             build_engine: BuildEngine::Tectonic,
+            build_driver: BuildDriver::Latexmk,
+            bibliography_enabled: true,
+            system_command: Default::default(),
+            latexmk: SystemTool {
+                arguments: "-bibtex-cond".into(),
+                ..Default::default()
+            },
+            bibtex: Default::default(),
+            biber: Default::default(),
             only_cached: false,
             synctex: true,
             texlab_enabled: true,
@@ -112,6 +242,20 @@ impl Default for TexSettings {
     }
 }
 impl TexSettings {
+    pub(crate) fn validate_build_settings(&self) -> Result<(), String> {
+        self.system_command
+            .validate()
+            .map_err(|e| format!("TeX engine: {e}"))?;
+        for (name, tool) in [
+            ("latexmk", &self.latexmk),
+            ("BibTeX", &self.bibtex),
+            ("Biber", &self.biber),
+        ] {
+            tool.validate(name)?;
+        }
+        validate_engine_arguments(&self.system_command.arguments)
+    }
+
     pub(crate) fn needs_badness(&self) -> bool {
         self.lint || self.formatter == Formatter::Badness
     }
@@ -132,6 +276,32 @@ impl TexSettings {
     }
 }
 
+/// Keep output publication, source identity and shell escape under the adapter.
+pub(crate) fn validate_engine_arguments(arguments: &str) -> Result<(), String> {
+    let tokens =
+        shlex::split(arguments).ok_or("TeX engine arguments contain an unmatched quote")?;
+    for token in tokens {
+        let flag = token
+            .trim_start_matches('-')
+            .split('=')
+            .next()
+            .unwrap_or("");
+        if token == "--"
+            || matches!(
+                flag,
+                "output-directory"
+                    | "aux-directory"
+                    | "jobname"
+                    | "shell-escape"
+                    | "enable-write18"
+            )
+        {
+            return Err(format!("TeX engine option {token:?} is managed by the app"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +311,9 @@ mod tests {
         assert_eq!(settings, TexSettings::default());
         assert!(settings.build_enabled && settings.texlab_enabled && settings.lint);
         assert!(settings.synctex);
+        assert_eq!(settings.build_driver, BuildDriver::Latexmk);
+        assert!(settings.bibliography_enabled);
+        settings.validate_build_settings().unwrap();
         assert_eq!(
             settings.texlab_configuration["texlab"]["diagnosticsDelay"],
             300
@@ -173,5 +346,37 @@ mod tests {
                 .unwrap(),
             settings
         );
+    }
+    #[test]
+    fn system_build_settings_reject_background_watch_and_output_redirection() {
+        for arguments in [
+            "-pvc",
+            "--pvc",
+            "-pvc=1",
+            "-pv",
+            "-p",
+            "-r custom.rc",
+            "-e '$pvc=1'",
+            "-outdir=/tmp",
+            "-jobname=other",
+            "extra.tex",
+            "-C",
+            "-shell-escape",
+            "-latexoption=-output-directory=/tmp",
+        ] {
+            let mut settings = TexSettings::default();
+            settings.latexmk.arguments = arguments.into();
+            assert!(settings.validate_build_settings().is_err(), "{arguments}");
+        }
+        let mut settings = TexSettings::default();
+        settings.latexmk.arguments = "-quiet -bibtex-cond -time".into();
+        settings.biber.arguments = "--sortlocale en_GB".into();
+        settings.system_command.arguments = "-draftmode".into();
+        settings.validate_build_settings().unwrap();
+        for arguments in ["--output-directory /tmp", "-shell-escape", "-jobname=other"] {
+            settings.system_command.arguments = arguments.into();
+            assert!(settings.validate_build_settings().is_err(), "{arguments}");
+        }
+        assert!(serde_json::from_str::<TexSettings>(r#"{"build_driver":"watch"}"#).is_err());
     }
 }

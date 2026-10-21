@@ -9,7 +9,7 @@ use std::{
 #[path = "../../build_support/bundled_assets.rs"]
 mod bundled_assets;
 #[path = "../../build_support/payload_codec.rs"]
-mod codec;
+pub(super) mod codec;
 
 // Level 19 saves another 15 MB across the universal package over level 9.
 // Compression happens at packaging time; runtime expansion remains lazy.
@@ -241,7 +241,7 @@ fn copy_same_file(source: &Path, destination: &Path) -> Result<(), String> {
         .map_err(|error| format!("copying {}: {error}", source.display()))
 }
 
-fn temporary_tree(parent: &Path) -> Result<tempfile::TempDir, String> {
+pub(super) fn temporary_tree(parent: &Path) -> Result<tempfile::TempDir, String> {
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     tempfile::Builder::new()
         .prefix(".tiptoptyp-payload-")
@@ -249,7 +249,7 @@ fn temporary_tree(parent: &Path) -> Result<tempfile::TempDir, String> {
         .map_err(|error| error.to_string())
 }
 
-fn publish_tree(staged: tempfile::TempDir, destination: &Path) -> Result<(), String> {
+pub(super) fn publish_tree(staged: tempfile::TempDir, destination: &Path) -> Result<(), String> {
     let backup = staged.path().with_extension("previous");
     let existed = destination
         .try_exists()

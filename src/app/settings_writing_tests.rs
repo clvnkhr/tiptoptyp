@@ -202,3 +202,27 @@ fn invalid_dictionary_draft_stays_visible_without_replacing_the_valid_dictionary
     assert!(harness.state().ui.harper_dictionary_draft.is_none());
     assert!(harness.state().settings.harper_ignore_capitalized_names);
 }
+
+#[test]
+fn ltex_enable_is_independent_of_harper_dictionary_and_language() {
+    let mut harness = harness();
+    assert!(!harness.state().settings.ltex.enabled);
+    let dictionary = harness.state().settings.harper_dictionary.clone();
+    let language = harness.state().settings.writing_language;
+    harness.get_by_label("LTeX+ spelling and grammar").click();
+    harness.run();
+    assert!(harness.state().settings.ltex.enabled);
+    assert!(!harness.state().settings.english_grammar);
+    assert_eq!(harness.state().settings.harper_dictionary, dictionary);
+    assert_eq!(harness.state().settings.writing_language, language);
+    harness.get_by_label("LTeX+ spelling and grammar").click();
+    harness.run();
+    assert!(!harness.state().settings.ltex.enabled);
+    let updates = harness.state().updates;
+    harness.run_steps(4);
+    assert_eq!(
+        harness.state().updates,
+        updates,
+        "idle controls must not publish settings"
+    );
+}

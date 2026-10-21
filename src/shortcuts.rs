@@ -44,6 +44,8 @@ pub(crate) enum ShortcutAction {
     NewTable,
     EditTable,
     LatexDiff,
+    TexDocumentation,
+    ImportCitation,
     Find,
     FindReplace,
     Format,
@@ -101,7 +103,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 85] = [
+    pub(crate) const ALL: [Self; 87] = [
         Self::Settings,
         Self::CommandPalette,
         Self::New,
@@ -133,6 +135,8 @@ impl ShortcutAction {
         Self::NewTable,
         Self::EditTable,
         Self::LatexDiff,
+        Self::TexDocumentation,
+        Self::ImportCitation,
         Self::Find,
         Self::FindReplace,
         Self::Format,
@@ -221,7 +225,9 @@ impl ShortcutAction {
             Self::ToggleComment => "edit.toggle_comment",
             Self::NewTable => "edit.new_table",
             Self::EditTable => "edit.edit_table",
-            Self::LatexDiff => "edit.latexdiff",
+            Self::LatexDiff => "file.latexdiff",
+            Self::TexDocumentation => "file.texdoc",
+            Self::ImportCitation => "file.import_citation",
             Self::Find => "edit.find",
             Self::FindReplace => "edit.find_replace",
             Self::Format => "edit.format",
@@ -315,7 +321,9 @@ impl ShortcutAction {
             Self::ToggleComment => "Toggle comment",
             Self::NewTable => "New table",
             Self::EditTable => "Edit table at cursor",
-            Self::LatexDiff => "LaTeXdiff",
+            Self::LatexDiff => "Create LaTeX Diff…",
+            Self::TexDocumentation => "TeXdoc · Package documentation…",
+            Self::ImportCitation => "Import citation…",
             Self::Find => "Find",
             Self::FindReplace => "Find and replace",
             Self::Format => "Format document",
@@ -392,7 +400,10 @@ impl ShortcutAction {
             | Self::SaveAs
             | Self::RevertTo
             | Self::Rename
-            | Self::ExportPdf => "File",
+            | Self::ExportPdf
+            | Self::LatexDiff
+            | Self::TexDocumentation
+            | Self::ImportCitation => "File",
             Self::Undo
             | Self::Redo
             | Self::Cut
@@ -403,7 +414,6 @@ impl ShortcutAction {
             | Self::NewTable
             | Self::ComfyPreview
             | Self::EditTable
-            | Self::LatexDiff
             | Self::Find
             | Self::FindReplace
             | Self::Format
@@ -1215,6 +1225,8 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         Action::NewTable
         | Action::EditTable
         | Action::LatexDiff
+        | Action::TexDocumentation
+        | Action::ImportCitation
         | Action::RevertTo
         | Action::NewFromTemplate
         | Action::ComfyPreview => {
@@ -1310,6 +1322,7 @@ mod tests {
             assert_eq!(ShortcutAction::from_id(action.id()), Some(action));
         }
         assert_eq!(ShortcutAction::from_id("file.open_recent"), None);
+        assert_eq!(ShortcutAction::from_id("edit.latexdiff"), None);
     }
 
     #[test]
@@ -1325,6 +1338,8 @@ mod tests {
                         ShortcutAction::NewTable
                             | ShortcutAction::RevertTo
                             | ShortcutAction::LatexDiff
+                            | ShortcutAction::TexDocumentation
+                            | ShortcutAction::ImportCitation
                             | ShortcutAction::EditTable
                             | ShortcutAction::NewFromTemplate
                             | ShortcutAction::ComfyPreview

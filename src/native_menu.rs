@@ -74,6 +74,9 @@ commands! {
     Rename => ("Rename…", File, 1, SavedDocument, 108),
     RevertTo => ("Revert To…", File, 1, LocalVersions, 110),
     ExportPdf => ("Export PDF…", File, 2, SourcePreview, 105),
+    LatexDiff => ("Create LaTeX Diff…", File, 2, Always, 213),
+    TexDocumentation => ("TeXdoc · Package Documentation…", File, 2, Always, 214),
+    ImportCitation => ("Import Citation…", File, 2, Always, 215),
     CloseTab => ("Close Tab", File, 3, Always, 109),
     Undo => ("Undo", Edit, 0, Undo, 200),
     Redo => ("Redo", Edit, 0, Redo, 201),
@@ -88,15 +91,14 @@ commands! {
     SyncPreview => ("Sync Preview", Edit, 3, InteractivePreview, 209),
     NewTable => ("New Table…", Edit, 4, NewTable, 211),
     EditTable => ("Edit Table…", Edit, 4, EditTable, 212),
-    LatexDiff => ("LaTeXdiff…", Edit, 5, Always, 213),
     CommandPalette => ("Command Palette…", View, 0, Always, 309),
     Panel => ("Panel", View, 0, Always, 300),
     MaximizePanel => ("Maximize/Restore Panel", View, 0, Always, 308),
     Terminal => ("Terminal", View, 0, Always, 307),
     Explorer => ("Explorer", View, 0, Always, 301),
-    Code => ("Code", View, 1, TypesettingDocument, 302),
-    Split => ("Split", View, 1, TypesettingDocument, 303),
-    Preview => ("Preview", View, 1, TypesettingDocument, 304),
+    Code => ("Code", View, 1, SourcePreview, 302),
+    Split => ("Split", View, 1, SourcePreview, 303),
+    Preview => ("Preview", View, 1, SourcePreview, 304),
     Packages => ("Packages…", View, 2, Always, 305),
     Git => ("Git…", View, 2, Always, 306),
 }
@@ -692,6 +694,35 @@ mod tests {
         assert_eq!(
             native_menu_request_from_tag(spec.native_id),
             Some(NativeMenuRequest::Command(AppCommand::CommandPalette))
+        );
+    }
+
+    #[test]
+    fn latex_diff_is_a_standalone_file_command_shared_with_shortcut_settings() {
+        let spec = command_spec(AppCommand::LatexDiff);
+        assert_eq!(spec.title, "Create LaTeX Diff…");
+        assert_eq!(spec.menu, CommandMenu::File);
+        assert_eq!(spec.requirement, CommandRequirement::Always);
+        assert_eq!(spec.shortcut_action.label(), spec.title);
+        assert_eq!(spec.shortcut_action.id(), "file.latexdiff");
+        assert_eq!(spec.shortcut_action.group(), "File");
+        let files: Vec<_> = command_specs(CommandMenu::File)
+            .map(|spec| spec.command)
+            .collect();
+        let position = |command| {
+            files
+                .iter()
+                .position(|candidate| *candidate == command)
+                .unwrap()
+        };
+        assert!(position(AppCommand::ExportPdf) < position(AppCommand::LatexDiff));
+        assert!(position(AppCommand::LatexDiff) < position(AppCommand::CloseTab));
+        assert!(
+            !command_specs(CommandMenu::Edit).any(|spec| spec.command == AppCommand::LatexDiff)
+        );
+        assert_eq!(
+            native_menu_request_from_tag(spec.native_id),
+            Some(NativeMenuRequest::Command(AppCommand::LatexDiff))
         );
     }
 

@@ -1,0 +1,1797 @@
+{
+  "schema_version": 1,
+  "started_at_utc": "2026-10-20T16:28:04.424259+00:00",
+  "workload": "Synthetic selected-prose CPU adapter/worker integration only",
+  "scope": {
+    "reference_direct_adapter": "Tokenization, CPU FP32 inference and detokenization inside pinned adapter.correct; internal perf_counter timing.",
+    "reference_roundtrip": "Direct adapter reference plus JSONL measurement transport and parent scheduling.",
+    "worker_roundtrip": "Actual app Python worker JSONL request/response, validation, adapter correction and parent scheduling.",
+    "first_use": "Fresh process start through first correction: process/import, full pinned SHA validation, model load and first inference; recorded separately.",
+    "excluded": [
+      "Rust supervisor",
+      "prose projection/source-map guard",
+      "app rendering",
+      "native UI interaction",
+      "download/install time"
+    ],
+    "caveats": [
+      "No GUI responsiveness or cross-platform performance claim.",
+      "OS file caches are not flushed; first-use values are not cold-disk startup.",
+      "Fresh processes run serially in ABBA order; system scheduling/thermal state remain uncontrolled.",
+      "Only three short synthetic sentences; p95 is descriptive with few per-input samples."
+    ]
+  },
+  "configuration": {
+    "device": "cpu",
+    "inference_dtype": "float32",
+    "threads": 4,
+    "interop_threads": 1,
+    "batch_size": 1,
+    "warmup_rounds": 2,
+    "sample_rounds": 5,
+    "sentence_order": [
+      "agreement",
+      "repeated_word",
+      "unchanged_math_prose"
+    ],
+    "process_order": [
+      "reference",
+      "worker",
+      "worker",
+      "reference"
+    ],
+    "python": "/private/tmp/liquid-integration-runtime-20261020/runtime/aarch64-apple-darwin-7293ef95a7ba/bin/python",
+    "cache_dir": "/private/tmp/liquid-integration-runtime-20261020/models",
+    "offline": true,
+    "max_correction_iterations": 3,
+    "first_request_timeout_seconds": 180,
+    "warm_request_timeout_seconds": 30
+  },
+  "inputs": [
+    {
+      "id": "agreement",
+      "text": "These estimates holds for every bounded operator.",
+      "provenance": "Synthetic, written for this probe"
+    },
+    {
+      "id": "repeated_word",
+      "text": "This is the the simple result.",
+      "provenance": "Synthetic, written for this probe"
+    },
+    {
+      "id": "unchanged_math_prose",
+      "text": "The nonautonomous semigroup is well-posed.",
+      "provenance": "Synthetic, written for this probe"
+    }
+  ],
+  "sources": {
+    "probe": {
+      "path": "/private/tmp/benchmark-liquid-worker.py",
+      "bytes": 19397,
+      "sha256": "921c59ef5a667fd7ce4179b731371c75d2bebcd612ce5a55fffc67ca11f70fb7"
+    },
+    "worker": {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/liquid-grammar-worker.py",
+      "bytes": 17687,
+      "sha256": "efb9d73fec22925d1fc991f9d67153096ea34e1a9d02d77fd8683682aa4e8f97"
+    },
+    "adapter": {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/grammar_compare/models.py",
+      "bytes": 19731,
+      "sha256": "ed1618411ccc052b5e1dfa28ebe9f12f610388699bb0c60209d32ef0c88268d1"
+    },
+    "requirements": {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/liquid-grammar-requirements.txt",
+      "bytes": 424,
+      "sha256": "a8a0d3381e2d035754e6a7f8b2b98dd32144372d95cf23fae0acf12886ee7eac"
+    }
+  },
+  "required_runtime_versions": {
+    "torch": "2.14.1",
+    "transformers": "5.20.2",
+    "tokenizers": "0.23.3",
+    "huggingface-hub": "2.2.0",
+    "safetensors": "0.8.0",
+    "sacremoses": "0.2.0"
+  },
+  "pinned_artifacts": [
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+      "name": "config.json",
+      "bytes": 494,
+      "sha256": "edeaa3214d6a34153416e3417c8960c998e9144f2d87e6bff7eac94d4da54102"
+    },
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+      "name": "model.safetensors",
+      "bytes": 713449656,
+      "sha256": "e788053172f2dbc5a1573454475230dca21f19cd3ca1193e2dca5b1a9fd27bfa"
+    },
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+      "name": "modeling_gectagger.py",
+      "bytes": 20673,
+      "sha256": "ecd2ee64c22e3ad020fc2fd9c926d2163549d624ba28a36b38035483d508d552"
+    },
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+      "name": "reranker_gectagger.py",
+      "bytes": 22767,
+      "sha256": "c63b299cab6d24b144642fc106d75b5c7fe1bc3ec620495b56f0294854536a13"
+    },
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+      "name": "tokenizer.json",
+      "bytes": 4733371,
+      "sha256": "1efc3a6609abf6b63b1f47188d139f3b59973a6a434dffe970a7261a51ed2711"
+    },
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+      "name": "tokenizer_config.json",
+      "bytes": 306,
+      "sha256": "ba91dd002005cdf48ada14d3406571d06adc50b141bb4284e390b0e4c8d8aa2c"
+    },
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M",
+      "revision": "b886781f7c6f10ca9b7096e21b83e30a073c2f39",
+      "name": "config.json",
+      "bytes": 1503,
+      "sha256": "559f88ddcebfb0a7b46ba99a074b17f3a951f278b3010a0f22fdf5d9cc358d11"
+    },
+    {
+      "repo": "LiquidAI/LFM2.5-Encoder-350M",
+      "revision": "b886781f7c6f10ca9b7096e21b83e30a073c2f39",
+      "name": "modeling_lfm2_bidirectional.py",
+      "bytes": 7093,
+      "sha256": "f171f518be2a07da48b17fdea5655cad0a2452ab548e90e8ae903143686647e2"
+    }
+  ],
+  "platform": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "logical_cpus": 12,
+    "orchestrator_python": "3.14.7 (main, Aug  5 2026, 10:29:49) [Clang 16.0.0 (clang-1600.0.26.6)]"
+  },
+  "cache_state_before": {
+    "dynamic_modules_present": true,
+    "pinned_artifact_bytes": 718235863
+  },
+  "runs": [
+    {
+      "ordinal": 1,
+      "mode": "reference",
+      "command": [
+        "/private/tmp/liquid-integration-runtime-20261020/runtime/aarch64-apple-darwin-7293ef95a7ba/bin/python",
+        "/private/tmp/benchmark-liquid-worker.py",
+        "--baseline-child",
+        "--repo",
+        "/Users/calvinkhor/Documents/GitHub/mytypst",
+        "--cache-dir",
+        "/private/tmp/liquid-integration-runtime-20261020/models"
+      ],
+      "first_use": {
+        "sentence_id": "agreement",
+        "id": 1,
+        "ok": true,
+        "corrected": "These estimates hold for every bounded operator.",
+        "elapsed_ms": 6306.008584040683,
+        "adapter_ms": 749.7726249857806,
+        "load_ms": 5556.2314170529135,
+        "metadata": {
+          "adapter": {
+            "name": "liquid",
+            "label": "Liquid LFM2.5 Encoder 350M (tagger only)",
+            "model_id": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+            "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+            "license": "LFM Open License v1.0",
+            "artifact_bytes": 713449656,
+            "source_url": "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+            "notes": "Published FP16 tagger; executed FP32 on CPU. Optional reranker excluded. Precision thresholds are an initial comparison setting, not calibrated.",
+            "device": "cpu",
+            "threads": 4,
+            "inference_dtype": "float32",
+            "batch_size": 1,
+            "artifact_weight_dtype": "float16",
+            "input_limit_tokens": 128,
+            "max_iter": 3,
+            "keep_confidence": 0.0,
+            "min_error_prob": 0.5,
+            "rerank": false,
+            "refinement_input_policy": "Full token count checked before each of up to 3 one-pass corrections; stop unchanged/cycles",
+            "tokenization": "Moses English, escape=False; word apostrophes normalized and restored",
+            "extra_artifacts": [
+              {
+                "model_id": "LiquidAI/LFM2.5-Encoder-350M",
+                "revision": "b886781f7c6f10ca9b7096e21b83e30a073c2f39",
+                "files": [
+                  "config.json",
+                  "modeling_lfm2_bidirectional.py"
+                ]
+              },
+              "pinned tagger config/tokenizer/modeling_gectagger.py/reranker_gectagger.py"
+            ],
+            "load_ms": 3768.808667024132,
+            "weights_cached_before_load": true,
+            "runtime_versions": {
+              "torch": "2.14.1",
+              "transformers": "5.20.2",
+              "tokenizers": "0.23.3",
+              "huggingface_hub": "2.2.0"
+            }
+          },
+          "python": "3.12.14 (main, Aug 12 2026, 13:57:54) [Clang 16.0.0 (clang-1600.0.26.6)]",
+          "python_executable": "/private/tmp/liquid-integration-runtime-20261020/runtime/aarch64-apple-darwin-7293ef95a7ba/bin/python",
+          "platform": "macOS-14.6.1-arm64-arm-64bit",
+          "machine": "arm64"
+        },
+        "roundtrip_ms": 6463.533208006993,
+        "process_to_response_ms": 6465.525083011016
+      },
+      "warmups": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 2,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 654.9045420251787,
+          "adapter_ms": 654.8961670487188,
+          "roundtrip_ms": 655.0877920235507,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 3,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 566.5232919855043,
+          "adapter_ms": 566.5220840019174,
+          "roundtrip_ms": 566.6412499849685,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 4,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 288.7762919999659,
+          "adapter_ms": 288.77483296673745,
+          "roundtrip_ms": 288.89745799824595,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 5,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 579.3564590276219,
+          "adapter_ms": 579.3546669883654,
+          "roundtrip_ms": 579.5305000501685,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 6,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 619.479582994245,
+          "adapter_ms": 619.4779580109753,
+          "roundtrip_ms": 619.5932920090854,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 7,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 295.33904197160155,
+          "adapter_ms": 295.3377080266364,
+          "roundtrip_ms": 295.4467920353636,
+          "process_to_response_ms": null
+        }
+      ],
+      "samples": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 8,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 653.1732080038637,
+          "adapter_ms": 653.171707992442,
+          "roundtrip_ms": 653.285791981034,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 9,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 623.651416040957,
+          "adapter_ms": 623.6497089848854,
+          "roundtrip_ms": 623.761499999091,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 10,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 542.6054160343483,
+          "adapter_ms": 542.6039159647189,
+          "roundtrip_ms": 542.711791000329,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 11,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 609.272375004366,
+          "adapter_ms": 609.2709160293452,
+          "roundtrip_ms": 609.4280409743078,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 12,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 582.6933750067838,
+          "adapter_ms": 582.6916249934584,
+          "roundtrip_ms": 582.8013339778408,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 13,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 290.41716700885445,
+          "adapter_ms": 290.41620902717113,
+          "roundtrip_ms": 290.5354999820702,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "agreement",
+          "id": 14,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 578.1621670466848,
+          "adapter_ms": 578.1499589793384,
+          "roundtrip_ms": 578.2792910467833,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "repeated_word",
+          "id": 15,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 563.3790420251898,
+          "adapter_ms": 563.3773329900578,
+          "roundtrip_ms": 563.5130839655176,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "unchanged_math_prose",
+          "id": 16,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 291.72516701510176,
+          "adapter_ms": 291.7237079818733,
+          "roundtrip_ms": 291.8362499913201,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "agreement",
+          "id": 17,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 587.3701659729704,
+          "adapter_ms": 587.3690000153147,
+          "roundtrip_ms": 587.4784580082633,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "repeated_word",
+          "id": 18,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 577.4678330053575,
+          "adapter_ms": 577.4669999955222,
+          "roundtrip_ms": 577.5691660237499,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "unchanged_math_prose",
+          "id": 19,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 301.31537502165884,
+          "adapter_ms": 301.31395801436156,
+          "roundtrip_ms": 301.41187499975786,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "agreement",
+          "id": 20,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 582.6352910371497,
+          "adapter_ms": 582.633874961175,
+          "roundtrip_ms": 582.7687499695458,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "repeated_word",
+          "id": 21,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 570.6046670093201,
+          "adapter_ms": 570.6030420260504,
+          "roundtrip_ms": 570.7234999863431,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "unchanged_math_prose",
+          "id": 22,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 319.2237080074847,
+          "adapter_ms": 319.22183302231133,
+          "roundtrip_ms": 319.33187501272187,
+          "process_to_response_ms": null
+        }
+      ],
+      "termination": {
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "ordinal": 2,
+      "mode": "worker",
+      "command": [
+        "/private/tmp/liquid-integration-runtime-20261020/runtime/aarch64-apple-darwin-7293ef95a7ba/bin/python",
+        "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/liquid-grammar-worker.py",
+        "--cache-dir",
+        "/private/tmp/liquid-integration-runtime-20261020/models",
+        "--threads",
+        "4"
+      ],
+      "first_use": {
+        "sentence_id": "agreement",
+        "id": 1,
+        "ok": true,
+        "corrected": "These estimates hold for every bounded operator.",
+        "elapsed_ms": 5472.358125029132,
+        "roundtrip_ms": 5563.757625001017,
+        "process_to_response_ms": 5565.652334014885
+      },
+      "warmups": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 2,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 598.6411670455709,
+          "roundtrip_ms": 598.7767920014448,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 3,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 628.9203750202432,
+          "roundtrip_ms": 629.0360409766436,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 4,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 295.4185839626007,
+          "roundtrip_ms": 295.55608303053305,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 5,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 581.3528340077028,
+          "roundtrip_ms": 581.4743749797344,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 6,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 584.1912920004688,
+          "roundtrip_ms": 584.3512499704957,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 7,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 300.2608329989016,
+          "roundtrip_ms": 300.37549999542534,
+          "process_to_response_ms": null
+        }
+      ],
+      "samples": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 8,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 579.5884589897469,
+          "roundtrip_ms": 579.7241249820217,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 9,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 552.8578750090674,
+          "roundtrip_ms": 552.9916660161689,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 10,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 284.5364169916138,
+          "roundtrip_ms": 284.67637504218146,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 11,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 569.2579579772428,
+          "roundtrip_ms": 569.3920410121791,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 12,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 572.0502079930156,
+          "roundtrip_ms": 572.2050410113297,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 13,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 306.0970829683356,
+          "roundtrip_ms": 306.24579201685265,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "agreement",
+          "id": 14,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 589.1719579813071,
+          "roundtrip_ms": 589.2889159731567,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "repeated_word",
+          "id": 15,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 584.8019580007531,
+          "roundtrip_ms": 584.9123329971917,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "unchanged_math_prose",
+          "id": 16,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 293.39275002712384,
+          "roundtrip_ms": 293.50824997527525,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "agreement",
+          "id": 17,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 593.3700419845991,
+          "roundtrip_ms": 593.4892920195125,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "repeated_word",
+          "id": 18,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 604.1131669771858,
+          "roundtrip_ms": 604.2417089920491,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "unchanged_math_prose",
+          "id": 19,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 311.143999977503,
+          "roundtrip_ms": 311.27620802726597,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "agreement",
+          "id": 20,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 592.0472919824533,
+          "roundtrip_ms": 592.1646669739857,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "repeated_word",
+          "id": 21,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 596.2887089699507,
+          "roundtrip_ms": 596.4038750389591,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "unchanged_math_prose",
+          "id": 22,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 292.7480419748463,
+          "roundtrip_ms": 292.87754197139293,
+          "process_to_response_ms": null
+        }
+      ],
+      "termination": {
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "ordinal": 3,
+      "mode": "worker",
+      "command": [
+        "/private/tmp/liquid-integration-runtime-20261020/runtime/aarch64-apple-darwin-7293ef95a7ba/bin/python",
+        "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/liquid-grammar-worker.py",
+        "--cache-dir",
+        "/private/tmp/liquid-integration-runtime-20261020/models",
+        "--threads",
+        "4"
+      ],
+      "first_use": {
+        "sentence_id": "agreement",
+        "id": 1,
+        "ok": true,
+        "corrected": "These estimates hold for every bounded operator.",
+        "elapsed_ms": 5462.975165981334,
+        "roundtrip_ms": 5545.315540977754,
+        "process_to_response_ms": 5547.295124968514
+      },
+      "warmups": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 2,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 605.796999996528,
+          "roundtrip_ms": 605.9457919909619,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 3,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 639.1494999988936,
+          "roundtrip_ms": 639.273208042141,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 4,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 310.72083296021447,
+          "roundtrip_ms": 310.8456250047311,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 5,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 608.5191250313073,
+          "roundtrip_ms": 608.6428340058774,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 6,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 823.4569159685634,
+          "roundtrip_ms": 823.5920830047689,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 7,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 362.5569579889998,
+          "roundtrip_ms": 362.6981250126846,
+          "process_to_response_ms": null
+        }
+      ],
+      "samples": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 8,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 588.0636670044623,
+          "roundtrip_ms": 588.2143750204705,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 9,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 669.0525829908438,
+          "roundtrip_ms": 669.1767919692211,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 10,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 355.7971669943072,
+          "roundtrip_ms": 355.93920899555087,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 11,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 698.0208340100944,
+          "roundtrip_ms": 698.1745830271393,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 12,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 670.569957990665,
+          "roundtrip_ms": 670.6985000055283,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 13,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 341.18470799876377,
+          "roundtrip_ms": 341.34599997196347,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "agreement",
+          "id": 14,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 664.3382079782896,
+          "roundtrip_ms": 664.4784589880146,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "repeated_word",
+          "id": 15,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 635.0555419921875,
+          "roundtrip_ms": 635.2142500109039,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "unchanged_math_prose",
+          "id": 16,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 305.8721669949591,
+          "roundtrip_ms": 305.9912499738857,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "agreement",
+          "id": 17,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 633.4059169748798,
+          "roundtrip_ms": 633.5243330104277,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "repeated_word",
+          "id": 18,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 639.1953750280663,
+          "roundtrip_ms": 639.3011250183918,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "unchanged_math_prose",
+          "id": 19,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 349.7804590151645,
+          "roundtrip_ms": 349.8955410323106,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "agreement",
+          "id": 20,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 631.2052920111455,
+          "roundtrip_ms": 631.334290956147,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "repeated_word",
+          "id": 21,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 593.3203749591485,
+          "roundtrip_ms": 593.4294590260834,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "unchanged_math_prose",
+          "id": 22,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 349.30574998725206,
+          "roundtrip_ms": 349.51929200906307,
+          "process_to_response_ms": null
+        }
+      ],
+      "termination": {
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "ordinal": 4,
+      "mode": "reference",
+      "command": [
+        "/private/tmp/liquid-integration-runtime-20261020/runtime/aarch64-apple-darwin-7293ef95a7ba/bin/python",
+        "/private/tmp/benchmark-liquid-worker.py",
+        "--baseline-child",
+        "--repo",
+        "/Users/calvinkhor/Documents/GitHub/mytypst",
+        "--cache-dir",
+        "/private/tmp/liquid-integration-runtime-20261020/models"
+      ],
+      "first_use": {
+        "sentence_id": "agreement",
+        "id": 1,
+        "ok": true,
+        "corrected": "These estimates hold for every bounded operator.",
+        "elapsed_ms": 5865.687124955002,
+        "adapter_ms": 658.2080829539336,
+        "load_ms": 5207.477041054517,
+        "metadata": {
+          "adapter": {
+            "name": "liquid",
+            "label": "Liquid LFM2.5 Encoder 350M (tagger only)",
+            "model_id": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+            "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+            "license": "LFM Open License v1.0",
+            "artifact_bytes": 713449656,
+            "source_url": "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+            "notes": "Published FP16 tagger; executed FP32 on CPU. Optional reranker excluded. Precision thresholds are an initial comparison setting, not calibrated.",
+            "device": "cpu",
+            "threads": 4,
+            "inference_dtype": "float32",
+            "batch_size": 1,
+            "artifact_weight_dtype": "float16",
+            "input_limit_tokens": 128,
+            "max_iter": 3,
+            "keep_confidence": 0.0,
+            "min_error_prob": 0.5,
+            "rerank": false,
+            "refinement_input_policy": "Full token count checked before each of up to 3 one-pass corrections; stop unchanged/cycles",
+            "tokenization": "Moses English, escape=False; word apostrophes normalized and restored",
+            "extra_artifacts": [
+              {
+                "model_id": "LiquidAI/LFM2.5-Encoder-350M",
+                "revision": "b886781f7c6f10ca9b7096e21b83e30a073c2f39",
+                "files": [
+                  "config.json",
+                  "modeling_lfm2_bidirectional.py"
+                ]
+              },
+              "pinned tagger config/tokenizer/modeling_gectagger.py/reranker_gectagger.py"
+            ],
+            "load_ms": 3551.3822499779053,
+            "weights_cached_before_load": true,
+            "runtime_versions": {
+              "torch": "2.14.1",
+              "transformers": "5.20.2",
+              "tokenizers": "0.23.3",
+              "huggingface_hub": "2.2.0"
+            }
+          },
+          "python": "3.12.14 (main, Aug 12 2026, 13:57:54) [Clang 16.0.0 (clang-1600.0.26.6)]",
+          "python_executable": "/private/tmp/liquid-integration-runtime-20261020/runtime/aarch64-apple-darwin-7293ef95a7ba/bin/python",
+          "platform": "macOS-14.6.1-arm64-arm-64bit",
+          "machine": "arm64"
+        },
+        "roundtrip_ms": 6021.876875020098,
+        "process_to_response_ms": 6024.119291978423
+      },
+      "warmups": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 2,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 683.5477919667028,
+          "adapter_ms": 683.5318329976872,
+          "roundtrip_ms": 683.7094170041382,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 3,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 732.998082996346,
+          "adapter_ms": 732.9922079807147,
+          "roundtrip_ms": 733.2532919826917,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 4,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 324.51837504049763,
+          "adapter_ms": 324.5166669948958,
+          "roundtrip_ms": 324.69445798778906,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 5,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 661.3890409935266,
+          "adapter_ms": 661.3872919697315,
+          "roundtrip_ms": 661.508374963887,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 6,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 633.6102079949342,
+          "adapter_ms": 633.6085830116645,
+          "roundtrip_ms": 633.7449999991804,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 7,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 294.1780829569325,
+          "adapter_ms": 294.17612502584234,
+          "roundtrip_ms": 294.30754197528586,
+          "process_to_response_ms": null
+        }
+      ],
+      "samples": [
+        {
+          "round": 0,
+          "sentence_id": "agreement",
+          "id": 8,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 691.6261250153184,
+          "adapter_ms": 691.624499973841,
+          "roundtrip_ms": 691.790666023735,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "repeated_word",
+          "id": 9,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 635.0273750140332,
+          "adapter_ms": 635.0261669722386,
+          "roundtrip_ms": 635.1700839586556,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 0,
+          "sentence_id": "unchanged_math_prose",
+          "id": 10,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 293.98841701913625,
+          "adapter_ms": 293.9869579859078,
+          "roundtrip_ms": 294.1073330002837,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "agreement",
+          "id": 11,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 584.5271250000224,
+          "adapter_ms": 584.5255409949459,
+          "roundtrip_ms": 584.6473749843426,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "repeated_word",
+          "id": 12,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 588.9716249657795,
+          "adapter_ms": 588.9696660451591,
+          "roundtrip_ms": 589.0757089946419,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 1,
+          "sentence_id": "unchanged_math_prose",
+          "id": 13,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 292.269166035112,
+          "adapter_ms": 292.2672919812612,
+          "roundtrip_ms": 292.38633305067196,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "agreement",
+          "id": 14,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 593.6613749945536,
+          "adapter_ms": 593.6598329572007,
+          "roundtrip_ms": 593.7674160231836,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "repeated_word",
+          "id": 15,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 743.2729590218514,
+          "adapter_ms": 743.2711250148714,
+          "roundtrip_ms": 743.3963340008631,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 2,
+          "sentence_id": "unchanged_math_prose",
+          "id": 16,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 310.70608395384625,
+          "adapter_ms": 310.7044590287842,
+          "roundtrip_ms": 310.8089169836603,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "agreement",
+          "id": 17,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 630.6259999983013,
+          "adapter_ms": 630.6243329891004,
+          "roundtrip_ms": 630.732125020586,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "repeated_word",
+          "id": 18,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 677.8026670217514,
+          "adapter_ms": 677.8012500144541,
+          "roundtrip_ms": 677.9022500268184,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 3,
+          "sentence_id": "unchanged_math_prose",
+          "id": 19,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 296.5333749889396,
+          "adapter_ms": 296.5320840012282,
+          "roundtrip_ms": 296.6329579940066,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "agreement",
+          "id": 20,
+          "ok": true,
+          "corrected": "These estimates hold for every bounded operator.",
+          "elapsed_ms": 636.3553330302238,
+          "adapter_ms": 636.3537079887465,
+          "roundtrip_ms": 636.4557499764487,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "repeated_word",
+          "id": 21,
+          "ok": true,
+          "corrected": "This is the simple result.",
+          "elapsed_ms": 604.7263750224374,
+          "adapter_ms": 604.725333978422,
+          "roundtrip_ms": 604.8307080054656,
+          "process_to_response_ms": null
+        },
+        {
+          "round": 4,
+          "sentence_id": "unchanged_math_prose",
+          "id": 22,
+          "ok": true,
+          "corrected": "The nonautonomous semigroup is well-posed.",
+          "elapsed_ms": 304.7541250125505,
+          "adapter_ms": 304.75262500112876,
+          "roundtrip_ms": 304.865374986548,
+          "process_to_response_ms": null
+        }
+      ],
+      "termination": {
+        "returncode": 0,
+        "stderr_bytes": 0,
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ],
+  "complete": true,
+  "correction_equality": {
+    "all_equal": true,
+    "by_sentence": {
+      "agreement": {
+        "equal": true,
+        "corrections": [
+          "These estimates hold for every bounded operator."
+        ]
+      },
+      "repeated_word": {
+        "equal": true,
+        "corrections": [
+          "This is the simple result."
+        ]
+      },
+      "unchanged_math_prose": {
+        "equal": true,
+        "corrections": [
+          "The nonautonomous semigroup is well-posed."
+        ]
+      }
+    }
+  },
+  "summary": {
+    "reference": {
+      "roundtrip": {
+        "count": 30,
+        "median_ms": 582.7850419736933,
+        "min_ms": 290.5354999820702,
+        "max_ms": 743.3963340008631,
+        "p95_nearest_rank_ms": 691.790666023735,
+        "samples_ms": [
+          653.285791981034,
+          623.761499999091,
+          542.711791000329,
+          609.4280409743078,
+          582.8013339778408,
+          290.5354999820702,
+          578.2792910467833,
+          563.5130839655176,
+          291.8362499913201,
+          587.4784580082633,
+          577.5691660237499,
+          301.41187499975786,
+          582.7687499695458,
+          570.7234999863431,
+          319.33187501272187,
+          691.790666023735,
+          635.1700839586556,
+          294.1073330002837,
+          584.6473749843426,
+          589.0757089946419,
+          292.38633305067196,
+          593.7674160231836,
+          743.3963340008631,
+          310.8089169836603,
+          630.732125020586,
+          677.9022500268184,
+          296.6329579940066,
+          636.4557499764487,
+          604.8307080054656,
+          304.865374986548
+        ]
+      },
+      "helper_elapsed": {
+        "count": 30,
+        "median_ms": 582.6643330219667,
+        "min_ms": 290.41716700885445,
+        "max_ms": 743.2729590218514,
+        "p95_nearest_rank_ms": 691.6261250153184,
+        "samples_ms": [
+          653.1732080038637,
+          623.651416040957,
+          542.6054160343483,
+          609.272375004366,
+          582.6933750067838,
+          290.41716700885445,
+          578.1621670466848,
+          563.3790420251898,
+          291.72516701510176,
+          587.3701659729704,
+          577.4678330053575,
+          301.31537502165884,
+          582.6352910371497,
+          570.6046670093201,
+          319.2237080074847,
+          691.6261250153184,
+          635.0273750140332,
+          293.98841701913625,
+          584.5271250000224,
+          588.9716249657795,
+          292.269166035112,
+          593.6613749945536,
+          743.2729590218514,
+          310.70608395384625,
+          630.6259999983013,
+          677.8026670217514,
+          296.5333749889396,
+          636.3553330302238,
+          604.7263750224374,
+          304.7541250125505
+        ]
+      },
+      "by_sentence": {
+        "agreement": {
+          "roundtrip": {
+            "count": 10,
+            "median_ms": 601.5977284987457,
+            "min_ms": 578.2792910467833,
+            "max_ms": 691.790666023735,
+            "p95_nearest_rank_ms": 691.790666023735,
+            "samples_ms": [
+              653.285791981034,
+              609.4280409743078,
+              578.2792910467833,
+              587.4784580082633,
+              582.7687499695458,
+              691.790666023735,
+              584.6473749843426,
+              593.7674160231836,
+              630.732125020586,
+              636.4557499764487
+            ]
+          },
+          "helper_elapsed": {
+            "count": 10,
+            "median_ms": 601.4668749994598,
+            "min_ms": 578.1621670466848,
+            "max_ms": 691.6261250153184,
+            "p95_nearest_rank_ms": 691.6261250153184,
+            "samples_ms": [
+              653.1732080038637,
+              609.272375004366,
+              578.1621670466848,
+              587.3701659729704,
+              582.6352910371497,
+              691.6261250153184,
+              584.5271250000224,
+              593.6613749945536,
+              630.6259999983013,
+              636.3553330302238
+            ]
+          },
+          "direct_adapter": {
+            "count": 10,
+            "median_ms": 601.465374493273,
+            "min_ms": 578.1499589793384,
+            "max_ms": 691.624499973841,
+            "p95_nearest_rank_ms": 691.624499973841,
+            "samples_ms": [
+              653.171707992442,
+              609.2709160293452,
+              578.1499589793384,
+              587.3690000153147,
+              582.633874961175,
+              691.624499973841,
+              584.5255409949459,
+              593.6598329572007,
+              630.6243329891004,
+              636.3537079887465
+            ]
+          }
+        },
+        "repeated_word": {
+          "roundtrip": {
+            "count": 10,
+            "median_ms": 596.9532085000537,
+            "min_ms": 563.5130839655176,
+            "max_ms": 743.3963340008631,
+            "p95_nearest_rank_ms": 743.3963340008631,
+            "samples_ms": [
+              623.761499999091,
+              582.8013339778408,
+              563.5130839655176,
+              577.5691660237499,
+              570.7234999863431,
+              635.1700839586556,
+              589.0757089946419,
+              743.3963340008631,
+              677.9022500268184,
+              604.8307080054656
+            ]
+          },
+          "helper_elapsed": {
+            "count": 10,
+            "median_ms": 596.8489999941085,
+            "min_ms": 563.3790420251898,
+            "max_ms": 743.2729590218514,
+            "p95_nearest_rank_ms": 743.2729590218514,
+            "samples_ms": [
+              623.651416040957,
+              582.6933750067838,
+              563.3790420251898,
+              577.4678330053575,
+              570.6046670093201,
+              635.0273750140332,
+              588.9716249657795,
+              743.2729590218514,
+              677.8026670217514,
+              604.7263750224374
+            ]
+          },
+          "direct_adapter": {
+            "count": 10,
+            "median_ms": 596.8475000117905,
+            "min_ms": 563.3773329900578,
+            "max_ms": 743.2711250148714,
+            "p95_nearest_rank_ms": 743.2711250148714,
+            "samples_ms": [
+              623.6497089848854,
+              582.6916249934584,
+              563.3773329900578,
+              577.4669999955222,
+              570.6030420260504,
+              635.0261669722386,
+              588.9696660451591,
+              743.2711250148714,
+              677.8012500144541,
+              604.725333978422
+            ]
+          }
+        },
+        "unchanged_math_prose": {
+          "roundtrip": {
+            "count": 10,
+            "median_ms": 299.0224164968822,
+            "min_ms": 290.5354999820702,
+            "max_ms": 542.711791000329,
+            "p95_nearest_rank_ms": 542.711791000329,
+            "samples_ms": [
+              542.711791000329,
+              290.5354999820702,
+              291.8362499913201,
+              301.41187499975786,
+              319.33187501272187,
+              294.1073330002837,
+              292.38633305067196,
+              310.8089169836603,
+              296.6329579940066,
+              304.865374986548
+            ]
+          },
+          "helper_elapsed": {
+            "count": 10,
+            "median_ms": 298.9243750052992,
+            "min_ms": 290.41716700885445,
+            "max_ms": 542.6054160343483,
+            "p95_nearest_rank_ms": 542.6054160343483,
+            "samples_ms": [
+              542.6054160343483,
+              290.41716700885445,
+              291.72516701510176,
+              301.31537502165884,
+              319.2237080074847,
+              293.98841701913625,
+              292.269166035112,
+              310.70608395384625,
+              296.5333749889396,
+              304.7541250125505
+            ]
+          },
+          "direct_adapter": {
+            "count": 10,
+            "median_ms": 298.9230210077949,
+            "min_ms": 290.41620902717113,
+            "max_ms": 542.6039159647189,
+            "p95_nearest_rank_ms": 542.6039159647189,
+            "samples_ms": [
+              542.6039159647189,
+              290.41620902717113,
+              291.7237079818733,
+              301.31395801436156,
+              319.22183302231133,
+              293.9869579859078,
+              292.2672919812612,
+              310.7044590287842,
+              296.5320840012282,
+              304.75262500112876
+            ]
+          }
+        }
+      },
+      "direct_adapter": {
+        "count": 30,
+        "median_ms": 582.6627499773167,
+        "min_ms": 290.41620902717113,
+        "max_ms": 743.2711250148714,
+        "p95_nearest_rank_ms": 691.624499973841,
+        "samples_ms": [
+          653.171707992442,
+          623.6497089848854,
+          542.6039159647189,
+          609.2709160293452,
+          582.6916249934584,
+          290.41620902717113,
+          578.1499589793384,
+          563.3773329900578,
+          291.7237079818733,
+          587.3690000153147,
+          577.4669999955222,
+          301.31395801436156,
+          582.633874961175,
+          570.6030420260504,
+          319.22183302231133,
+          691.624499973841,
+          635.0261669722386,
+          293.9869579859078,
+          584.5255409949459,
+          588.9696660451591,
+          292.2672919812612,
+          593.6598329572007,
+          743.2711250148714,
+          310.7044590287842,
+          630.6243329891004,
+          677.8012500144541,
+          296.5320840012282,
+          636.3537079887465,
+          604.725333978422,
+          304.75262500112876
+        ]
+      }
+    },
+    "worker": {
+      "roundtrip": {
+        "count": 30,
+        "median_ms": 586.5633540088311,
+        "min_ms": 284.67637504218146,
+        "max_ms": 698.1745830271393,
+        "p95_nearest_rank_ms": 670.6985000055283,
+        "samples_ms": [
+          579.7241249820217,
+          552.9916660161689,
+          284.67637504218146,
+          569.3920410121791,
+          572.2050410113297,
+          306.24579201685265,
+          589.2889159731567,
+          584.9123329971917,
+          293.50824997527525,
+          593.4892920195125,
+          604.2417089920491,
+          311.27620802726597,
+          592.1646669739857,
+          596.4038750389591,
+          292.87754197139293,
+          588.2143750204705,
+          669.1767919692211,
+          355.93920899555087,
+          698.1745830271393,
+          670.6985000055283,
+          341.34599997196347,
+          664.4784589880146,
+          635.2142500109039,
+          305.9912499738857,
+          633.5243330104277,
+          639.3011250183918,
+          349.8955410323106,
+          631.334290956147,
+          593.4294590260834,
+          349.51929200906307
+        ]
+      },
+      "helper_elapsed": {
+        "count": 30,
+        "median_ms": 586.4328125026077,
+        "min_ms": 284.5364169916138,
+        "max_ms": 698.0208340100944,
+        "p95_nearest_rank_ms": 670.569957990665,
+        "samples_ms": [
+          579.5884589897469,
+          552.8578750090674,
+          284.5364169916138,
+          569.2579579772428,
+          572.0502079930156,
+          306.0970829683356,
+          589.1719579813071,
+          584.8019580007531,
+          293.39275002712384,
+          593.3700419845991,
+          604.1131669771858,
+          311.143999977503,
+          592.0472919824533,
+          596.2887089699507,
+          292.7480419748463,
+          588.0636670044623,
+          669.0525829908438,
+          355.7971669943072,
+          698.0208340100944,
+          670.569957990665,
+          341.18470799876377,
+          664.3382079782896,
+          635.0555419921875,
+          305.8721669949591,
+          633.4059169748798,
+          639.1953750280663,
+          349.7804590151645,
+          631.2052920111455,
+          593.3203749591485,
+          349.30574998725206
+        ]
+      },
+      "by_sentence": {
+        "agreement": {
+          "roundtrip": {
+            "count": 10,
+            "median_ms": 592.8269794967491,
+            "min_ms": 569.3920410121791,
+            "max_ms": 698.1745830271393,
+            "p95_nearest_rank_ms": 698.1745830271393,
+            "samples_ms": [
+              579.7241249820217,
+              569.3920410121791,
+              589.2889159731567,
+              593.4892920195125,
+              592.1646669739857,
+              588.2143750204705,
+              698.1745830271393,
+              664.4784589880146,
+              633.5243330104277,
+              631.334290956147
+            ]
+          },
+          "helper_elapsed": {
+            "count": 10,
+            "median_ms": 592.7086669835262,
+            "min_ms": 569.2579579772428,
+            "max_ms": 698.0208340100944,
+            "p95_nearest_rank_ms": 698.0208340100944,
+            "samples_ms": [
+              579.5884589897469,
+              569.2579579772428,
+              589.1719579813071,
+              593.3700419845991,
+              592.0472919824533,
+              588.0636670044623,
+              698.0208340100944,
+              664.3382079782896,
+              633.4059169748798,
+              631.2052920111455
+            ]
+          }
+        },
+        "repeated_word": {
+          "roundtrip": {
+            "count": 10,
+            "median_ms": 600.3227920155041,
+            "min_ms": 552.9916660161689,
+            "max_ms": 670.6985000055283,
+            "p95_nearest_rank_ms": 670.6985000055283,
+            "samples_ms": [
+              552.9916660161689,
+              572.2050410113297,
+              584.9123329971917,
+              604.2417089920491,
+              596.4038750389591,
+              669.1767919692211,
+              670.6985000055283,
+              635.2142500109039,
+              639.3011250183918,
+              593.4294590260834
+            ]
+          },
+          "helper_elapsed": {
+            "count": 10,
+            "median_ms": 600.2009379735682,
+            "min_ms": 552.8578750090674,
+            "max_ms": 670.569957990665,
+            "p95_nearest_rank_ms": 670.569957990665,
+            "samples_ms": [
+              552.8578750090674,
+              572.0502079930156,
+              584.8019580007531,
+              604.1131669771858,
+              596.2887089699507,
+              669.0525829908438,
+              670.569957990665,
+              635.0555419921875,
+              639.1953750280663,
+              593.3203749591485
+            ]
+          }
+        },
+        "unchanged_math_prose": {
+          "roundtrip": {
+            "count": 10,
+            "median_ms": 308.7610000220593,
+            "min_ms": 284.67637504218146,
+            "max_ms": 355.93920899555087,
+            "p95_nearest_rank_ms": 355.93920899555087,
+            "samples_ms": [
+              284.67637504218146,
+              306.24579201685265,
+              293.50824997527525,
+              311.27620802726597,
+              292.87754197139293,
+              355.93920899555087,
+              341.34599997196347,
+              305.9912499738857,
+              349.8955410323106,
+              349.51929200906307
+            ]
+          },
+          "helper_elapsed": {
+            "count": 10,
+            "median_ms": 308.6205414729193,
+            "min_ms": 284.5364169916138,
+            "max_ms": 355.7971669943072,
+            "p95_nearest_rank_ms": 355.7971669943072,
+            "samples_ms": [
+              284.5364169916138,
+              306.0970829683356,
+              293.39275002712384,
+              311.143999977503,
+              292.7480419748463,
+              355.7971669943072,
+              341.18470799876377,
+              305.8721669949591,
+              349.7804590151645,
+              349.30574998725206
+            ]
+          }
+        }
+      }
+    },
+    "worker_to_reference_roundtrip_median_ratio": 1.0064832000875348
+  },
+  "finished_at_utc": "2026-10-20T16:29:14.085214+00:00"
+}

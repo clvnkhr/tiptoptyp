@@ -15,6 +15,7 @@ pub(super) struct WritingState {
     job: LatestJob<(WritingIdentity, Vec<Diagnostic>)>,
     checker: Arc<std::sync::Mutex<crate::writing::Checker>>,
     dictionary: Arc<str>,
+    tex_prose_rules: Arc<crate::writing::prose_rules::TexProseRules>,
     ignore_capitalized_names: bool,
     configuration_revision: u64,
     pub(super) diagnostics: Vec<Diagnostic>,
@@ -24,14 +25,21 @@ impl WritingState {
     /// Called when Settings are applied, so dictionary contents are not scanned
     /// or copied by the per-frame scheduler. Jobs carry this revision to reject
     /// old results while the previous diagnostics remain visible.
-    pub(super) fn configure(&mut self, dictionary: &str, ignore_capitalized_names: bool) {
+    pub(super) fn configure(
+        &mut self,
+        dictionary: &str,
+        ignore_capitalized_names: bool,
+        rules: &crate::writing::prose_rules::TexProseRules,
+    ) {
         if self.dictionary.as_ref() != dictionary
             || self.ignore_capitalized_names != ignore_capitalized_names
+            || self.tex_prose_rules.as_ref() != rules
         {
             if self.dictionary.as_ref() != dictionary {
                 self.dictionary = Arc::from(dictionary);
             }
             self.ignore_capitalized_names = ignore_capitalized_names;
+            self.tex_prose_rules = Arc::new(rules.clone());
             self.configuration_revision = self.configuration_revision.wrapping_add(1);
         }
     }
@@ -92,6 +100,7 @@ impl EditorApp {
             self.writing.configure(
                 &self.settings.harper_dictionary,
                 self.settings.harper_ignore_capitalized_names,
+                &self.settings.tex_prose_rules,
             );
         }
         let key = self.document().key();
@@ -127,9 +136,10 @@ impl EditorApp {
             }
         }
         match self.writing.job.poll() {
-            LatestJobPoll::Ready((completed, diagnostics))
+            LatestJobPoll::Ready((completed, mut diagnostics))
                 if Some(completed) == self.writing.observed =>
             {
+                crate::diagnostics::bind_document(&mut diagnostics, completed.0);
                 let mut starts = vec![0];
                 for (index, ch) in self.document().source().chars().enumerate() {
                     if ch == '\n' {
@@ -185,6 +195,7 @@ impl EditorApp {
         }
         let checker = Arc::clone(&self.writing.checker);
         let dictionary = Arc::clone(&self.writing.dictionary);
+        let rules = Arc::clone(&self.writing.tex_prose_rules);
         let ignore_capitalized_names = self.writing.ignore_capitalized_names;
         if let Err(error) =
             self.writing
@@ -208,6 +219,7 @@ impl EditorApp {
                             crate::writing::Options {
                                 dictionary: &dictionary,
                                 ignore_capitalized_names,
+                                tex_prose_rules: Some(&rules),
                             },
                         ),
                     ))
@@ -237,6 +249,7 @@ mod tests {
         app.update_writing_checks(&context);
         let old = app.writing.observed.unwrap();
         let stale = vec![Diagnostic {
+            correction: None,
             provider: Some("Harper".into()),
             severity: DiagnosticSeverity::Help,
             source: DiagnosticSource::Main,
@@ -375,6 +388,7 @@ mod tests {
         let previous = app.writing.observed.unwrap();
         app.writing.deadline = None;
         let obsolete = Diagnostic {
+            correction: None,
             provider: Some("Harper".into()),
             severity: DiagnosticSeverity::Help,
             source: DiagnosticSource::Main,

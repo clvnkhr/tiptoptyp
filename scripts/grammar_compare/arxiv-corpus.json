@@ -1,0 +1,3886 @@
+{
+  "version": 1,
+  "description": "Expanded developer grammar comparison: original64 baseline cases plus94 author-first arXiv observations.56 self-contained arXiv sentences have pre-reviewed, nonexhaustive minimal references;38 excerpts or interpretation-dependent passages are exploratory and unscored. This is not a representative held-out benchmark. ArXiv mathematical typography is normalized but formula glyphs are not replaced with MATH: inspect protected-text changes for formatting or unsupported-character effects, not automatically semantic damage.",
+  "collection_counts": {
+    "baseline": 64,
+    "arxiv": 94,
+    "arxiv_scored": 56,
+    "arxiv_unscored": 38
+  },
+  "source_collection": "docs/grammar-comparison/2026-10-20/arxiv-additions.html; previous40 passages recovered from the same conversation, preserving source URLs and locations.",
+  "review_notes": [
+    "All 27 have at least one clear grammatical or construction error in the local sentence; no sentence is labelled ungrammatical solely because of mathematical shorthand or an optional style preference.",
+    "ARXIV-055 has several grammatical repairs of the condition; additional semantically equivalent outputs require human review.",
+    "ARXIV-085 articles are explicitly optional because mathematical domain labels can be bare.",
+    "ARXIV-088 allows deleting of or restoring the evident variable R; exact intended original wording is unknowable, but both references preserve the stated mathematics.",
+    "No model outputs were consulted when setting these references.",
+    "All references were fixed before any expanded-run model outputs were available.",
+    "The three earlier context-dependent full sentences and all35 incomplete excerpts are unscored; results are displayed for review only.",
+    "The arXiv set contains known error candidates only. False alarms are measured by the original32 correct baseline controls, not by this all-error collection.",
+    "Strict protected strings include mathematical typography. Formatting-only edits can trigger review flags; do not call all such flags mathematical corruption.",
+    "No thresholds, prompts or model options were tuned on this expanded collection."
+  ],
+  "cases": [
+    {
+      "id": "clean-agreement",
+      "category": "unchanged",
+      "text": "These estimates hold for every bounded operator.",
+      "expected": "These estimates hold for every bounded operator.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-an",
+      "category": "unchanged",
+      "text": "An unbounded operator need not be continuous.",
+      "expected": "An unbounded operator need not be continuous.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-a-unique",
+      "category": "unchanged",
+      "text": "The equation has a unique solution.",
+      "expected": "The equation has a unique solution.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-a-one",
+      "category": "unchanged",
+      "text": "We construct a one-parameter semigroup.",
+      "expected": "We construct a one-parameter semigroup.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-tao-straight",
+      "category": "unchanged",
+      "text": "Tao's argument applies to this operator.",
+      "expected": "Tao's argument applies to this operator.",
+      "format": "plain",
+      "protected": [
+        "Tao's"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-tao-curly",
+      "category": "unchanged",
+      "text": "Tao’s argument applies to this operator.",
+      "expected": "Tao’s argument applies to this operator.",
+      "format": "plain",
+      "protected": [
+        "Tao’s"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-mathematicians",
+      "category": "unchanged",
+      "text": "Barbato and Romito proved the corresponding result.",
+      "expected": "Barbato and Romito proved the corresponding result.",
+      "format": "plain",
+      "protected": [
+        "Barbato",
+        "Romito"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-semigroup",
+      "category": "unchanged",
+      "text": "The semigroup preserves nonnegative functions.",
+      "expected": "The semigroup preserves nonnegative functions.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-nonautonomous",
+      "category": "unchanged",
+      "text": "The nonautonomous equation admits a mild solution.",
+      "expected": "The nonautonomous equation admits a mild solution.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-well-posedness",
+      "category": "unchanged",
+      "text": "We establish local well-posedness in the energy space.",
+      "expected": "We establish local well-posedness in the energy space.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-british-behaviour",
+      "category": "unchanged",
+      "text": "We minimise the energy to characterise the asymptotic behaviour.",
+      "expected": "We minimise the energy to characterise the asymptotic behaviour.",
+      "format": "plain",
+      "notes": "British spelling is intentional; dialect conversion is not a grammar correction.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-british-centre",
+      "category": "unchanged",
+      "text": "We recognise the centre of the ball by its symmetry.",
+      "expected": "We recognise the centre of the ball by its symmetry.",
+      "format": "plain",
+      "notes": "British spelling is intentional; dialect conversion is not a grammar correction.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-hypotheses",
+      "category": "unchanged",
+      "text": "These hypotheses imply that the solution is smooth.",
+      "expected": "These hypotheses imply that the solution is smooth.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-zero-article",
+      "category": "unchanged",
+      "text": "We prove uniqueness without assuming compactness.",
+      "expected": "We prove uniqueness without assuming compactness.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-chosen",
+      "category": "unchanged",
+      "text": "The basis has been chosen independently of the parameter.",
+      "expected": "The basis has been chosen independently of the parameter.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-legitimate-repetition",
+      "category": "unchanged",
+      "text": "We show that that operator is bounded.",
+      "expected": "We show that that operator is bounded.",
+      "format": "plain",
+      "notes": "Both occurrences of that are grammatical: the first introduces a clause and the second modifies operator. Removing an optional clause introducer is unnecessary rewriting, not a required grammar correction.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-its",
+      "category": "unchanged",
+      "text": "The operator is bounded, and its norm is finite.",
+      "expected": "The operator is bounded, and its norm is finite.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-plural-possessive",
+      "category": "unchanged",
+      "text": "The authors' estimates agree.",
+      "expected": "The authors' estimates agree.",
+      "format": "plain",
+      "protected": [
+        "authors'"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-name-reference",
+      "category": "unchanged",
+      "text": "The result of Leray remains valid in this setting.",
+      "expected": "The result of Leray remains valid in this setting.",
+      "format": "plain",
+      "protected": [
+        "Leray"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-inline-math",
+      "category": "unchanged",
+      "text": "The norm MATH is finite.",
+      "expected": "The norm MATH is finite.",
+      "format": "tex",
+      "source": "The norm $\\lVert u\\rVert_{H^s}$ is finite.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-bound-control",
+      "category": "unchanged",
+      "text": "If this bound holds, then the solution exists.",
+      "expected": "If this bound holds, then the solution exists.",
+      "format": "plain",
+      "notes": "Plain-language control for the following display-math projection cases.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-tex-display-comma",
+      "category": "unchanged",
+      "text": "If MATH, then the solution exists.",
+      "expected": "If MATH, then the solution exists.",
+      "format": "tex",
+      "source": "If\n\\[\n  \\lVert u\\rVert_{H^s} \\leq C,\n\\]\nthen the solution exists.",
+      "protected": [
+        "MATH"
+      ],
+      "notes": "The comma inside display math remains sentence punctuation in the reviewed projection.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-typst-display-comma",
+      "category": "unchanged",
+      "text": "If MATH, then the solution exists.",
+      "expected": "If MATH, then the solution exists.",
+      "format": "typst",
+      "source": "If\n$\n  norm(u)_(H^s) <= C,\n$\nthen the solution exists.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-tex-display-period",
+      "category": "unchanged",
+      "text": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "expected": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "format": "tex",
+      "source": "The energy satisfies\n\\begin{equation}\n  E(t) \\leq E(0).\n\\end{equation}\nTherefore, the solution is bounded.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-typst-display-period",
+      "category": "unchanged",
+      "text": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "expected": "The energy satisfies MATH. Therefore, the solution is bounded.",
+      "format": "typst",
+      "source": "The energy satisfies\n$\n  E(t) <= E(0).\n$\nTherefore, the solution is bounded.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-tex-text-in-math",
+      "category": "unchanged",
+      "text": "The operator is bounded and the solution is unique.",
+      "expected": "The operator is bounded and the solution is unique.",
+      "format": "tex",
+      "source": "\\[\\text{The operator is bounded and the solution is unique.}\\]",
+      "notes": "Natural-language content inside a math text command is retained, with no placeholder.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-typst-text-in-math",
+      "category": "unchanged",
+      "text": "The operator is bounded and the solution is unique.",
+      "expected": "The operator is bounded and the solution is unique.",
+      "format": "typst",
+      "source": "$ text(\"The operator is bounded and the solution is unique.\") $",
+      "notes": "Natural-language content inside math text is retained, with no placeholder.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-math-clause",
+      "category": "unchanged",
+      "text": "Since MATH, the estimate follows.",
+      "expected": "Since MATH, the estimate follows.",
+      "format": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe estimate follows.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-tex-macro",
+      "category": "unchanged",
+      "text": "We use the estimate MATH throughout this proof.",
+      "expected": "We use the estimate MATH throughout this proof.",
+      "format": "tex",
+      "source": "We use the estimate $\\energyBound$ throughout this proof.",
+      "protected": [
+        "MATH"
+      ],
+      "notes": "The macro is represented by the protected math placeholder, not passed to the grammar model as prose.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-number",
+      "category": "unchanged",
+      "text": "The constant 3.14159 is positive.",
+      "expected": "The constant 3.14159 is positive.",
+      "format": "plain",
+      "protected": [
+        "3.14159"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-equation-reference",
+      "category": "unchanged",
+      "text": "Equation (12) gives the required estimate.",
+      "expected": "Equation (12) gives the required estimate.",
+      "format": "plain",
+      "protected": [
+        "(12)"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "clean-typst-macro",
+      "category": "unchanged",
+      "text": "For MATH, the nonautonomous equation is well-posed.",
+      "expected": "For MATH, the nonautonomous equation is well-posed.",
+      "format": "typst",
+      "source": "For $energy-bound$, the nonautonomous equation is well-posed.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "missing-indefinite-article",
+      "category": "article",
+      "text": "Let T be bounded operator on this space.",
+      "expected": "Let T be a bounded operator on this space.",
+      "format": "plain",
+      "protected": [
+        "T"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "article-before-unbounded",
+      "category": "article",
+      "text": "We construct a unbounded operator.",
+      "expected": "We construct an unbounded operator.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "article-before-unique",
+      "category": "article",
+      "text": "The equation has an unique solution.",
+      "expected": "The equation has a unique solution.",
+      "format": "plain",
+      "notes": "Plain-language control for the projected-math article cases.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "article-before-one",
+      "category": "article",
+      "text": "This is an one-parameter semigroup.",
+      "expected": "This is a one-parameter semigroup.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "agreement-estimates",
+      "category": "agreement",
+      "text": "These estimates holds for every bounded operator.",
+      "expected": "These estimates hold for every bounded operator.",
+      "format": "plain",
+      "notes": "Plain-language control for the projected-math agreement cases.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "agreement-theorems",
+      "category": "agreement",
+      "text": "The two theorems has the same conclusion.",
+      "expected": "The two theorems have the same conclusion.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "agreement-operator",
+      "category": "agreement",
+      "text": "This operator commute with the projection.",
+      "expected": "This operator commutes with the projection.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "agreement-each",
+      "category": "agreement",
+      "text": "Each operator are bounded.",
+      "expected": "Each operator is bounded.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "agreement-exist",
+      "category": "agreement",
+      "text": "There exists two distinct solutions.",
+      "expected": "There exist two distinct solutions.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "verb-perfect",
+      "category": "verb",
+      "text": "We have prove the estimate.",
+      "expected": "We have proved the estimate.",
+      "format": "plain",
+      "accepted": [
+        "We have proven the estimate."
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "verb-passive",
+      "category": "verb",
+      "text": "The estimate has been prove.",
+      "expected": "The estimate has been proved.",
+      "format": "plain",
+      "accepted": [
+        "The estimate has been proven."
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "verb-chosen",
+      "category": "verb",
+      "text": "The parameter can be chose independently.",
+      "expected": "The parameter can be chosen independently.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "verb-did",
+      "category": "verb",
+      "text": "The constant did not depended on time.",
+      "expected": "The constant did not depend on time.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "verb-does",
+      "category": "verb",
+      "text": "The bound does not depends on the parameter.",
+      "expected": "The bound does not depend on the parameter.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "number-solutions",
+      "category": "number",
+      "text": "We obtain two distinct solution.",
+      "expected": "We obtain two distinct solutions.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "number-estimates",
+      "category": "number",
+      "text": "Several estimate are needed.",
+      "expected": "Several estimates are needed.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "number-bounds",
+      "category": "number",
+      "text": "These bound hold uniformly in time.",
+      "expected": "These bounds hold uniformly in time.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "number-hypotheses",
+      "category": "number",
+      "text": "These hypothesis imply uniqueness.",
+      "expected": "These hypotheses imply uniqueness.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "possessive-its",
+      "category": "possessive",
+      "text": "The operator is bounded, and it's norm is finite.",
+      "expected": "The operator is bounded, and its norm is finite.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "contraction-it-is",
+      "category": "possessive",
+      "text": "Its clear that the solution exists.",
+      "expected": "It's clear that the solution exists.",
+      "format": "plain",
+      "accepted": [
+        "It is clear that the solution exists."
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "repetition-the",
+      "category": "repetition",
+      "text": "The the operator is bounded.",
+      "expected": "The operator is bounded.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "repetition-of",
+      "category": "repetition",
+      "text": "The norm of of the solution is finite.",
+      "expected": "The norm of the solution is finite.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "repetition-we",
+      "category": "repetition",
+      "text": "In this section, we we prove uniqueness.",
+      "expected": "In this section, we prove uniqueness.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "repetition-since",
+      "category": "repetition",
+      "text": "Since since the operator is bounded, the norm is finite.",
+      "expected": "Since the operator is bounded, the norm is finite.",
+      "format": "plain",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "tex-display-article",
+      "category": "article",
+      "text": "We obtain an unique solution from MATH.",
+      "expected": "We obtain a unique solution from MATH.",
+      "format": "tex",
+      "source": "We obtain an unique solution from\n\\[\n  E(t) \\leq C.\n\\]",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "typst-display-article",
+      "category": "article",
+      "text": "We obtain an unique solution from MATH.",
+      "expected": "We obtain a unique solution from MATH.",
+      "format": "typst",
+      "source": "We obtain an unique solution from\n$\n  E(t) <= C.\n$",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "tex-display-agreement",
+      "category": "agreement",
+      "text": "The estimates MATH holds uniformly in time.",
+      "expected": "The estimates MATH hold uniformly in time.",
+      "format": "tex",
+      "source": "The estimates\n\\begin{align}\n  E(t) &\\leq C, & D(t) &\\leq C\n\\end{align}\nholds uniformly in time.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "typst-display-agreement",
+      "category": "agreement",
+      "text": "The estimates MATH holds uniformly in time.",
+      "expected": "The estimates MATH hold uniformly in time.",
+      "format": "typst",
+      "source": "The estimates\n$\n  E(t) &<= C, & D(t) &<= C\n$\nholds uniformly in time.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "tex-display-clause",
+      "category": "agreement",
+      "text": "Since MATH, the solution remain bounded.",
+      "expected": "Since MATH, the solution remains bounded.",
+      "format": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe solution remain bounded.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "typst-display-clause",
+      "category": "agreement",
+      "text": "Since MATH, the solution remain bounded.",
+      "expected": "Since MATH, the solution remains bounded.",
+      "format": "typst",
+      "source": "Since\n$\n  E(t) <= C,\n$\nthe solution remain bounded.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "tex-text-in-math-agreement",
+      "category": "agreement",
+      "text": "The operator are bounded.",
+      "expected": "The operator is bounded.",
+      "format": "tex",
+      "source": "\\[\\text{The operator are bounded.}\\]",
+      "notes": "The error is in natural-language content inside math, not in the formula.",
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "typst-inline-article",
+      "category": "article",
+      "text": "We obtain a estimate from MATH.",
+      "expected": "We obtain an estimate from MATH.",
+      "format": "typst",
+      "source": "We obtain a estimate from $norm(u) <= C$.",
+      "protected": [
+        "MATH"
+      ],
+      "cohort": "baseline",
+      "kind": "sentence"
+    },
+    {
+      "id": "arxiv-math-0607456",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "with the nonlinear term F(u) is equal either to f(u) or to Q(D)f(u)",
+      "citation": {
+        "title": "arXiv math/0607456v2",
+        "url": "https://arxiv.org/pdf/math/0607456v2#page=1",
+        "location": "p.1"
+      },
+      "notes": "Finite verb inside a malformed with construction. Remove the copula or use a relative clause. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed.",
+      "protected": [
+        "F(u)",
+        "f(u)",
+        "Q(D)f(u)"
+      ]
+    },
+    {
+      "id": "arxiv-math-0607458",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "i.e. which satisfies the MHD equations in distribution sense, and satisfying the energy estimate (1.6).",
+      "citation": {
+        "title": "arXiv math/0607458v3",
+        "url": "https://arxiv.org/pdf/math/0607458v3#page=2",
+        "location": "p.2"
+      },
+      "notes": "Broken attachment and nonparallel verbs. Make the defining properties parallel; repair the distributional phrase. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed.",
+      "protected": [
+        "MHD",
+        "(1.6)"
+      ]
+    },
+    {
+      "id": "arxiv-1209-3096",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "As we know, there is no pointwise criteria for the critical problem, GWP and scattering result are simultaneously solved in general.",
+      "citation": {
+        "title": "arXiv 1209.3096v3",
+        "url": "https://arxiv.org/pdf/1209.3096v3#page=3",
+        "location": "p.3"
+      },
+      "notes": "Comma splice plus number/determiner problems. Separate the clauses and repair agreement without changing the mathematical claim. Unscored: the intended attachment or mathematical claim needs contextual interpretation, so no single gold rewrite is prescribed. The number error in criteria and comma splice are clear, but the expression about results being solved has no unique meaning-preserving repair from this isolated sentence.",
+      "protected": [
+        "GWP"
+      ]
+    },
+    {
+      "id": "arxiv-1803-00075",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "While in focusing energy critical cases, the Morawetz estimates (1.3) fails.",
+      "citation": {
+        "title": "arXiv 1803.00075v1",
+        "url": "https://arxiv.org/pdf/1803.00075v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "Subordinate-clause fragment and agreement error. Remove or properly attach the opening conjunction; use a plural verb. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "In focusing energy critical cases, the Morawetz estimates (1.3) fail.",
+      "accepted": [
+        "However, in focusing energy critical cases, the Morawetz estimates (1.3) fail.",
+        "In focusing energy-critical cases, the Morawetz estimates (1.3) fail."
+      ],
+      "protected": [
+        "Morawetz",
+        "(1.3)"
+      ]
+    },
+    {
+      "id": "arxiv-1011-6214",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "although the problem that whether the equation has global regularity or not is still open, some partial results have been proved.",
+      "citation": {
+        "title": "arXiv 1011.6214v1",
+        "url": "https://arxiv.org/pdf/1011.6214v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "Malformed embedded question. Remove the redundant noun/complementiser construction or use a grammatical question-of-whether construction. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed."
+    },
+    {
+      "id": "arxiv-0910-0311",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Section 2 is devoted to present some preparatory results on Besov spaces.",
+      "citation": {
+        "title": "arXiv 0910.0311v1",
+        "url": "https://arxiv.org/pdf/0910.0311v1#page=3",
+        "location": "p.3"
+      },
+      "notes": "The construction requires a gerund: presenting. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Section 2 is devoted to presenting some preparatory results on Besov spaces.",
+      "protected": [
+        "2",
+        "Besov"
+      ]
+    },
+    {
+      "id": "arxiv-1901-01489",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "The cone condition imposed on C is that for every ζ∈Γz₀, there is one principal curvature does not vanish.",
+      "citation": {
+        "title": "arXiv 1901.01489v1",
+        "url": "https://arxiv.org/pdf/1901.01489v1#page=1",
+        "location": "p.1"
+      },
+      "notes": "Missing relative-clause connector after curvature. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "The cone condition imposed on C is that for every ζ∈Γz₀, there is one principal curvature that does not vanish.",
+      "accepted": [
+        "The cone condition imposed on C is that for every ζ∈Γz₀, there is one principal curvature which does not vanish."
+      ],
+      "protected": [
+        "C",
+        "ζ∈Γz₀"
+      ]
+    },
+    {
+      "id": "arxiv-2001-08574",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "Among which the prototypical example is Schrödinger operator, of which local smoothing estimate finds extensive application in various aspects.",
+      "citation": {
+        "title": "arXiv 2001.08574v1",
+        "url": "https://arxiv.org/pdf/2001.08574v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "Sentence fragment, missing articles and malformed possessive relative clause. Make the opening independent and repair the relative construction. Unscored: the intended attachment or mathematical claim needs contextual interpretation, so no single gold rewrite is prescribed. The antecedent of Among which is outside this sentence; restructuring it without the surrounding paragraph could change its reference.",
+      "protected": [
+        "Schrödinger"
+      ]
+    },
+    {
+      "id": "arxiv-2107-05299",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "If the maximal interval of existence Imax=(T−(u),T+(u))=ℝ, we call the solution u is global.",
+      "citation": {
+        "title": "arXiv 2107.05299v1",
+        "url": "https://arxiv.org/pdf/2107.05299v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "Invalid object-complement construction: remove is. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "If the maximal interval of existence Imax=(T−(u),T+(u))=ℝ, we call the solution u global.",
+      "protected": [
+        "Imax=(T−(u),T+(u))=ℝ",
+        "u"
+      ]
+    },
+    {
+      "id": "arxiv-2201-01021",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "For n = 2, this conjecture has been completely established, one may refer to [21].",
+      "citation": {
+        "title": "arXiv 2201.01021v1",
+        "url": "https://arxiv.org/pdf/2201.01021v1#page=11",
+        "location": "p.11"
+      },
+      "notes": "Two independent clauses joined by a comma. Use a semicolon or sentence boundary. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "For n = 2, this conjecture has been completely established; one may refer to [21].",
+      "accepted": [
+        "For n = 2, this conjecture has been completely established. One may refer to [21]."
+      ],
+      "protected": [
+        "n = 2",
+        "[21]"
+      ]
+    },
+    {
+      "id": "arxiv-1901-01487",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "If this conjecture would have been proved, then it would imply positive answers to a number of open conjectures",
+      "citation": {
+        "title": "arXiv 1901.01487v1",
+        "url": "https://arxiv.org/pdf/1901.01487v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "Review: inconsistent conditional construction. A prospective reading calls for were proved; a past counterfactual needs a different repair. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed. The prospective versus past-counterfactual reading must be recovered from the omitted continuation before choosing a tense reference."
+    },
+    {
+      "id": "arxiv-2010-14390",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Although FIO was introduced to study Conjecture 1.2, the numerology for their local smoothing conjectures are yet again different.",
+      "citation": {
+        "title": "arXiv 2010.14390v1",
+        "url": "https://arxiv.org/pdf/2010.14390v1#page=3",
+        "location": "p.3"
+      },
+      "notes": "Agreement across an intervening phrase: the main subject is singular numerology. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Although FIO was introduced to study Conjecture 1.2, the numerology for their local smoothing conjectures is yet again different.",
+      "protected": [
+        "FIO",
+        "Conjecture 1.2"
+      ]
+    },
+    {
+      "id": "arxiv-2012-04805",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "The basic question is that how to control the uniform estimates of the solution of (1.1).",
+      "citation": {
+        "title": "arXiv 2012.04805v1",
+        "url": "https://arxiv.org/html/2012.04805v1#S1",
+        "location": "§1"
+      },
+      "notes": "Malformed embedded question. Delete that. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "The basic question is how to control the uniform estimates of the solution of (1.1).",
+      "protected": [
+        "(1.1)"
+      ]
+    },
+    {
+      "id": "arxiv-2112-07936",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "Is there any other function ϕ vanishing at infinity satisfies Lϕ(x)=0, except that belongs to the set N defined by (1.8)?",
+      "citation": {
+        "title": "arXiv 2112.07936v1",
+        "url": "https://arxiv.org/html/2112.07936v1#S1",
+        "location": "§1"
+      },
+      "notes": "Two broken relative constructions. Review: repair both while preserving the question about functions outside the known kernel. Unscored: the intended attachment or mathematical claim needs contextual interpretation, so no single gold rewrite is prescribed. The scope of except and its intended relation to the kernel must be reviewed in context; a fluent rewrite could reverse the question.",
+      "protected": [
+        "ϕ",
+        "Lϕ(x)=0",
+        "N",
+        "(1.8)"
+      ]
+    },
+    {
+      "id": "arxiv-2406-05614",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "the remaider with low-frequency-localized initial data, which energy is almost conserved for arbitrarily large time T if choosing the frequency cutoff carefully",
+      "citation": {
+        "title": "arXiv 2406.05614v3",
+        "url": "https://arxiv.org/html/2406.05614v3#S1",
+        "location": "§1"
+      },
+      "notes": "Possession requires whose; the misspelling becomes remainder. Avoid imposing additional stylistic changes. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed.",
+      "protected": [
+        "T"
+      ]
+    },
+    {
+      "id": "arxiv-2208-02065",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "Recently, Killip, Miao, etc, make use of by the Calderón–Zygmund singular integral operator theory",
+      "citation": {
+        "title": "arXiv 2208.02065v1",
+        "url": "https://arxiv.org/pdf/2208.02065v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "Two constructions have been merged. Remove the extra preposition by. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed.",
+      "protected": [
+        "Killip",
+        "Miao",
+        "Calderón–Zygmund"
+      ]
+    },
+    {
+      "id": "arxiv-2310-14646",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "Our goal is to classify the threshold solutions with u₀∈Ḣ¹(ℝᴺ) is radial, and E(u₀)=E(W).",
+      "citation": {
+        "title": "arXiv 2310.14646v2",
+        "url": "https://arxiv.org/html/2310.14646v2#S1",
+        "location": "§1"
+      },
+      "notes": "Malformed construction crossing displayed mathematics. Recast the initial-data conditions as parallel properties, preserving both hypotheses. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Our goal is to classify the threshold solutions for which u₀∈Ḣ¹(ℝᴺ) is radial and E(u₀)=E(W).",
+      "accepted": [
+        "Our goal is to classify the threshold solutions with radial u₀∈Ḣ¹(ℝᴺ) and E(u₀)=E(W)."
+      ],
+      "protected": [
+        "u₀∈Ḣ¹(ℝᴺ)",
+        "E(u₀)=E(W)"
+      ]
+    },
+    {
+      "id": "arxiv-1910-11150",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "From now on, we fix p>5 and Ω=Ω(p,γ)>γ²/4 is determined by (1.7).",
+      "citation": {
+        "title": "arXiv 1910.11150v1",
+        "url": "https://arxiv.org/html/1910.11150v1#S2",
+        "location": "§2"
+      },
+      "notes": "Mixed coordination: Ω is simultaneously presented as an object and a clause’s subject. Separate what is fixed from how it is determined. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "From now on, we fix p>5 and Ω=Ω(p,γ)>γ²/4, where Ω is determined by (1.7).",
+      "accepted": [
+        "From now on, we fix p>5 and Ω=Ω(p,γ)>γ²/4, with Ω determined by (1.7)."
+      ],
+      "protected": [
+        "p>5",
+        "Ω=Ω(p,γ)>γ²/4",
+        "(1.7)"
+      ]
+    },
+    {
+      "id": "arxiv-0807-0692",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "In this case, one need to control of motion of spatial translation of the soliton solution",
+      "citation": {
+        "title": "arXiv 0807.0692v1",
+        "url": "https://arxiv.org/pdf/0807.0692v1#page=3",
+        "location": "p.3"
+      },
+      "notes": "Agreement plus malformed verb object. The local repair is needs to control the motion. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed."
+    },
+    {
+      "id": "arxiv-0801-0019",
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "Similar as in [12], it is still open that scattering for the general data",
+      "citation": {
+        "title": "arXiv 0801.0019v2",
+        "url": "https://arxiv.org/pdf/0801.0019v2#page=3",
+        "location": "p.3"
+      },
+      "notes": "Broken introductory comparison and an incomplete embedded clause. Recast using a whether-clause with a finite verb, retaining the subsequent energy assumptions. Unscored: exact excerpt from a larger sentence; missing context is not a grammar error and no sentence completion is prescribed. The subsequent energy assumptions were not included in the quote and must not be fabricated by a grammar model.",
+      "protected": [
+        "[12]"
+      ]
+    },
+    {
+      "id": "arxiv-1608-02048",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Lately, this results was improved in [3] to the critical Lᵖ framework.",
+      "citation": {
+        "title": "arXiv 1608.02048v1",
+        "url": "https://arxiv.org/pdf/1608.02048v1#page=3",
+        "location": "p.3"
+      },
+      "notes": "results → result Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Lately, this result was improved in [3] to the critical Lᵖ framework.",
+      "protected": [
+        "[3]",
+        "Lᵖ"
+      ]
+    },
+    {
+      "id": "arxiv-2307-12197",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Our methods can be used to other related models.",
+      "citation": {
+        "title": "arXiv 2307.12197v2",
+        "url": "https://arxiv.org/pdf/2307.12197v2#page=2",
+        "location": "Remark 1.4"
+      },
+      "notes": "to → for Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Our methods can be used for other related models.",
+      "accepted": [
+        "Our methods can be applied to other related models.",
+        "Our methods can be used on other related models."
+      ]
+    },
+    {
+      "id": "arxiv-2106-10501",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "However, there has rather few results about the inviscid Hall-MHD system (1.1).",
+      "citation": {
+        "title": "arXiv 2106.10501v1",
+        "url": "https://arxiv.org/pdf/2106.10501v1#page=1",
+        "location": "p.1"
+      },
+      "notes": "has → are Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "However, there are rather few results about the inviscid Hall-MHD system (1.1).",
+      "accepted": [
+        "However, there have been rather few results about the inviscid Hall-MHD system (1.1)."
+      ],
+      "protected": [
+        "Hall-MHD",
+        "(1.1)"
+      ]
+    },
+    {
+      "id": "arxiv-1212-0499",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "We finally combines the solutions in Region 1,2,3 and 4 to finish the construction.",
+      "citation": {
+        "title": "arXiv 1212.0499v4",
+        "url": "https://arxiv.org/pdf/1212.0499v4#page=6",
+        "location": "§2.4"
+      },
+      "notes": "combines → combine; Region → Regions Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "We finally combine the solutions in Regions 1,2,3 and 4 to finish the construction.",
+      "accepted": [
+        "We finally combine the solutions in Regions 1, 2, 3 and 4 to finish the construction.",
+        "We finally combine the solutions in Regions 1, 2, 3, and 4 to finish the construction."
+      ],
+      "protected": [
+        "1",
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    {
+      "id": "arxiv-2107-05350",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Compared to the weak solutions, there are relative fruitful results on the strong solutions.",
+      "citation": {
+        "title": "arXiv 2107.05350v2",
+        "url": "https://arxiv.org/pdf/2107.05350v2#page=2",
+        "location": "p.2"
+      },
+      "notes": "relative → relatively Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Compared to the weak solutions, there are relatively fruitful results on the strong solutions."
+    },
+    {
+      "id": "arxiv-1111-2203",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Whether similar result can be generalized to the case of two dimensional space remains unknown.",
+      "citation": {
+        "title": "arXiv 1111.2203v2",
+        "url": "https://arxiv.org/pdf/1111.2203v2#page=3",
+        "location": "Remark 1.3"
+      },
+      "notes": "Insert a before similar. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Whether a similar result can be generalized to the case of two dimensional space remains unknown.",
+      "accepted": [
+        "Whether a similar result can be generalized to the case of two-dimensional space remains unknown."
+      ]
+    },
+    {
+      "id": "arxiv-2412-10013",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "We work over the complex number ℂ.",
+      "citation": {
+        "title": "arXiv 2412.10013v2",
+        "url": "https://arxiv.org/pdf/2412.10013v2#page=2",
+        "location": "§1.1"
+      },
+      "notes": "number → numbers Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "We work over the complex numbers ℂ.",
+      "accepted": [
+        "We work over the field of complex numbers ℂ.",
+        "We work over the complex number field ℂ."
+      ],
+      "protected": [
+        "ℂ"
+      ]
+    },
+    {
+      "id": "arxiv-2509-12640",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Next, we present some results about the the second largest distance eigenvalue.",
+      "citation": {
+        "title": "arXiv 2509.12640v1",
+        "url": "https://arxiv.org/pdf/2509.12640v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "Delete one the. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Next, we present some results about the second largest distance eigenvalue."
+    },
+    {
+      "id": "arxiv-2507-11078",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "In this paper, all graphs considered are assumed to simple and undirected.",
+      "citation": {
+        "title": "arXiv 2507.11078v1",
+        "url": "https://arxiv.org/pdf/2507.11078v1#page=1",
+        "location": "p.1"
+      },
+      "notes": "Insert be after to. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "In this paper, all graphs considered are assumed to be simple and undirected."
+    },
+    {
+      "id": "arxiv-2410-00648",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Fan [8] proved the existence of f(k) by proved f(k) ≤ 3⌈k/2⌉.",
+      "citation": {
+        "title": "arXiv 2410.00648v2",
+        "url": "https://arxiv.org/pdf/2410.00648v2#page=2",
+        "location": "p.2"
+      },
+      "notes": "Second proved → proving. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Fan [8] proved the existence of f(k) by proving f(k) ≤ 3⌈k/2⌉.",
+      "protected": [
+        "Fan",
+        "[8]",
+        "f(k)",
+        "3⌈k/2⌉"
+      ]
+    },
+    {
+      "id": "arxiv-2312-17035",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "We will introduce some notations and conventions in next subsection.",
+      "citation": {
+        "title": "arXiv 2312.17035v1",
+        "url": "https://arxiv.org/pdf/2312.17035v1#page=5",
+        "location": "§1.3"
+      },
+      "notes": "Insert the before next. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "We will introduce some notations and conventions in the next subsection."
+    },
+    {
+      "id": "arxiv-2507-15139",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Let k be an integers with k ≥ 2, and let G be a connected graph.",
+      "citation": {
+        "title": "arXiv 2507.15139v2",
+        "url": "https://arxiv.org/pdf/2507.15139v2#page=2",
+        "location": "Theorem 1.1"
+      },
+      "notes": "integers → integer Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Let k be an integer with k ≥ 2, and let G be a connected graph.",
+      "protected": [
+        "k",
+        "2",
+        "G"
+      ]
+    },
+    {
+      "id": "arxiv-2504-15314",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "A vertex v ∈ V(G) is called a cut vertex if G is disconnects after removing v.",
+      "citation": {
+        "title": "arXiv 2504.15314v1",
+        "url": "https://arxiv.org/pdf/2504.15314v1#page=2",
+        "location": "p.2"
+      },
+      "notes": "disconnects → disconnected Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "A vertex v ∈ V(G) is called a cut vertex if G is disconnected after removing v.",
+      "protected": [
+        "v",
+        "V(G)",
+        "G"
+      ]
+    },
+    {
+      "id": "arxiv-2504-09794",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "The bold edges indicate that all possible edges are present and have the directed shown.",
+      "citation": {
+        "title": "arXiv 2504.09794v2",
+        "url": "https://arxiv.org/pdf/2504.09794v2#page=2",
+        "location": "Figure 1"
+      },
+      "notes": "directed → direction Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "The bold edges indicate that all possible edges are present and have the direction shown."
+    },
+    {
+      "id": "arxiv-2312-15845",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Next, we will bound the the consensus error terms.",
+      "citation": {
+        "title": "arXiv 2312.15845v1",
+        "url": "https://arxiv.org/pdf/2312.15845v1#page=10",
+        "location": "§4"
+      },
+      "notes": "Delete one the. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Next, we will bound the consensus error terms."
+    },
+    {
+      "id": "arxiv-1611-04074",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "All these can be easily casted into an Empirical Risk Minimization(ERM) framework.",
+      "citation": {
+        "title": "arXiv 1611.04074v4",
+        "url": "https://arxiv.org/pdf/1611.04074v4#page=1",
+        "location": "p.1"
+      },
+      "notes": "casted → cast Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "All these can be easily cast into an Empirical Risk Minimization(ERM) framework.",
+      "accepted": [
+        "All these can be easily cast into an Empirical Risk Minimization (ERM) framework."
+      ],
+      "protected": [
+        "Empirical Risk Minimization",
+        "ERM"
+      ]
+    },
+    {
+      "id": "arxiv-1303-1600",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Higher order pathwise numerical approximations of SPDEs with additive noise was considered in [14].",
+      "citation": {
+        "title": "arXiv 1303.1600v1",
+        "url": "https://arxiv.org/pdf/1303.1600v1#page=1",
+        "location": "introduction"
+      },
+      "notes": "was → were Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Higher order pathwise numerical approximations of SPDEs with additive noise were considered in [14].",
+      "accepted": [
+        "Higher-order pathwise numerical approximations of SPDEs with additive noise were considered in [14]."
+      ],
+      "protected": [
+        "SPDEs",
+        "[14]"
+      ]
+    },
+    {
+      "id": "arxiv-2212-05273",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Based on above two lemmas, we obtain the following convergence properties.",
+      "citation": {
+        "title": "arXiv 2212.05273v1",
+        "url": "https://arxiv.org/html/2212.05273v1#S3.SS2",
+        "location": "§3.2"
+      },
+      "notes": "Insert the before above. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "Based on the above two lemmas, we obtain the following convergence properties."
+    },
+    {
+      "id": "arxiv-2510-10945",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "The descent direction g̃(xₜ) in above equation has been used in several works (Nesterov and Spokoiny 2017, Ye et al. 2025).",
+      "citation": {
+        "title": "arXiv 2510.10945v1",
+        "url": "https://arxiv.org/html/2510.10945v1#S4",
+        "location": "after (20)"
+      },
+      "notes": "Insert the before above. Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "The descent direction g̃(xₜ) in the above equation has been used in several works (Nesterov and Spokoiny 2017, Ye et al. 2025).",
+      "protected": [
+        "g̃(xₜ)",
+        "Nesterov",
+        "Spokoiny",
+        "2017",
+        "Ye",
+        "2025"
+      ]
+    },
+    {
+      "id": "arxiv-1309-6940",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "In this case, applying Luzin’s theorem, for each n>0, we can find an continuous mapping ϕ̃ₙ such that μₙ{y∈Sₙ;ϕₙ(y)≠ϕ̃ₙ(y)}<2⁻ⁿ.",
+      "citation": {
+        "title": "arXiv 1309.6940v1",
+        "url": "https://arxiv.org/pdf/1309.6940v1#page=4",
+        "location": "(2.4)"
+      },
+      "notes": "an → a Reviewed minimal reference; additional meaning-preserving grammatical rewrites may also be valid. Optional stylistic changes are not required.",
+      "expected": "In this case, applying Luzin’s theorem, for each n>0, we can find a continuous mapping ϕ̃ₙ such that μₙ{y∈Sₙ;ϕₙ(y)≠ϕ̃ₙ(y)}<2⁻ⁿ.",
+      "protected": [
+        "Luzin’s",
+        "n>0",
+        "ϕ̃ₙ",
+        "μₙ{y∈Sₙ;ϕₙ(y)≠ϕ̃ₙ(y)}<2⁻ⁿ"
+      ]
+    },
+    {
+      "id": "arxiv-041",
+      "category": "arxiv-construction",
+      "text": "So the orthogonality can be exploited and get the desired orthogonal relation similar to (9) (see Section 3).",
+      "expected": "So the orthogonality can be exploited to get the desired orthogonal relation similar to (9) (see Section 3).",
+      "format": "plain",
+      "notes": "Replace the invalid passive/active coordination with a purpose infinitive. The change from get to obtain is optional.",
+      "protected": [
+        "(9)",
+        "Section 3"
+      ],
+      "provenance": {
+        "id": "ARXIV-041",
+        "paper": "0801.3925v1",
+        "title": "Global well-posedness and scattering for the mass-critical Hartree equation with radial data",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Lifeng Zhao"
+        ],
+        "location": "Page 6, Section 1, paragraph following the non-symmetric spacetime-norm example",
+        "discovery": "site:arxiv.org \"Changxing Miao\" \"Guixiang Xu\" \"Lifeng Zhao\"",
+        "verification": "Version-pinned PDF, lines 460–463; read the preceding radial-solution discussion and both surrounding paragraphs.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "So the orthogonality can be exploited to obtain the desired orthogonal relation similar to (9) (see Section 3)."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Global well-posedness and scattering for the mass-critical Hartree equation with radial data",
+        "url": "https://arxiv.org/pdf/0801.3925v1#page=6",
+        "location": "Page 6, Section 1, paragraph following the non-symmetric spacetime-norm example",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Lifeng Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-042",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "Choose two nonnegative radial functions χ, ϕ ∈ D(Rⁿ) be supported respectively",
+      "notes": "Invalid finite/base verb after the imperative object: the support clause is missing its relative construction. Repair direction: Delete the copula before the support participle, or introduce a relative clause with a plural finite verb. Preserve both support conditions. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "0901.1368v6",
+        "title": "Global well-posedness for a modified critical dissipative quasi-geostrophic equation",
+        "authors": [
+          "Changxing Miao",
+          "Liutang Xue"
+        ],
+        "original": "Choose two nonnegative radial functions χ, ϕ ∈ D(Rⁿ) be supported respectively",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "Invalid finite/base verb after the imperative object: the support clause is missing its relative construction.",
+        "repair": "Delete the copula before the support participle, or introduce a relative clause with a plural finite verb. Preserve both support conditions.",
+        "location": "printed p.4, Section 2, Littlewood–Paley decomposition",
+        "url": "https://arxiv.org/pdf/0901.1368v6#page=4",
+        "discovery": "Author-first web query: site:arxiv.org \"Changxing Miao\" \"Xue\".",
+        "verification": "PDF lines 216–229; read surrounding definitions and the subsequent partition-of-unity equations.",
+        "context": "The imperative chooses a pair of smooth functions with supports in a ball and an annulus before the displayed partition identities.",
+        "categories": [
+          "verb_complement",
+          "relative_clause"
+        ],
+        "note": "",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 12,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-042"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Global well-posedness for a modified critical dissipative quasi-geostrophic equation",
+        "url": "https://arxiv.org/pdf/0901.1368v6#page=4",
+        "location": "printed p.4, Section 2, Littlewood–Paley decomposition",
+        "authors": [
+          "Changxing Miao",
+          "Liutang Xue"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-043",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "they showed that the scattering of the equation and relaxed the low regularity assumption given in the previous work [8].",
+      "notes": "The reporting complement starts with a clause introducer but contains only a noun phrase, followed by a coordinated finite verb. Repair direction: Remove the unnecessary complementiser and make both coordinated objects/actions grammatical, or provide a finite clause stating the scattering result. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "0907.5047v1",
+        "title": "Scattering theory below energy for the cubic fourth-order Schrödinger equation",
+        "authors": [
+          "Changxing Miao",
+          "Haigen Wu",
+          "Junyong Zhang"
+        ],
+        "original": "they showed that the scattering of the equation and relaxed the low regularity assumption given in the previous work [8].",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "The reporting complement starts with a clause introducer but contains only a noun phrase, followed by a coordinated finite verb.",
+        "repair": "Remove the unnecessary complementiser and make both coordinated objects/actions grammatical, or provide a finite clause stating the scattering result.",
+        "location": "printed p.2, Section 1, discussion after the Morawetz functional (1.2)",
+        "url": "https://arxiv.org/pdf/0907.5047v1#page=2",
+        "discovery": "Author-first web query: site:arxiv.org \"Changxing Miao\" \"Junyong Zhang\" -1209.3096.",
+        "verification": "PDF lines 82–90; preceding participial clause explains the combined Morawetz and almost-conservation argument.",
+        "context": "The passage credits prior authors with proving scattering and improving the regularity threshold.",
+        "categories": [
+          "verb_complement",
+          "coordination"
+        ],
+        "note": "",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 20,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-043"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Scattering theory below energy for the cubic fourth-order Schrödinger equation",
+        "url": "https://arxiv.org/pdf/0907.5047v1#page=2",
+        "location": "printed p.2, Section 1, discussion after the Morawetz functional (1.2)",
+        "authors": [
+          "Changxing Miao",
+          "Haigen Wu",
+          "Junyong Zhang"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-044",
+      "category": "arxiv-construction",
+      "text": "Clearly, W is a new solution which doesn’t satisfy neither conclusion in Theorem 1.1.",
+      "expected": "Clearly, W is a new solution which doesn’t satisfy either conclusion in Theorem 1.1.",
+      "format": "plain",
+      "notes": "Both theorem alternatives fail for W. Repair negative concord without reversing that meaning. Relative which/that substitution is not required.",
+      "protected": [
+        "W",
+        "Theorem 1.1"
+      ],
+      "provenance": {
+        "id": "ARXIV-044",
+        "paper": "1104.1229v1",
+        "title": "Dynamics for the focusing, energy-critical nonlinear Hartree equation",
+        "authors": [
+          "Changxing Miao",
+          "Yifei Wu",
+          "Guixiang Xu"
+        ],
+        "location": "Page 2, Section 1, paragraph immediately before Theorem 1.2",
+        "discovery": "site:arxiv.org \"Changxing Miao\" \"Yifei Wu\" \"Guixiang\"",
+        "verification": "Pinned primary HTML, line 133; cross-checked unversioned PDF with v1 header, lines 206–208.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "Clearly, W is a new solution which satisfies neither conclusion in Theorem 1.1.",
+        "Clearly, W is a new solution which does not satisfy either conclusion in Theorem 1.1."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Dynamics for the focusing, energy-critical nonlinear Hartree equation",
+        "url": "https://arxiv.org/html/1104.1229v1#S1",
+        "location": "Page 2, Section 1, paragraph immediately before Theorem 1.2",
+        "authors": [
+          "Changxing Miao",
+          "Yifei Wu",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-045",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "The solution lies in the space Lₜ,ₓ^((d+4)p/4)(I × Rᵈ) locally in time is natural",
+      "notes": "A finite declarative clause is placed directly in the subject position of another finite clause without nominalisation. Repair direction: Nominalise the opening assertion, or reformulate it as the natural requirement that the solution belongs to the specified space. Preserve the integrability exponent. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "1211.4668v1",
+        "title": "Scattering theory for the defocusing fourth-order Schrödinger equation",
+        "authors": [
+          "Changxing Miao",
+          "Jiqiang Zheng"
+        ],
+        "original": "The solution lies in the space Lₜ,ₓ^((d+4)p/4)(I × Rᵈ) locally in time is natural",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "A finite declarative clause is placed directly in the subject position of another finite clause without nominalisation.",
+        "repair": "Nominalise the opening assertion, or reformulate it as the natural requirement that the solution belongs to the specified space. Preserve the integrability exponent.",
+        "location": "printed p.2, Section 1, paragraph after Definition 1.1",
+        "url": "https://arxiv.org/pdf/1211.4668v1#page=2",
+        "discovery": "Author-first web query: site:arxiv.org \"Changxing Miao\" \"Jiqiang Zheng\" nonlinear wave.",
+        "verification": "PDF lines 146–153; next clause explains naturality using the Strichartz estimate.",
+        "context": "The authors explain why requiring this local space-time integrability is natural for a strong solution.",
+        "categories": [
+          "clause_structure",
+          "nominalisation"
+        ],
+        "note": "",
+        "normalization": "Mathematical layout only is flattened; prose words are unchanged.",
+        "quote_words_whitespace": 14,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-045"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Scattering theory for the defocusing fourth-order Schrödinger equation",
+        "url": "https://arxiv.org/pdf/1211.4668v1#page=2",
+        "location": "printed p.2, Section 1, paragraph after Definition 1.1",
+        "authors": [
+          "Changxing Miao",
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-046",
+      "category": "arxiv-construction",
+      "text": "In addtion, there are some numerical stability analysis and blowup results of (1.1) in the energy space, please refer to [2, 12].",
+      "expected": "In addition, there are some numerical stability analysis and blowup results of (1.1) in the energy space; please refer to [2, 12].",
+      "format": "plain",
+      "notes": "Correct addtion and the comma splice. Analysis can be a mass noun in this coordinated subject; plural analyses is not mandatory. Changing results of to results for is not required.",
+      "protected": [
+        "(1.1)",
+        "[2, 12]"
+      ],
+      "provenance": {
+        "id": "ARXIV-046",
+        "paper": "1702.07858v1",
+        "title": "Stability of the sum of two solitary waves for (gDNLS) in the energy space",
+        "authors": [
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ],
+        "location": "Page 2, introduction, just before the solitary-wave family",
+        "discovery": "site:arxiv.org \"Stability of the sum of two\" \"Xu\"",
+        "verification": "Primary PDF retrieved from unversioned URL explicitly identifies itself as v1; page 2, lines 125–127. Line-wrap hyphenation normalised.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "In addition, there are some numerical stability analysis and blowup results of (1.1) in the energy space. Please refer to [2, 12]."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Stability of the sum of two solitary waves for (gDNLS) in the energy space",
+        "url": "https://arxiv.org/pdf/1702.07858v1#page=2",
+        "location": "Page 2, introduction, just before the solitary-wave family",
+        "authors": [
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-047",
+      "category": "arxiv-construction",
+      "text": "If µ = 1, we call the Cauchy problem (NLS) is defocusing.",
+      "expected": "If µ = 1, we call the Cauchy problem (NLS) defocusing.",
+      "format": "plain",
+      "notes": "Remove is from the call + object + adjective construction. Alternatively change the reporting construction, not the mathematical sign. arXiv abstract metadata names Tengfei Zhang; the PDF title page instead prints Tengfei Zhao. Preserve this provenance discrepancy rather than silently resolving it.",
+      "protected": [
+        "µ = 1",
+        "(NLS)"
+      ],
+      "provenance": {
+        "id": "ARXIV-047",
+        "paper": "1711.10362v1",
+        "title": "On the 4D Nonlinear Schrödinger equation with combined terms under the energy threshold",
+        "authors": [
+          "Changxing Miao",
+          "Tengfei Zhang",
+          "Jiqiang Zheng"
+        ],
+        "location": "printed p.2, Section 1, defocusing case",
+        "discovery": "Author-first web query: site:arxiv.org \"Changxing Miao\" nonlinear wave equation.",
+        "verification": "PDF line 91; arXiv abs/1711.10362v1 separately checked for author metadata.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "If µ = 1, we say that the Cauchy problem (NLS) is defocusing."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On the 4D Nonlinear Schrödinger equation with combined terms under the energy threshold",
+        "url": "https://arxiv.org/pdf/1711.10362v1#page=2",
+        "location": "printed p.2, Section 1, defocusing case",
+        "authors": [
+          "Changxing Miao",
+          "Tengfei Zhang",
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-048",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "energy critical which leads that the spirits of the linear profiles and the profile decompositions are same.",
+      "notes": "Invalid causal verb-complement construction and missing article before sameness adjective. Repair direction: Use a grammatical causal construction and add the article in the final predicate; avoid replacing the technical intent with a style rewrite. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "provenance": {
+        "paper": "1712.01266v3",
+        "title": "On scattering for the defocusing nonlinear Schrödinger equation on waveguide Rm × T (when m=2,3)",
+        "authors": [
+          "Zehua Zhao"
+        ],
+        "original": "energy critical which leads that the spirits of the linear profiles and the profile decompositions are same.",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "Invalid causal verb-complement construction and missing article before sameness adjective.",
+        "repair": "Use a grammatical causal construction and add the article in the final predicate; avoid replacing the technical intent with a style rewrite.",
+        "location": "Page 3, 1 Introduction, comparison of the two problems",
+        "url": "https://arxiv.org/pdf/1712.01266v3#page=3",
+        "discovery": "site:arxiv.org \"Zehua Zhao\" \"scattering\"",
+        "verification": "PDF lines 177–182; excerpt from sentence identifying mass supercritical/energy critical similarity.",
+        "context": "PDF lines 177–182; excerpt from sentence identifying mass supercritical/energy critical similarity.",
+        "categories": [
+          "Invalid causal verb-complement construction and missing article before sameness adjective."
+        ],
+        "note": "Zehua Zhao coauthored 1809.04211 with Gao.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 17,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-048"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "On scattering for the defocusing nonlinear Schrödinger equation on waveguide Rm × T (when m=2,3)",
+        "url": "https://arxiv.org/pdf/1712.01266v3#page=3",
+        "location": "Page 3, 1 Introduction, comparison of the two problems",
+        "authors": [
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-049",
+      "category": "arxiv-construction",
+      "text": "It also figures in the time-dependent Landau-Ginzburg model of phase transitions, in this case the wave function u is a complex order parameter.",
+      "expected": "It also figures in the time-dependent Landau-Ginzburg model of phase transitions; in this case the wave function u is a complex order parameter.",
+      "format": "plain",
+      "notes": "Repair the comma splice. A comma after in this case is optional. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "protected": [
+        "Landau-Ginzburg",
+        "u"
+      ],
+      "provenance": {
+        "id": "ARXIV-049",
+        "paper": "1809.01527v1",
+        "title": "On scattering for the defocusing quintic nonlinear Schrödinger equation on the two-dimensional cylinder",
+        "authors": [
+          "Xing Cheng",
+          "Zihua Guo",
+          "Zehua Zhao"
+        ],
+        "location": "Page 2, 1 Introduction",
+        "discovery": "\"Zehua Zhao\" arxiv \"2018\"",
+        "verification": "PDF lines 58–64. Complete sentence in physical examples. 24-word quotation; do not quote target in full.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "It also figures in the time-dependent Landau-Ginzburg model of phase transitions. In this case the wave function u is a complex order parameter.",
+        "It also figures in the time-dependent Landau-Ginzburg model of phase transitions, and in this case the wave function u is a complex order parameter."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On scattering for the defocusing quintic nonlinear Schrödinger equation on the two-dimensional cylinder",
+        "url": "https://arxiv.org/pdf/1809.01527v1#page=2",
+        "location": "Page 2, 1 Introduction",
+        "authors": [
+          "Xing Cheng",
+          "Zihua Guo",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-050",
+      "category": "arxiv-construction",
+      "text": "It is worth noting that since the Lin-Strauss Morawetz inequality has a scale of Ḣ½ which is exactly suited for this setting.",
+      "expected": "It is worth noting that the Lin-Strauss Morawetz inequality has a scale of Ḣ½ which is exactly suited for this setting.",
+      "format": "plain",
+      "notes": "Delete since so that the clause after that is complete. Do not treat the mathematical scale description or relative which as an obligatory edit.",
+      "protected": [
+        "Lin-Strauss",
+        "Morawetz",
+        "Ḣ½"
+      ],
+      "provenance": {
+        "id": "ARXIV-050",
+        "paper": "1809.04211v1",
+        "title": "On scattering for the defocusing high dimensional inter-critical NLS",
+        "authors": [
+          "Chuanwei Gao",
+          "Zehua Zhao"
+        ],
+        "location": "Page 4, 1 Introduction",
+        "discovery": "Chuanwei Gao arxiv papers mathematics",
+        "verification": "PDF lines 279–287; prior sentence discusses Kenig–Merle, subsequent sentence discusses Murphy. Formula normalized to Ḣ½.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On scattering for the defocusing high dimensional inter-critical NLS",
+        "url": "https://arxiv.org/pdf/1809.04211v1#page=4",
+        "location": "Page 4, 1 Introduction",
+        "authors": [
+          "Chuanwei Gao",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-051",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "and the Markovian character are still remained",
+      "notes": "Singular agreement fails, and an intransitive verb is incorrectly made passive. Repair direction: Repair singular agreement and remove the passive construction from the intransitive predicate. Preserve the assertion that the property persists. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Xiaoyan Su coauthored 2106.14242 with Guixiang Xu.",
+      "provenance": {
+        "paper": "1901.00957v1",
+        "title": "Dispersive estimates for time and space fractional Schrödinger equations",
+        "authors": [
+          "Xiaoyan Su",
+          "Shiliang Zhao",
+          "Miao Li"
+        ],
+        "original": "and the Markovian character are still remained",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "Singular agreement fails, and an intransitive verb is incorrectly made passive.",
+        "repair": "Repair singular agreement and remove the passive construction from the intransitive predicate. Preserve the assertion that the property persists.",
+        "location": "Page 1, paragraph on space fractional Schrödinger equations",
+        "url": "https://arxiv.org/pdf/1901.00957v1#page=1",
+        "discovery": "\"Xiaoyan Su\" \"arxiv\" Schrödinger",
+        "verification": "Pinned primary PDF, page 1, lines 23–26, within a sentence explaining replacement of Brownian paths by Lévy-stable paths.",
+        "context": "Pinned primary PDF, page 1, lines 23–26, within a sentence explaining replacement of Brownian paths by Lévy-stable paths.",
+        "categories": [
+          "agreement plus invalid passive"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "Xiaoyan Su coauthored 2106.14242 with Guixiang Xu.",
+        "quote_words_whitespace": 7,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-051"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Dispersive estimates for time and space fractional Schrödinger equations",
+        "url": "https://arxiv.org/pdf/1901.00957v1#page=1",
+        "location": "Page 1, paragraph on space fractional Schrödinger equations",
+        "authors": [
+          "Xiaoyan Su",
+          "Shiliang Zhao",
+          "Miao Li"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-052",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "what is the minimal regularity can guarantee the existence of the classical solution?",
+      "notes": "The question contains an extra copula or a missing relative connector. Repair direction: Remove the extra copula, or insert a relative-clause connector before the modal predicate. Do not alter the mathematical question. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Xiaoyan Su coauthored 2106.14242 with Guixiang Xu.",
+      "provenance": {
+        "paper": "1907.04227v1",
+        "title": "Hölder regularity for the time fractional Schrödinger equation",
+        "authors": [
+          "Xiaoyan Su",
+          "Jiqiang Zheng"
+        ],
+        "original": "what is the minimal regularity can guarantee the existence of the classical solution?",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "The question contains an extra copula or a missing relative connector.",
+        "repair": "Remove the extra copula, or insert a relative-clause connector before the modal predicate. Do not alter the mathematical question.",
+        "location": "Section 1, paragraph beginning with a contrast about the Schrödinger equation",
+        "url": "https://arxiv.org/html/1907.04227v1#S1",
+        "discovery": "site:arxiv.org \"Xiaoyan Su\" \"Jiqiang Zheng\"",
+        "verification": "Pinned primary HTML, line 63. This is the question following a colon in a longer sentence. Search abstract snippet differed from pinned HTML, so a different body passage was selected.",
+        "context": "Pinned primary HTML, line 63. This is the question following a colon in a longer sentence. Search abstract snippet differed from pinned HTML, so a different body passage was selected.",
+        "categories": [
+          "malformed question / competing finite predicates"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "Xiaoyan Su coauthored 2106.14242 with Guixiang Xu.",
+        "quote_words_whitespace": 13,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-052"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Hölder regularity for the time fractional Schrödinger equation",
+        "url": "https://arxiv.org/html/1907.04227v1#S1",
+        "location": "Section 1, paragraph beginning with a contrast about the Schrödinger equation",
+        "authors": [
+          "Xiaoyan Su",
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-053",
+      "category": "arxiv-construction",
+      "text": "It may be possible to apply vector filed methods and using commutator type estimates to approach those types of problems, see for example, [10].",
+      "expected": "It may be possible to apply vector field methods and use commutator type estimates to approach those types of problems, see for example, [10].",
+      "format": "plain",
+      "notes": "Correct filed and coordinate use/to use with to apply. The citation instruction may remain parenthetical; hyphenating commutator type is not required. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "protected": [
+        "[10]"
+      ],
+      "provenance": {
+        "id": "ARXIV-053",
+        "paper": "2007.04491v3",
+        "title": "Decay estimates for nonlinear Schrödinger equations",
+        "authors": [
+          "Chenjie Fan",
+          "Zehua Zhao"
+        ],
+        "location": "Page 4, 1.2 Background and some further discussions",
+        "discovery": "site:arxiv.org/abs \"Zehua Zhao\" \"decay\"",
+        "verification": "PDF lines 250–260. Complete sentence; current PDF header pins v3 dated 24 Aug 2020.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "It may be possible to apply vector field methods and to use commutator type estimates to approach those types of problems, see for example, [10].",
+        "It may be possible to apply vector field methods and use commutator type estimates to approach those types of problems; see, for example, [10].",
+        "It may be possible to apply vector field methods and to use commutator type estimates to approach those types of problems; see, for example, [10]."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Decay estimates for nonlinear Schrödinger equations",
+        "url": "https://arxiv.org/pdf/2007.04491v3#page=4",
+        "location": "Page 4, 1.2 Background and some further discussions",
+        "authors": [
+          "Chenjie Fan",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-054",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "the solution with mass less than ‖Q‖₂ is global existence in H¹(ℝ)",
+      "notes": "A noun phrase replaces the predicate needed to assert global existence. Repair direction: Replace the nominal complement with a grammatical predicate asserting global existence. Preserve the mass threshold and Sobolev space. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2110.07834v1",
+        "title": "Minimal mass blow-up solutions for the L2-critical NLS with the Delta potential for radial data in one dimension",
+        "authors": [
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ],
+        "original": "the solution with mass less than ‖Q‖₂ is global existence in H¹(ℝ)",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "A noun phrase replaces the predicate needed to assert global existence.",
+        "repair": "Replace the nominal complement with a grammatical predicate asserting global existence. Preserve the mass threshold and Sobolev space.",
+        "location": "Abstract, second sentence",
+        "url": "https://arxiv.org/html/2110.07834v1",
+        "discovery": "\"Xingdong Tang\" \"Minimal Mass\" arxiv",
+        "verification": "Pinned primary HTML, lines 48–51. Mathematical typography normalised; the remainder identifies Q as the unperturbed ground state.",
+        "context": "Pinned primary HTML, lines 48–51. Mathematical typography normalised; the remainder identifies Q as the unperturbed ground state.",
+        "categories": [
+          "noun phrase used as predicate"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "",
+        "quote_words_whitespace": 12,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-054"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Minimal mass blow-up solutions for the L2-critical NLS with the Delta potential for radial data in one dimension",
+        "url": "https://arxiv.org/html/2110.07834v1",
+        "location": "Abstract, second sentence",
+        "authors": [
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-055",
+      "category": "arxiv-construction",
+      "text": "Note that such a slow asymptotic convergence is impossible if one further pose the initial data of u(0) be in L1.",
+      "expected": "Note that such a slow asymptotic convergence is impossible if one further requires the initial data of u(0) to be in L1.",
+      "format": "plain",
+      "notes": "Repair the malformed pose ... be complement and one/pose agreement. Data may take plural or mass-noun agreement. Many further valid paraphrases exist; references do not exhaust them. Preserve the L1 condition. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "protected": [
+        "u(0)",
+        "L1"
+      ],
+      "provenance": {
+        "id": "ARXIV-055",
+        "paper": "2203.06896v1",
+        "title": "A note on decay property of nonlinear Schrödinger equations",
+        "authors": [
+          "Chenjie Fan",
+          "Zehua Zhao"
+        ],
+        "location": "Page 1, Abstract",
+        "discovery": "site:arxiv.org \"Zehua Zhao\" \"2022\" scattering",
+        "verification": "PDF lines 12–16; complete sentence follows displayed divergence criterion. Formula L superscript 1 normalized.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "Note that such a slow asymptotic convergence is impossible if one further assumes the initial data of u(0) to be in L1.",
+        "Note that such a slow asymptotic convergence is impossible if one further assumes that the initial data of u(0) are in L1.",
+        "Note that such a slow asymptotic convergence is impossible if one further assumes that the initial data of u(0) is in L1."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "A note on decay property of nonlinear Schrödinger equations",
+        "url": "https://arxiv.org/pdf/2203.06896v1#page=1",
+        "location": "Page 1, Abstract",
+        "authors": [
+          "Chenjie Fan",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-056",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "We need to choose β satisfies",
+      "notes": "Subject relative clause after choose cannot omit its relative pronoun; alternatively the finite verb should be a participle. Repair direction: Insert a subject relative pronoun, or change the verb to a participle. Retain the following inequality defining the acceptable parameter. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "provenance": {
+        "paper": "2207.00485v1",
+        "title": "On scattering for generalized NLS on waveguide manifolds",
+        "authors": [
+          "Yannick Sire",
+          "Xueying Yu",
+          "Haitian Yue",
+          "Zehua Zhao"
+        ],
+        "original": "We need to choose β satisfies",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "Subject relative clause after choose cannot omit its relative pronoun; alternatively the finite verb should be a participle.",
+        "repair": "Insert a subject relative pronoun, or change the verb to a participle. Retain the following inequality defining the acceptable parameter.",
+        "location": "Page 9, 4.2 Step 2, following the list of index requirements",
+        "url": "https://arxiv.org/pdf/2207.00485v1#page=9",
+        "discovery": "site:arxiv.org \"Zehua Zhao\" \"2022\" scattering",
+        "verification": "PDF lines 985–1004: the quoted words immediately precede the inequality β < 1/2 + (1/2+σ)/d. This replacement avoids the earlier ambiguous consider construction.",
+        "context": "PDF lines 985–1004: the quoted words immediately precede the inequality β < 1/2 + (1/2+σ)/d. This replacement avoids the earlier ambiguous consider construction.",
+        "categories": [
+          "Subject relative clause after choose cannot omit its relative pronoun; alternatively the finite verb should be a participle."
+        ],
+        "note": "Zehua Zhao coauthored 1809.04211 with Gao.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 6,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-056"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "On scattering for generalized NLS on waveguide manifolds",
+        "url": "https://arxiv.org/pdf/2207.00485v1#page=9",
+        "location": "Page 9, 4.2 Step 2, following the list of index requirements",
+        "authors": [
+          "Yannick Sire",
+          "Xueying Yu",
+          "Haitian Yue",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-057",
+      "category": "arxiv-construction",
+      "text": "In this paper, we suffice to prove Theorem 1.4 for (1.1) with ν₁, ν₂ > 0.",
+      "expected": "In this paper, it suffices to prove Theorem 1.4 for (1.1) with ν₁, ν₂ > 0.",
+      "format": "plain",
+      "notes": "Use impersonal it suffices or the equivalent only need construction. Preserve positive viscosity and both references.",
+      "protected": [
+        "Theorem 1.4",
+        "(1.1)",
+        "ν₁, ν₂ > 0"
+      ],
+      "provenance": {
+        "id": "ARXIV-057",
+        "paper": "2208.08311v1",
+        "title": "On the weak solutions for the MHD systems with controllable total energy and cross helicity",
+        "authors": [
+          "Changxing Miao",
+          "Weikui Ye"
+        ],
+        "location": "printed p.6, opening of Section 2",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "PDF lines 379–382; next sentence fixes both viscosity coefficients to one.",
+        "normalization": "Greek subscripts flattened from displayed font; prose unchanged."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "In this paper, we only need to prove Theorem 1.4 for (1.1) with ν₁, ν₂ > 0."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On the weak solutions for the MHD systems with controllable total energy and cross helicity",
+        "url": "https://arxiv.org/pdf/2208.08311v1#page=6",
+        "location": "printed p.6, opening of Section 2",
+        "authors": [
+          "Changxing Miao",
+          "Weikui Ye"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-058",
+      "category": "arxiv-construction",
+      "text": "Existence results for the backward self-similar solutions to the system (1.5) were obtained in, see, e.g., [15, 19].",
+      "expected": "Existence results for the backward self-similar solutions to the system (1.5) were obtained in [15, 19].",
+      "format": "plain",
+      "notes": "Unblend obtained in and see citation constructions. The parenthetical e.g. can remain; references are protected.",
+      "protected": [
+        "(1.5)",
+        "[15, 19]"
+      ],
+      "provenance": {
+        "id": "ARXIV-058",
+        "paper": "2209.00153v1",
+        "title": "Global regularity and decay behavior for Leray equations with critical-dissipation and its application to self-similar solutions",
+        "authors": [
+          "Changxing Miao",
+          "Xiaoxin Zheng"
+        ],
+        "location": "printed p.2, Section 1, paragraph following (1.5)",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "PDF lines 121–124; next sentence contrasts the forward problem studied in the paper.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "Existence results for the backward self-similar solutions to the system (1.5) were obtained; see, e.g., [15, 19].",
+        "Existence results for the backward self-similar solutions to the system (1.5) were obtained (see, e.g., [15, 19]).",
+        "Existence results for the backward self-similar solutions to the system (1.5) were obtained in, e.g., [15, 19]."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Global regularity and decay behavior for Leray equations with critical-dissipation and its application to self-similar solutions",
+        "url": "https://arxiv.org/pdf/2209.00153v1#page=2",
+        "location": "printed p.2, Section 1, paragraph following (1.5)",
+        "authors": [
+          "Changxing Miao",
+          "Xiaoxin Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-059",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "the starting point is whether, given given the fact that scattering behaviors have by now been studied extensively, can one further improve",
+      "notes": "Repeated word and question inversion inside an embedded whether-clause. Repair direction: Remove the duplicated introductory word and use statement word order inside the embedded question. Retain the question about improving understanding of the decay estimate. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "provenance": {
+        "paper": "2211.03124v1",
+        "title": "On decaying properties of nonlinear Schrödinger equations",
+        "authors": [
+          "Chenjie Fan",
+          "Gigliola Staffilani",
+          "Zehua Zhao"
+        ],
+        "original": "the starting point is whether, given given the fact that scattering behaviors have by now been studied extensively, can one further improve",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "Repeated word and question inversion inside an embedded whether-clause.",
+        "repair": "Remove the duplicated introductory word and use statement word order inside the embedded question. Retain the question about improving understanding of the decay estimate.",
+        "location": "Page 2, 1.1 Background and motivations",
+        "url": "https://arxiv.org/pdf/2211.03124v1#page=2",
+        "discovery": "site:arxiv.org/abs \"Zehua Zhao\" \"decay\"",
+        "verification": "PDF lines 73–77; the full sentence begins with discussion of previous papers and ends by asking about understanding equation (1.3).",
+        "context": "PDF lines 73–77; the full sentence begins with discussion of previous papers and ends by asking about understanding equation (1.3).",
+        "categories": [
+          "Repeated word and question inversion inside an embedded whether-clause."
+        ],
+        "note": "Zehua Zhao coauthored 1809.04211 with Gao.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 22,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-059"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "On decaying properties of nonlinear Schrödinger equations",
+        "url": "https://arxiv.org/pdf/2211.03124v1#page=2",
+        "location": "Page 2, 1.1 Background and motivations",
+        "authors": [
+          "Chenjie Fan",
+          "Gigliola Staffilani",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-060",
+      "category": "arxiv-construction",
+      "text": "One natural question to ask is that whether we can get similar results for the NLS with a potential.",
+      "expected": "One natural question to ask is whether we can get similar results for the NLS with a potential.",
+      "format": "plain",
+      "notes": "Delete the redundant that before whether. Replacing get with obtain would be style. Xiaoyan Su coauthored 2106.14242 with Guixiang Xu.",
+      "protected": [
+        "NLS"
+      ],
+      "provenance": {
+        "id": "ARXIV-060",
+        "paper": "2304.02995v1",
+        "title": "Growth of Sobolev norms for 2D cubic NLS with partial harmonic potential",
+        "authors": [
+          "Mingming Deng",
+          "Xiaoyan Su",
+          "Jiqiang Zheng"
+        ],
+        "location": "Section 1, paragraph introducing the potential case",
+        "discovery": "site:arxiv.org \"Xiaoyan Su\" \"Local well-posedness\"",
+        "verification": "Pinned primary HTML, line 65. The next sentence discusses earlier results with a full harmonic potential.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Growth of Sobolev norms for 2D cubic NLS with partial harmonic potential",
+        "url": "https://arxiv.org/html/2304.02995v1#S1",
+        "location": "Section 1, paragraph introducing the potential case",
+        "authors": [
+          "Mingming Deng",
+          "Xiaoyan Su",
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-061",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "A natural question arises in the study of bubble solutions to (NLH) is that",
+      "notes": "Two finite predicates compete; the question is introduced with an inappropriate complementiser. Repair direction: Make the first finite predicate a relative clause modifying the question; introduce the displayed question with a colon rather than a complementiser. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2304.04139v1",
+        "title": "Nondegeneracy of positive bubble solutions for generalized energy-critical Hartree equations",
+        "authors": [
+          "Xuemei Li",
+          "Chenxi Liu",
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ],
+        "original": "A natural question arises in the study of bubble solutions to (NLH) is that",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "Two finite predicates compete; the question is introduced with an inappropriate complementiser.",
+        "repair": "Make the first finite predicate a relative clause modifying the question; introduce the displayed question with a colon rather than a complementiser.",
+        "location": "Page 3, paragraph before the displayed nondegeneracy question",
+        "url": "https://arxiv.org/pdf/2304.04139v1#page=3",
+        "discovery": "site:arxiv.org \"Guixiang Xu\" \"Li\"",
+        "verification": "Pinned primary PDF, page 3, lines 238–239; the following displayed text asks whether positive solutions are nondegenerate.",
+        "context": "Pinned primary PDF, page 3, lines 238–239; the following displayed text asks whether positive solutions are nondegenerate.",
+        "categories": [
+          "two competing predicates / malformed question introduction"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "",
+        "quote_words_whitespace": 14,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-061"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Nondegeneracy of positive bubble solutions for generalized energy-critical Hartree equations",
+        "url": "https://arxiv.org/pdf/2304.04139v1#page=3",
+        "location": "Page 3, paragraph before the displayed nondegeneracy question",
+        "authors": [
+          "Xuemei Li",
+          "Chenxi Liu",
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-062",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "There makes no progress in pursuing a precise description for the damage effect of the weights on the regularity",
+      "notes": "An existential dummy subject is incorrectly combined with an active lexical verb; tense also needs to fit the historical until-clause. Repair direction: Use a past-tense or past-perfect passive/existential construction for the absence of progress, preserving the subsequent chronological clause. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2312.02875v1",
+        "title": "Local regularity for solutions to quasi-linear singular parabolic equations with anisotropic weights",
+        "authors": [
+          "Changxing Miao",
+          "Zhiwen Zhao"
+        ],
+        "original": "There makes no progress in pursuing a precise description for the damage effect of the weights on the regularity",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "An existential dummy subject is incorrectly combined with an active lexical verb; tense also needs to fit the historical until-clause.",
+        "repair": "Use a past-tense or past-perfect passive/existential construction for the absence of progress, preserving the subsequent chronological clause.",
+        "location": "printed p.5, Section 1, literature review before the page break",
+        "url": "https://arxiv.org/pdf/2312.02875v1#page=5",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "PDF lines 380–388; the remainder introduces the later work of Dong, Li and Yang through an until-clause.",
+        "context": "The authors say that the problem remained without progress before specified later work.",
+        "categories": [
+          "existential_construction",
+          "voice",
+          "tense"
+        ],
+        "note": "",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 19,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-062"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Local regularity for solutions to quasi-linear singular parabolic equations with anisotropic weights",
+        "url": "https://arxiv.org/pdf/2312.02875v1#page=5",
+        "location": "printed p.5, Section 1, literature review before the page break",
+        "authors": [
+          "Changxing Miao",
+          "Zhiwen Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-063",
+      "category": "arxiv-construction",
+      "text": "In this paper, we devote to this problem in the higher order cases k≥3 on 𝕋.",
+      "expected": "In this paper, we devote ourselves to this problem in the higher order cases k≥3 on 𝕋.",
+      "format": "plain",
+      "notes": "Supply the reflexive object to devote or use an appropriate transitive verb. Hyphenating higher order is optional.",
+      "protected": [
+        "k≥3",
+        "𝕋"
+      ],
+      "provenance": {
+        "id": "ARXIV-063",
+        "paper": "2408.15527v1",
+        "title": "Lᵖ maximal estimates for Weyl sums with k≥3 on 𝕋",
+        "authors": [
+          "Xuezhi Chen",
+          "Changxing Miao",
+          "Jiye Yuan",
+          "Tengfei Zhao"
+        ],
+        "location": "Section 1, paragraph immediately before Theorem 1.1",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "HTML line 54; preceding paragraphs review the quadratic case, and the next sentence explains the higher-order difficulty.",
+        "normalization": "Math inequalities and torus symbol flattened from HTML TeX; prose unchanged."
+      },
+      "severity": "construction",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "In this paper, we address this problem in the higher order cases k≥3 on 𝕋."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Lᵖ maximal estimates for Weyl sums with k≥3 on 𝕋",
+        "url": "https://arxiv.org/html/2408.15527v1#S1",
+        "location": "Section 1, paragraph immediately before Theorem 1.1",
+        "authors": [
+          "Xuezhi Chen",
+          "Changxing Miao",
+          "Jiye Yuan",
+          "Tengfei Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-064",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "The key components that allow to classify the solutions are the hyperbolic (ejection) dynamical behavior near the ground state",
+      "notes": "The permissive verb lacks its required object before the infinitive. Repair direction: Supply an object for the transitive permissive verb before the infinitive, or make the infinitival construction passive. Preserve the following second component. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2506.05406v1",
+        "title": "Global dynamics above the ground state for the energy-critical Hartree equation with radial data",
+        "authors": [
+          "Xuemei Li",
+          "Chenxi Liu",
+          "Guixiang Xu"
+        ],
+        "original": "The key components that allow to classify the solutions are the hyperbolic (ejection) dynamical behavior near the ground state",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "The permissive verb lacks its required object before the infinitive.",
+        "repair": "Supply an object for the transitive permissive verb before the infinitive, or make the infinitival construction passive. Preserve the following second component.",
+        "location": "Abstract, final sentence",
+        "url": "https://arxiv.org/html/2506.05406v1",
+        "discovery": "site:arxiv.org \"Guixiang Xu\" \"Li\"",
+        "verification": "Pinned primary HTML, abstract lines 62–64. Omitted continuation names the one-pass lemma as second component.",
+        "context": "Pinned primary HTML, abstract lines 62–64. Omitted continuation names the one-pass lemma as second component.",
+        "categories": [
+          "missing verb complement / clause structure"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "",
+        "quote_words_whitespace": 19,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-064"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Global dynamics above the ground state for the energy-critical Hartree equation with radial data",
+        "url": "https://arxiv.org/html/2506.05406v1",
+        "location": "Abstract, final sentence",
+        "authors": [
+          "Xuemei Li",
+          "Chenxi Liu",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-065",
+      "category": "arxiv-construction",
+      "format": "plain",
+      "text": "with the ratio of their length scales converging to 0 and the phases of the two bubbles form the right angle.",
+      "notes": "The second component of a with-construction is finite instead of parallel with the first. Repair direction: Make the second coordinated component of the with-construction a participial phrase, parallel with the first. Do not change the limiting ratio or phase relation. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2602.08490v1",
+        "title": "Construction of two-bubble solutions for the energy-critical Hartree equation",
+        "authors": [
+          "Jacek Jendrej",
+          "Xuemei Li",
+          "Guixiang Xu"
+        ],
+        "original": "with the ratio of their length scales converging to 0 and the phases of the two bubbles form the right angle.",
+        "kind": "excerpt",
+        "severity": "construction",
+        "issue": "The second component of a with-construction is finite instead of parallel with the first.",
+        "repair": "Make the second coordinated component of the with-construction a participial phrase, parallel with the first. Do not change the limiting ratio or phase relation.",
+        "location": "Abstract, end of second sentence",
+        "url": "https://arxiv.org/html/2602.08490v1",
+        "discovery": "site:arxiv.org \"Guixiang Xu\" \"Construction of two-bubble\"",
+        "verification": "Pinned primary HTML, lines 58–59. Number normalised from math. Contains a coauthor outside the original name seeds; no ethnicity or nationality inferred.",
+        "context": "Pinned primary HTML, lines 58–59. Number normalised from math. Contains a coauthor outside the original name seeds; no ethnicity or nationality inferred.",
+        "categories": [
+          "malformed with-construction / parallelism"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "",
+        "quote_words_whitespace": 21,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-065"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "construction",
+      "citation": {
+        "title": "Construction of two-bubble solutions for the energy-critical Hartree equation",
+        "url": "https://arxiv.org/html/2602.08490v1",
+        "location": "Abstract, end of second sentence",
+        "authors": [
+          "Jacek Jendrej",
+          "Xuemei Li",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-066",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Then there exists finite energy solutions",
+      "notes": "A singular existential verb precedes a plural subject. Repair direction: Use plural existential agreement. Preserve both scattering solutions and their limiting directions. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "0704.0665v2",
+        "title": "Global well-posedness and scattering for the energy-critical, defocusing Hartree equation for radial data",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Lifeng Zhao"
+        ],
+        "original": "Then there exists finite energy solutions",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "A singular existential verb precedes a plural subject.",
+        "repair": "Use plural existential agreement. Preserve both scattering solutions and their limiting directions.",
+        "location": "Page 3, Corollary 1.1, before the scattering limit",
+        "url": "https://arxiv.org/pdf/0704.0665v2#page=3",
+        "discovery": "site:arxiv.org \"Changxing Miao\" \"Guixiang Xu\" \"2007\"",
+        "verification": "Primary PDF retrieved at the unversioned PDF URL; header explicitly identifies v2, 15 April 2007. Passage at lines 277–287.",
+        "context": "After assuming radial finite-energy initial data, the corollary asserts the existence of two free scattering solutions.",
+        "categories": [
+          "subject_verb_agreement"
+        ],
+        "retrieval_url": "https://arxiv.org/pdf/0704.0665",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 6,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-066"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Global well-posedness and scattering for the energy-critical, defocusing Hartree equation for radial data",
+        "url": "https://arxiv.org/pdf/0704.0665v2#page=3",
+        "location": "Page 3, Corollary 1.1, before the scattering limit",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Lifeng Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-067",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Let u is the solution of",
+      "notes": "The imperative let requires the bare infinitive, not a finite copula. Repair direction: Use the bare infinitive after the introduced unknown; retain the displayed equation and initial condition. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "0807.0690v1",
+        "title": "Global wellposedness and scattering for the focusing energy-critical nonlinear Schrödinger equations of fourth order in the radial case",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Lifeng Zhao"
+        ],
+        "original": "Let u is the solution of",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "The imperative let requires the bare infinitive, not a finite copula.",
+        "repair": "Use the bare infinitive after the introduced unknown; retain the displayed equation and initial condition.",
+        "location": "Page 3, Lemma 1.3 (Strichartz estimates), immediately before equation (1.3)",
+        "url": "https://arxiv.org/pdf/0807.0690v1#page=3",
+        "discovery": "site:arxiv.org \"Changxing Miao\" \"Guixiang Xu\" \"Lifeng Zhao\"",
+        "verification": "Version-pinned PDF, lines 123–136; the quoted introduction continues into the displayed evolution equation.",
+        "context": "The lemma introduces the unknown satisfying a linear fourth-order evolution equation. The excerpt is not a complete sentence.",
+        "categories": [
+          "verb_form",
+          "imperative"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 6,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-067"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Global wellposedness and scattering for the focusing energy-critical nonlinear Schrödinger equations of fourth order in the radial case",
+        "url": "https://arxiv.org/pdf/0807.0690v1#page=3",
+        "location": "Page 3, Lemma 1.3 (Strichartz estimates), immediately before equation (1.3)",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Lifeng Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-068",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "They are made possibly by the well-known strategies:",
+      "notes": "An adverb is used where the causative passive requires a predicative adjective. Repair direction: Use the adjective form. Keep the following two named strategies and citations. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "0908.0782v3",
+        "title": "The low regularity global solutions for the critical generalized KdV equation",
+        "authors": [
+          "Changxing Miao",
+          "Shuanglin Shao",
+          "Yifei Wu",
+          "Guixiang Xu"
+        ],
+        "original": "They are made possibly by the well-known strategies:",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "An adverb is used where the causative passive requires a predicative adjective.",
+        "repair": "Use the adjective form. Keep the following two named strategies and citations.",
+        "location": "Page 2, Section 1, paragraph discussing recent progress and the two globalisation methods",
+        "url": "https://arxiv.org/pdf/0908.0782v3#page=2",
+        "discovery": "site:arxiv.org \"Changxing Miao\" \"Yifei Wu\"",
+        "verification": "Primary PDF retrieved at the unversioned PDF URL; header identifies v3, 7 December 2009. Passage at lines 101–106.",
+        "context": "The pronoun refers to recent progress; the colon introduces the Fourier truncation method and I-method.",
+        "categories": [
+          "word_form",
+          "predicative_complement"
+        ],
+        "retrieval_url": "https://arxiv.org/pdf/0908.0782",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 8,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-068"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "The low regularity global solutions for the critical generalized KdV equation",
+        "url": "https://arxiv.org/pdf/0908.0782v3#page=2",
+        "location": "Page 2, Section 1, paragraph discussing recent progress and the two globalisation methods",
+        "authors": [
+          "Changxing Miao",
+          "Shuanglin Shao",
+          "Yifei Wu",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-069",
+      "category": "arxiv-local",
+      "text": "The drift-diffusion equation (1.1) with different velocities (1.2) has various physical background from the geophysics, fluid dynamics and other fields.",
+      "expected": "The drift-diffusion equation (1.1) with different velocities (1.2) has various physical backgrounds from the geophysics, fluid dynamics and other fields.",
+      "format": "plain",
+      "notes": "Various requires plural backgrounds. Removing the article before geophysics is a permissible usage repair; do not require a broader physical-background rewrite.",
+      "protected": [
+        "(1.1)",
+        "(1.2)"
+      ],
+      "provenance": {
+        "id": "ARXIV-069",
+        "paper": "1507.04806v1",
+        "title": "On the regularity issues of a class of drift-diffusion equations with nonlocal diffusion",
+        "authors": [
+          "Changxing Miao",
+          "Liutang Xue"
+        ],
+        "location": "printed p.2, Section 1, paragraph before the SQG example",
+        "discovery": "Author-first web query: site:arxiv.org \"Changxing Miao\" \"Xue\" equations.",
+        "verification": "PDF lines 193–196; surrounding discussion enumerates several physical models.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "The drift-diffusion equation (1.1) with different velocities (1.2) has various physical backgrounds from geophysics, fluid dynamics and other fields."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On the regularity issues of a class of drift-diffusion equations with nonlocal diffusion",
+        "url": "https://arxiv.org/pdf/1507.04806v1#page=2",
+        "location": "printed p.2, Section 1, paragraph before the SQG example",
+        "authors": [
+          "Changxing Miao",
+          "Liutang Xue"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-070",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "The mass, momentum and energy are defined as following",
+      "notes": "Malformed formula introducing the definitions that follow. Repair direction: Use the fixed formula introducing a following definition, or add the definite article and change the preposition. The displayed definitions remain unchanged. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "1702.07856v1",
+        "title": "Stability of the traveling waves for the derivative Schrödinger equation in the energy space",
+        "authors": [
+          "Changxing Miao",
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ],
+        "original": "The mass, momentum and energy are defined as following",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "Malformed formula introducing the definitions that follow.",
+        "repair": "Use the fixed formula introducing a following definition, or add the definite article and change the preposition. The displayed definitions remain unchanged.",
+        "location": "Page 1, text before the definitions of mass, momentum and energy",
+        "url": "https://arxiv.org/pdf/1702.07856v1#page=1",
+        "discovery": "site:arxiv.org \"Stability of the traveling waves\" \"Tang\"",
+        "verification": "Primary PDF retrieved from unversioned URL explicitly identifies itself as v1; page 1, lines 71–72.",
+        "context": "Primary PDF retrieved from unversioned URL explicitly identifies itself as v1; page 1, lines 71–72.",
+        "categories": [
+          "malformed introductory expression"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "",
+        "quote_words_whitespace": 9,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-070"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Stability of the traveling waves for the derivative Schrödinger equation in the energy space",
+        "url": "https://arxiv.org/pdf/1702.07856v1#page=1",
+        "location": "Page 1, text before the definitions of mass, momentum and energy",
+        "authors": [
+          "Changxing Miao",
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-071",
+      "category": "arxiv-local",
+      "text": "If the solutions exist for all t ∈ R, does it approach a free solution?",
+      "expected": "If the solutions exist for all t ∈ R, do they approach a free solution?",
+      "format": "plain",
+      "notes": "Maintain consistent number across the antecedent and question; singular generic and plural generic are both legitimate.",
+      "protected": [
+        "t ∈ R"
+      ],
+      "provenance": {
+        "id": "ARXIV-071",
+        "paper": "1711.01172v2",
+        "title": "Dynamics of nonlinear wave equations",
+        "authors": [
+          "Changxing Miao",
+          "Jiqiang Zheng"
+        ],
+        "location": "printed p.4, Section 1, Scattering theory bullet",
+        "discovery": "Author-first web query: site:arxiv.org \"Changxing Miao\" nonlinear wave equation.",
+        "verification": "PDF lines 272–273; read the surrounding numbered list of principal nonlinear-wave questions.",
+        "normalization": "The real-number symbol is flattened; prose unchanged. Version read is confirmed by the PDF arXiv stamp; direct version URL returned a fetch-cache error, unversioned URL returned this exact v2."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "If the solution exists for all t ∈ R, does it approach a free solution?"
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Dynamics of nonlinear wave equations",
+        "url": "https://arxiv.org/pdf/1711.01172v2#page=4",
+        "location": "printed p.4, Section 1, Scattering theory bullet",
+        "authors": [
+          "Changxing Miao",
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-072",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "various quantitative behavior of the eigenfunctions restricted to certain smooth curve.",
+      "notes": "Number/determiner errors after various and certain. Repair direction: Use a plural noun after the plural quantifier and supply a determiner or plural ending for the curve. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Yakun Xi coauthored 2108.06870 with Gao.",
+      "provenance": {
+        "paper": "1711.04707v4",
+        "title": "Inner product of eigenfunctions over curves and generalized periods for compact Riemannian surfaces",
+        "authors": [
+          "Yakun Xi"
+        ],
+        "original": "various quantitative behavior of the eigenfunctions restricted to certain smooth curve.",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "Number/determiner errors after various and certain.",
+        "repair": "Use a plural noun after the plural quantifier and supply a determiner or plural ending for the curve.",
+        "location": "Page 1, 1 Introduction",
+        "url": "https://arxiv.org/pdf/1711.04707v4#page=1",
+        "discovery": "site:arxiv.org \"Yakun Xi\" mathematics",
+        "verification": "PDF lines 40–43. Excerpt from complete sentence beginning with an area of interest; not presented as a full sentence.",
+        "context": "PDF lines 40–43. Excerpt from complete sentence beginning with an area of interest; not presented as a full sentence.",
+        "categories": [
+          "Number/determiner errors after various and certain."
+        ],
+        "note": "Yakun Xi coauthored 2108.06870 with Gao.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 11,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-072"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Inner product of eigenfunctions over curves and generalized periods for compact Riemannian surfaces",
+        "url": "https://arxiv.org/pdf/1711.04707v4#page=1",
+        "location": "Page 1, 1 Introduction",
+        "authors": [
+          "Yakun Xi"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-073",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "This allowed them to show that the period integrals (1.1) goes to 0 as λ → ∞",
+      "notes": "Plural subject with singular verb inside a complement clause. Repair direction: Use plural agreement; retain the limiting statement. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Yakun Xi coauthored 2108.06870 with Gao.",
+      "provenance": {
+        "paper": "1711.09864v3",
+        "title": "Improved Generalized Periods Estimates on Riemannian Surfaces with Nonpositive Curvature",
+        "authors": [
+          "Yakun Xi"
+        ],
+        "original": "This allowed them to show that the period integrals (1.1) goes to 0 as λ → ∞",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "Plural subject with singular verb inside a complement clause.",
+        "repair": "Use plural agreement; retain the limiting statement.",
+        "location": "Page 2, 1 Introduction",
+        "url": "https://arxiv.org/pdf/1711.09864v3#page=2",
+        "discovery": "site:arxiv.org \"Yakun Xi\" mathematics",
+        "verification": "PDF lines 120–123; clause continues with a stationary-phase method. Formula normalized.",
+        "context": "PDF lines 120–123; clause continues with a stationary-phase method. Formula normalized.",
+        "categories": [
+          "Plural subject with singular verb inside a complement clause."
+        ],
+        "note": "Yakun Xi coauthored 2108.06870 with Gao.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 17,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-073"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Improved Generalized Periods Estimates on Riemannian Surfaces with Nonpositive Curvature",
+        "url": "https://arxiv.org/pdf/1711.09864v3#page=2",
+        "location": "Page 2, 1 Introduction",
+        "authors": [
+          "Yakun Xi"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-074",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "then the solution u(t) of (1.1) with initial data u₀ exist globally in time and satisfies",
+      "notes": "The first coordinated predicate fails to agree with its singular subject. Repair direction: Make the first coordinated predicate agree with the singular subject, as the second already does. Keep the initial data and stability bound unchanged. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "1803.06451v1",
+        "title": "Instability of the solitary waves for the generalized derivative nonlinear Schrödinger equation in the degenerate case",
+        "authors": [
+          "Changxing Miao",
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ],
+        "original": "then the solution u(t) of (1.1) with initial data u₀ exist globally in time and satisfies",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "The first coordinated predicate fails to agree with its singular subject.",
+        "repair": "Make the first coordinated predicate agree with the singular subject, as the second already does. Keep the initial data and stability bound unchanged.",
+        "location": "Section 1, Definition 1.1 of orbital stability",
+        "url": "https://arxiv.org/html/1803.06451v1#S1",
+        "discovery": "site:arxiv.org \"Guixiang Xu\" \"generalized derivative\"",
+        "verification": "Pinned primary HTML, line 95; text continues into the displayed orbital-stability inequality. Math typography normalised.",
+        "context": "Pinned primary HTML, line 95; text continues into the displayed orbital-stability inequality. Math typography normalised.",
+        "categories": [
+          "subject–verb agreement across mathematical insertions"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "",
+        "quote_words_whitespace": 16,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-074"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Instability of the solitary waves for the generalized derivative nonlinear Schrödinger equation in the degenerate case",
+        "url": "https://arxiv.org/html/1803.06451v1#S1",
+        "location": "Section 1, Definition 1.1 of orbital stability",
+        "authors": [
+          "Changxing Miao",
+          "Xingdong Tang",
+          "Guixiang Xu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-075",
+      "category": "arxiv-local",
+      "text": "It is a sharp global result except of the critical case s=s_c, which is a very difficult open problem.",
+      "expected": "It is a sharp global result except for the critical case s=s_c, which is a very difficult open problem.",
+      "format": "plain",
+      "notes": "Replace except of with except for. The mathematical condition and degree of difficulty must not be changed.",
+      "protected": [
+        "s=s_c"
+      ],
+      "provenance": {
+        "id": "ARXIV-075",
+        "paper": "1807.05841v1",
+        "title": "Global well-posedness for the defocusing Hartree equation with radial data in R4",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Jianwei Yang"
+        ],
+        "location": "Page 1, abstract final sentence",
+        "discovery": "site:arxiv.org \"Guixiang Xu\" -Miao -2406.05614 -2012.04805 -1910.11150 -2112.07936 -2310.14646 -2208.02065",
+        "verification": "Primary PDF retrieved from unversioned URL explicitly identifies itself as v1; page 1, lines 28–29. Math typography normalised.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Global well-posedness for the defocusing Hartree equation with radial data in R4",
+        "url": "https://arxiv.org/pdf/1807.05841v1#page=1",
+        "location": "Page 1, abstract final sentence",
+        "authors": [
+          "Changxing Miao",
+          "Guixiang Xu",
+          "Jianwei Yang"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-076",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "This follows from equivalent of Sobolev norm and the following variant of the Gagliardo-Nirenberg inequality:",
+      "notes": "Adjective used in place of the required noun, with missing determiner. Repair direction: Use the noun denoting equivalence, with a determiner; retain the Sobolev-norm assertion. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Jiqiang Zheng coauthored 2202.11326 with Gao.",
+      "provenance": {
+        "paper": "1808.02236v1",
+        "title": "Focusing NLS with inverse square potential",
+        "authors": [
+          "Jiqiang Zheng"
+        ],
+        "original": "This follows from equivalent of Sobolev norm and the following variant of the Gagliardo-Nirenberg inequality:",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "Adjective used in place of the required noun, with missing determiner.",
+        "repair": "Use the noun denoting equivalence, with a determiner; retain the Sobolev-norm assertion.",
+        "location": "Page 1, 1 Introduction, before (1.3)",
+        "url": "https://arxiv.org/pdf/1808.02236v1#page=1",
+        "discovery": "site:arxiv.org/abs \"Jiqiang Zheng\" \"scattering\"",
+        "verification": "PDF lines 69–75, immediately before displayed Gagliardo–Nirenberg inequality.",
+        "context": "PDF lines 69–75, immediately before displayed Gagliardo–Nirenberg inequality.",
+        "categories": [
+          "Adjective used in place of the required noun, with missing determiner."
+        ],
+        "note": "Jiqiang Zheng coauthored 2202.11326 with Gao.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 15,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-076"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Focusing NLS with inverse square potential",
+        "url": "https://arxiv.org/pdf/1808.02236v1#page=1",
+        "location": "Page 1, 1 Introduction, before (1.3)",
+        "authors": [
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-077",
+      "category": "arxiv-local",
+      "text": "Remarkably, an interaction Morawetz-type estimate are applied.",
+      "expected": "Remarkably, an interaction Morawetz-type estimate is applied.",
+      "format": "plain",
+      "notes": "The auxiliary agrees with singular estimate. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "protected": [
+        "Morawetz-type"
+      ],
+      "provenance": {
+        "id": "ARXIV-077",
+        "paper": "1811.07239v1",
+        "title": "Dynamics of subcritical threshold solutions for energy-critical NLS",
+        "authors": [
+          "Qingtang Su",
+          "Zehua Zhao"
+        ],
+        "location": "Page 1, Abstract",
+        "discovery": "\"Zehua Zhao\" arxiv \"2018\"",
+        "verification": "PDF abstract lines 10–12. Exact sentence and authors verified.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Dynamics of subcritical threshold solutions for energy-critical NLS",
+        "url": "https://arxiv.org/pdf/1811.07239v1#page=1",
+        "location": "Page 1, Abstract",
+        "authors": [
+          "Qingtang Su",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-078",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "the fundamental solutions by using the Fox H-functions in order to to establish some Lˢ decay estimates.",
+      "notes": "The infinitive marker is duplicated. Repair direction: Delete the duplicated infinitive marker. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Xiaoyan Su coauthored 2106.14242 with Guixiang Xu.",
+      "provenance": {
+        "paper": "1901.00394v1",
+        "title": "Local well-posedness of semilinear space-time fractional Schrödinger equation",
+        "authors": [
+          "Xiaoyan Su",
+          "Shiliang Zhao",
+          "Miao Li"
+        ],
+        "original": "the fundamental solutions by using the Fox H-functions in order to to establish some Lˢ decay estimates.",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "The infinitive marker is duplicated.",
+        "repair": "Delete the duplicated infinitive marker.",
+        "location": "Abstract, second sentence",
+        "url": "https://arxiv.org/html/1901.00394v1",
+        "discovery": "site:arxiv.org \"Xiaoyan Su\" \"Local well-posedness\"",
+        "verification": "Pinned primary HTML, abstract line 34. H-function and Lebesgue notation normalised; passage ends the sentence.",
+        "context": "Pinned primary HTML, abstract line 34. H-function and Lebesgue notation normalised; passage ends the sentence.",
+        "categories": [
+          "repeated word"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "Xiaoyan Su coauthored 2106.14242 with Guixiang Xu.",
+        "quote_words_whitespace": 17,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-078"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Local well-posedness of semilinear space-time fractional Schrödinger equation",
+        "url": "https://arxiv.org/html/1901.00394v1",
+        "location": "Abstract, second sentence",
+        "authors": [
+          "Xiaoyan Su",
+          "Shiliang Zhao",
+          "Miao Li"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-079",
+      "category": "arxiv-local",
+      "text": "As far as the authors known, there are two different ways to study sign-changing solutions of (1.1).",
+      "expected": "As far as the authors know, there are two different ways to study sign-changing solutions of (1.1).",
+      "format": "plain",
+      "notes": "Use finite know, not known. Retain the number of methods.",
+      "protected": [
+        "(1.1)"
+      ],
+      "provenance": {
+        "id": "ARXIV-079",
+        "paper": "2008.02119v1",
+        "title": "Entire sign-changing solutions to the fractional critical Schrödinger equation",
+        "authors": [
+          "Xingdong Tang",
+          "Guixiang Xu",
+          "Chunyan Zhang",
+          "Jihui Zhang"
+        ],
+        "location": "Section 1, discussion of sign-changing solutions",
+        "discovery": "site:arxiv.org \"Guixiang Xu\" Tang",
+        "verification": "Pinned primary HTML, Section 1 line 82; the next paragraphs explain the two methods.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Entire sign-changing solutions to the fractional critical Schrödinger equation",
+        "url": "https://arxiv.org/html/2008.02119v1#S1",
+        "location": "Section 1, discussion of sign-changing solutions",
+        "authors": [
+          "Xingdong Tang",
+          "Guixiang Xu",
+          "Chunyan Zhang",
+          "Jihui Zhang"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-080",
+      "category": "arxiv-local",
+      "text": "The space B and its dual B* is defined as follows.",
+      "expected": "The space B and its dual B* are defined as follows.",
+      "format": "plain",
+      "notes": "The coordinated subject requires are. B and B* remain distinct protected values.",
+      "protected": [
+        "B",
+        "B*"
+      ],
+      "provenance": {
+        "id": "ARXIV-080",
+        "paper": "2106.14242v1",
+        "title": "A Limiting absorption principle for high-order Schrödinger operators in critical spaces",
+        "authors": [
+          "Xiaoyan Su",
+          "Chengbin Xu",
+          "Guixiang Xu",
+          "Xiaoqing Yu"
+        ],
+        "location": "Section 1.1, paragraph introducing B and its dual",
+        "discovery": "site:arxiv.org \"A Limiting absorption principle\" \"Xu\"",
+        "verification": "Pinned primary HTML, line 77, immediately before both spaces are defined. Math typography normalised.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "A Limiting absorption principle for high-order Schrödinger operators in critical spaces",
+        "url": "https://arxiv.org/html/2106.14242v1#S1.SS1",
+        "location": "Section 1.1, paragraph introducing B and its dual",
+        "authors": [
+          "Xiaoyan Su",
+          "Chengbin Xu",
+          "Guixiang Xu",
+          "Xiaoqing Yu"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-081",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "that broad and narrow bounds for the circular cone only is not enough for proving local smoothing type estimates.",
+      "notes": "Plural coordinated subject with singular copula. Repair direction: Use plural agreement for the combined bounds; no mathematical claim needs changing. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2108.06870v1",
+        "title": "Improved local smoothing estimate for the wave equation in higher dimensions",
+        "authors": [
+          "Chuanwei Gao",
+          "Bochen Liu",
+          "Changxing Miao",
+          "Yakun Xi"
+        ],
+        "original": "that broad and narrow bounds for the circular cone only is not enough for proving local smoothing type estimates.",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "Plural coordinated subject with singular copula.",
+        "repair": "Use plural agreement for the combined bounds; no mathematical claim needs changing.",
+        "location": "Page 4, Acknowledgements",
+        "url": "https://arxiv.org/pdf/2108.06870v1#page=4",
+        "discovery": "site:arxiv.org \"Chuanwei Gao\"",
+        "verification": "PDF prose at lines 509–513; dependent clause within acknowledgement of Beltran's observation.",
+        "context": "PDF prose at lines 509–513; dependent clause within acknowledgement of Beltran's observation.",
+        "categories": [
+          "Plural coordinated subject with singular copula."
+        ],
+        "note": "",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 19,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-081"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Improved local smoothing estimate for the wave equation in higher dimensions",
+        "url": "https://arxiv.org/pdf/2108.06870v1#page=4",
+        "location": "Page 4, Acknowledgements",
+        "authors": [
+          "Chuanwei Gao",
+          "Bochen Liu",
+          "Changxing Miao",
+          "Yakun Xi"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-082",
+      "category": "arxiv-local",
+      "text": "It would very interesting to ask if one could relax the regularity requirement on data.",
+      "expected": "It would be very interesting to ask if one could relax the regularity requirement on data.",
+      "format": "plain",
+      "notes": "Insert be after would. Changing if to whether or adding the before data is not required. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "protected": [],
+      "provenance": {
+        "id": "ARXIV-082",
+        "paper": "2201.00515v1",
+        "title": "On the decay property of the cubic fourth-order Schrödinger equation",
+        "authors": [
+          "Xueying Yu",
+          "Haitian Yue",
+          "Zehua Zhao"
+        ],
+        "location": "Page 2, Remark 1.3",
+        "discovery": "site:arxiv.org \"Zehua Zhao\" \"2022\" scattering",
+        "verification": "PDF lines 75–80. Complete sentence in regularity remark, not a mathematical fragment.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On the decay property of the cubic fourth-order Schrödinger equation",
+        "url": "https://arxiv.org/pdf/2201.00515v1#page=2",
+        "location": "Page 2, Remark 1.3",
+        "authors": [
+          "Xueying Yu",
+          "Haitian Yue",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-083",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "The refined Strichartz estimates are closely related to the the refined decoupling estimates,",
+      "notes": "A definite article is duplicated. Repair direction: Delete the duplicate article; keep the mathematical terms and citations. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2201.12840v1",
+        "title": "Maximal estimate for the Weyl sums on 𝕋ᵈ",
+        "authors": [
+          "Changxing Miao",
+          "Jiye Yuan",
+          "Tengfei Zhao"
+        ],
+        "original": "The refined Strichartz estimates are closely related to the the refined decoupling estimates,",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "A definite article is duplicated.",
+        "repair": "Delete the duplicate article; keep the mathematical terms and citations.",
+        "location": "printed p.2, Section 1, paragraph on refined Strichartz estimates",
+        "url": "https://arxiv.org/pdf/2201.12840v1#page=2",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "PDF lines 97–99; remainder gives three references for the connection.",
+        "context": "The sentence points to literature connecting refined Strichartz and decoupling estimates.",
+        "categories": [
+          "repeated_word"
+        ],
+        "note": "",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 13,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-083"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Maximal estimate for the Weyl sums on 𝕋ᵈ",
+        "url": "https://arxiv.org/pdf/2201.12840v1#page=2",
+        "location": "printed p.2, Section 1, paragraph on refined Strichartz estimates",
+        "authors": [
+          "Changxing Miao",
+          "Jiye Yuan",
+          "Tengfei Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-084",
+      "category": "arxiv-local",
+      "text": "Decoupling inequalities was introduced by Wolff [21] in connection with the local smoothing estimates for the solution to the wave equation.",
+      "expected": "Decoupling inequalities were introduced by Wolff [21] in connection with the local smoothing estimates for the solution to the wave equation.",
+      "format": "plain",
+      "notes": "Use plural were for inequalities; do not silently rename the cited author.",
+      "protected": [
+        "Wolff",
+        "[21]"
+      ],
+      "provenance": {
+        "id": "ARXIV-084",
+        "paper": "2202.11326v1",
+        "title": "Decoupling and Schrödinger maximal estimates for finite type phases in higher dimensions",
+        "authors": [
+          "Chuanwei Gao",
+          "Zhuoran Li",
+          "Tengfei Zhao",
+          "Jiqiang Zheng"
+        ],
+        "location": "Page 1, 1 Introduction and main result",
+        "discovery": "site:arxiv.org \"Chuanwei Gao\"",
+        "verification": "PDF lines 31–34, first introduction paragraph. Title is v1 title; later arXiv abstract uses shorter title.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Decoupling and Schrödinger maximal estimates for finite type phases in higher dimensions",
+        "url": "https://arxiv.org/pdf/2202.11326v1#page=1",
+        "location": "Page 1, 1 Introduction and main result",
+        "authors": [
+          "Chuanwei Gao",
+          "Zhuoran Li",
+          "Tengfei Zhao",
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-085",
+      "category": "arxiv-local",
+      "text": "It can roughly viewed from the fact that Fourier transformation takes torus to lattice.",
+      "expected": "It can roughly be viewed from the fact that Fourier transformation takes torus to lattice.",
+      "format": "plain",
+      "notes": "The missing passive auxiliary is unambiguous. Bare torus/lattice may act as generic domain labels here; article changes are not mandatory. Adverb placement has multiple grammatical variants. Zehua Zhao coauthored 1809.04211 with Gao.",
+      "protected": [
+        "Fourier"
+      ],
+      "provenance": {
+        "id": "ARXIV-085",
+        "paper": "2207.01185v1",
+        "title": "On scattering asymptotics for the 2D cubic resonant system",
+        "authors": [
+          "Kailong Yang",
+          "Zehua Zhao"
+        ],
+        "location": "Page 2, 1.2 Background and motivations, item (1)",
+        "discovery": "site:arxiv.org \"Zehua Zhao\" \"2022\" scattering",
+        "verification": "PDF lines 97–102. Complete parenthesised sentence follows explanation of discrete dimension.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "It can be roughly viewed from the fact that Fourier transformation takes torus to lattice.",
+        "It can roughly be viewed from the fact that Fourier transformation takes the torus to the lattice.",
+        "It can be roughly viewed from the fact that Fourier transformation takes the torus to the lattice.",
+        "It can roughly be viewed from the fact that Fourier transformation takes a torus to a lattice.",
+        "It can be roughly viewed from the fact that Fourier transformation takes a torus to a lattice."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On scattering asymptotics for the 2D cubic resonant system",
+        "url": "https://arxiv.org/pdf/2207.01185v1#page=2",
+        "location": "Page 2, 1.2 Background and motivations, item (1)",
+        "authors": [
+          "Kailong Yang",
+          "Zehua Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-086",
+      "category": "arxiv-local",
+      "text": "This difficulty was overcame in [39] by proving arbitrarily high integrability of ∂ₜu/u.",
+      "expected": "This difficulty was overcome in [39] by proving arbitrarily high integrability of ∂ₜu/u.",
+      "format": "plain",
+      "notes": "Was requires past participle overcome, not simple-past overcame.",
+      "protected": [
+        "[39]",
+        "∂ₜu/u"
+      ],
+      "provenance": {
+        "id": "ARXIV-086",
+        "paper": "2310.01359v2",
+        "title": "On a class of anisotropic Muckenhoupt weights and their applications to p-Laplace equations",
+        "authors": [
+          "Changxing Miao",
+          "Zhiwen Zhao"
+        ],
+        "location": "printed p.2, Section 1, discussion of weighted fast diffusion",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "PDF lines 119–124; previous sentence describes bootstrapping regularity once a Hölder bound is proved.",
+        "normalization": "The derivative fraction is flattened; prose unchanged."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "On a class of anisotropic Muckenhoupt weights and their applications to p-Laplace equations",
+        "url": "https://arxiv.org/pdf/2310.01359v2#page=2",
+        "location": "printed p.2, Section 1, discussion of weighted fast diffusion",
+        "authors": [
+          "Changxing Miao",
+          "Zhiwen Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-087",
+      "category": "arxiv-local",
+      "text": "We refer this result as the Furstenberg-Sárközy theorem.",
+      "expected": "We refer to this result as the Furstenberg-Sárközy theorem.",
+      "format": "plain",
+      "notes": "Insert to after refer; preserve the theorem name and accent.",
+      "protected": [
+        "Furstenberg-Sárközy"
+      ],
+      "provenance": {
+        "id": "ARXIV-087",
+        "paper": "2405.15400v1",
+        "title": "Two-point polynomial patterns in subsets of positive density in Rⁿ",
+        "authors": [
+          "Xuezhi Chen",
+          "Changxing Miao"
+        ],
+        "location": "Section 1, paragraph following (1.1)",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "HTML line 51; surrounding paragraph identifies the classical square-differences theorem.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Two-point polynomial patterns in subsets of positive density in Rⁿ",
+        "url": "https://arxiv.org/html/2405.15400v1#S1",
+        "location": "Section 1, paragraph following (1.1)",
+        "authors": [
+          "Xuezhi Chen",
+          "Changxing Miao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-088",
+      "category": "arxiv-local",
+      "text": "Suppose A(R) and B(R) are now functions of taking non-negative values.",
+      "expected": "Suppose A(R) and B(R) are now functions taking non-negative values.",
+      "format": "plain",
+      "notes": "Remove stray of or restore its mathematically evident R complement. Primary PDF 2411.01577v1, p.5, lines 408–410, was reread during this target review; its extracted prose also has functions of taking, so the issue is not introduced by the collection.",
+      "protected": [
+        "A(R)",
+        "B(R)"
+      ],
+      "provenance": {
+        "id": "ARXIV-088",
+        "paper": "2411.01577v1",
+        "title": "Refined Lp restriction estimate for eigenfunctions on Riemannian surfaces",
+        "authors": [
+          "Chuanwei Gao",
+          "Changxing Miao",
+          "Yakun Xi"
+        ],
+        "location": "Page 5, 1.2 Notation",
+        "discovery": "Chuanwei Gao arxiv papers mathematics",
+        "verification": "PDF lines 408–410: notation paragraph introducing comparison of nonnegative functions.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "Suppose A(R) and B(R) are now functions of R taking non-negative values."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Refined Lp restriction estimate for eigenfunctions on Riemannian surfaces",
+        "url": "https://arxiv.org/pdf/2411.01577v1#page=5",
+        "location": "Page 5, 1.2 Notation",
+        "authors": [
+          "Chuanwei Gao",
+          "Changxing Miao",
+          "Yakun Xi"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-089",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "in the Lorentz space framework, and reduces the problem to the exclusion of almost periodic solutions.",
+      "notes": "The second coordinated verb incorrectly takes singular agreement. Repair direction: Use the base-form coordinated verb to agree with the first-person-plural subject. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Requires preceding context: the omitted first clause has a first-person-plural subject. This excerpt alone does not demonstrate the agreement error.",
+      "provenance": {
+        "paper": "2412.04566v1",
+        "title": "Global well-posedness and scattering for mass-critical inhomogeneous NLS when d≥3",
+        "authors": [
+          "Xuan Liu",
+          "Changxing Miao",
+          "Jiqiang Zheng"
+        ],
+        "original": "in the Lorentz space framework, and reduces the problem to the exclusion of almost periodic solutions.",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "The second coordinated verb incorrectly takes singular agreement.",
+        "repair": "Use the base-form coordinated verb to agree with the first-person-plural subject.",
+        "location": "Abstract, sentence describing the concentration compactness/rigidity method",
+        "url": "https://arxiv.org/html/2412.04566v1",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "HTML line 43; preceding clause supplies the first-person-plural subject and the first coordinated verb.",
+        "context": "The same first-person-plural subject applies to performing the method and reducing the problem.",
+        "categories": [
+          "subject_verb_agreement",
+          "coordination"
+        ],
+        "note": "Requires preceding context: the omitted first clause has a first-person-plural subject. This excerpt alone does not demonstrate the agreement error.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 16,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-089"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Global well-posedness and scattering for mass-critical inhomogeneous NLS when d≥3",
+        "url": "https://arxiv.org/html/2412.04566v1",
+        "location": "Abstract, sentence describing the concentration compactness/rigidity method",
+        "authors": [
+          "Xuan Liu",
+          "Changxing Miao",
+          "Jiqiang Zheng"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-090",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "where the solution maybe have infinite energy.",
+      "notes": "An adverb is used where the sentence requires a modal predicate. Repair direction: Separate the probability adverb into a modal plus adverb; the following verb then remains in its base form. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error.",
+      "provenance": {
+        "paper": "2501.05188v1",
+        "title": "Global well-posedness of the defocusing nonlinear wave equation outside of a ball with radial data for 3<p<5",
+        "authors": [
+          "Guixiang Xu",
+          "Pengxuan Yang",
+          "Zhuohui You"
+        ],
+        "original": "where the solution maybe have infinite energy.",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "An adverb is used where the sentence requires a modal predicate.",
+        "repair": "Separate the probability adverb into a modal plus adverb; the following verb then remains in its base form.",
+        "location": "Section 1, paragraph immediately preceding Theorem 1.3",
+        "url": "https://arxiv.org/html/2501.05188v1#S1",
+        "discovery": "site:arxiv.org \"Guixiang Xu\" Tang",
+        "verification": "Pinned primary HTML, lines 81–88; clause ends the paragraph, referring to the low-regularity radial solution.",
+        "context": "Pinned primary HTML, lines 81–88; clause ends the paragraph, referring to the low-regularity radial solution.",
+        "categories": [
+          "word segmentation / modal predicate"
+        ],
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "note": "",
+        "quote_words_whitespace": 7,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-090"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Global well-posedness of the defocusing nonlinear wave equation outside of a ball with radial data for 3<p<5",
+        "url": "https://arxiv.org/html/2501.05188v1#S1",
+        "location": "Section 1, paragraph immediately preceding Theorem 1.3",
+        "authors": [
+          "Guixiang Xu",
+          "Pengxuan Yang",
+          "Zhuohui You"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-091",
+      "category": "arxiv-local",
+      "format": "plain",
+      "text": "Note that all these work can be viewed as theories insider Calderón-Zygmund’s framework",
+      "notes": "Plural demonstrative attached to uncountable work; misspelled preposition. Repair direction: Use a compatible quantifier for the mass noun and correct the final letter of the preposition. Unscored: this is an exact excerpt, not a complete sentence. Retain the original paper context; do not treat missing context as a model error. Liang Wang coauthored 2201.01021 with Gao; matching math affiliation Wuhan University.",
+      "provenance": {
+        "paper": "2501.08832v1",
+        "title": "Noncommutative Bourgain’s circular maximal theorem and a local smoothing estimate on quantum Euclidean space",
+        "authors": [
+          "Guixiang Hong",
+          "Xudong Lai",
+          "Liang Wang"
+        ],
+        "original": "Note that all these work can be viewed as theories insider Calderón-Zygmund’s framework",
+        "kind": "excerpt",
+        "severity": "local",
+        "issue": "Plural demonstrative attached to uncountable work; misspelled preposition.",
+        "repair": "Use a compatible quantifier for the mass noun and correct the final letter of the preposition.",
+        "location": "Page 2, 1 Introduction",
+        "url": "https://arxiv.org/pdf/2501.08832v1#page=2",
+        "discovery": "\"Liang Wang\" arxiv \"local smoothing\"",
+        "verification": "PDF lines 45–53; sentence describes preceding noncommutative-analysis work and continues with a contrast.",
+        "context": "PDF lines 45–53; sentence describes preceding noncommutative-analysis work and continues with a contrast.",
+        "categories": [
+          "Plural demonstrative attached to uncountable work; misspelled preposition."
+        ],
+        "note": "Liang Wang coauthored 2201.01021 with Gao; matching math affiliation Wuhan University.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved.",
+        "quote_words_whitespace": 13,
+        "status": "research_candidate_not_gold",
+        "evaluation_use": "retain source context; not a standalone sentence fixture",
+        "id": "ARXIV-091"
+      },
+      "cohort": "arxiv",
+      "kind": "excerpt",
+      "severity": "local",
+      "citation": {
+        "title": "Noncommutative Bourgain’s circular maximal theorem and a local smoothing estimate on quantum Euclidean space",
+        "url": "https://arxiv.org/pdf/2501.08832v1#page=2",
+        "location": "Page 2, 1 Introduction",
+        "authors": [
+          "Guixiang Hong",
+          "Xudong Lai",
+          "Liang Wang"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-092",
+      "category": "arxiv-local",
+      "text": "These facts indicate that the nonuniqueness of Leray-Hopf solutions are more difficult to handle than mild/Oseen solutions.",
+      "expected": "These facts indicate that the nonuniqueness of Leray-Hopf solutions is more difficult to handle than mild/Oseen solutions.",
+      "format": "plain",
+      "notes": "Singular nonuniqueness requires is. Treat the comparison as elliptical; making it explicit is optional, not mandatory grammar correction. Independent review: the comparison can be elliptical. Only the agreement error is required for grammar scoring.",
+      "protected": [
+        "Leray-Hopf",
+        "mild/Oseen"
+      ],
+      "provenance": {
+        "id": "ARXIV-092",
+        "paper": "2501.09698v1",
+        "title": "Nonuniqueness analysis on the Navier-Stokes equation in CₜLᵠ space",
+        "authors": [
+          "Changxing Miao",
+          "Zhiwen Zhao"
+        ],
+        "location": "Section 1, paragraph comparing Leray–Hopf and mild/Oseen solutions",
+        "discovery": "https://arxiv.org/search/?query=Miao%2C+Changxing&searchtype=author&abstracts=show&order=-announced_date_first&size=50",
+        "verification": "HTML line 65; preceding sentences discuss additional Sobolev regularity and weak–strong uniqueness.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Nonuniqueness analysis on the Navier-Stokes equation in CₜLᵠ space",
+        "url": "https://arxiv.org/html/2501.09698v1#S1",
+        "location": "Section 1, paragraph comparing Leray–Hopf and mild/Oseen solutions",
+        "authors": [
+          "Changxing Miao",
+          "Zhiwen Zhao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-093",
+      "category": "arxiv-local",
+      "text": "In Section 3, we prove the sharp Lp estimate for Hörmander oscillatory integral operator.",
+      "expected": "In Section 3, we prove the sharp Lp estimate for the Hörmander oscillatory integral operator.",
+      "format": "plain",
+      "notes": "Supply a determiner for singular operator, or use the generic plural. The exact operator class and exponent notation remain fixed.",
+      "protected": [
+        "Section 3",
+        "Lp",
+        "Hörmander"
+      ],
+      "provenance": {
+        "id": "ARXIV-093",
+        "paper": "2505.03330v1",
+        "title": "Hörmander oscillatory integral operators: a revisit",
+        "authors": [
+          "Chuanwei Gao",
+          "Zhong Gao",
+          "Changxing Miao"
+        ],
+        "location": "Page 3, 1 Introduction, paper outline",
+        "discovery": "Chuanwei Gao arxiv papers mathematics",
+        "verification": "PDF lines 290–295, outline. Mathematical L superscript p normalized.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "accepted": [
+        "In Section 3, we prove the sharp Lp estimate for a Hörmander oscillatory integral operator.",
+        "In Section 3, we prove the sharp Lp estimate for Hörmander oscillatory integral operators."
+      ],
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Hörmander oscillatory integral operators: a revisit",
+        "url": "https://arxiv.org/pdf/2505.03330v1#page=3",
+        "location": "Page 3, 1 Introduction, paper outline",
+        "authors": [
+          "Chuanwei Gao",
+          "Zhong Gao",
+          "Changxing Miao"
+        ]
+      }
+    },
+    {
+      "id": "arxiv-094",
+      "category": "arxiv-local",
+      "text": "Sogge’s bounds (1.1) corresponds to the case when dim Q = 1.",
+      "expected": "Sogge’s bounds (1.1) correspond to the case when dim Q = 1.",
+      "format": "plain",
+      "notes": "Use correspond with plural bounds. Changing when to where is optional style. Yakun Xi coauthored 2108.06870 with Gao.",
+      "protected": [
+        "Sogge’s",
+        "(1.1)",
+        "dim Q = 1"
+      ],
+      "provenance": {
+        "id": "ARXIV-094",
+        "paper": "2505.20657v1",
+        "title": "Sharp Spectral-Cluster Restriction Bounds for Orthonormal Systems",
+        "authors": [
+          "Changbiao Jian",
+          "Xing Wang",
+          "Yakun Xi"
+        ],
+        "location": "Page 2, 1 Introduction",
+        "discovery": "Chuanwei Gao arxiv papers mathematics → Yakun Xi author result",
+        "verification": "PDF lines 128–129; sentence following discussion of Frank and Sabin's sharp exponent.",
+        "normalization": "Line breaks and mathematical typography normalized; prose words preserved."
+      },
+      "severity": "local",
+      "review_status": "reviewed_minimal_reference",
+      "reference_scope": "Exact matches are a conservative lower bound; other edits still require review.",
+      "cohort": "arxiv",
+      "kind": "sentence",
+      "citation": {
+        "title": "Sharp Spectral-Cluster Restriction Bounds for Orthonormal Systems",
+        "url": "https://arxiv.org/pdf/2505.20657v1#page=2",
+        "location": "Page 2, 1 Introduction",
+        "authors": [
+          "Changbiao Jian",
+          "Xing Wang",
+          "Yakun Xi"
+        ]
+      }
+    }
+  ]
+}

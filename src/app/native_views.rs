@@ -910,7 +910,8 @@ impl EditorApp {
             || self.packages_visible
             || self.rename_dialog.is_some()
             || self.table_editor.is_some()
-            || self.latexdiff.is_some()
+            || self.tool_dialog_open()
+            || self.liquid.visible()
             || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some();
         if blocked_by_overlay {
@@ -1175,6 +1176,7 @@ impl EditorApp {
             || self.settings_visible
             || self.packages_visible
             || self.rename_dialog.is_some()
+            || self.liquid.visible()
             || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some()
         {
@@ -1199,12 +1201,14 @@ impl EditorApp {
     }
 
     pub(super) fn show_app_popup_window(&mut self, context: &egui::Context) {
-        if app_popup_blocked_by_root_overlay(
-            self.document_workflow.modal().is_some(),
-            self.typst_overrides_visible,
-            self.workspace_chooser_visible,
-            self.rename_dialog.is_some(),
-        ) {
+        if self.liquid.visible()
+            || app_popup_blocked_by_root_overlay(
+                self.document_workflow.modal().is_some(),
+                self.typst_overrides_visible,
+                self.workspace_chooser_visible,
+                self.rename_dialog.is_some(),
+            )
+        {
             self.close_app_popup();
             return;
         }
@@ -1518,6 +1522,7 @@ impl EditorApp {
                                     link,
                                     table,
                                     math,
+                                    liquid_selection,
                                     ..
                                 } => {
                                     let mut editor_action = None;
@@ -1535,6 +1540,9 @@ impl EditorApp {
                                             link: link.as_deref(),
                                             table: table.as_ref(),
                                             math: math.as_ref(),
+                                            liquid_selection: liquid_selection
+                                                .as_ref()
+                                                .filter(|_| !self.liquid.busy()),
                                         },
                                         &shortcuts,
                                         &mut editor_action,
@@ -1645,21 +1653,8 @@ impl EditorApp {
             visible,
         };
         if self.webview.is_none() {
-            let focused = eframe::window_host::window(context, context.viewport_id())
-                .map(|window| window.has_focus())
-                .or_else(|| context.input(|input| input.viewport().focused));
-            let may_create =
-                may_create_window_webview(self.window_host, cfg!(target_os = "macos"), focused);
-            if !may_create {
-                // Wry currently activates NSApplication while constructing a
-                // WKWebView, including child web views. Defer creation until
-                // the user next activates this window so background service
-                // changes can never pull focus from another application.
-                self.preview.webview_state = ServiceState::Starting(
-                    "Interactive preview will resume when the window is active".to_owned(),
-                );
-                return false;
-            }
+            // Child construction preserves native parent ownership, including
+            // inactive document windows. Backend work never waits for focus.
             let navigation_sender = self.web_link_sender.clone();
             let navigation_repaint = crate::worker::RepaintTarget::current(context);
             let popup_sender = self.web_link_sender.clone();
@@ -1745,10 +1740,8 @@ impl EditorApp {
             let built = builder.build_as_child(&parent);
             match built {
                 Ok(webview) => {
-                    // Native preview creation is background rendering work.
-                    // with_focused(false) is unsupported on macOS, so explicitly
-                    // leave the parent as the keyboard owner after construction.
-                    let _ = webview.focus_parent();
+                    // Child construction neither activates the application nor
+                    // changes the parent's existing first responder.
                     #[cfg(target_os = "macos")]
                     {
                         crate::native_window::enable_native_webview_magnification(&webview);

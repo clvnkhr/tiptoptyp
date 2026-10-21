@@ -1,0 +1,1336 @@
+{
+  "version": 1,
+  "description": "Source-backed Harper-adapter comparison. Generated controlled sources and word probes are explicitly labelled; original TeX excerpts retain source provenance; existing repository documents are unchanged. No normalized arXiv sentence is claimed to be original TeX.",
+  "documents": [
+    {
+      "id": "inline-agreement-tex",
+      "category": "grammar",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese estimates $A$ and $B$ is uniform.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese estimates $A$ and $B$ are uniform.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "The subject and finite verb straddle two masked equations.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "inline-agreement-typst",
+      "category": "grammar",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThese estimates $A$ and $B$ is uniform.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThese estimates $A$ and $B$ are uniform.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "The subject and finite verb straddle two masked equations.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "inline-control-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe norm $\\lVert u\\rVert$ is finite.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe norm $\\lVert u\\rVert$ is finite.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "inline-control-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe norm $norm(u)$ is finite.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThe norm $norm(u)$ is finite.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "display-comma-tex",
+      "category": "grammar",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe use the identity\n\\[\n  x = y,\n\\]\nwhich imply the result.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe use the identity\n\\[\n  x = y,\n\\]\nwhich implies the result.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "A comma inside display math continues the relative clause; retain the identity as its singular antecedent.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "display-comma-typst",
+      "category": "grammar",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe use the identity\n$\n  x = y,\n$\nwhich imply the result.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nWe use the identity\n$\n  x = y,\n$\nwhich implies the result.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "A comma inside display math continues the relative clause; retain the identity as its singular antecedent.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "display-semicolon-tex",
+      "category": "grammar",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe estimate gives\n\\begin{equation}\n  z = x;\n\\end{equation}\ntherefore, the conclusion follow.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe estimate gives\n\\begin{equation}\n  z = x;\n\\end{equation}\ntherefore, the conclusion follows.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "display-semicolon-typst",
+      "category": "grammar",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe estimate gives\n$\n  z = x;\n$\ntherefore, the conclusion follow.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThe estimate gives\n$\n  z = x;\n$\ntherefore, the conclusion follows.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "display-period-tex",
+      "category": "grammar",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[x=y.\\]\nThese estimate is useful.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[x=y.\\]\nThis estimate is useful.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Reference chooses the singular demonstrative; pluralising both estimate and is is also grammatical and should be reviewed rather than called wrong.",
+      "kind": "tex",
+      "cohort": "source-boundaries",
+      "accepted_source": [
+        "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[x=y.\\]\nThese estimates are useful.\n\\end{document}\n"
+      ]
+    },
+    {
+      "id": "display-period-typst",
+      "category": "grammar",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$ x=y. $\nThese estimate is useful.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$ x=y. $\nThis estimate is useful.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Reference chooses the singular demonstrative; pluralising both estimate and is is also grammatical and should be reviewed rather than called wrong.",
+      "kind": "typst",
+      "cohort": "source-boundaries",
+      "accepted_source": [
+        "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$ x=y. $\nThese estimates are useful.\n"
+      ]
+    },
+    {
+      "id": "display-colon-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe use the identity\n\\[x=y:\\]\nthe theorem then follows.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe use the identity\n\\[x=y:\\]\nthe theorem then follows.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "display-colon-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe use the identity\n$ x=y: $\nthe theorem then follows.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nWe use the identity\n$ x=y: $\nthe theorem then follows.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "formatting-agreement-tex",
+      "category": "grammar",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese \\emph{estimates} is uniform.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThese \\emph{estimates} are uniform.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Visible emphasis content participates in the sentence; repair must not replace macro syntax.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "formatting-agreement-typst",
+      "category": "grammar",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThese #emph[estimates] is uniform.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThese #emph[estimates] are uniform.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Visible emphasis content participates in the sentence; repair must not replace macro syntax.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "formatting-word-tex",
+      "category": "spelling",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe proof contains a \\textbf{misspelld} word.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe proof contains a \\textbf{misspelled} word.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "formatting-word-typst",
+      "category": "spelling",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe proof contains a #strong[misspelld] word.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThe proof contains a #strong[misspelled] word.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "math-text-tex",
+      "category": "grammar",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\[x=y\\quad\\text{This is is the result.}\\]\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\[x=y\\quad\\text{This is the result.}\\]\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Intentional adapter difference: current TeX parser admits text command contents inside math; Typst Equation is entirely opaque. Typst source should remain unchanged because the integration cannot see the typo.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "math-text-typst",
+      "category": "grammar",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n$ x=y quad text(\"This is is the result.\") $\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\n$ x=y quad text(\"This is is the result.\") $\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Intentional adapter difference: current TeX parser admits text command contents inside math; Typst Equation is entirely opaque. Typst source should remain unchanged because the integration cannot see the typo.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "technical-payloads-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\newcommand{\\technicalname}{NonsensicalTechnicalToken}\nThe theorem applies.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\newcommand{\\technicalname}{NonsensicalTechnicalToken}\nThe theorem applies.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Payloads are not English prose; a projection must never expose or edit them.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "technical-payloads-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n#let technical_fn(name, value: \"NonsensicalTechnicalToken\") = name\n#technical_fn(\"NonsensicalArgumentToken\", value: \"NonsensicalValueToken\")\nThe theorem applies.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\n#let technical_fn(name, value: \"NonsensicalTechnicalToken\") = name\n#technical_fn(\"NonsensicalArgumentToken\", value: \"NonsensicalValueToken\")\nThe theorem applies.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Payloads are not English prose; a projection must never expose or edit them.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "heading-fragment-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\section{A priori estimates}\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\section{A priori estimates}\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Heading is an intentional fragment, not a sentence requiring a verb.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "heading-fragment-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n= A priori estimates\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\n= A priori estimates\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Heading is an intentional fragment, not a sentence requiring a verb.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "heading-typo-tex",
+      "category": "spelling",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\section{Asymptotic behaviour and regularity estmates}\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\section{Asymptotic behaviour and regularity estimates}\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "heading-typo-typst",
+      "category": "spelling",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n= Asymptotic behaviour and regularity estmates\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\n= Asymptotic behaviour and regularity estimates\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "caption-fragment-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\begin{figure}\n\\caption{Comparison of the two bounds}\n\\end{figure}\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\begin{figure}\n\\caption{Comparison of the two bounds}\n\\end{figure}\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Caption fragments should not be completed or rephrased.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "caption-fragment-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n#figure(rect(), caption: [Comparison of the two bounds])\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\n#figure(rect(), caption: [Comparison of the two bounds])\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Caption fragments should not be completed or rephrased.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "caption-repeat-tex",
+      "category": "grammar",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\begin{figure}\n\\caption{The the two bounds agree.}\n\\end{figure}\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\n\\begin{figure}\n\\caption{The two bounds agree.}\n\\end{figure}\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "caption-repeat-typst",
+      "category": "grammar",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\n#figure(rect(), caption: [The the two bounds agree.])\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\n#figure(rect(), caption: [The two bounds agree.])\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "names-possessives-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "names-possessives-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "math-compounds-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe nonautonomous semigroup has local well-posedness.\nThis result does not imply ill-posedness.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe nonautonomous semigroup has local well-posedness.\nThis result does not imply ill-posedness.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "math-compounds-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe nonautonomous semigroup has local well-posedness.\nThis result does not imply ill-posedness.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThe nonautonomous semigroup has local well-posedness.\nThis result does not imply ill-posedness.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "math-compound-typo-tex",
+      "category": "spelling",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe nonautonmous semigroup is continuous.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe nonautonomous semigroup is continuous.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "math-compound-typo-typst",
+      "category": "spelling",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe nonautonmous semigroup is continuous.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThe nonautonomous semigroup is continuous.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "unicode-location-tex",
+      "category": "spelling",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nÉtale cohomology is discussed here. The next \\emph{misspelld} word follows $\\alpha$.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nÉtale cohomology is discussed here. The next \\emph{misspelled} word follows $\\alpha$.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Accented characters before repair check Unicode scalar offsets; math identifier must remain untouched.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "unicode-location-typst",
+      "category": "spelling",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nÉtale cohomology is discussed here. The next #emph[misspelld] word follows $alpha$.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nÉtale cohomology is discussed here. The next #emph[misspelled] word follows $alpha$.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Accented characters before repair check Unicode scalar offsets; math identifier must remain untouched.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "literal-code-tex",
+      "category": "unchanged",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nLiteral code \\verb|misspelld is is| is not prose.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nLiteral code \\verb|misspelld is is| is not prose.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "literal-code-typst",
+      "category": "unchanged",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nLiteral code `misspelld is is` is not prose.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nLiteral code `misspelld is is` is not prose.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "word-split-formatting-tex",
+      "category": "spelling",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe non\\emph{autonmous} equation is stable.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nThe non\\emph{autonomous} equation is stable.\n\\end{document}\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Deliberately adversarial formatting within one word. Treat reconstruction correctness separately from model quality; no cross-syntax replacement can be blindly applied.",
+      "kind": "tex",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "word-split-formatting-typst",
+      "category": "spelling",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nThe non#emph[autonmous] equation is stable.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nThe non#emph[autonomous] equation is stable.\n",
+      "provenance": "Generated integration fixture; not a quotation or reconstruction of an original paper source.",
+      "notes": "Deliberately adversarial formatting within one word. Treat reconstruction correctness separately from model quality; no cross-syntax replacement can be blindly applied.",
+      "kind": "typst",
+      "cohort": "source-boundaries"
+    },
+    {
+      "id": "word-01-word",
+      "kind": "tex",
+      "source": "sentnce",
+      "expected_source": "sentence",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-01",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-01-context",
+      "kind": "tex",
+      "source": "This sentnce states the main result.",
+      "expected_source": "This sentence states the main result.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-01",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-02-word",
+      "kind": "typst",
+      "source": "misspelld",
+      "expected_source": "misspelled",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-02",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-02-context",
+      "kind": "typst",
+      "source": "This is a misspelld word.",
+      "expected_source": "This is a misspelled word.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-02",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-03-word",
+      "kind": "tex",
+      "source": "estmates",
+      "expected_source": "estimates",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-03",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-03-context",
+      "kind": "tex",
+      "source": "These estmates hold uniformly.",
+      "expected_source": "These estimates hold uniformly.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-03",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-04-word",
+      "kind": "typst",
+      "source": "nonautonmous",
+      "expected_source": "nonautonomous",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-04",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-04-context",
+      "kind": "typst",
+      "source": "The nonautonmous equation has a mild solution.",
+      "expected_source": "The nonautonomous equation has a mild solution.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-04",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-05-word",
+      "kind": "tex",
+      "source": "continous",
+      "expected_source": "continuous",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-05",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-05-context",
+      "kind": "tex",
+      "source": "The function is continous.",
+      "expected_source": "The function is continuous.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-05",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-06-word",
+      "kind": "typst",
+      "source": "teh",
+      "expected_source": "the",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-06",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-06-context",
+      "kind": "typst",
+      "source": "We prove teh main theorem.",
+      "expected_source": "We prove the main theorem.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-06",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-07-word",
+      "kind": "tex",
+      "source": "recieve",
+      "expected_source": "receive",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-07",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-07-context",
+      "kind": "tex",
+      "source": "We recieve a uniform bound.",
+      "expected_source": "We receive a uniform bound.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-07",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-08-word",
+      "kind": "typst",
+      "source": "seperate",
+      "expected_source": "separate",
+      "category": "spelling",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-08",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-08-context",
+      "kind": "typst",
+      "source": "The two estimates are seperate.",
+      "expected_source": "The two estimates are separate.",
+      "category": "spelling",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-08",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-09-word",
+      "kind": "tex",
+      "source": "semigroup",
+      "expected_source": "semigroup",
+      "category": "math-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-09",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-09-context",
+      "kind": "tex",
+      "source": "The semigroup preserves positivity.",
+      "expected_source": "The semigroup preserves positivity.",
+      "category": "math-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-09",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-10-word",
+      "kind": "typst",
+      "source": "nonautonomous",
+      "expected_source": "nonautonomous",
+      "category": "math-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-10",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-10-context",
+      "kind": "typst",
+      "source": "The nonautonomous equation is well posed.",
+      "expected_source": "The nonautonomous equation is well posed.",
+      "category": "math-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-10",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-11-word",
+      "kind": "tex",
+      "source": "well-posedness",
+      "expected_source": "well-posedness",
+      "category": "math-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-11",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-11-context",
+      "kind": "tex",
+      "source": "We prove local well-posedness.",
+      "expected_source": "We prove local well-posedness.",
+      "category": "math-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-11",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-12-word",
+      "kind": "typst",
+      "source": "ill-posedness",
+      "expected_source": "ill-posedness",
+      "category": "math-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-12",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-12-context",
+      "kind": "typst",
+      "source": "This example establishes ill-posedness.",
+      "expected_source": "This example establishes ill-posedness.",
+      "category": "math-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-12",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-13-word",
+      "kind": "tex",
+      "source": "Tao",
+      "expected_source": "Tao",
+      "category": "name-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-13",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-13-context",
+      "kind": "tex",
+      "source": "The theorem of Tao applies here.",
+      "expected_source": "The theorem of Tao applies here.",
+      "category": "name-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-13",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-14-word",
+      "kind": "typst",
+      "source": "Tao's",
+      "expected_source": "Tao's",
+      "category": "name-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-14",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-14-context",
+      "kind": "typst",
+      "source": "Tao's argument gives the estimate.",
+      "expected_source": "Tao's argument gives the estimate.",
+      "category": "name-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-14",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-15-word",
+      "kind": "tex",
+      "source": "Tao’s",
+      "expected_source": "Tao’s",
+      "category": "name-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-15",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-15-context",
+      "kind": "tex",
+      "source": "Tao’s argument gives the estimate.",
+      "expected_source": "Tao’s argument gives the estimate.",
+      "category": "name-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-15",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-16-word",
+      "kind": "typst",
+      "source": "Barbato",
+      "expected_source": "Barbato",
+      "category": "name-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-16",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-16-context",
+      "kind": "typst",
+      "source": "The result of Barbato applies here.",
+      "expected_source": "The result of Barbato applies here.",
+      "category": "name-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-16",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-17-word",
+      "kind": "tex",
+      "source": "Romito",
+      "expected_source": "Romito",
+      "category": "name-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-17",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-17-context",
+      "kind": "tex",
+      "source": "The result of Romito applies here.",
+      "expected_source": "The result of Romito applies here.",
+      "category": "name-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-17",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-18-word",
+      "kind": "typst",
+      "source": "Romito’s",
+      "expected_source": "Romito’s",
+      "category": "name-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-18",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-18-context",
+      "kind": "typst",
+      "source": "Romito’s proof gives the bound.",
+      "expected_source": "Romito’s proof gives the bound.",
+      "category": "name-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-18",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-19-word",
+      "kind": "tex",
+      "source": "colour",
+      "expected_source": "colour",
+      "category": "british-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-19",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-19-context",
+      "kind": "tex",
+      "source": "The colour of the curve indicates its sign.",
+      "expected_source": "The colour of the curve indicates its sign.",
+      "category": "british-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-19",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-20-word",
+      "kind": "typst",
+      "source": "behaviour",
+      "expected_source": "behaviour",
+      "category": "british-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-20",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-20-context",
+      "kind": "typst",
+      "source": "We study the asymptotic behaviour.",
+      "expected_source": "We study the asymptotic behaviour.",
+      "category": "british-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-20",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-21-word",
+      "kind": "tex",
+      "source": "centre",
+      "expected_source": "centre",
+      "category": "british-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-21",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-21-context",
+      "kind": "tex",
+      "source": "The centre of the ball is fixed.",
+      "expected_source": "The centre of the ball is fixed.",
+      "category": "british-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-21",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-22-word",
+      "kind": "typst",
+      "source": "minimise",
+      "expected_source": "minimise",
+      "category": "british-control",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-22",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-22-context",
+      "kind": "typst",
+      "source": "We minimise the energy.",
+      "expected_source": "We minimise the energy.",
+      "category": "british-control",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-22",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-23-word",
+      "kind": "tex",
+      "source": "form",
+      "expected_source": "form",
+      "category": "context-only",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-23",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-23-context",
+      "kind": "tex",
+      "source": "We derive the estimate form the energy identity.",
+      "expected_source": "We derive the estimate from the energy identity.",
+      "category": "context-only",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-23",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-24-word",
+      "kind": "typst",
+      "source": "their",
+      "expected_source": "their",
+      "category": "context-only",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-24",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-24-context",
+      "kind": "typst",
+      "source": "Their is a unique solution.",
+      "expected_source": "There is a unique solution.",
+      "category": "context-only",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-24",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-25-word",
+      "kind": "tex",
+      "source": "there",
+      "expected_source": "there",
+      "category": "context-only",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-25",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-25-context",
+      "kind": "tex",
+      "source": "We use there estimates.",
+      "expected_source": "We use their estimates.",
+      "category": "context-only",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-25",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-26-word",
+      "kind": "typst",
+      "source": "affect",
+      "expected_source": "affect",
+      "category": "context-only",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-26",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-26-context",
+      "kind": "typst",
+      "source": "The estimate has an affect on the proof.",
+      "expected_source": "The estimate has an effect on the proof.",
+      "category": "context-only",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-26",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-27-word",
+      "kind": "tex",
+      "source": "prove",
+      "expected_source": "prove",
+      "category": "context-only",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-27",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-27-context",
+      "kind": "tex",
+      "source": "This argument provides a prove of the theorem.",
+      "expected_source": "This argument provides a proof of the theorem.",
+      "category": "context-only",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-27",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "word-28-word",
+      "kind": "typst",
+      "source": "proof",
+      "expected_source": "proof",
+      "category": "context-only",
+      "notes": "Generated individual-word input. Valid real words remain unchanged: intended replacement cannot be inferred without context. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-28",
+      "scope": "word",
+      "cohort": "individual-bits"
+    },
+    {
+      "id": "word-28-context",
+      "kind": "typst",
+      "source": "We proof the main theorem.",
+      "expected_source": "We prove the main theorem.",
+      "category": "context-only",
+      "notes": "Generated sentence-context counterpart, with a conservative minimal reference. British dialect is intentional; names and accepted mathematical compounds should remain unchanged.",
+      "pair_id": "word-28",
+      "scope": "context",
+      "cohort": "word-context"
+    },
+    {
+      "id": "original-source-0910.0311v1",
+      "kind": "tex",
+      "source": "Section 2 is devoted to present some\npreparatory results on Besov spaces.",
+      "expected_source": "Section 2 is devoted to presenting some\npreparatory results on Besov spaces.",
+      "category": "paper-source-excerpt",
+      "notes": "Exact, short original TeX source excerpt, not a normalized prose reconstruction. Not a complete original paragraph. Minimal repair retains all math source.",
+      "corpus_case": "arxiv-0910-0311",
+      "citation": {
+        "url": "https://arxiv.org/src/0910.0311v1",
+        "paper": "0910.0311v1",
+        "source_file": "MX-GBN.tex",
+        "line_start": 212,
+        "line_end": 213
+      },
+      "retrieval": {
+        "archive_path": "/private/tmp/tiptoptyp-arxiv-sources/0910.0311v1.source",
+        "sha256": "c1377b518b3bef65f618105baf80a61d2584aaba9c248a07709b1c60a6e4eeb8",
+        "original_source_scalar_range": [
+          11661,
+          11734
+        ],
+        "archive_validation": "Member paths were checked against absolute/traversal names and links; members read in memory only; no TeX executed."
+      },
+      "quote_words": 12,
+      "cohort": "original-tex"
+    },
+    {
+      "id": "original-source-1811.07239v1",
+      "kind": "tex",
+      "source": "Remarkably, an interaction Morawetz-type estimate are applied.",
+      "expected_source": "Remarkably, an interaction Morawetz-type estimate is applied.",
+      "category": "paper-source-excerpt",
+      "notes": "Exact, short original TeX source excerpt, not a normalized prose reconstruction. Not a complete original paragraph. Minimal repair retains all math source.",
+      "corpus_case": "arxiv-077",
+      "citation": {
+        "url": "https://arxiv.org/src/1811.07239v1",
+        "paper": "1811.07239v1",
+        "source_file": "threshold_solution.tex",
+        "line_start": 83,
+        "line_end": 83
+      },
+      "retrieval": {
+        "archive_path": "/private/tmp/tiptoptyp-arxiv-sources/1811.07239v1.source",
+        "sha256": "55bbdf4b71cb0885fa6663d2a0ecad298143fabfbb9bbf11d06d2a872aead0dc",
+        "original_source_scalar_range": [
+          2890,
+          2952
+        ],
+        "archive_validation": "Member paths were checked against absolute/traversal names and links; members read in memory only; no TeX executed."
+      },
+      "quote_words": 7,
+      "cohort": "original-tex"
+    },
+    {
+      "id": "original-source-2312.17035v1",
+      "kind": "tex",
+      "source": "We will introduce some notations and conventions in next subsection.",
+      "expected_source": "We will introduce some notations and conventions in the next subsection.",
+      "category": "paper-source-excerpt",
+      "notes": "Exact, short original TeX source excerpt, not a normalized prose reconstruction. Not a complete original paragraph. Minimal repair retains all math source.",
+      "corpus_case": "arxiv-2312-17035",
+      "citation": {
+        "url": "https://arxiv.org/src/2312.17035v1",
+        "paper": "2312.17035v1",
+        "source_file": "Yuan_202312.tex",
+        "line_start": 226,
+        "line_end": 226
+      },
+      "retrieval": {
+        "archive_path": "/private/tmp/tiptoptyp-arxiv-sources/2312.17035v1.source",
+        "sha256": "7656a020a8f58ea569d12db680fe84c9a6e44a0906d0308ff070ffdba6b5be75",
+        "original_source_scalar_range": [
+          12418,
+          12486
+        ],
+        "archive_validation": "Member paths were checked against absolute/traversal names and links; members read in memory only; no TeX executed."
+      },
+      "quote_words": 10,
+      "cohort": "original-tex"
+    },
+    {
+      "id": "original-source-2507.15139v2",
+      "kind": "tex",
+      "source": "Let $k$ be an integers with $k\\geq2$, and let $G$ be a connected graph.",
+      "expected_source": "Let $k$ be an integer with $k\\geq2$, and let $G$ be a connected graph.",
+      "category": "paper-source-excerpt",
+      "notes": "Exact, short original TeX source excerpt, not a normalized prose reconstruction. Not a complete original paragraph. Minimal repair retains all math source.",
+      "corpus_case": "arxiv-2507-15139",
+      "citation": {
+        "url": "https://arxiv.org/src/2507.15139v2",
+        "paper": "2507.15139v2",
+        "source_file": "A_result_on_spanning_trees_with_bounded_total_excess.tex",
+        "line_start": 96,
+        "line_end": 96
+      },
+      "retrieval": {
+        "archive_path": "/private/tmp/tiptoptyp-arxiv-sources/2507.15139v2.source",
+        "sha256": "e75a5d7190fcb71e26c14c63611354fdf24f53077d28b87a2b2138c5c36b66ce",
+        "original_source_scalar_range": [
+          4807,
+          4878
+        ],
+        "archive_validation": "Member paths were checked against absolute/traversal names and links; members read in memory only; no TeX executed."
+      },
+      "quote_words": 14,
+      "cohort": "original-tex"
+    },
+    {
+      "id": "existing-clean-inline-math",
+      "kind": "tex",
+      "source": "The norm $\\lVert u\\rVert_{H^s}$ is finite.",
+      "expected_source": "The norm $\\lVert u\\rVert_{H^s}$ is finite.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-tex-display-comma",
+      "kind": "tex",
+      "source": "If\n\\[\n  \\lVert u\\rVert_{H^s} \\leq C,\n\\]\nthen the solution exists.",
+      "expected_source": "If\n\\[\n  \\lVert u\\rVert_{H^s} \\leq C,\n\\]\nthen the solution exists.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. The comma inside display math remains sentence punctuation in the reviewed projection.",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-typst-display-comma",
+      "kind": "typst",
+      "source": "If\n$\n  norm(u)_(H^s) <= C,\n$\nthen the solution exists.",
+      "expected_source": "If\n$\n  norm(u)_(H^s) <= C,\n$\nthen the solution exists.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-tex-display-period",
+      "kind": "tex",
+      "source": "The energy satisfies\n\\begin{equation}\n  E(t) \\leq E(0).\n\\end{equation}\nTherefore, the solution is bounded.",
+      "expected_source": "The energy satisfies\n\\begin{equation}\n  E(t) \\leq E(0).\n\\end{equation}\nTherefore, the solution is bounded.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-typst-display-period",
+      "kind": "typst",
+      "source": "The energy satisfies\n$\n  E(t) <= E(0).\n$\nTherefore, the solution is bounded.",
+      "expected_source": "The energy satisfies\n$\n  E(t) <= E(0).\n$\nTherefore, the solution is bounded.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-tex-text-in-math",
+      "kind": "tex",
+      "source": "\\[\\text{The operator is bounded and the solution is unique.}\\]",
+      "expected_source": "\\[\\text{The operator is bounded and the solution is unique.}\\]",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. Natural-language content inside a math text command is retained, with no placeholder.",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-typst-text-in-math",
+      "kind": "typst",
+      "source": "$ text(\"The operator is bounded and the solution is unique.\") $",
+      "expected_source": "$ text(\"The operator is bounded and the solution is unique.\") $",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. Natural-language content inside math text is retained, with no placeholder.",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-math-clause",
+      "kind": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe estimate follows.",
+      "expected_source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe estimate follows.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-tex-macro",
+      "kind": "tex",
+      "source": "We use the estimate $\\energyBound$ throughout this proof.",
+      "expected_source": "We use the estimate $\\energyBound$ throughout this proof.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. The macro is represented by the protected math placeholder, not passed to the grammar model as prose.",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-clean-typst-macro",
+      "kind": "typst",
+      "source": "For $energy-bound$, the nonautonomous equation is well-posed.",
+      "expected_source": "For $energy-bound$, the nonautonomous equation is well-posed.",
+      "category": "unchanged",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-tex-display-article",
+      "kind": "tex",
+      "source": "We obtain an unique solution from\n\\[\n  E(t) \\leq C.\n\\]",
+      "expected_source": "We obtain a unique solution from\n\\[\n  E(t) \\leq C.\n\\]",
+      "category": "article",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-typst-display-article",
+      "kind": "typst",
+      "source": "We obtain an unique solution from\n$\n  E(t) <= C.\n$",
+      "expected_source": "We obtain a unique solution from\n$\n  E(t) <= C.\n$",
+      "category": "article",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-tex-display-agreement",
+      "kind": "tex",
+      "source": "The estimates\n\\begin{align}\n  E(t) &\\leq C, & D(t) &\\leq C\n\\end{align}\nholds uniformly in time.",
+      "expected_source": "The estimates\n\\begin{align}\n  E(t) &\\leq C, & D(t) &\\leq C\n\\end{align}\nhold uniformly in time.",
+      "category": "agreement",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-typst-display-agreement",
+      "kind": "typst",
+      "source": "The estimates\n$\n  E(t) &<= C, & D(t) &<= C\n$\nholds uniformly in time.",
+      "expected_source": "The estimates\n$\n  E(t) &<= C, & D(t) &<= C\n$\nhold uniformly in time.",
+      "category": "agreement",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-tex-display-clause",
+      "kind": "tex",
+      "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe solution remain bounded.",
+      "expected_source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe solution remains bounded.",
+      "category": "agreement",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-typst-display-clause",
+      "kind": "typst",
+      "source": "Since\n$\n  E(t) <= C,\n$\nthe solution remain bounded.",
+      "expected_source": "Since\n$\n  E(t) <= C,\n$\nthe solution remains bounded.",
+      "category": "agreement",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-tex-text-in-math-agreement",
+      "kind": "tex",
+      "source": "\\[\\text{The operator are bounded.}\\]",
+      "expected_source": "\\[\\text{The operator is bounded.}\\]",
+      "category": "agreement",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. The error is in natural-language content inside math, not in the formula.",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "existing-typst-inline-article",
+      "kind": "typst",
+      "source": "We obtain a estimate from $norm(u) <= C$.",
+      "expected_source": "We obtain an estimate from $norm(u) <= C$.",
+      "category": "article",
+      "cohort": "existing-source-cases",
+      "notes": "Existing checked-in source-backed fixture. Reference is a minimal source edit, not the earlier hand-written MATH projection. ",
+      "provenance": "scripts/grammar_compare/corpus.json"
+    },
+    {
+      "id": "real-repo-math-prose-tex",
+      "kind": "tex",
+      "source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[\n  x = y,\n\\]\nwhich proves well-posedness for this equation.\n\nThe estimate gives\n\\begin{equation}\n  z = x;\n\\end{equation}\ntherefore, the conclusion follows from the estimate.\n\nWe have\n\\begin{align}\n  x &= y.\n\\end{align}\nThis proves ill-posedness.\n\nFor a nonautonomous equation, we have\n$$\n  a = b\n$$,\nwhich is useful.\n\nWe use the identity\n\\[\n  z = x:\n\\]\nthe theorem then follows.\n\nThe estimate holds\n\\[x=1,\\]\nwhere\n    \\emph{the theorem gives several solutions to this equation.}\n\nThe semigroup satisfies $x = y$, which is useful.\nThe Leray theorem applies to this semigroup.\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n\\end{document}\n",
+      "expected_source": "\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\nWe obtain\n\\[\n  x = y,\n\\]\nwhich proves well-posedness for this equation.\n\nThe estimate gives\n\\begin{equation}\n  z = x;\n\\end{equation}\ntherefore, the conclusion follows from the estimate.\n\nWe have\n\\begin{align}\n  x &= y.\n\\end{align}\nThis proves ill-posedness.\n\nFor a nonautonomous equation, we have\n$$\n  a = b\n$$,\nwhich is useful.\n\nWe use the identity\n\\[\n  z = x:\n\\]\nthe theorem then follows.\n\nThe estimate holds\n\\[x=1,\\]\nwhere\n    \\emph{the theorem gives several solutions to this equation.}\n\nThe semigroup satisfies $x = y$, which is useful.\nThe Leray theorem applies to this semigroup.\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n\\end{document}\n",
+      "category": "unchanged",
+      "cohort": "existing-documents",
+      "notes": "Existing complete repository document, used unchanged. Includes multiple real paragraph boundaries, display punctuation and accepted mathematical vocabulary.",
+      "provenance": "manual-tests/harper-math-prose.tex"
+    },
+    {
+      "id": "real-repo-math-prose-typst",
+      "kind": "typst",
+      "source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$\n  x = y,\n$\nwhich proves well-posedness for this equation.\n\nThe estimate gives\n$\n  z = x;\n$\ntherefore, the conclusion follows from the estimate.\n\nWe have\n$\n  x = y.\n$\nThis proves ill-posedness.\n\nFor a nonautonomous equation, we have\n$\n  a = b\n$,\nwhich is useful.\n\nWe use the identity\n$\n  z = x:\n$\nthe theorem then follows.\n\nThe semigroup satisfies $x = y$, which is useful.\nThe Leray theorem applies to this semigroup.\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n",
+      "expected_source": "#set text(lang: \"en\", region: \"gb\")\n\nWe obtain\n$\n  x = y,\n$\nwhich proves well-posedness for this equation.\n\nThe estimate gives\n$\n  z = x;\n$\ntherefore, the conclusion follows from the estimate.\n\nWe have\n$\n  x = y.\n$\nThis proves ill-posedness.\n\nFor a nonautonomous equation, we have\n$\n  a = b\n$,\nwhich is useful.\n\nWe use the identity\n$\n  z = x:\n$\nthe theorem then follows.\n\nThe semigroup satisfies $x = y$, which is useful.\nThe Leray theorem applies to this semigroup.\n\nBarbato and Romito prove this result.\nTao's argument agrees with Tao's conclusion.\nTao’s proof agrees with Romito’s result.\n",
+      "category": "unchanged",
+      "cohort": "existing-documents",
+      "notes": "Existing complete repository document, used unchanged. Includes multiple real paragraph boundaries, display punctuation and accepted mathematical vocabulary.",
+      "provenance": "manual-tests/harper-math-prose.typ"
+    }
+  ]
+}

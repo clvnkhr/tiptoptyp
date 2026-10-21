@@ -1,68 +1,112 @@
-//! LaTeXdiff uses the same owned modal host and keyboard contract as app dialogs.
+//! An owned wizard; filesystem reads, comparison and publication stay on its worker.
 use super::*;
-use crate::tex::diff::{self, Cancellation, Output, Request};
+use crate::tex::diff::{self, Cancellation, Completed, Output, Request};
+use std::sync::atomic::Ordering;
 
 pub(super) const SALT: &str = "tiptoptyp-latexdiff";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Files,
+    Output,
+    Review,
+}
+impl Step {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Files => "1 · Files",
+            Self::Output => "2 · Output & options",
+            Self::Review => "3 · Create",
+        }
+    }
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn id(self) -> &'static str {
+        match self {
+            Self::Files => "files",
+            Self::Output => "output",
+            Self::Review => "review",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Older,
     Newer,
+    Output,
+    Next,
+    Back,
     Generate,
+    CancelGeneration,
     Copy,
-    Save,
+    Open,
     Close,
-}
-struct Selection(PathBuf);
-impl crate::worker::OperationSummary for Selection {
-    fn completion_summary(&self) -> String {
-        format!("Saved {}", self.0.display())
-    }
 }
 pub(super) struct Dialog {
     older: String,
     newer: String,
+    destination: String,
+    destination_edited: bool,
+    step: Step,
     current: Option<(PathBuf, String)>,
     include_edits: bool,
     focus_file: bool,
     settings: diff::Settings,
     output: Option<Output>,
+    completed_path: Option<PathBuf>,
+    validated_directory: Option<String>,
     error: Option<String>,
-    generate: LatestJob<Output>,
-    selection: crate::worker::ExclusiveJob<Selection>,
+    generate: LatestJob<Completed>,
     picker: Option<PendingDialog<Action>>,
     cancel: Cancellation,
+    cancelling: bool,
     pub(super) edit_events: Vec<egui::Event>,
 }
 impl Dialog {
     fn new(current: Option<(PathBuf, String)>, settings: diff::Settings) -> Self {
-        let path = current
+        let newer = current
             .as_ref()
             .map(|(path, _)| path.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let destination = suggested_destination(&newer);
         Self {
-            older: path.clone(),
-            newer: path,
+            older: String::new(),
+            newer,
+            destination,
+            destination_edited: false,
+            step: Step::Files,
             current,
             include_edits: true,
             focus_file: true,
             settings,
             output: None,
+            completed_path: None,
+            validated_directory: None,
             error: None,
             generate: LatestJob::default(),
-            selection: crate::worker::ExclusiveJob::default(),
             picker: None,
             cancel: Cancellation::default(),
+            cancelling: false,
             edit_events: Vec::new(),
         }
     }
     fn busy(&self) -> bool {
-        self.generate.is_running() || self.selection.is_running() || self.picker.is_some()
+        self.generate.is_running() || self.picker.is_some()
+    }
+    fn invalidate(&mut self) {
+        self.output = None;
+        self.completed_path = None;
+        self.error = None;
+    }
+    fn validate_files(&self) -> Result<(), String> {
+        validate_tex_path(&self.older, "older file")?;
+        validate_tex_path(&self.newer, "newer file")?;
+        Ok(())
+    }
+    fn destination(&self) -> Result<PathBuf, String> {
+        validate_tex_path(&self.destination, "output file")
     }
     fn request(&self) -> Result<Request, String> {
-        if self.older.trim().is_empty() || self.newer.trim().is_empty() {
-            return Err("Choose an older and a newer TeX file.".into());
-        }
-        self.settings.validate()?;
+        self.validate_files()?;
+        // Validation that touches the filesystem or resolves tools runs in generate().
         Ok(Request {
             older: self.older.trim().into(),
             newer: self.newer.trim().into(),
@@ -75,57 +119,123 @@ impl Dialog {
             settings: self.settings.clone(),
         })
     }
-    fn poll(&mut self, context: &egui::Context) -> Option<PathBuf> {
+    fn navigate(&mut self, forward: bool) {
+        if self.busy() {
+            return;
+        }
+        let result = match (self.step, forward) {
+            (Step::Files, true) => self.validate_files().map(|()| Step::Output),
+            (Step::Output, true) => self
+                .settings
+                .validate_syntax()
+                .and_then(|()| self.destination().map(|_| Step::Review)),
+            (Step::Output, false) => Ok(Step::Files),
+            (Step::Review, false) => Ok(Step::Output),
+            _ => return,
+        };
+        match result {
+            Ok(step) => {
+                self.step = step;
+                self.focus_file = true;
+                self.error = None;
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+    fn start(&mut self, context: &egui::Context) {
+        if self.busy() || self.step != Step::Review {
+            return;
+        }
+        let input = self
+            .request()
+            .and_then(|request| Ok((request, self.destination()?)));
+        match input {
+            Ok((request, destination)) => {
+                self.cancel = Cancellation::default();
+                self.cancelling = false;
+                self.invalidate();
+                let cancel = self.cancel.0.clone();
+                if let Err(error) =
+                    self.generate
+                        .start_and_repaint("Create LaTeX diff", context, move || {
+                            diff::generate_and_save(request, &destination, &cancel)
+                        })
+                {
+                    self.error = Some(error);
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+    fn cancel_generation(&mut self) {
+        if self.generate.is_running() {
+            self.cancelling = true;
+            self.cancel.0.store(true, Ordering::Release);
+        }
+    }
+    fn poll(&mut self, context: &egui::Context) {
         if let DialogPoll::Ready {
             request: action,
             selection: Some(file),
         } = crate::workflow::poll_dialog(&mut self.picker, context)
         {
+            let value = file.path().to_string_lossy().into_owned();
             match action {
-                Action::Older | Action::Newer => {
-                    let value = file.path().to_string_lossy().into_owned();
-                    if action == Action::Older {
-                        self.older = value;
-                    } else {
-                        self.newer = value;
+                Action::Older => self.older = value,
+                Action::Newer => {
+                    self.newer = value;
+                    if !self.destination_edited {
+                        self.destination = suggested_destination(&self.newer);
                     }
-                    self.output = None;
-                    self.error = None;
                 }
-                Action::Save => {
-                    if let Some(output) = self.output.clone() {
-                        let path = crate::workflow::source_save_path(
-                            file.path().into(),
-                            DocumentKind::Tex,
-                        );
-                        if let Err(error) =
-                            self.selection
-                                .start_and_repaint("Save LaTeXdiff", context, move || {
-                                    output.save(&path).map(Selection)
-                                })
-                        {
-                            self.error = Some(error);
-                        }
-                    }
+                Action::Output => {
+                    self.destination = value;
+                    self.destination_edited = true;
                 }
                 _ => unreachable!(),
             }
+            self.invalidate();
         }
         match self.generate.poll() {
-            LatestJobPoll::Ready(output) => {
-                self.output = Some(output);
+            LatestJobPoll::Ready(completed) => {
+                self.output = Some(completed.output);
+                self.completed_path = Some(completed.path);
+                self.validated_directory = Some(self.settings.command.directory.clone());
                 self.error = None;
+                self.cancelling = false;
             }
-            LatestJobPoll::Failed(error) => self.error = Some(error),
+            LatestJobPoll::Failed(error) => {
+                self.error = Some(error);
+                self.cancelling = false;
+            }
             _ => {}
         }
-        match self.selection.poll() {
-            LatestJobPoll::Ready(Selection(path)) => return Some(path),
-            LatestJobPoll::Failed(error) => self.error = Some(error),
-            _ => {}
-        }
-        None
     }
+}
+fn validate_tex_path(value: &str, role: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(value.trim());
+    if value.trim().is_empty() {
+        return Err(format!("Choose the {role}."));
+    }
+    if !path.is_absolute() || value.contains('\0') {
+        return Err(format!("Choose an absolute path for the {role}."));
+    }
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("tex"))
+    {
+        return Err(format!("The {role} must have a .tex extension."));
+    }
+    Ok(path)
+}
+fn suggested_destination(newer: &str) -> String {
+    let path = Path::new(newer.trim());
+    let Some(stem) = path.file_stem() else {
+        return String::new();
+    };
+    path.with_file_name(format!("{}-diff.tex", stem.to_string_lossy()))
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(super) fn prepare_snapshot(app: &mut EditorApp, context: &egui::Context) {
@@ -136,13 +246,7 @@ pub(super) fn prepare_snapshot(app: &mut EditorApp, context: &egui::Context) {
     if let Some(dialog) = &mut app.latexdiff {
         dialog.older = "/project/revision-before.tex".into();
         dialog.newer = "/project/revision-after.tex".into();
-        dialog.current = Some((PathBuf::from(&dialog.newer), "Updated source".into()));
-        dialog.output = Some(Output {
-            source: "\\DIFdel{Original text}\\DIFadd{Revised text}".into(),
-            warnings: String::new(),
-            older: PathBuf::from(&dialog.older),
-            newer: PathBuf::from(&dialog.newer),
-        });
+        dialog.destination = "/project/revision-after-diff.tex".into();
     }
 }
 
@@ -151,7 +255,7 @@ impl EditorApp {
         if self.document_flow_busy() {
             return;
         }
-        let current = (self.document().kind() == DocumentKind::Tex)
+        let current = (!self.tabs.is_empty() && self.document().kind() == DocumentKind::Tex)
             .then(|| {
                 self.document()
                     .path()
@@ -171,11 +275,17 @@ impl EditorApp {
     }
     pub(super) fn close_latexdiff(&mut self, context: &egui::Context) {
         if let Some(dialog) = self.latexdiff.take() {
-            if dialog.settings.validate().is_ok() && dialog.settings != self.settings.latexdiff {
+            if dialog.settings != self.settings.latexdiff
+                && dialog.settings.validate_syntax().is_ok()
+                && (dialog.settings.command.directory == self.settings.latexdiff.command.directory
+                    || dialog.validated_directory.as_ref()
+                        == Some(&dialog.settings.command.directory))
+            {
                 let mut edited = self.settings.clone();
                 edited.latexdiff = dialog.settings.clone();
                 self.queue_settings(edited, context);
             }
+            // Dropping Cancellation signals the worker; dropping LatestJob never joins it.
             ChildViewHost::close(context, SALT);
             crate::window_host::return_focus(context);
         }
@@ -188,13 +298,7 @@ impl EditorApp {
         let Some(dialog) = &mut self.latexdiff else {
             return;
         };
-        if let Some(path) = dialog.poll(context) {
-            self.close_latexdiff(context);
-            if self.open_tab_path(path, context) {
-                self.select_preview_tab(self.tabs.active_id().expect("opened diff tab"), context);
-            }
-            return;
-        }
+        dialog.poll(context);
         let Some(owner) = context.input(|input| input.viewport().inner_rect) else {
             return;
         };
@@ -211,7 +315,7 @@ impl EditorApp {
         ChildViewHost::show(
             context,
             &self.captures,
-            ChildViewSpec::modal(SALT, "LaTeXdiff", owner, "latexdiff"),
+            ChildViewSpec::modal(SALT, "Create LaTeX Diff", owner, "latexdiff"),
             appearance,
             &style,
             |ui, input| {
@@ -255,32 +359,27 @@ impl EditorApp {
         }
         match action {
             Some(Action::Close) => self.close_latexdiff(context),
-            Some(Action::Generate) => {
-                let dialog = self.latexdiff.as_mut().unwrap();
-                match dialog.request() {
-                    Ok(request) => {
-                        let cancel = dialog.cancel.0.clone();
-                        dialog.output = None;
-                        dialog.error = None;
-                        if let Err(error) =
-                            dialog
-                                .generate
-                                .start_and_repaint("latexdiff", context, move || {
-                                    diff::generate(request, &cancel)
-                                })
-                        {
-                            dialog.error = Some(error);
-                        }
-                    }
-                    Err(error) => dialog.error = Some(error),
-                }
-            }
+            Some(Action::Next) => self.latexdiff.as_mut().unwrap().navigate(true),
+            Some(Action::Back) => self.latexdiff.as_mut().unwrap().navigate(false),
+            Some(Action::Generate) => self.latexdiff.as_mut().unwrap().start(context),
+            Some(Action::CancelGeneration) => self.latexdiff.as_mut().unwrap().cancel_generation(),
             Some(Action::Copy) => {
                 if let Some(output) = &self.latexdiff.as_ref().unwrap().output {
                     context.copy_text(output.source.clone());
                 }
             }
-            Some(action @ (Action::Older | Action::Newer | Action::Save)) => {
+            Some(Action::Open) => {
+                if let Some(path) = self.latexdiff.as_ref().unwrap().completed_path.clone() {
+                    self.close_latexdiff(context);
+                    if self.open_tab_path(path, context) {
+                        self.select_preview_tab(
+                            self.tabs.active_id().expect("opened diff tab"),
+                            context,
+                        );
+                    }
+                }
+            }
+            Some(action @ (Action::Older | Action::Newer | Action::Output)) => {
                 self.pick_latexdiff_file(context, frame, action)
             }
             None => {}
@@ -305,44 +404,63 @@ impl EditorApp {
         if dialog.busy() {
             return;
         }
-        let newer = Path::new(&dialog.newer);
-        if let Some(parent) = newer.parent().filter(|p| p.is_dir()) {
+        // The picker itself resolves the initial folder; no stat calls in the frame path.
+        let source = if action == Action::Output {
+            &dialog.destination
+        } else {
+            &dialog.newer
+        };
+        if let Some(parent) = Path::new(source).parent().filter(|p| p.is_absolute()) {
             picker = picker.set_directory(parent);
         }
         picker = picker.add_filter("LaTeX source", &["tex"]);
-        dialog.picker = Some(if action == Action::Save {
-            let Some(output) = &dialog.output else {
-                return;
-            };
-            picker = picker
-                .set_title("Save LaTeXdiff and open for compilation")
-                .set_file_name(output.suggested_name());
-            PendingDialog::new(action, picker.save_file())
+        dialog.picker = Some(if action == Action::Output {
+            if let Some(name) = Path::new(&dialog.destination).file_name() {
+                picker = picker.set_file_name(name.to_string_lossy());
+            }
+            PendingDialog::new(
+                action,
+                picker
+                    .set_title("Choose a new diff output file")
+                    .save_file(),
+            )
         } else {
-            picker = picker.set_title(if action == Action::Older {
-                "Choose older TeX file"
-            } else {
-                "Choose newer TeX file"
-            });
-            PendingDialog::new(action, picker.pick_file())
+            PendingDialog::new(
+                action,
+                picker
+                    .set_title(if action == Action::Older {
+                        "Choose older TeX file"
+                    } else {
+                        "Choose newer TeX file"
+                    })
+                    .pick_file(),
+            )
         });
     }
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn latexdiff_inspection(&self) -> serde_json::Value {
+        let Some(dialog) = &self.latexdiff else {
+            return serde_json::json!({"visible":false,"busy":false,"step":null,"error":null,"output_path":null,
+                "older_fingerprint":null,"newer_fingerprint":null,"output_fingerprint":null,"arguments_fingerprint":null});
+        };
+        serde_json::json!({"visible":true,"busy":dialog.busy(),"step":dialog.step.id(),"error":dialog.error,
+            "output_path":dialog.completed_path,"older_fingerprint":crate::desktop_test::fingerprint(&dialog.older),
+            "newer_fingerprint":crate::desktop_test::fingerprint(&dialog.newer),
+            "output_fingerprint":crate::desktop_test::fingerprint(&dialog.destination),
+            "arguments_fingerprint":crate::desktop_test::fingerprint(&dialog.settings.command.arguments)})
+    }
 }
-
 fn card_width(owner_width: f32) -> f32 {
     (owner_width - 48.0).clamp(1.0, 660.0)
 }
-
 fn card_height(owner_height: f32) -> f32 {
-    (owner_height - 48.0).clamp(1.0, 260.0)
+    (owner_height - 48.0).clamp(1.0, 330.0)
 }
-
 fn close_requested(
     context: &egui::Context,
     input: crate::child_view::ChildViewInput,
     shortcuts: &ShortcutBindings,
 ) -> bool {
-    // Consume close before the common field normalizer defers non-edit keys.
     input.close_requested
         || input.escape_pressed
         || [ShortcutAction::CloseWindow, ShortcutAction::CloseTab]
@@ -353,26 +471,42 @@ fn close_requested(
                 })
             })
 }
-
+fn observe(_name: &str, _response: &egui::Response) {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe(&format!("latexdiff.{_name}"), _response);
+}
 fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
     theme::apply_compact_tool_spacing(ui);
     let mut action = None;
     ui.horizontal(|ui| {
-        ui.strong("LaTeXdiff");
+        ui.strong("Create LaTeX Diff");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if icon_button(ui, UiIcon::Close, "Close LaTeXdiff").clicked() {
+            let close = icon_button(ui, UiIcon::Close, "Close LaTeX diff");
+            observe("close", &close);
+            if close.clicked() {
                 action = Some(Action::Close);
             }
         });
     });
+    ui.horizontal_wrapped(|ui| {
+        for step in [Step::Files, Step::Output, Step::Review] {
+            if step == dialog.step {
+                ui.strong(step.label());
+            } else {
+                ui.weak(step.label());
+            }
+            if step != Step::Review {
+                ui.weak("›");
+            }
+        }
+    });
     ui.separator();
     let busy = dialog.busy();
     let bounds = ui.available_rect_before_wrap();
-    let footer_height = footer_height(ui, busy);
+    let footer_height = footer_height(ui, dialog);
     let footer_top = (bounds.bottom() - footer_height).max(bounds.top());
     let body = Rect::from_min_max(bounds.min, Pos2::new(bounds.right(), footer_top));
     let footer = Rect::from_min_max(Pos2::new(bounds.left(), footer_top), bounds.max);
-    let mut changed = false;
     ui.scope_builder(
         egui::UiBuilder::new()
             .id_salt("latexdiff-body")
@@ -383,66 +517,130 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
                 .id_salt("latexdiff-options-scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
-                        let label_width = text_width(ui, "Newer file");
-                        let button_width =
-                            text_width(ui, "Choose…") + ui.spacing().button_padding.x * 2.0;
-                        let field_width = (ui.available_width()
-                            - label_width
-                            - button_width
-                            - ui.spacing().item_spacing.x * 2.0)
-                            .max(1.0);
-                        egui::Grid::new("latexdiff-files")
-                            .num_columns(3)
-                            .min_col_width(0.0)
-                            .show(ui, |ui| {
-                                for (label, value, pick) in [
-                                    ("Older file", &mut dialog.older, Action::Older),
-                                    ("Newer file", &mut dialog.newer, Action::Newer),
-                                ] {
-                                    let label = ui.label(label);
+                    let mut changed = false;
+                    ui.add_enabled_ui(!busy, |ui| match dialog.step {
+                        Step::Files => {
+                            for (label, value, pick, id) in [
+                                ("Older file", &mut dialog.older, Action::Older, "older"),
+                                ("Newer file", &mut dialog.newer, Action::Newer, "newer"),
+                            ] {
+                                let field_label = ui.label(label);
+                                let choose_width =
+                                    text_width(ui, "Choose…") + ui.spacing().button_padding.x * 2.0;
+                                ui.horizontal(|ui| {
+                                    let width = (ui.available_width()
+                                        - choose_width
+                                        - ui.spacing().item_spacing.x)
+                                        .max(1.0);
                                     let field = ui
                                         .add_sized(
-                                            [field_width, ui.spacing().interact_size.y],
+                                            [width, ui.spacing().interact_size.y],
                                             egui::TextEdit::singleline(value)
+                                                .id_salt(("latexdiff-file", id))
                                                 .hint_text("/path/to/document.tex")
-                                                .desired_width(field_width),
+                                                .desired_width(width),
                                         )
-                                        .labelled_by(label.id);
+                                        .labelled_by(field_label.id);
+                                    observe(id, &field);
                                     if pick == Action::Older && dialog.focus_file {
                                         field.request_focus();
                                         dialog.focus_file = false;
                                     }
-                                    changed |= field.changed();
-                                    if ui.button("Choose…").clicked() {
+                                    if field.changed() {
+                                        changed = true;
+                                        if pick == Action::Newer && !dialog.destination_edited {
+                                            dialog.destination = suggested_destination(value);
+                                        }
+                                    }
+                                    let choose = ui.button("Choose…");
+                                    observe(&format!("choose_{id}"), &choose);
+                                    if choose.clicked() {
                                         action = Some(pick);
                                     }
-                                    ui.end_row();
+                                });
+                            }
+                            if dialog
+                                .current
+                                .as_ref()
+                                .is_some_and(|(path, _)| path == Path::new(dialog.newer.trim()))
+                            {
+                                changed |= ui
+                                    .checkbox(
+                                        &mut dialog.include_edits,
+                                        "Include unsaved editor changes",
+                                    )
+                                    .changed();
+                            }
+                        }
+                        Step::Output => {
+                            let label = ui.label("Output file");
+                            ui.horizontal(|ui| {
+                                let width = (ui.available_width()
+                                    - text_width(ui, "Choose…")
+                                    - ui.spacing().button_padding.x * 2.0
+                                    - ui.spacing().item_spacing.x)
+                                    .max(1.0);
+                                let field = ui
+                                    .add_sized(
+                                        [width, ui.spacing().interact_size.y],
+                                        egui::TextEdit::singleline(&mut dialog.destination)
+                                            .id_salt("latexdiff-output")
+                                            .hint_text("/path/to/document-diff.tex")
+                                            .desired_width(width),
+                                    )
+                                    .labelled_by(label.id);
+                                observe("output", &field);
+                                if dialog.focus_file {
+                                    field.request_focus();
+                                    dialog.focus_file = false;
+                                }
+                                if field.changed() {
+                                    dialog.destination_edited = true;
+                                    changed = true;
+                                }
+                                let choose = ui.button("Choose…");
+                                observe("choose_output", &choose);
+                                if choose.clicked() {
+                                    action = Some(Action::Output);
                                 }
                             });
-                        if dialog
-                            .current
-                            .as_ref()
-                            .is_some_and(|(path, _)| path == Path::new(dialog.newer.trim()))
-                        {
-                            changed |= ui
-                                .checkbox(
-                                    &mut dialog.include_edits,
-                                    "Include unsaved editor changes",
-                                )
-                                .changed();
+                            changed |= preferences(ui, &mut dialog.settings);
                         }
-                        changed |= preferences(ui, &mut dialog.settings);
+                        Step::Review => {
+                            for (label, value) in [
+                                ("Older", dialog.older.as_str()),
+                                ("Newer", dialog.newer.as_str()),
+                                ("Output", dialog.destination.as_str()),
+                            ] {
+                                ui.weak(label);
+                                ui.label(value);
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(dialog.settings.markup.label());
+                                if dialog.settings.flatten {
+                                    ui.weak("· Include subfiles");
+                                }
+                                if dialog.include_edits
+                                    && dialog.current.as_ref().is_some_and(|(path, _)| {
+                                        path == Path::new(dialog.newer.trim())
+                                    })
+                                {
+                                    ui.weak("· Unsaved editor changes");
+                                }
+                            });
+                            if !dialog.settings.command.arguments.trim().is_empty() {
+                                ui.monospace(&dialog.settings.command.arguments);
+                            }
+                        }
                     });
                     if changed {
-                        dialog.output = None;
-                        dialog.error = None;
+                        dialog.invalidate();
                     }
                     if let Some(error) = &dialog.error {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     }
                     if let Some(output) = &dialog.output {
-                        ui.weak(format!("Diff source ready · {} bytes", output.source.len()));
+                        ui.strong(format!("Created diff · {} bytes", output.source.len()));
                         if !output.warnings.trim().is_empty() {
                             egui::CollapsingHeader::new("LaTeXdiff messages").show(ui, |ui| {
                                 ui.label(&output.warnings);
@@ -463,33 +661,33 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
                 Vec2::new(ui.available_width(), ui.spacing().interact_size.y),
                 Layout::right_to_left(Align::Center).with_main_wrap(true),
                 |ui| {
-                    let ready = dialog.output.is_some();
-                    let save = if ready {
-                        egui::Button::new(RichText::new("Save and open…").strong())
-                            .fill(ui.visuals().selection.bg_fill)
-                    } else {
-                        egui::Button::new("Save and open…")
-                    };
-                    if ui.add_enabled(!busy && ready, save).clicked() {
-                        action = Some(Action::Save);
+                    for (name, id, clicked) in footer_actions(dialog) {
+                        let enabled = match clicked {
+                            Action::Back | Action::Next | Action::Generate => !busy,
+                            Action::CancelGeneration => !dialog.cancelling,
+                            _ => true,
+                        };
+                        let primary =
+                            matches!(clicked, Action::Next | Action::Generate | Action::Open);
+                        let button = if primary {
+                            egui::Button::new(RichText::new(name).strong())
+                                .fill(ui.visuals().selection.bg_fill)
+                        } else {
+                            egui::Button::new(name)
+                        };
+                        let response = ui.push_id(id, |ui| ui.add_enabled(enabled, button)).inner;
+                        observe(id, &response);
+                        if response.clicked() {
+                            action = Some(clicked);
+                        }
                     }
-                    let generate = if ready {
-                        egui::Button::new("Generate diff")
-                    } else {
-                        egui::Button::new(RichText::new("Generate diff").strong())
-                            .fill(ui.visuals().selection.bg_fill)
-                    };
-                    if ui.add_enabled(!busy, generate).clicked() {
-                        action = Some(Action::Generate);
-                    }
-                    if ui
-                        .add_enabled(!busy && ready, egui::Button::new("Copy source"))
-                        .clicked()
-                    {
-                        action = Some(Action::Copy);
-                    }
-                    if busy {
+                    if dialog.generate.is_running() {
                         ui.spinner();
+                        ui.weak(if dialog.cancelling {
+                            "Canceling…"
+                        } else {
+                            "Creating diff…"
+                        });
                     }
                 },
             );
@@ -498,7 +696,27 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
     ui.advance_cursor_after_rect(bounds);
     action
 }
-
+fn footer_actions(dialog: &Dialog) -> Vec<(&'static str, &'static str, Action)> {
+    if dialog.generate.is_running() {
+        vec![("Cancel", "cancel", Action::CancelGeneration)]
+    } else if dialog.step == Step::Review && dialog.completed_path.is_some() {
+        vec![
+            ("Open diff", "open", Action::Open),
+            ("Copy source", "copy", Action::Copy),
+            ("Back", "back", Action::Back),
+        ]
+    } else {
+        let mut actions = vec![match dialog.step {
+            Step::Review => ("Create diff", "generate", Action::Generate),
+            _ => ("Next", "next", Action::Next),
+        }];
+        if dialog.step != Step::Files {
+            actions.push(("Back", "back", Action::Back));
+        }
+        actions.push(("Cancel", "cancel", Action::Close));
+        actions
+    }
+}
 fn text_width(ui: &egui::Ui, text: &str) -> f32 {
     ui.painter()
         .layout_no_wrap(
@@ -509,38 +727,21 @@ fn text_width(ui: &egui::Ui, text: &str) -> f32 {
         .size()
         .x
 }
-
-fn footer_height(ui: &egui::Ui, busy: bool) -> f32 {
-    let button_sizes = ["Save and open…", "Generate diff", "Copy source"].map(|label| {
-        egui::WidgetText::from(RichText::new(label).strong())
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                egui::TextStyle::Button,
-            )
-            .size()
-            + ui.spacing().button_padding * 2.0
-            + Vec2::splat(ui.visuals().widgets.inactive.bg_stroke.width * 2.0)
-    });
-    let widths = [
-        button_sizes[0].x,
-        button_sizes[1].x,
-        button_sizes[2].x,
-        ui.spacing().interact_size.y,
-    ];
-    let rows = wrapped_rows(
-        ui.available_width(),
-        &widths[..if busy { 4 } else { 3 }],
-        ui.spacing().item_spacing.x,
-    );
-    let button_height = button_sizes
+fn footer_height(ui: &egui::Ui, dialog: &Dialog) -> f32 {
+    let mut widths: Vec<_> = footer_actions(dialog)
         .iter()
-        .map(|size| size.y)
-        .fold(ui.spacing().interact_size.y, f32::max);
-    rows as f32 * (button_height + ui.spacing().item_spacing.y) + 8.0
+        .map(|(label, _, _)| text_width(ui, label) + ui.spacing().button_padding.x * 2.0 + 4.0)
+        .collect();
+    if dialog.generate.is_running() {
+        widths.push(
+            ui.spacing().interact_size.y
+                + ui.spacing().item_spacing.x
+                + text_width(ui, "Creating diff…"),
+        );
+    }
+    let rows = wrapped_rows(ui.available_width(), &widths, ui.spacing().item_spacing.x);
+    rows as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y + 2.0) + 8.0
 }
-
 fn wrapped_rows(width: f32, items: &[f32], gap: f32) -> usize {
     let mut rows = 1;
     let mut used = 0.0;
@@ -554,48 +755,70 @@ fn wrapped_rows(width: f32, items: &[f32], gap: f32) -> usize {
     }
     rows
 }
-
 pub(super) fn preferences(ui: &mut egui::Ui, settings: &mut diff::Settings) -> bool {
     let mut changed = false;
     ui.horizontal_wrapped(|ui| {
         ui.label("Markup");
-        egui::ComboBox::from_id_salt("latexdiff-markup").selected_text(settings.markup.label()).show_ui(ui, |ui| {
-            for markup in diff::Markup::ALL { changed |= ui.selectable_value(&mut settings.markup, markup, markup.label()).changed(); }
-        });
-        changed |= ui.checkbox(&mut settings.flatten, "Include subfiles").on_hover_text("Expand \\input and \\include before comparing (--flatten). Both projects' included files must be available.").changed();
-    });
-    egui::CollapsingHeader::new("LaTeXdiff options").show(ui, |ui| {
-        let label_width = text_width(ui, "Working directory");
-        let field_width = (ui.available_width() - label_width - ui.spacing().item_spacing.x).max(1.0);
-        egui::Grid::new("latexdiff-command-options")
-            .num_columns(2)
-            .min_col_width(0.0)
-            .show(ui, |ui| {
-                for (name, value, example) in [
-                    ("Executable", &mut settings.executable, "Blank finds latexdiff in PATH or MacTeX; otherwise enter its full path."),
-                    ("Arguments", &mut settings.command.arguments, "Example: --math-markup=1. Mark whole equations rather than individual mathematical terms. Input paths, style and include expansion are supplied by the app."),
-                    ("Environment", &mut settings.command.environment, "Example: {\"LC_ALL\":\"C\"}. Use a predictable process locale. Enter a JSON object of strings."),
-                    ("Working directory", &mut settings.command.directory, "Example: /Users/me/paper. Blank uses the newer file's directory."),
-                ] {
-                    let label = preference_help(ui.label(name), example);
-                    let field = preference_help(ui.add_sized([field_width, ui.spacing().interact_size.y], egui::TextEdit::singleline(value).desired_width(field_width)), example)
-                        .labelled_by(label.id);
-                    changed |= field.changed();
-                    ui.end_row();
+        egui::ComboBox::from_id_salt("latexdiff-markup")
+            .selected_text(settings.markup.label())
+            .show_ui(ui, |ui| {
+                for markup in diff::Markup::ALL {
+                    changed |= ui
+                        .selectable_value(&mut settings.markup, markup, markup.label())
+                        .changed();
                 }
             });
+        changed |= ui
+            .checkbox(&mut settings.flatten, "Include subfiles")
+            .changed();
+    });
+    let label = ui.label("Arguments");
+    let arguments = ui
+        .add(
+            egui::TextEdit::singleline(&mut settings.command.arguments)
+                .id_salt("latexdiff-arguments")
+                .desired_width(ui.available_width())
+                .hint_text("--math-markup=1"),
+        )
+        .labelled_by(label.id);
+    observe("options.arguments", &arguments);
+    changed |= arguments.changed();
+    egui::CollapsingHeader::new("Advanced").show(ui, |ui| {
+        for (name, value, example) in [
+            (
+                "Executable",
+                &mut settings.executable,
+                "latexdiff (auto-detect)",
+            ),
+            (
+                "Environment",
+                &mut settings.command.environment,
+                "{\"LC_ALL\":\"C\"}",
+            ),
+            (
+                "Working directory",
+                &mut settings.command.directory,
+                "Newer file’s directory",
+            ),
+        ] {
+            let label = ui.label(name);
+            changed |= ui
+                .add(
+                    egui::TextEdit::singleline(value)
+                        .id_salt(("latexdiff-option", name))
+                        .desired_width(ui.available_width())
+                        .hint_text(example),
+                )
+                .labelled_by(label.id)
+                .changed();
+        }
         super::settings_controls::documentation_link(ui, "LaTeXdiff documentation", diff::DOCS);
-        if ui.button("Reset LaTeXdiff options").clicked() { *settings = diff::Settings::default(); changed = true; }
-        if let Err(error) = settings.validate() { ui.colored_label(ui.visuals().error_fg_color, error); }
+        if ui.button("Reset LaTeXdiff options").clicked() {
+            *settings = diff::Settings::default();
+            changed = true;
+        }
     });
     changed
-}
-
-fn preference_help(response: egui::Response, example: &str) -> egui::Response {
-    response.on_hover_ui(|ui| {
-        ui.label(example);
-        super::settings_controls::documentation_link(ui, "LaTeXdiff documentation", diff::DOCS);
-    })
 }
 
 #[cfg(test)]
@@ -606,10 +829,60 @@ mod tests {
         kittest::{NodeT, Queryable},
     };
     fn fixture() -> Dialog {
-        Dialog::new(
+        let mut dialog = Dialog::new(
             Some((PathBuf::from("/tmp/paper.tex"), "unsaved text".into())),
             diff::Settings::default(),
-        )
+        );
+        dialog.older = "/tmp/older.tex".into();
+        dialog
+    }
+    fn ui_harness(dialog: Dialog, width: f32) -> Harness<'static, (Dialog, Option<Action>)> {
+        Harness::builder()
+            .with_size(Vec2::new(width, 440.0))
+            .build_ui_state(
+                |ui, state: &mut (Dialog, Option<Action>)| {
+                    if let Some(action) = show(ui, &mut state.0) {
+                        match action {
+                            Action::Next => state.0.navigate(true),
+                            Action::Back => state.0.navigate(false),
+                            Action::CancelGeneration => state.0.cancel_generation(),
+                            _ => {}
+                        }
+                        state.1 = Some(action);
+                    }
+                },
+                (dialog, None),
+            )
+    }
+    #[test]
+    fn wizard_validates_steps_without_reading_files_and_keeps_drafts() {
+        let mut dialog = Dialog::new(None, Default::default());
+        dialog.navigate(true);
+        assert_eq!(dialog.step, Step::Files);
+        assert!(dialog.error.as_deref().unwrap().contains("older"));
+        dialog.older = "/not-on-disk/old.tex".into();
+        dialog.newer = "/not-on-disk/new.tex".into();
+        dialog.destination = suggested_destination(&dialog.newer);
+        dialog.navigate(true);
+        assert_eq!(dialog.step, Step::Output);
+        assert_eq!(dialog.destination, "/not-on-disk/new-diff.tex");
+        dialog.destination = "/not-on-disk/review.txt".into();
+        dialog.navigate(true);
+        assert_eq!(dialog.step, Step::Output);
+        assert!(dialog.error.as_deref().unwrap().contains(".tex"));
+        dialog.destination = "/not-on-disk/review.tex".into();
+        dialog.settings.command.arguments = "--math-markup=1".into();
+        dialog.navigate(true);
+        assert_eq!(dialog.step, Step::Review);
+        dialog.navigate(false);
+        dialog.navigate(false);
+        assert_eq!(dialog.step, Step::Files);
+        assert_eq!(dialog.settings.command.arguments, "--math-markup=1");
+        assert_eq!(dialog.destination, "/not-on-disk/review.tex");
+        for value in ["relative.tex", "/tmp/file.pdf", "/tmp/file.tex\0"] {
+            assert!(validate_tex_path(value, "input").is_err());
+        }
+        assert!(validate_tex_path("/tmp/paper.TEX", "input").is_ok());
     }
     #[test]
     fn editor_snapshot_only_applies_to_the_selected_newer_document() {
@@ -627,50 +900,277 @@ mod tests {
         assert!(dialog.request().unwrap_err().contains("Choose"));
     }
     #[test]
-    fn controls_use_editor_changes_and_options_invalidate_generated_output() {
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(720.0, 600.0))
-            .build_ui_state(
-                |ui, dialog| {
-                    let _ = show(ui, dialog);
-                },
-                fixture(),
-            );
+    fn keyboard_editing_and_back_next_preserve_path_and_option_drafts() {
+        let mut harness = ui_harness(fixture(), 720.0);
         harness.run();
+        harness.get_by_label("Older file").click();
+        harness.run();
+        harness.get_by_label("Older file").type_text("x");
+        harness.run();
+        assert!(harness.state().0.older.contains('x'));
+        harness.state_mut().0.older = "/tmp/before.tex".into();
+        harness.run();
+        harness.get_by_label("Next").click();
+        harness.run();
+        assert_eq!(harness.state().0.step, Step::Output);
+        harness.get_by_label("Arguments").click();
+        harness.run();
+        harness
+            .get_by_label("Arguments")
+            .type_text("--math-markup=1");
+        harness.run();
+        harness.get_by_label("Next").click();
+        harness.run();
+        assert_eq!(harness.state().0.step, Step::Review);
+        assert!(harness.query_by_label("Create diff").is_some());
+        harness.get_by_label("Back").click();
+        harness.run();
+        assert_eq!(
+            harness.state().0.settings.command.arguments,
+            "--math-markup=1"
+        );
+        harness.get_by_label("Back").click();
+        harness.run();
+        assert_eq!(harness.state().0.older, "/tmp/before.tex");
+    }
+    #[test]
+    fn a_newer_path_updates_default_output_but_preserves_a_custom_output() {
+        assert_eq!(
+            suggested_destination("/tmp/paper.v2.tex"),
+            "/tmp/paper.v2-diff.tex"
+        );
+        assert_eq!(suggested_destination(""), "");
+        let mut harness = ui_harness(fixture(), 720.0);
+        harness.run();
+        harness.get_by_label("Newer file").click();
+        harness.run();
+        harness.get_by_label("Newer file").type_text("x");
+        harness.run();
+        assert_eq!(
+            harness.state().0.destination,
+            suggested_destination(&harness.state().0.newer)
+        );
+        harness.state_mut().0.destination_edited = true;
+        harness.state_mut().0.destination = "/tmp/custom.tex".into();
+        harness.get_by_label("Newer file").type_text("y");
+        harness.run();
+        assert_eq!(harness.state().0.destination, "/tmp/custom.tex");
+    }
+    #[test]
+    fn pending_worker_is_cancellable_without_waiting_or_starting_a_second_job() {
+        let mut dialog = fixture();
+        dialog.step = Step::Review;
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        dialog
+            .generate
+            .start("controlled comparison", move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Err("LaTeXdiff canceled".into())
+            })
+            .unwrap();
+        started_rx.recv().unwrap();
+        let token = dialog.cancel.0.clone();
+        dialog.start(&egui::Context::default());
+        assert!(
+            Arc::ptr_eq(&token, &dialog.cancel.0),
+            "busy start must not replace or duplicate the worker"
+        );
+        let mut harness = ui_harness(dialog, 720.0);
+        harness.run_steps(2);
+        assert!(harness.query_by_label("Create diff").is_none());
+        assert!(harness.query_by_label("Back").is_none());
+        harness.get_by_label("Cancel").click();
+        harness.run_steps(2);
+        assert!(token.load(Ordering::Acquire));
+        assert!(harness.state().0.busy());
         assert!(
             harness
-                .get_by_label("Save and open…")
+                .get_by_label("Cancel")
                 .accesskit_node()
                 .is_disabled()
         );
+        release_tx.send(()).unwrap();
         harness
-            .get_by_label("Include unsaved editor changes")
-            .click();
+            .state_mut()
+            .0
+            .generate
+            .wait_until_ready_for_test()
+            .unwrap();
+        harness.state_mut().0.poll(&egui::Context::default());
+        assert!(!harness.state().0.busy());
+        assert!(harness.state().0.completed_path.is_none());
+        assert!(
+            harness
+                .state()
+                .0
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("canceled")
+        );
+        harness.run_steps(2);
+        assert!(harness.query_by_label("Create diff").is_some());
+        let token = harness.state().0.cancel.0.clone();
+        drop(harness);
+        assert!(token.load(Ordering::Acquire));
+    }
+    #[test]
+    fn completed_results_can_go_back_and_forward_without_editing_or_regenerating() {
+        let mut dialog = fixture();
+        dialog.step = Step::Review;
+        dialog.completed_path = Some("/tmp/paper-diff.tex".into());
+        let mut harness = ui_harness(dialog, 720.0);
         harness.run();
-        assert!(!harness.state().include_edits);
-        harness.state_mut().output = Some(Output {
+        assert!(harness.query_by_label("Open diff").is_some());
+        harness.get_by_label("Back").click();
+        harness.run();
+        assert_eq!(harness.state().0.step, Step::Output);
+        assert!(harness.query_by_label("Open diff").is_none());
+        harness.get_by_label("Next").click();
+        harness.run();
+        assert_eq!(harness.state().0.step, Step::Review);
+        assert!(harness.query_by_label("Open diff").is_some());
+        assert_eq!(
+            harness.state().0.completed_path.as_deref(),
+            Some(Path::new("/tmp/paper-diff.tex"))
+        );
+    }
+    #[test]
+    fn releasing_cancel_after_completion_cannot_activate_open_diff() {
+        let mut dialog = fixture();
+        dialog.step = Step::Review;
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        dialog
+            .generate
+            .start("controlled completion", move || {
+                release_rx.recv().unwrap();
+                Ok(Completed {
+                    path: "/tmp/diff.tex".into(),
+                    output: Output {
+                        source: "generated".into(),
+                        warnings: String::new(),
+                        older: "/tmp/older.tex".into(),
+                        newer: "/tmp/paper.tex".into(),
+                    },
+                })
+            })
+            .unwrap();
+        let mut harness = ui_harness(dialog, 720.0);
+        harness.run_steps(2);
+        let pos = harness.get_by_label("Cancel").rect().center();
+        harness.event(egui::Event::PointerMoved(pos));
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.step();
+        release_tx.send(()).unwrap();
+        harness
+            .state_mut()
+            .0
+            .generate
+            .wait_until_ready_for_test()
+            .unwrap();
+        harness.state_mut().0.poll(&egui::Context::default());
+        harness.step();
+        assert!(harness.get_by_label("Open diff").rect().contains(pos));
+        harness.event(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        harness.run_steps(2);
+        assert_eq!(harness.state().1, None);
+    }
+    #[test]
+    fn changing_options_invalidates_the_completed_result() {
+        let mut dialog = fixture();
+        dialog.step = Step::Output;
+        dialog.completed_path = Some("/tmp/paper-diff.tex".into());
+        dialog.output = Some(Output {
             source: "generated".into(),
             warnings: String::new(),
-            older: "/tmp/old.tex".into(),
+            older: "/tmp/older.tex".into(),
             newer: "/tmp/paper.tex".into(),
         });
+        let mut harness = ui_harness(dialog, 720.0);
         harness.run();
-        assert!(
-            !harness
-                .get_by_label("Save and open…")
-                .accesskit_node()
-                .is_disabled()
-        );
         harness.get_by_label("Include subfiles").click();
         harness.run();
-        assert!(!harness.state().settings.flatten);
-        assert!(harness.state().output.is_none());
-        assert!(
-            harness
-                .get_by_label("Copy source")
-                .accesskit_node()
-                .is_disabled()
-        );
+        assert!(harness.state().0.output.is_none());
+        assert!(harness.state().0.completed_path.is_none());
+    }
+    #[test]
+    fn every_step_keeps_actions_visible_and_fields_inside_narrow_cards() {
+        for width in [320.0, 660.0] {
+            for step in [Step::Files, Step::Output, Step::Review] {
+                let mut dialog = fixture();
+                dialog.step = step;
+                dialog.error = Some("A comparison error. ".repeat(200));
+                let mut harness = ui_harness(dialog, width);
+                harness.run();
+                let action = if step == Step::Review {
+                    "Create diff"
+                } else {
+                    "Next"
+                };
+                let rect = harness.get_by_label(action).rect();
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width && rect.bottom() <= 440.0,
+                    "{step:?}: {rect:?}"
+                );
+                if step == Step::Files {
+                    for name in ["Older file", "Newer file"] {
+                        let r = harness.get_by_label(name).rect();
+                        assert!(r.width() > 200.0 && r.right() <= width, "{name}: {r:?}");
+                    }
+                }
+                if step == Step::Output {
+                    let footer = rect;
+                    harness.get_by_label("Advanced").click();
+                    harness.run();
+                    assert_eq!(harness.get_by_label("Next").rect(), footer);
+                    for name in [
+                        "Output file",
+                        "Arguments",
+                        "Environment",
+                        "Working directory",
+                    ] {
+                        let r = harness.get_by_label(name).rect();
+                        assert!(r.left() >= 0.0 && r.right() <= width, "{name}: {r:?}");
+                    }
+                }
+            }
+        }
+        for width in [100.0, 320.0, 1200.0] {
+            assert!(card_width(width) + 32.0 <= width);
+        }
+        for height in [100.0, 320.0, 600.0] {
+            assert!(card_height(height) + 32.0 <= height);
+        }
+    }
+    #[test]
+    fn documentation_uses_the_existing_child_safe_link_route() {
+        let mut dialog = fixture();
+        dialog.step = Step::Output;
+        let mut harness = ui_harness(dialog, 720.0);
+        harness.run();
+        harness.get_by_label("Advanced").click();
+        harness.run();
+        harness.get_by_label("LaTeXdiff documentation").click();
+        harness.run();
+        let url = harness.ctx.data(|data| {
+            data.get_temp::<String>(egui::Id::new((
+                "settings-documentation",
+                harness.ctx.viewport_id(),
+            )))
+        });
+        assert_eq!(url.as_deref(), Some(diff::DOCS));
     }
     #[test]
     fn typing_in_a_modal_field_cannot_edit_source_or_execute_parent_commands() {
@@ -829,133 +1329,17 @@ mod tests {
         assert!(app.latexdiff.is_none());
     }
     #[test]
-    fn card_fits_narrow_owners_and_expanded_options_wrap() {
-        for width in [100.0, 320.0, 660.0, 1200.0] {
-            assert!(card_width(width) + 32.0 <= width);
-        }
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(320.0, 600.0))
-            .build_ui_state(
-                |ui, dialog| {
-                    let _ = show(ui, dialog);
-                },
-                fixture(),
-            );
-        harness.run();
-        harness.get_by_label("LaTeXdiff options").click();
-        harness.run();
-        for label in [
-            "Generate diff",
-            "Save and open…",
-            "Copy source",
-            "Arguments",
-            "Environment",
-            "Working directory",
-        ] {
-            let rect = harness.get_by_label(label).rect();
-            assert!(
-                rect.right() <= 320.0 && rect.left() >= 0.0,
-                "{label}: {rect:?}"
-            );
-        }
+    fn closing_a_draft_cannot_save_an_unverified_working_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.begin_latexdiff(&context);
+        app.latexdiff.as_mut().unwrap().settings.command.directory =
+            root.path().join("absent").to_string_lossy().into_owned();
+        app.close_latexdiff(&context);
+        assert!(app.pending_settings.is_none());
+        assert!(app.settings.latexdiff.command.directory.is_empty());
     }
-    #[test]
-    fn paths_and_expanded_command_fields_fill_finite_columns_in_the_real_card() {
-        assert_eq!(card_height(600.0), 260.0);
-        for (width, path_minimum, options_minimum) in [(320.0, 120.0, 140.0), (660.0, 440.0, 460.0)]
-        {
-            let mut harness = Harness::builder()
-                .with_size(Vec2::new(width, 500.0))
-                .build_ui_state(
-                    |ui, dialog| {
-                        ui.set_height(card_height(500.0));
-                        let _ = show(ui, dialog);
-                    },
-                    fixture(),
-                );
-            harness.run();
-            for label in ["Older file", "Newer file"] {
-                let rect = harness.get_by_label(label).rect();
-                assert!(
-                    rect.width() >= path_minimum,
-                    "{width}px / {label}: {rect:?}"
-                );
-                assert!(
-                    rect.left() >= 0.0 && rect.right() <= width,
-                    "{label}: {rect:?}"
-                );
-            }
-            let footer = harness.get_by_label("Generate diff").rect();
-            assert!(footer.bottom() <= 268.0, "{footer:?}");
-            harness.get_by_label("LaTeXdiff options").click();
-            harness.run();
-            for label in [
-                "Executable",
-                "Arguments",
-                "Environment",
-                "Working directory",
-            ] {
-                let rect = harness.get_by_label(label).rect();
-                assert!(
-                    rect.width() >= options_minimum,
-                    "{width}px / {label}: {rect:?}"
-                );
-                assert!(
-                    rect.left() >= 0.0 && rect.right() <= width,
-                    "{label}: {rect:?}"
-                );
-            }
-            assert_eq!(
-                harness.get_by_label("Generate diff").rect(),
-                footer,
-                "expanded options must scroll above a stationary footer"
-            );
-        }
-    }
-
-    #[test]
-    fn footer_reserves_every_wrapped_row_including_busy_spinner() {
-        assert_eq!(wrapped_rows(166.0, &[80.0, 80.0], 6.0), 1);
-        assert_eq!(wrapped_rows(165.0, &[80.0, 80.0], 6.0), 2);
-        assert_eq!(wrapped_rows(100.0, &[80.0, 80.0, 80.0], 6.0), 3);
-        assert_eq!(wrapped_rows(240.0, &[70.0, 70.0, 70.0], 6.0), 1);
-        assert_eq!(wrapped_rows(240.0, &[70.0, 70.0, 70.0, 20.0], 6.0), 2);
-    }
-
-    #[test]
-    fn expanded_options_and_long_errors_cannot_scroll_actions_out_of_view() {
-        for width in [320.0, 660.0] {
-            let mut harness = Harness::builder()
-                .with_size(Vec2::new(width, 320.0))
-                .build_ui_state(
-                    |ui, dialog| {
-                        let _ = show(ui, dialog);
-                    },
-                    fixture(),
-                );
-            harness.run();
-            let before = harness.get_by_label("Generate diff").rect();
-            harness.get_by_label("LaTeXdiff options").click();
-            harness.state_mut().error = Some("Could not generate this comparison. ".repeat(200));
-            harness.run();
-            assert_eq!(harness.get_by_label("Generate diff").rect(), before);
-            for label in ["Generate diff", "Save and open…", "Copy source"] {
-                let rect = harness.get_by_label(label).rect();
-                assert!(
-                    rect.left() >= 0.0 && rect.right() <= width,
-                    "{label}: {rect:?}"
-                );
-                assert!(
-                    rect.bottom() <= 320.0 && rect.top() >= 240.0,
-                    "{label}: {rect:?}"
-                );
-            }
-        }
-        for height in [100.0, 320.0, 600.0] {
-            assert!(card_height(height) + 32.0 <= height);
-        }
-    }
-
     #[test]
     fn a_custom_shortcut_opens_the_modal_from_the_editor() {
         let root = tempfile::tempdir().unwrap();
@@ -992,103 +1376,77 @@ mod tests {
         assert_eq!(app.document().source(), "source");
     }
     #[test]
-    fn documentation_uses_the_existing_child_safe_link_route() {
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(720.0, 640.0))
-            .build_ui_state(
-                |ui, dialog| {
-                    let _ = show(ui, dialog);
-                },
-                fixture(),
-            );
-        harness.run();
-        harness.get_by_label("LaTeXdiff options").click();
-        harness.run();
-        harness.get_by_label("LaTeXdiff documentation").click();
-        harness.run();
-        let url = harness.ctx.data(|data| {
-            data.get_temp::<String>(egui::Id::new((
-                "settings-documentation",
-                harness.ctx.viewport_id(),
-            )))
-        });
-        assert_eq!(url.as_deref(), Some(diff::DOCS));
+    fn footer_reserves_every_wrapped_row_including_busy_spinner() {
+        assert_eq!(wrapped_rows(166.0, &[80.0, 80.0], 6.0), 1);
+        assert_eq!(wrapped_rows(165.0, &[80.0, 80.0], 6.0), 2);
+        assert_eq!(wrapped_rows(100.0, &[80.0, 80.0, 80.0], 6.0), 3);
+        assert_eq!(wrapped_rows(240.0, &[70.0, 70.0, 70.0], 6.0), 1);
+        assert_eq!(wrapped_rows(240.0, &[70.0, 70.0, 70.0, 20.0], 6.0), 2);
     }
     #[test]
-    fn copied_result_is_available_without_touching_disk() {
-        let mut dialog = fixture();
-        dialog.output = Some(Output {
-            source: "\\DIFadd{new}".into(),
-            warnings: String::new(),
-            older: "/tmp/old.tex".into(),
-            newer: "/tmp/new.tex".into(),
-        });
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(720.0, 600.0))
-            .build_ui_state(
-                |ui, state: &mut (Dialog, Option<Action>)| {
-                    state.1 = show(ui, &mut state.0);
-                },
-                (dialog, None),
-            );
-        harness.run();
-        harness.get_by_label("Copy source").click();
-        harness.step();
-        assert_eq!(harness.state().1, Some(Action::Copy));
-    }
-    #[test]
-    #[ignore = "captures fresh offscreen modal framebuffer for visual review"]
+    #[ignore = "captures fresh offscreen wizard framebuffers for visual review"]
     #[cfg(target_os = "macos")]
     fn modal_framebuffer_review() {
         for dark in [false, true] {
-            let context = egui::Context::default();
-            theme::configure_test_fonts(&context);
-            let palette = crate::builtin_themes::find(if dark {
-                "catppuccin-mocha"
-            } else {
-                "catppuccin-latte"
-            })
-            .unwrap();
-            theme::set_imported_palette(&context, Some((dark, palette.palette)));
-            theme::configure_styles(&context);
-            context.set_theme(if dark {
-                egui::Theme::Dark
-            } else {
-                egui::Theme::Light
-            });
-            let mut dialog = fixture();
-            let mut framebuffer = crate::test_framebuffer::Framebuffer::new([820, 600]);
-            let destination = PathBuf::from(format!(
-                ".tiptoptyp/screenshots/agent-review/latexdiff/{}.png",
-                if dark { "dark" } else { "light" }
-            ));
-            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-            for frame in 0..4 {
-                let output = context.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(820.0, 600.0))),
-                        time: Some(frame as f64 / 60.0),
-                        ..Default::default()
-                    },
-                    |ui| {
-                        ui.painter()
-                            .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
-                        egui::Area::new(egui::Id::new("review-card"))
-                            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                            .show(ui.ctx(), |ui| {
-                                theme::dialog_card_frame(ui.style()).show(ui, |ui| {
-                                    ui.set_width(660.0);
-                                    ui.set_height(card_height(600.0));
-                                    let _ = show(ui, &mut dialog);
+            for step in [Step::Files, Step::Output, Step::Review] {
+                let context = egui::Context::default();
+                theme::configure_test_fonts(&context);
+                let palette = crate::builtin_themes::find(if dark {
+                    "catppuccin-mocha"
+                } else {
+                    "catppuccin-latte"
+                })
+                .unwrap();
+                theme::set_imported_palette(&context, Some((dark, palette.palette)));
+                theme::configure_styles(&context);
+                context.set_theme(if dark {
+                    egui::Theme::Dark
+                } else {
+                    egui::Theme::Light
+                });
+                let mut dialog = fixture();
+                dialog.step = step;
+                let mut framebuffer = crate::test_framebuffer::Framebuffer::new([820, 600]);
+                let destination = PathBuf::from(format!(
+                    ".tiptoptyp/screenshots/agent-review/latexdiff/{}-{}.png",
+                    if dark { "dark" } else { "light" },
+                    match step {
+                        Step::Files => "files",
+                        Step::Output => "output",
+                        Step::Review => "review",
+                    }
+                ));
+                std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+                for frame in 0..4 {
+                    let output = context.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(820.0, 600.0),
+                            )),
+                            time: Some(frame as f64 / 60.0),
+                            ..Default::default()
+                        },
+                        |ui| {
+                            ui.painter()
+                                .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+                            egui::Area::new(egui::Id::new("review-card"))
+                                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                                .show(ui.ctx(), |ui| {
+                                    theme::dialog_card_frame(ui.style()).show(ui, |ui| {
+                                        ui.set_width(660.0);
+                                        ui.set_height(card_height(600.0));
+                                        let _ = show(ui, &mut dialog);
+                                    });
                                 });
-                            });
-                    },
-                );
-                framebuffer.render(
-                    &context,
-                    output,
-                    (frame == 3).then_some(destination.as_path()),
-                );
+                        },
+                    );
+                    framebuffer.render(
+                        &context,
+                        output,
+                        (frame == 3).then_some(destination.as_path()),
+                    );
+                }
             }
         }
     }

@@ -8,6 +8,11 @@ on:
         type: choice
         options: [
           "all",
+          "liquid_selection",
+          "liquid_streaming",
+          "latexdiff_wizard",
+          "tex_documentation",
+          "citation_import",
           "file_versions",
           "command_palette",
           "preview_jump",
@@ -45,6 +50,8 @@ on:
           "diagnostics",
           "completion",
           "layout",
+          "pdf_layout",
+          "inactive_preview",
           "explorer_toggle",
           "explorer_scroll",
           "folding",
@@ -67,6 +74,11 @@ on:
           "context_menu"
         ]
         default: all
+      liquid_model_dir:
+        description: Prepared native model folder for Liquid journeys (no downloads)
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -87,7 +99,13 @@ jobs:
       - name: Real editor journeys
         env:
           JOURNEY: ${{ inputs.journey }}
-        run: python3 scripts/test-desktop-ui.py --journey "$JOURNEY"
+          LIQUID_MODEL_DIR: ${{ inputs.liquid_model_dir }}
+        run: |
+          args=(--journey "$JOURNEY")
+          if [[ -n "$LIQUID_MODEL_DIR" ]]; then
+            args+=(--liquid-model-dir "$LIQUID_MODEL_DIR")
+          fi
+          python3 scripts/test-desktop-ui.py "${args[@]}"
       - name: Preserve evidence
         if: always()
         uses: actions/upload-artifact@v4

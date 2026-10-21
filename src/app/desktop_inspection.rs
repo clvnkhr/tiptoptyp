@@ -2,11 +2,12 @@
 use super::*;
 impl EditorApp {
     pub(super) fn publish_desktop_inspection(&self, context: &egui::Context) {
-        if !crate::desktop_test::requested() {
+        let viewport = format!("{:?}", context.viewport_id());
+        if !crate::desktop_test::requested_for(&viewport) {
             return;
         }
         if let Some(webview) = &self.webview
-            && let Some(epoch) = crate::desktop_test::request_renderer()
+            && let Some(epoch) = crate::desktop_test::request_renderer(&viewport)
             && webview
                 .evaluate_script_with_callback(
                     include_str!("desktop_preview_probe.js"),
@@ -102,6 +103,9 @@ impl EditorApp {
             })
             .into();
         observation["palette_visible"] = self.command_palette_visible().into();
+        observation["latexdiff"] = self.latexdiff_inspection();
+        observation["tex_documentation"] = self.tex_documentation_inspection();
+        observation["citation"] = self.citation_inspection();
         observation["palette_query_fingerprint"] =
             crate::desktop_test::fingerprint(&self.command_palette.query).into();
         observation["palette_selected"] = self
@@ -224,6 +228,20 @@ impl EditorApp {
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+        interaction["workspace_content"] = serde_json::json!(format!(
+            "{:?}",
+            workspace_view::content_view(
+                self.tabs.is_empty(),
+                self.document().kind(),
+                self.source_preview_available(),
+                self.view_mode,
+                self.preview_source_popped_out()
+            )
+        ));
+        interaction["asset_pdfium_ready"] = serde_json::json!(
+            self.pdfium_asset
+                .ready_for(self.asset_preview.content.pdf())
+        );
 
         let font_name = self.editor_completion.as_ref().and_then(|completion| {
             let item = completion.items.get(completion.selected)?;
@@ -279,6 +297,16 @@ impl EditorApp {
             "tex_diagnostic_counts": self.tex_diagnostics.iter().map(|diagnostics| diagnostics.len()).collect::<Vec<_>>(),
             "tex_diagnostics_current": self.activity.diagnostics[1..].iter().map(|key| *key == Some(self.document().key())).collect::<Vec<_>>(),
             "completion_pending": self.activity.completion.is_some(),
+            "ltex": {
+                "enabled": self.settings.ltex.enabled,
+                "current": self.ltex.current(self.document().key()),
+                "state": self.ltex.activity().label(),
+                "count": self.ltex.diagnostics.len(),
+                "locations": self.ltex.diagnostics.iter().filter_map(|d| d.location.map(|l| [l.line,l.column])).collect::<Vec<_>>(),
+                "rules": self.ltex.diagnostics.iter().filter_map(|d| d.correction.as_ref().and_then(|c| c.rule.as_ref())).collect::<Vec<_>>(),
+                "suggestions": self.ltex.diagnostics.iter().filter_map(|d| d.correction.as_ref()).map(|c| c.replacements.len()).sum::<usize>(),
+                "paths": self.ltex.diagnostics.iter().map(|d| match &d.source { DiagnosticSource::File(p) => Some(p.display().to_string()), _ => None }).collect::<Vec<_>>(),
+            },
             "writing_count": self.writing.diagnostics.len(),
             "writing_lines": self.writing.diagnostics.iter().filter_map(|diagnostic| diagnostic.line()).collect::<Vec<_>>(),
             "writing_fingerprint": crate::desktop_test::fingerprint(&format!("{:?}", self.writing.diagnostics)),
@@ -300,6 +328,7 @@ impl EditorApp {
                     "selected": [null, null], "can_restore": [false, false], "rendering": false, "preview": null, "error": null,
                 })
             });
+        interaction["liquid"] = self.liquid_inspection();
         interaction["harper_dictionary_fingerprint"] = serde_json::json!(
             crate::desktop_test::fingerprint(&self.settings.harper_dictionary)
         );

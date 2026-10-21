@@ -31,15 +31,15 @@ A regression checks message replacement, absence of the duplicate label, and
 retention of the earlier action in history.
 
 Preview progress text and its spinner share a centered bounding box. Wrapped text
-is measured against available width; focus-wait text remains non-animating.
+is measured against available width; paused-preview text remains non-animating.
 Explorer section headers use a flexible trailing spacer to left-align text while
 keeping the whole header clickable.
 
 ## Verification
 
 Deterministic tests cover notification timing and duplicates, entry filtering,
-visible status text, successful file actions, centered geometry, static focus
-waiting, header alignment, and the full-width disclosure click target. The opt-in
+visible status text, successful file actions, centered geometry, static paused
+feedback, header alignment, and the full-width disclosure click target. The opt-in
 `real_tinymist_reports_preview_compile_cycles` test also passed against the bundled
 macOS ARM64 server, observing a matching start/success cycle.
 

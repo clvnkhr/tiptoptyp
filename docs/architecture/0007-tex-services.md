@@ -26,9 +26,7 @@ below the project's `.tiptoptyp`, along with the child process and its logs.
 The main buffer overlays its on-disk entry; included files remain disk-backed,
 matching the existing Typst policy. Relative paths retain project layout. Build
 outputs must never overwrite the user's PDF, source or auxiliary files.
-Tectonic manages TeX/BibTeX reruns. System engines have their own argument builder
-and run two passes, with a third when the log requests a reference rerun. Automatic
-BibTeX/Biber orchestration for system engines is not implemented.
+Tectonic manages its own TeX/BibTeX reruns. System pdfLaTeX, XeLaTeX and LuaLaTeX engines default to finite latexmk builds, which choose BibTeX/Biber from the generated auxiliary files and rerun the engine until references settle. Settings beside the compiler choices expose the latexmk/direct driver, bibliography toggle and a background Biber cache reset. Direct mode retains the basic two/three-pass loop without bibliography automation. The editable latexmk default `-bibtex-cond` preserves a supplied `.bbl` when its source `.bib` is unavailable. The app owns watching, cancellation, source overlays and private output paths; latexmk never runs a persistent viewer/watcher. A cache reset and active system builds exclude one another across editor windows; reset removes only the verified Biber PAR cache leaf, never its parent or TeX installation.
 Shell escape is disabled. Package downloads are allowed by default, with an
 independent cached-packages-only setting. Private outputs live until the build
 session is retired, and canonical PDF bytes are snapshotted before cleanup.

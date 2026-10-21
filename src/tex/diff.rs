@@ -62,12 +62,25 @@ impl Default for Settings {
     }
 }
 impl Settings {
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        self.command.validate()?;
+    /// Form validation never touches the filesystem. Existence checks belong
+    /// to the job worker, where a slow custom directory cannot block a frame.
+    pub(crate) fn validate_syntax(&self) -> Result<(), String> {
         if self.executable.contains('\0') {
             return Err("LaTeXdiff executable contains NUL".into());
         }
-        Ok(())
+        if self.command.directory.contains('\0') {
+            return Err("Working directory cannot contain NUL".into());
+        }
+        if !self.command.directory.is_empty() && !Path::new(&self.command.directory).is_absolute() {
+            return Err("Working directory must be blank or an absolute directory".into());
+        }
+        let mut syntax = self.command.clone();
+        syntax.directory.clear();
+        syntax.validate()
+    }
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        self.validate_syntax()?;
+        self.command.validate()
     }
     fn program(&self) -> PathBuf {
         if self.executable.trim().is_empty() {
@@ -94,31 +107,89 @@ pub(crate) struct Output {
     pub(crate) newer: PathBuf,
 }
 impl Output {
-    pub(crate) fn suggested_name(&self) -> String {
-        format!(
-            "{}-diff.tex",
-            self.newer.file_stem().unwrap_or_default().to_string_lossy()
-        )
-    }
-    pub(crate) fn save(&self, path: &Path) -> Result<PathBuf, String> {
-        // Canonicalize existing destinations too: aliases cannot overwrite an input.
-        let destination = std::path::absolute(path).map_err(|e| e.to_string())?;
-        let resolved = destination.canonicalize().unwrap_or(destination.clone());
-        for original in [&self.older, &self.newer] {
-            if original.canonicalize().unwrap_or(original.clone()) == resolved {
-                return Err("Choose a different output file; a diff cannot overwrite either original document.".into());
-            }
-        }
+    pub(crate) fn save_new(&self, path: &Path, cancel: &AtomicBool) -> Result<PathBuf, String> {
+        check_canceled(cancel)?;
+        let selected_path = std::path::absolute(path).map_err(|e| e.to_string())?;
+        let destination = new_destination(&selected_path, &self.older, &self.newer)?;
         let mut file = tempfile::NamedTempFile::new_in(
             destination.parent().ok_or("Choose an output directory")?,
         )
         .map_err(|e| format!("Cannot create diff: {e}"))?;
-        file.write_all(self.source.as_bytes())
-            .map_err(|e| e.to_string())?;
-        file.persist(&destination)
+        write_source(&mut file, self.source.as_bytes(), cancel)?;
+        file.as_file()
+            .sync_all()
             .map_err(|e| format!("Cannot save diff: {e}"))?;
-        Ok(destination)
+        // Publication is the commit point. Recheck after writing/fsync, and
+        // atomically refuse a destination created since the earlier validation.
+        check_canceled(cancel)?;
+        file.persist_noclobber(&destination)
+            .map_err(|e| format!("Cannot save diff; choose a new output file: {e}"))?;
+        // Keep the selected spelling (for example /var or a project symlink),
+        // while publication above used the resolved parent for safe checks.
+        Ok(selected_path)
     }
+}
+#[derive(Debug)]
+pub(crate) struct Completed {
+    pub(crate) output: Output,
+    pub(crate) path: PathBuf,
+}
+/// Validate the destination before running a potentially expensive external job,
+/// and check it again when publishing. Both stages belong on the worker.
+pub(crate) fn generate_and_save(
+    request: Request,
+    path: &Path,
+    cancel: &AtomicBool,
+) -> Result<Completed, String> {
+    check_canceled(cancel)?;
+    new_destination(path, &request.older, &request.newer)?;
+    let output = generate(request, cancel)?;
+    let path = output.save_new(path, cancel)?;
+    Ok(Completed { output, path })
+}
+fn new_destination(path: &Path, older: &Path, newer: &Path) -> Result<PathBuf, String> {
+    let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
+    let parent = absolute
+        .parent()
+        .ok_or("Choose an output directory")?
+        .canonicalize()
+        .map_err(|e| format!("Choose an existing output directory: {e}"))?;
+    let name = absolute.file_name().ok_or("Choose an output file name")?;
+    let destination = parent.join(name);
+    let resolved = destination
+        .canonicalize()
+        .unwrap_or_else(|_| destination.clone());
+    for original in [older, newer] {
+        let original = original
+            .canonicalize()
+            .or_else(|_| std::path::absolute(original))
+            .map_err(|e| e.to_string())?;
+        if original == resolved {
+            return Err(
+                "Choose a different output file; a diff cannot overwrite either original document."
+                    .into(),
+            );
+        }
+    }
+    match std::fs::symlink_metadata(&destination) {
+        Ok(_) => Err("The output file already exists. Choose a new output file.".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(destination),
+        Err(error) => Err(format!("Cannot inspect the output file: {error}")),
+    }
+}
+fn check_canceled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
+        Err("LaTeXdiff canceled".into())
+    } else {
+        Ok(())
+    }
+}
+fn write_source(writer: &mut impl Write, source: &[u8], cancel: &AtomicBool) -> Result<(), String> {
+    for chunk in source.chunks(64 * 1024) {
+        check_canceled(cancel)?;
+        writer.write_all(chunk).map_err(|e| e.to_string())?;
+    }
+    check_canceled(cancel)
 }
 
 pub(crate) fn generate(request: Request, cancel: &AtomicBool) -> Result<Output, String> {
@@ -132,9 +203,7 @@ fn generate_with_timeout(
     request.settings.validate()?;
     let older = validate_input(&request.older)?;
     let newer = validate_input(&request.newer)?;
-    if cancel.load(Ordering::Acquire) {
-        return Err("LaTeXdiff canceled".into());
-    }
+    check_canceled(cancel)?;
     // Use the original directory so --flatten resolves relative \input/include.
     // A uniquely named snapshot is removed on every success/error/cancel path.
     let snapshot = if let Some(source) = request.source {
@@ -150,8 +219,7 @@ fn generate_with_timeout(
                     .ok_or("The newer file needs a parent directory")?,
             )
             .map_err(|e| format!("Cannot snapshot unsaved edits: {e}"))?;
-        file.write_all(source.as_bytes())
-            .map_err(|e| e.to_string())?;
+        write_source(&mut file, source.as_bytes(), cancel)?;
         Some(file)
     } else {
         None
@@ -161,16 +229,24 @@ fn generate_with_timeout(
     let stderr_path = directory.path().join("latexdiff.log");
     let mut command = Command::new(request.settings.program());
     command.current_dir(newer.parent().unwrap());
-    request
-        .settings
-        .command
+    // CommandCustomization prepends argv to an existing command. Put these
+    // defaults in the same literal argv text, ahead of editable options, so a
+    // repeated user option can override a preset without involving a shell.
+    let mut customization = request.settings.command.clone();
+    customization.arguments = format!(
+        "--type={}{} --encoding=utf8 {}",
+        request.settings.markup.argument(),
+        if request.settings.flatten {
+            " --flatten"
+        } else {
+            ""
+        },
+        customization.arguments,
+    );
+    customization
         .apply(&mut command)
         .map_err(|e| e.to_string())?;
-    command.arg(format!("--type={}", request.settings.markup.argument()));
-    if request.settings.flatten {
-        command.arg("--flatten");
-    }
-    command.args(["--encoding=utf8", "--label"]);
+    command.arg("--label");
     command.arg(older.as_os_str());
     command.arg("--label").arg(newer.as_os_str());
     command
@@ -188,10 +264,7 @@ fn generate_with_timeout(
             Some("LaTeXdiff canceled")
         } else if start.elapsed() >= timeout {
             Some("LaTeXdiff timed out after 120 seconds")
-        } else if [(&stdout_path, MAX_SOURCE), (&stderr_path, MAX_SOURCE)]
-            .iter()
-            .any(|(p, max)| std::fs::metadata(p).is_ok_and(|m| m.len() > *max))
-        {
+        } else if check_output_sizes(&stdout_path, &stderr_path).is_err() {
             Some("LaTeXdiff output exceeds the 16 MiB limit")
         } else {
             None
@@ -207,6 +280,10 @@ fn generate_with_timeout(
             }
         }
     };
+    check_canceled(cancel)?;
+    // A fast child can finish between the monitor's size check and try_wait.
+    // Enforce both limits again after it has stopped writing.
+    check_output_sizes(&stdout_path, &stderr_path)?;
     let warnings = read_bounded(&stderr_path, MAX_LOG)?;
     if !status.success() {
         return Err(format!("LaTeXdiff failed ({status}).\n{warnings}"));
@@ -223,6 +300,16 @@ fn generate_with_timeout(
         older,
         newer,
     })
+}
+fn check_output_sizes(stdout: &Path, stderr: &Path) -> Result<(), String> {
+    if [stdout, stderr]
+        .into_iter()
+        .any(|path| std::fs::metadata(path).is_ok_and(|metadata| metadata.len() > MAX_SOURCE))
+    {
+        Err("LaTeXdiff output exceeds the 16 MiB limit".into())
+    } else {
+        Ok(())
+    }
 }
 fn validate_input(path: &Path) -> Result<PathBuf, String> {
     let path = path
@@ -257,7 +344,13 @@ fn read_bounded(path: &Path, limit: u64) -> Result<String, String> {
             String::from_utf8_lossy(&bytes)
         ));
     }
-    String::from_utf8(bytes).map_err(|e| format!("LaTeXdiff output is not UTF-8: {e}"))
+    if limit == MAX_LOG {
+        // Warnings may use the tool's locale. Preserve valid generated UTF-8
+        // source even when a diagnostic contains an undecodable byte.
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    } else {
+        String::from_utf8(bytes).map_err(|e| format!("LaTeXdiff output is not UTF-8: {e}"))
+    }
 }
 
 /// Closing the dialog cancels its process; no stale completion can open a tab.
@@ -312,6 +405,48 @@ mod tests {
         assert!(serde_json::from_str::<Settings>(r#"{"unknown":1}"#).is_err());
     }
     #[test]
+    fn form_validation_does_not_require_the_working_directory_to_exist() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        settings.command.directory = root
+            .path()
+            .join("not-created")
+            .to_string_lossy()
+            .into_owned();
+        settings.validate_syntax().unwrap();
+        assert!(
+            settings
+                .validate()
+                .unwrap_err()
+                .contains("existing absolute directory")
+        );
+        settings.command.directory = "relative/directory".into();
+        assert!(
+            settings
+                .validate_syntax()
+                .unwrap_err()
+                .contains("absolute directory")
+        );
+        settings.command.directory = "/invalid\0directory".into();
+        assert!(settings.validate_syntax().unwrap_err().contains("NUL"));
+        settings.command.directory.clear();
+        settings.command.arguments = "'unclosed".into();
+        assert!(
+            settings
+                .validate_syntax()
+                .unwrap_err()
+                .contains("unmatched quote")
+        );
+        settings.command.arguments.clear();
+        settings.command.environment = "[]".into();
+        assert!(
+            settings
+                .validate_syntax()
+                .unwrap_err()
+                .contains("JSON object of strings")
+        );
+    }
+    #[test]
     fn invalid_options_are_reported_before_launch() {
         let root = tempfile::tempdir().unwrap();
         let mut request = inputs(root.path());
@@ -349,7 +484,7 @@ printf 'a warning' >&2
         let old = request.older.clone();
         let new = request.newer.clone();
         let output = generate(request, &AtomicBool::new(false)).unwrap();
-        assert!(output.source.starts_with("--math-markup=1\n$(touch should-not-exist)\n--type=UNDERLINE\n--flatten\n--encoding=utf8\n"));
+        assert!(output.source.starts_with("--type=UNDERLINE\n--flatten\n--encoding=utf8\n--math-markup=1\n$(touch should-not-exist)\n"));
         assert!(output.source.contains("literal env\nunsaved new"));
         assert_eq!(output.warnings, "a warning");
         assert!(!root.path().join("should-not-exist").exists());
@@ -362,6 +497,36 @@ printf 'a warning' >&2
                 .to_string_lossy()
                 .starts_with(".tiptoptyp-latexdiff-")
         }));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn custom_options_override_presets_before_managed_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let mut request = inputs(root.path());
+        request.source = None;
+        request.settings.executable = fake(root.path(), r#"printf '%s\n' "$@""#);
+        request.settings.flatten = false;
+        request.settings.command.arguments = "--type=COLOR --flatten --math-markup=1".into();
+        let older = request.older.canonicalize().unwrap();
+        let newer = request.newer.canonicalize().unwrap();
+        let output = generate(request, &AtomicBool::new(false)).unwrap();
+        assert_eq!(
+            output.source.lines().collect::<Vec<_>>(),
+            vec![
+                "--type=UNDERLINE",
+                "--encoding=utf8",
+                "--type=COLOR",
+                "--flatten",
+                "--math-markup=1",
+                "--label",
+                older.to_str().unwrap(),
+                "--label",
+                newer.to_str().unwrap(),
+                "--",
+                older.to_str().unwrap(),
+                newer.to_str().unwrap()
+            ]
+        );
     }
     #[cfg(unix)]
     #[test]
@@ -402,7 +567,10 @@ printf 'a warning' >&2
         request.settings.executable = fake(root.path(), "printf started > ready; exec sleep 30");
         let cancellation = Cancellation::default();
         let flag = cancellation.0.clone();
-        let worker = std::thread::spawn(move || generate(request, &flag));
+        let destination = root.path().join("canceled-diff.tex");
+        let worker_destination = destination.clone();
+        let worker =
+            std::thread::spawn(move || generate_and_save(request, &worker_destination, &flag));
         // Wait for the child itself to acknowledge startup, so this covers
         // cancellation of a running process rather than the pre-launch check.
         let ready = root.path().join("ready");
@@ -415,6 +583,7 @@ printf 'a warning' >&2
         let result = worker.join().unwrap();
         assert!(started, "child did not start: {result:?}");
         assert!(result.unwrap_err().contains("canceled"));
+        assert!(!destination.exists());
         assert!(!std::fs::read_dir(root.path()).unwrap().any(|entry| {
             entry
                 .unwrap()
@@ -434,18 +603,178 @@ printf 'a warning' >&2
             newer: request.newer,
         };
         for path in [&output.older, &output.newer] {
-            assert!(output.save(path).unwrap_err().contains("cannot overwrite"));
+            assert!(
+                output
+                    .save_new(path, &AtomicBool::new(false))
+                    .unwrap_err()
+                    .contains("cannot overwrite")
+            );
         }
         #[cfg(unix)]
         {
             let alias = root.path().join("alias.tex");
             std::os::unix::fs::symlink(&output.newer, &alias).unwrap();
-            assert!(output.save(&alias).is_err());
+            assert!(output.save_new(&alias, &AtomicBool::new(false)).is_err());
         }
-        let path = root.path().join(output.suggested_name());
-        assert_eq!(output.save(&path).unwrap(), path);
+        let path = root.path().join("new-diff.tex");
+        assert_eq!(
+            output.save_new(&path, &AtomicBool::new(false)).unwrap(),
+            path
+        );
         assert_eq!(std::fs::read_to_string(path).unwrap(), "marked up");
         assert_eq!(std::fs::read_to_string(output.newer).unwrap(), "new disk");
+    }
+    #[test]
+    fn new_output_rejects_existing_files_hardlinks_and_parent_aliases() {
+        let root = tempfile::tempdir().unwrap();
+        let request = inputs(root.path());
+        let output = Output {
+            source: "marked up".into(),
+            warnings: String::new(),
+            older: request.older,
+            newer: request.newer,
+        };
+        let existing = root.path().join("existing.tex");
+        std::fs::write(&existing, "keep me").unwrap();
+        assert!(
+            output
+                .save_new(&existing, &AtomicBool::new(false))
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "keep me");
+        let hardlink = root.path().join("hardlink.tex");
+        std::fs::hard_link(&output.newer, &hardlink).unwrap();
+        assert!(output.save_new(&hardlink, &AtomicBool::new(false)).is_err());
+        assert_eq!(std::fs::read_to_string(&output.newer).unwrap(), "new disk");
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("folder-alias");
+            std::os::unix::fs::symlink(root.path(), &alias).unwrap();
+            let original_alias = alias.join(output.newer.file_name().unwrap());
+            assert!(
+                output
+                    .save_new(&original_alias, &AtomicBool::new(false))
+                    .unwrap_err()
+                    .contains("cannot overwrite")
+            );
+            let new_alias = alias.join("new-diff.tex");
+            let saved = output
+                .save_new(&new_alias, &AtomicBool::new(false))
+                .unwrap();
+            assert_eq!(saved, new_alias);
+            assert_eq!(
+                saved.canonicalize().unwrap(),
+                root.path().canonicalize().unwrap().join("new-diff.tex")
+            );
+            assert_eq!(std::fs::read_to_string(saved).unwrap(), "marked up");
+        }
+        let canceled = root.path().join("pre-canceled.tex");
+        assert!(
+            output
+                .save_new(&canceled, &AtomicBool::new(true))
+                .unwrap_err()
+                .contains("canceled")
+        );
+        assert!(!canceled.exists());
+    }
+    #[test]
+    fn source_writing_stops_between_chunks_before_publishing() {
+        struct CancelWriter<'a> {
+            cancel: &'a AtomicBool,
+            bytes: usize,
+        }
+        impl Write for CancelWriter<'_> {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.bytes += data.len();
+                self.cancel.store(true, Ordering::Release);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let cancel = AtomicBool::new(false);
+        let mut writer = CancelWriter {
+            cancel: &cancel,
+            bytes: 0,
+        };
+        let source = vec![b'x'; 256 * 1024];
+        assert!(
+            write_source(&mut writer, &source, &cancel)
+                .unwrap_err()
+                .contains("canceled")
+        );
+        assert!(writer.bytes > 0 && writer.bytes <= 64 * 1024);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn generate_and_save_validates_before_launch_and_keeps_later_outputs() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("result.tex");
+        let mut request = inputs(root.path());
+        request.settings.executable =
+            fake(root.path(), "printf started > ran; printf 'valid diff'");
+        std::fs::write(&destination, "existing output").unwrap();
+        assert!(
+            generate_and_save(request, &destination, &AtomicBool::new(false))
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert!(!root.path().join("ran").exists());
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "existing output"
+        );
+        std::fs::remove_file(&destination).unwrap();
+        let mut request = inputs(root.path());
+        request.settings.executable = fake(
+            root.path(),
+            "printf raced > result.tex; printf 'valid diff'",
+        );
+        assert!(
+            generate_and_save(request, &destination, &AtomicBool::new(false))
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "raced");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn successful_output_tolerates_locale_warnings_but_not_invalid_source() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("result.tex");
+        let mut request = inputs(root.path());
+        request.settings.executable = fake(
+            root.path(),
+            r"printf 'valid diff'; printf '\377 warning' >&2",
+        );
+        let completed = generate_and_save(request, &destination, &AtomicBool::new(false)).unwrap();
+        assert_eq!(completed.output.source, "valid diff");
+        assert_eq!(completed.output.warnings, "� warning");
+        assert_eq!(
+            std::fs::read_to_string(&completed.path).unwrap(),
+            "valid diff"
+        );
+        let invalid = root.path().join("invalid.tex");
+        let mut request = inputs(root.path());
+        request.settings.executable = fake(root.path(), r"printf '\377'");
+        assert!(
+            generate_and_save(request, &invalid, &AtomicBool::new(false))
+                .unwrap_err()
+                .contains("not UTF-8")
+        );
+        assert!(!invalid.exists());
+        let failed = root.path().join("failed.tex");
+        let mut request = inputs(root.path());
+        request.settings.executable =
+            fake(root.path(), "printf partial; printf failed >&2; exit 2");
+        assert!(
+            generate_and_save(request, &failed, &AtomicBool::new(false))
+                .unwrap_err()
+                .contains("failed")
+        );
+        assert!(!failed.exists());
     }
     #[test]
     fn rejects_empty_directory_and_large_inputs() {
@@ -481,6 +810,9 @@ printf 'a warning' >&2
                 .ends_with("[Log truncated]")
         );
         file.as_file().set_len(MAX_SOURCE + 1).unwrap();
+        let other = tempfile::NamedTempFile::new().unwrap();
+        assert!(check_output_sizes(other.path(), file.path()).is_err());
+        assert!(check_output_sizes(file.path(), other.path()).is_err());
         assert!(
             read_bounded(file.path(), MAX_SOURCE)
                 .unwrap_err()
@@ -515,7 +847,9 @@ printf 'a warning' >&2
         );
         assert!(output.source.contains("unsaved") && output.source.contains("theorem"));
         assert!(!output.source.contains("\\input{body}"));
-        let path = output.save(&new_root.join("diff.tex")).unwrap();
+        let path = output
+            .save_new(&new_root.join("diff.tex"), &AtomicBool::new(false))
+            .unwrap();
         assert!(path.is_file());
         let engine = super::super::tools::distribution_tool("pdflatex")
             .expect("installed pdfLaTeX for integration check");

@@ -1100,6 +1100,7 @@ mod tests {
 
     fn diagnostic(path: &Path, line: usize, message: &str) -> Diagnostic {
         Diagnostic {
+            correction: None,
             provider: None,
             severity: DiagnosticSeverity::Error,
             source: DiagnosticSource::File(path.to_owned()),

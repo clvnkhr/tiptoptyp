@@ -1,0 +1,400 @@
+{
+  "version": 1,
+  "reviewer": "assistant",
+  "review_type": "Qualitative assistant inspection, not blinded human annotation.",
+  "gold_modified": false,
+  "results_path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/grammar-comparison/harper-20261020-combined/results.json",
+  "ranking_note": {
+    "harper_spelling_isolated_typos": 8,
+    "typos_detected": 8,
+    "exact_first_suggestion_repairs": 6,
+    "other_first_suggestions": 2,
+    "intended_second_suggestions": {
+      "misspelld": "misspelled",
+      "estmates": "estimates"
+    },
+    "warning": "The app displays diagnostics and alternatives. This synthetic first-suggestion result is not automatic correction behavior."
+  },
+  "cohort_metrics": {
+    "liquid": {
+      "word": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 5,
+          "missed": 1,
+          "other_edit": 2,
+          "unchanged": 16,
+          "false_alarm": 4
+        }
+      },
+      "context": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 12,
+          "other_edit": 2,
+          "unchanged": 13,
+          "false_alarm": 1
+        }
+      }
+    },
+    "gector": {
+      "word": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 2,
+          "missed": 6,
+          "unchanged": 19,
+          "false_alarm": 1
+        }
+      },
+      "context": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 7,
+          "missed": 7,
+          "unchanged": 13,
+          "false_alarm": 1
+        }
+      }
+    },
+    "harper": {
+      "word": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 6,
+          "other_edit": 2,
+          "unchanged": 20
+        }
+      },
+      "context": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 9,
+          "other_edit": 2,
+          "unchanged": 14,
+          "missed": 3
+        }
+      }
+    },
+    "harper-spelling": {
+      "word": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 6,
+          "other_edit": 2,
+          "unchanged": 20
+        }
+      },
+      "context": {
+        "count": 28,
+        "assessment_counts": {
+          "corrected": 6,
+          "other_edit": 2,
+          "unchanged": 14,
+          "missed": 6
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "model": "liquid",
+      "id": "formatting-agreement-typst-p3",
+      "input": "is uniform.",
+      "output": "is a uniform.",
+      "classification": "worsened_fragment",
+      "reason": "Adding the article changes adjectival uniform to a noun. It neither repairs the missing plural agreement nor restores the subject context lost by the parser.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-split-formatting-tex-p1",
+      "input": "The nonautonmous equation is stable.",
+      "output": "The nonatomic equation is stable.",
+      "classification": "wrong_mathematical_term",
+      "reason": "Nonatomic is a different mathematical property, not a spelling repair of nonautonomous; the equation description changes.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": false
+    },
+    {
+      "model": "liquid",
+      "id": "word-02-context-p1",
+      "input": "This is a misspelld word.",
+      "output": "This is a misspelled.",
+      "classification": "required_noun_deleted",
+      "reason": "The typo becomes misspelled but the following noun word disappears, leaving a malformed ordinary sentence.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-04-word-p1",
+      "input": "nonautonmous",
+      "output": "nonaut",
+      "classification": "truncated_word",
+      "reason": "Nonaut is not the intended ordinary or mathematical word; output truncates the input instead of correcting nonautonomous.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-04-context-p1",
+      "input": "The nonautonmous equation has a mild solution.",
+      "output": "The nonautolinear equation has a mild solution.",
+      "classification": "wrong_or_invented_mathematical_term",
+      "reason": "Nonautolinear does not recover the intended nonautonomous; the model invents or substitutes a different technical expression.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-06-word-p1",
+      "input": "teh",
+      "output": "The",
+      "classification": "spelling_repaired_with_unrequested_capitalization",
+      "reason": "The spelling is repaired, but a standalone fragment gives no evidence that the should be capitalized. This is a useful spelling candidate with an unnecessary case change, not an exact minimal repair.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "existing-tex-display-agreement-p1",
+      "input": "The estimates x holds uniformly in time.",
+      "output": "The estimate x holds uniformly in time.",
+      "classification": "grammatical_number_choice_requires_author_review",
+      "reason": "Changing estimates to estimate yields grammatical agreement, but singularizes the mathematical claim. Fixing holds to hold preserves the supplied plurality; the alternative requires author intent and is not automatically semantically equivalent.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "existing-typst-display-agreement-p1",
+      "input": "The estimates x holds uniformly in time.",
+      "output": "The estimate x holds uniformly in time.",
+      "classification": "grammatical_number_choice_requires_author_review",
+      "reason": "Changing estimates to estimate yields grammatical agreement, but singularizes the mathematical claim. Fixing holds to hold preserves the supplied plurality; the alternative requires author intent and is not automatically semantically equivalent.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "existing-typst-inline-article-p1",
+      "input": "We obtain a estimate from x.",
+      "output": "We obtain an estimate of x.",
+      "classification": "partial_fix_with_unwanted_relation_change",
+      "reason": "The a/an error is repaired, but from becomes of. The original sentence describes deriving an estimate from an expression; the output can instead describe estimating that expression. The extra edit is not required grammar repair.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-23-word-p1",
+      "input": "form",
+      "output": "formulation",
+      "classification": "unsupported_expansion_of_valid_word",
+      "reason": "Form is correctly spelled; replacing it by formulation invents the intended meaning without context.",
+      "automatic_assessment": "false_alarm",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-23-context-p1",
+      "input": "We derive the estimate form the energy identity.",
+      "output": "We derive the estimate from the energy identity.",
+      "classification": "correct_contextual_confusable_repair",
+      "reason": "Sentence context makes from the intended preposition; this repair is unavailable to ordinary spelling-only checking.",
+      "automatic_assessment": "corrected",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-24-word-p1",
+      "input": "their",
+      "output": "There is",
+      "classification": "unsupported_sentence_completion",
+      "reason": "Their is a valid isolated word; expanding it to There is invents a sentence and changes lexical identity.",
+      "automatic_assessment": "false_alarm",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-24-context-p1",
+      "input": "Their is a unique solution.",
+      "output": "There is a unique solution.",
+      "classification": "correct_contextual_confusable_repair",
+      "reason": "The existential construction makes There is a conservative correction in this sentence.",
+      "automatic_assessment": "corrected",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-25-word-p1",
+      "input": "there",
+      "output": "there.",
+      "classification": "unrequested_terminal_punctuation",
+      "reason": "The isolated valid word there does not require a sentence-ending period.",
+      "automatic_assessment": "false_alarm",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-12-word-p1",
+      "input": "ill-posedness",
+      "output": "illposedness",
+      "classification": "valid_mathematical_compound_changed",
+      "reason": "Ill-posedness is an accepted hyphenated mathematical noun; deleting its hyphen is an unwanted edit.",
+      "automatic_assessment": "false_alarm",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-22-context-p1",
+      "input": "We minimise the energy.",
+      "output": "We minimise energy.",
+      "classification": "optional_style_change",
+      "reason": "Both We minimise the energy and We minimise energy can be grammatical. Removing the determiner is unnecessary for a grammar-only checker.",
+      "automatic_assessment": "false_alarm",
+      "source_map_safe": true
+    },
+    {
+      "model": "gector",
+      "id": "word-25-word-p1",
+      "input": "there",
+      "output": "There",
+      "classification": "unrequested_capitalization",
+      "reason": "There is a capitalized variant of a valid word. The isolated input supplies no sentence-initial requirement.",
+      "automatic_assessment": "false_alarm",
+      "source_map_safe": true
+    },
+    {
+      "model": "gector",
+      "id": "word-20-context-p1",
+      "input": "We study the asymptotic behaviour.",
+      "output": "We study asymptotic behaviour.",
+      "classification": "optional_style_change",
+      "reason": "The definite and bare abstract-noun readings can both be grammatical; deleting the is unnecessary rewriting.",
+      "automatic_assessment": "false_alarm",
+      "source_map_safe": true
+    },
+    {
+      "model": "gector",
+      "id": "word-23-context-p1",
+      "input": "We derive the estimate form the energy identity.",
+      "output": "We derive the estimate from the energy identity.",
+      "classification": "correct_contextual_confusable_repair",
+      "reason": "Sentence context supplies evidence for form to from, which was appropriately left unchanged in isolation.",
+      "automatic_assessment": "corrected",
+      "source_map_safe": true
+    },
+    {
+      "model": "gector",
+      "id": "word-28-context-p1",
+      "input": "We proof the main theorem.",
+      "output": "We prove the main theorem.",
+      "classification": "correct_contextual_part_of_speech_repair",
+      "reason": "We requires the verb prove here; proof remains a valid isolated noun.",
+      "automatic_assessment": "corrected",
+      "source_map_safe": true
+    },
+    {
+      "model": "harper-spelling",
+      "id": "word-02-word-p1",
+      "input": "misspelld",
+      "output": "misspell",
+      "classification": "intended_spelling_present_but_misranked",
+      "reason": "Harper detects the typo. Its first suggestion is misspell; intended misspelled is second. First-suggestion scoring does not represent whether the UI offers the intended spelling.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "harper-spelling",
+      "id": "word-03-word-p1",
+      "input": "estmates",
+      "output": "estates",
+      "classification": "intended_spelling_present_but_misranked",
+      "reason": "Harper detects the typo but ranks estates ahead of intended estimates, which is second. User choice can recover the right correction.",
+      "automatic_assessment": "other_edit",
+      "source_map_safe": true
+    },
+    {
+      "model": "harper-spelling",
+      "id": "word-04-word-p1",
+      "input": "nonautonmous",
+      "output": "nonautonomous",
+      "classification": "correct_mathematical_spelling_repair",
+      "reason": "The math-aware dictionary supplies intended nonautonomous, where both ML models fail to produce it.",
+      "automatic_assessment": "corrected",
+      "source_map_safe": true
+    },
+    {
+      "model": "harper-spelling",
+      "id": "word-23-context-p1",
+      "input": "We derive the estimate form the energy identity.",
+      "output": "We derive the estimate form the energy identity.",
+      "classification": "expected_spelling_only_limit",
+      "reason": "Form is a valid word; spelling-only deliberately cannot select from based on sentence meaning.",
+      "automatic_assessment": "missed",
+      "source_map_safe": true
+    },
+    {
+      "model": "harper",
+      "id": "word-24-context-p1",
+      "input": "Their is a unique solution.",
+      "output": "There is a unique solution.",
+      "classification": "correct_contextual_rule",
+      "reason": "Curated Harper grammar corrects Their is to There is, showing that a spelling-only switch would remove useful existing context rules.",
+      "automatic_assessment": "corrected",
+      "source_map_safe": true
+    },
+    {
+      "model": "harper-spelling",
+      "id": "word-12-word-p1",
+      "input": "ill-posedness",
+      "output": "ill-posedness",
+      "classification": "valid_mathematical_control_preserved",
+      "reason": "The dictionary preserves accepted ill-posedness; no spelling correction is appropriate.",
+      "automatic_assessment": "unchanged",
+      "source_map_safe": true
+    },
+    {
+      "model": "liquid",
+      "id": "word-15-context-p1",
+      "input": "Tao’s argument gives the estimate.",
+      "output": "Tao’s argument gives the estimate.",
+      "classification": "name_possessive_control_preserved",
+      "reason": "The selected Tao curly-apostrophe possessive remains unchanged in context.",
+      "automatic_assessment": "unchanged",
+      "source_map_safe": true
+    },
+    {
+      "model": "gector",
+      "id": "word-18-context-p1",
+      "input": "Romito’s proof gives the bound.",
+      "output": "Romito’s proof gives the bound.",
+      "classification": "name_possessive_control_preserved",
+      "reason": "The selected Romito curly-apostrophe possessive remains unchanged in context.",
+      "automatic_assessment": "unchanged",
+      "source_map_safe": true
+    }
+  ],
+  "documentation_review": {
+    "path": "/Users/calvinkhor/Documents/GitHub/mytypst/docs/grammar-comparison.md",
+    "material_numeric_errors_found": false,
+    "wording_issues": [
+      {
+        "text": "Mathematical compounds and the selected Tao/Barbato/Romito possessive/name controls were preserved.",
+        "issue": "Ambiguous scope: if read as model-output behavior this contradicts Liquid modifying ill-posedness. It appears intended to describe source extraction/admission.",
+        "suggestion": "Explicitly say the parser preserved mathematical compounds and name/possessive tokens; model changes are recorded separately."
+      }
+    ],
+    "validated_claims": [
+      "139 admitted blocks;108 distinct strings;57 error references;82 unchanged controls",
+      "Liquid42exact,13modifiedcontrols;GECToR31exact,2modifiedcontrols;Harper25exact,6modifiedcontrols;Harper spelling16exact,3modifiedcontrols",
+      "Liquid64changed proposals with7rejected;GECToR33changed proposals with0rejected;eachHarpermode1rejected",
+      "Both MLmodels exactly repair the4selected original-source excerpts",
+      "All ML distinct_outputs lists have length1",
+      "Word/context cohort counts and six-confusable outcomes match results"
+    ]
+  }
+}

@@ -14,6 +14,7 @@ fn retained_diagnostic_tooltip_tracks_edits_and_resolved_diagnostics() {
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
         app.document_mut().replace_unprojected_untitled("#broken");
         app.preview.diagnostics = vec![Diagnostic {
+            correction: None,
             provider: None,
             severity: DiagnosticSeverity::Error,
             source: DiagnosticSource::Main,
@@ -521,6 +522,7 @@ fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts()
             match route {
                 "index" => app.navigate_file_location(path, None, Some((1, 1)), "index test"),
                 "problems" => app.jump_to_diagnostic(Diagnostic {
+                    correction: None,
                     provider: None,
                     severity: DiagnosticSeverity::Error,
                     source: DiagnosticSource::Main,
@@ -1120,11 +1122,11 @@ fn closing_retained_root_clears_discarded_buffer_autosave_and_old_receipts() {
 }
 
 #[test]
-fn preview_focus_wait_is_static_but_active_transition_animates() {
+fn paused_preview_is_static_but_loading_animates() {
     let context = egui::Context::default();
-    let paint = |waiting| {
+    let paint = |paused| {
         context.run_ui(egui::RawInput::default(), |ui| {
-            show_preview_transition(ui, waiting, false, !waiting)
+            show_preview_transition(ui, paused, true)
         })
     };
     for _ in 0..10 {
@@ -1132,7 +1134,7 @@ fn preview_focus_wait_is_static_but_active_transition_animates() {
     }
     assert!(
         !context.has_requested_repaint(),
-        "waiting for window focus must not animate indefinitely"
+        "a paused preview must not animate indefinitely"
     );
     paint(false).drop_without_applying_deltas();
     assert!(
@@ -1343,6 +1345,7 @@ fn context_menu_sizes_include_every_action_and_separator() {
                                     link,
                                     table: None,
                                     math: None,
+                                    liquid_selection: None,
                                 },
                                 &ShortcutBindings::current_defaults(),
                                 &mut None,
@@ -3424,6 +3427,7 @@ fn editor_context_menu_exposes_the_link_under_the_pointer() {
                         link: Some("https://example.com/docs"),
                         table: None,
                         math: None,
+                        liquid_selection: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3587,6 +3591,7 @@ fn typst_math_menu_offers_the_other_form_directly_without_a_flyout() {
                         link: None,
                         table: None,
                         math: Some(&target),
+                        liquid_selection: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3630,6 +3635,7 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
                         link: None,
                         table: None,
                         math: Some(&target),
+                        liquid_selection: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3686,6 +3692,7 @@ fn reopened_conversion_menu_does_not_inherit_the_previous_flyout() {
                             link: None,
                             table: None,
                             math: Some(&target),
+                            liquid_selection: None,
                         },
                         &ShortcutBindings::current_defaults(),
                         &mut None,
@@ -3754,6 +3761,7 @@ fn rendered_menu_geometry_matches_sized_geometry_exactly() {
                         link: None,
                         table: None,
                         math: Some(&target),
+                        liquid_selection: None,
                     },
                     &bindings,
                     action,
@@ -3900,6 +3908,7 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
                         link: None,
                         table: Some(&table),
                         math: None,
+                        liquid_selection: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -7052,6 +7061,7 @@ fn workspace_colors_use_the_same_extension_policy_as_document_detection() {
 #[test]
 fn problems_row_double_click_dispatches_only_located_diagnostics() {
     let located = Diagnostic {
+        correction: None,
         provider: None,
         severity: DiagnosticSeverity::Error,
         source: DiagnosticSource::File(PathBuf::from("chapter.typ")),
@@ -7066,6 +7076,7 @@ fn problems_row_double_click_dispatches_only_located_diagnostics() {
     assert_eq!(problem_row_jump_target(&located, true), Some(located));
 
     let unlocated = Diagnostic {
+        correction: None,
         provider: None,
         severity: DiagnosticSeverity::Error,
         source: DiagnosticSource::Global,
@@ -8135,38 +8146,6 @@ fn only_backend_or_tool_changes_restart_tinymist() {
 }
 
 #[test]
-fn activation_sensitive_webview_creation_waits_only_for_explicit_blur() {
-    assert!(!may_create_embedded_webview(true, Some(false)));
-    assert!(may_create_embedded_webview(true, Some(true)));
-    assert!(may_create_embedded_webview(true, None));
-    assert!(may_create_embedded_webview(false, Some(false)));
-}
-
-#[test]
-fn every_secondary_window_can_embed_after_its_native_parent_is_focused() {
-    assert!(!may_create_window_webview(
-        EditorWindowHost::Secondary,
-        true,
-        None,
-    ));
-    assert!(!may_create_window_webview(
-        EditorWindowHost::Secondary,
-        false,
-        Some(false),
-    ));
-    assert!(may_create_window_webview(
-        EditorWindowHost::Secondary,
-        true,
-        Some(true),
-    ));
-    assert!(may_create_window_webview(
-        EditorWindowHost::Root,
-        false,
-        Some(false),
-    ));
-}
-
-#[test]
 fn sublime_theme_accepts_either_slot_before_color_transforms() {
     let temp = tempfile::tempdir().expect("create temporary theme directory");
     let path = temp.path().join("Dark.sublime-color-scheme");
@@ -9056,6 +9035,7 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     app.set_diagnostics(DiagnosticReport {
         raw: format!("{name}:{canonical_line}:{canonical_column}: warning: CLI test"),
         diagnostics: vec![Diagnostic {
+            correction: None,
             provider: None,
             severity: DiagnosticSeverity::Warning,
             source: DiagnosticSource::Main,
@@ -9329,6 +9309,7 @@ fn ignored_tex_diagnostic_codes_are_filtered_without_disabling_other_results() {
     app.settings.tex.badness_ignored_codes = vec!["redundant-script-braces".into()];
     app.tex_diagnostics[0] = vec![
         Diagnostic {
+            correction: None,
             provider: Some("Badness".into()),
             severity: DiagnosticSeverity::Warning,
             source: DiagnosticSource::Main,
@@ -9337,6 +9318,7 @@ fn ignored_tex_diagnostic_codes_are_filtered_without_disabling_other_results() {
             details: vec!["Code: \"redundant-script-braces\"".into()],
         },
         Diagnostic {
+            correction: None,
             provider: Some("Badness".into()),
             severity: DiagnosticSeverity::Warning,
             source: DiagnosticSource::Main,
@@ -9724,6 +9706,7 @@ fn compact_problems_harness() -> egui_kittest::Harness<'static, EditorApp> {
     app.document_mut()
         .replace_unprojected_untitled("first\nsecond\nthird");
     app.preview.diagnostics = vec![Diagnostic {
+        correction: None,
         provider: Some("Badness".into()),
         severity: DiagnosticSeverity::Warning,
         source: DiagnosticSource::Main,
@@ -9879,6 +9862,7 @@ fn problems_paints_provider_beside_a_taller_location_label() {
     let root = tempfile::tempdir().unwrap();
     let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
     app.preview.diagnostics = vec![Diagnostic {
+        correction: None,
         provider: Some("Tectonic".into()),
         severity: DiagnosticSeverity::Warning,
         source: DiagnosticSource::Main,
@@ -10649,6 +10633,7 @@ fn math_context_conversion_choices_follow_document_language() {
                         link: None,
                         table: None,
                         math: Some(&target),
+                        liquid_selection: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -10683,6 +10668,7 @@ fn math_context_conversion_choices_follow_document_language() {
                         link: None,
                         table: None,
                         math: Some(&target),
+                        liquid_selection: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -11437,18 +11423,28 @@ fn native_preview_popout_ignores_document_dividers() {
 }
 
 #[test]
-fn native_preview_asset_split_reserves_resize_edge_in_every_view_mode() {
+fn native_preview_asset_layout_reserves_only_its_visible_resize_edge() {
     use workspace_view::ContentView;
     let available = Rect::from_min_max(Pos2::new(600.0, 68.0), Pos2::new(1400.0, 884.0));
     for kind in [DocumentKind::Image, DocumentKind::Pdf] {
         for mode in [ViewMode::Code, ViewMode::Preview, ViewMode::Split] {
             let view = workspace_view::content_view(false, kind, true, mode, false);
-            assert_eq!(view, ContentView::SplitAsset);
+            assert_eq!(
+                view,
+                match mode {
+                    ViewMode::Code => ContentView::Asset,
+                    ViewMode::Split => ContentView::SplitAsset,
+                    ViewMode::Preview => ContentView::Preview,
+                }
+            );
             let split = matches!(view, ContentView::SplitSource | ContentView::SplitAsset);
             let (left_grip, bottom_grip) =
                 panel_handles::native_preview_grips(split, false, false, false);
             let content = native_preview_content_rect(available, available, left_grip, bottom_grip);
-            assert_eq!(content.left(), available.left() + 4.0);
+            assert_eq!(
+                content.left(),
+                available.left() + if split { 4.0 } else { 0.0 }
+            );
             assert_eq!(content.bottom(), available.bottom());
         }
     }

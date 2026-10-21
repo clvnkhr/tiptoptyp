@@ -122,6 +122,13 @@ pub(super) fn editor_menu_row_specs(
             right: shortcut(action),
         });
     }
+    rows.insert(
+        rows.len() - 2,
+        EditorMenuRow {
+            label: super::liquid::MENU_LABEL,
+            right: String::new(),
+        },
+    );
     if can_format {
         rows.push(EditorMenuRow {
             label: "Format Document",

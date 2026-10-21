@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "date": "2026-10-21",
+  "change": "Cache source-discontinuous word spans once per projected Liquid fragment; binary-search them for local edit mapping.",
+  "scope": "Optimized standalone extraction of the actual production Fragment, Origin, word_char and map_edit code, before and after. No model inference, UI rendering or end-to-end grammar timing.",
+  "workload": {
+    "paragraphs": "Synthetic ASCII prose with contiguous literal source origins; fixed local four-character edit at EOF. No selected document text is retained.",
+    "requested_sizes_bytes": [
+      102400,
+      1048576
+    ],
+    "edits_per_run": 256,
+    "warmup_runs": 5,
+    "measured_runs": 7,
+    "construction_measured_separately": true
+  },
+  "comparison": [
+    {
+      "paragraph_scalars": 102399,
+      "before_setup_us": 565.958,
+      "after_setup_us": 692.625,
+      "before_median_local_edit_us": 181.696453125,
+      "after_median_local_edit_us": 0.006671875
+    },
+    {
+      "paragraph_scalars": 1048574,
+      "before_setup_us": 4771.667,
+      "after_setup_us": 7243.625,
+      "before_median_local_edit_us": 2160.88232421875,
+      "after_median_local_edit_us": 0.006671875
+    }
+  ],
+  "before": {
+    "mode": "before",
+    "source": "/private/tmp/liquid-grammar-before-cache-20261021.rs",
+    "source_sha256": "6043300d0a0b94410a564e7c4d9140e60bbd92cd0ad6a2d6ee361a03f7ec509d",
+    "extracted_source_sha256": "f34fefad8661d5b8e4e32b90b0f52e4a98b828012cd378af57b5bb2bfd770423",
+    "binary_sha256": "1409c18e9db2d687f786f1f2fe095759f55c81537f571214834d5c13b5598267",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "compile_flags": [
+      "--edition",
+      "2024",
+      "-O",
+      "-C",
+      "target-cpu=native"
+    ],
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu": "Apple M2 Max",
+    "measurements": [
+      {
+        "requested_bytes": 102400,
+        "actual_scalars": 102399,
+        "setup_ns": 565958,
+        "iterations_per_run": 256,
+        "warmup_runs": 5,
+        "runs_ns": [
+          46514292,
+          46979709,
+          46516542,
+          46531542,
+          46350458,
+          46485875,
+          46151917
+        ],
+        "checksum": 0,
+        "median_ns_per_edit": 181696.453125
+      },
+      {
+        "requested_bytes": 1048576,
+        "actual_scalars": 1048574,
+        "setup_ns": 4771667,
+        "iterations_per_run": 256,
+        "warmup_runs": 5,
+        "runs_ns": [
+          553185875,
+          546368166,
+          551430083,
+          556511916,
+          556959583,
+          548597541,
+          557617000
+        ],
+        "checksum": 0,
+        "median_ns_per_edit": 2160882.32421875
+      }
+    ]
+  },
+  "after": {
+    "mode": "after",
+    "source": "src/liquid_grammar.rs",
+    "source_sha256": "ee0ad7985c03d4068579a31bfd029e3497e37cdabdaea3fe17813124ded4d2ad",
+    "extracted_source_sha256": "3bbb20d3b00286b666100bee3072a452c1f18a595cbd50dd921b77bfae7119ea",
+    "binary_sha256": "c56afb72ff8177637255212448ac4859ad945dff851f652dbb3cccc1504fc5e2",
+    "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "compile_flags": [
+      "--edition",
+      "2024",
+      "-O",
+      "-C",
+      "target-cpu=native"
+    ],
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu": "Apple M2 Max",
+    "measurements": [
+      {
+        "requested_bytes": 102400,
+        "actual_scalars": 102399,
+        "setup_ns": 692625,
+        "iterations_per_run": 256,
+        "warmup_runs": 5,
+        "runs_ns": [
+          1750,
+          1833,
+          1708,
+          1708,
+          1708,
+          1666,
+          1708
+        ],
+        "checksum": 0,
+        "median_ns_per_edit": 6.671875
+      },
+      {
+        "requested_bytes": 1048576,
+        "actual_scalars": 1048574,
+        "setup_ns": 7243625,
+        "iterations_per_run": 256,
+        "warmup_runs": 5,
+        "runs_ns": [
+          1750,
+          1708,
+          1708,
+          1708,
+          1708,
+          1708,
+          1708
+        ],
+        "checksum": 0,
+        "median_ns_per_edit": 6.671875
+      }
+    ]
+  },
+  "regression": {
+    "test": "liquid_grammar::tests::cached_word_fences_bound_local_mapping_work_and_preserve_strict_edges",
+    "contract": "A local EOF edit in a paragraph containing32768 source-discontinuous words inspects at most18 cached spans; strict interior insertions and split-word suffix edits remain rejected.",
+    "instrumentation": "Comparison counting exists only under cfg(test); no production counters or logging."
+  },
+  "artifacts": {
+    "benchmark_driver": "/private/tmp/bench-liquid-mapping-20261021.py",
+    "benchmark_driver_sha256": "81756cc219f4a75d803f49b34db56caa7794c167026d6a982f3028c8ea47ea25",
+    "before_source": "/private/tmp/liquid-grammar-before-cache-20261021.rs"
+  },
+  "limitations": [
+    "The post-fix operation is very short; its per-edit nanosecond estimate is timer-sensitive. The durable conclusion is removal of paragraph-size-dependent scanning, covered by the bounded-work regression.",
+    "The cache adds a one-time linear projection pass; its construction cost is recorded separately.",
+    "This is one Apple M2 Max running macOS14.6.1. It is not a cross-platform speed claim and does not measure complete Liquid inference or GUI responsiveness."
+  ]
+}

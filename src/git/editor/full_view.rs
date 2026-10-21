@@ -12,6 +12,8 @@ use eframe::egui::{
 };
 use std::{ops::Range, sync::Arc};
 
+mod comparison;
+
 // Keep a small overscan for the editor's bounded paint-only screen shake.
 const PAINT_GUARD: f32 = 4.0;
 
@@ -416,6 +418,20 @@ pub(crate) fn show_comparison(
             }
         })
         .inner_rect
+}
+
+/// Read-only full-source comparison in the user's configured Git presentation.
+pub(crate) fn show_styled_comparison(
+    ui: &mut Ui,
+    diff: &DocumentDiff,
+    id: Id,
+    path: &std::path::Path,
+    settings: &AppSettings,
+) -> Rect {
+    match settings.git_diff_style {
+        crate::settings::GitDiffStyle::SideBySide => show_comparison(ui, diff, id, path, settings),
+        crate::settings::GitDiffStyle::Unified => comparison::show(ui, diff, id, path, settings),
+    }
 }
 
 fn line_number_gutter(ui: &Ui, before: &str, current: &str, settings: &AppSettings) -> f32 {
@@ -824,6 +840,84 @@ mod tests {
         assert!(Arc::ptr_eq(&first.layout, &next.layout));
         assert_eq!(first.layout.old_rows.len(), 151);
         assert_eq!(first.layout.new_rows.len(), 161);
+    }
+
+    #[test]
+    fn styled_immutable_comparison_honors_both_git_styles_and_keeps_full_sources() {
+        use crate::settings::GitDiffStyle;
+        for style in GitDiffStyle::ALL {
+            let before =
+                "#let value = 1\nUnchanged context.\nOld result.\nMore unchanged context.\n";
+            let after =
+                "#let value = 1\nUnchanged context.\nNew result.\nMore unchanged context.\n";
+            let mut harness = Harness::builder()
+                .with_size(vec2(900.0, 400.0))
+                .build_ui_state(
+                    move |ui, state: &mut (DocumentDiff, bool)| {
+                        if !state.1 {
+                            fonts(ui.ctx());
+                            state.1 = true;
+                            return;
+                        }
+                        let settings = AppSettings {
+                            git_diff_style: style,
+                            ..Default::default()
+                        };
+                        show_styled_comparison(
+                            ui,
+                            &state.0,
+                            Id::new("styled-comparison"),
+                            std::path::Path::new("selection.typ"),
+                            &settings,
+                        );
+                    },
+                    (DocumentDiff::new(before.into(), after), false),
+                );
+            harness.run();
+            match style {
+                GitDiffStyle::Unified => {
+                    harness.get_by_label("Unified comparison contents");
+                    assert!(harness.query_by_label("Older version contents").is_none());
+                }
+                GitDiffStyle::SideBySide => {
+                    harness.get_by_label("Older version contents");
+                    harness.get_by_label("Newer version contents");
+                }
+            }
+            harness.key_press(Key::A);
+            harness.run_steps(2);
+            assert_eq!(harness.state().0.before, before);
+            assert_eq!(harness.state().0.current, after);
+            assert_eq!(harness.state().0.builds, 1);
+            let cached = harness
+                .ctx
+                .data(|data| {
+                    data.get_temp::<Arc<LayoutCache>>(
+                        Id::new("styled-comparison").with("full-diff-layout"),
+                    )
+                })
+                .unwrap();
+            assert_eq!(cached.layout.old.job.text, before);
+            assert_eq!(cached.layout.new.job.text, after);
+            assert!(
+                cached
+                    .layout
+                    .old
+                    .job
+                    .sections
+                    .iter()
+                    .any(|section| section.format.background != Color32::TRANSPARENT)
+            );
+            assert!(
+                cached
+                    .layout
+                    .new
+                    .job
+                    .sections
+                    .iter()
+                    .any(|section| section.format.background != Color32::TRANSPARENT)
+            );
+        }
     }
 
     #[test]

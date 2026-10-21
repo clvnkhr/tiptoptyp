@@ -330,6 +330,11 @@ impl EditorApp {
             ),
         );
         add(
+            "LTeX+",
+            "Checks spelling and grammar with the optional local LanguageTool server.",
+            self.ltex.activity(),
+        );
+        add(
             "Harper",
             "English spelling and grammar checks.",
             if self.settings.english_grammar {

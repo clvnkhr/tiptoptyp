@@ -1,0 +1,306 @@
+{
+  "schema": 1,
+  "created_utc": "2026-10-20T14:15:14.363182+00:00",
+  "evidence_method": "Filesystem stat on explicitly listed pinned required cache files. No model loaded, converted, quantized, compiled, compressed or copied. Existing result metadata supplies runtime measurements.",
+  "results_path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/grammar-comparison/harper-20261020-ml/results.json",
+  "results_file_sha256": "a3e29fc17423aa1f6b29dab0a25f719402256515efdab89b351a81435194a9be",
+  "results_created_utc": "2026-10-20T14:00:43.818768+00:00",
+  "corpus_sha256": "5453615e6a436d7828de61dab4530badad5d2fdd64ba65f96b0e63043ac16ee5",
+  "runtime": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.12.14",
+    "processor": "Apple M2 Max",
+    "logical_cpus": 12,
+    "device": "cpu",
+    "threads": 4,
+    "repeats": 3,
+    "warmup": 2
+  },
+  "models": {
+    "liquid": {
+      "label": "Liquid LFM2.5 Encoder 350M (tagger only)",
+      "model_id": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+      "required_files": [
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/snapshots/4e2f724c10985e9ec90f34189c22be5d5f2e41e0/model.safetensors",
+          "role": "FP16 spellchecker tagger checkpoint",
+          "logical_bytes": 713449656,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/e788053172f2dbc5a1573454475230dca21f19cd3ca1193e2dca5b1a9fd27bfa",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/blobs/02/02c5449e33687d2fcb61198f84f0c17d6fb933183bc2a349f81ffcc4f33abcf8",
+          "device": 16777230,
+          "inode": 206489645
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/snapshots/4e2f724c10985e9ec90f34189c22be5d5f2e41e0/config.json",
+          "role": "Pinned tagger architecture/configuration",
+          "logical_bytes": 494,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/d0aaa9e5754829fc502f625c722adf0e4f9e3558",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/blobs/d0aaa9e5754829fc502f625c722adf0e4f9e3558",
+          "device": 16777230,
+          "inode": 206489654
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/snapshots/4e2f724c10985e9ec90f34189c22be5d5f2e41e0/modeling_gectagger.py",
+          "role": "Pinned custom tagger model and decoding code",
+          "logical_bytes": 20673,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/e15eb5e62c82dfa1231c47b0fd37c271b4554fda",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/blobs/e15eb5e62c82dfa1231c47b0fd37c271b4554fda",
+          "device": 16777230,
+          "inode": 206489648
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/snapshots/4e2f724c10985e9ec90f34189c22be5d5f2e41e0/reranker_gectagger.py",
+          "role": "Companion Python module; no reranker model weights are included",
+          "logical_bytes": 22767,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/45851482f313f4a7c5f7ea0d52338715718f222f",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/blobs/45851482f313f4a7c5f7ea0d52338715718f222f",
+          "device": 16777230,
+          "inode": 206489652
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/snapshots/4e2f724c10985e9ec90f34189c22be5d5f2e41e0/tokenizer.json",
+          "role": "Pinned tokenizer",
+          "logical_bytes": 4733371,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/53d5df363b01234edae97ee6e05139d2c067b31a",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/blobs/53d5df363b01234edae97ee6e05139d2c067b31a",
+          "device": 16777230,
+          "inode": 206489665
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/snapshots/4e2f724c10985e9ec90f34189c22be5d5f2e41e0/tokenizer_config.json",
+          "role": "Pinned tokenizer configuration",
+          "logical_bytes": 306,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/24e798f65ffad2978b12ebe6f6654c196882dbae",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M-Spellchecker/blobs/24e798f65ffad2978b12ebe6f6654c196882dbae",
+          "device": 16777230,
+          "inode": 206489650
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M/snapshots/b886781f7c6f10ca9b7096e21b83e30a073c2f39/config.json",
+          "role": "Pinned encoder architecture configuration; no second encoder weights",
+          "logical_bytes": 1503,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/097bf3a0c38f0c0c81d61e887cf0fc5001494e2f",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M/blobs/097bf3a0c38f0c0c81d61e887cf0fc5001494e2f",
+          "device": 16777230,
+          "inode": 206512458
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M/snapshots/b886781f7c6f10ca9b7096e21b83e30a073c2f39/modeling_lfm2_bidirectional.py",
+          "role": "Pinned custom bidirectional encoder code",
+          "logical_bytes": 7093,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/1d567014f8296af8ff6e58ee82bc231cdfd4dd6c",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--LiquidAI--LFM2.5-Encoder-350M/blobs/1d567014f8296af8ff6e58ee82bc231cdfd4dd6c",
+          "device": 16777230,
+          "inode": 206512462
+        }
+      ],
+      "listed_file_count": 8,
+      "logical_bytes": 718235863,
+      "unique_resolved_file_count": 8,
+      "unique_resolved_logical_bytes": 718235863,
+      "unique_inode_file_count": 8,
+      "unique_inode_logical_bytes": 718235863,
+      "weights_logical_bytes": 713449656,
+      "artifact_weight_dtype": "float16",
+      "inference_dtype": "float32",
+      "device": "cpu",
+      "threads": 4,
+      "batch_size": 1,
+      "max_iter": 3,
+      "input_limit_tokens": 128,
+      "reranker_included": false,
+      "source_url": "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "runtime_versions": {
+        "torch": "2.14.1",
+        "transformers": "5.20.2",
+        "tokenizers": "0.23.3",
+        "huggingface_hub": "2.2.0"
+      },
+      "cached_before_load": true,
+      "measured_import_ms": 1264.9700419860892,
+      "measured_cached_load_ms": 4439.408915990498,
+      "measured_peak_process_rss_mib": 2425.5,
+      "measurement_caveat": "Values above are taken from the completed identified CPU comparison run, not newly measured inference. Peak process RSS includes Python/runtime, loading and transient allocations; it is not idle model RAM."
+    },
+    "gector": {
+      "label": "GECToR-2024 (official RoBERTa-large)",
+      "model_id": "grammarly/GECToR-2024/gector-2024-roberta-large.th",
+      "revision": "sha256:77e1c9e0d7ad5507c16509fd765283dbce5221552aa7a90c37d143f1aeaddb10",
+      "required_files": [
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/gector/gector-2024-roberta-large.th",
+          "role": "Official FP32 GECToR-2024 RoBERTa-large checkpoint",
+          "logical_bytes": 1442177179,
+          "is_symlink": false,
+          "symlink_target": null,
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/gector/gector-2024-roberta-large.th",
+          "device": 16777230,
+          "inode": 206488005
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/gector/fea1532608bf50d086c0b62cb9c4fdc3e5c71daa/labels.txt",
+          "role": "Pinned GECToR edit-label vocabulary",
+          "logical_bytes": 80469,
+          "is_symlink": false,
+          "symlink_target": null,
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/gector/fea1532608bf50d086c0b62cb9c4fdc3e5c71daa/labels.txt",
+          "device": 16777230,
+          "inode": 206489821
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/gector/fea1532608bf50d086c0b62cb9c4fdc3e5c71daa/verb-form-vocab.txt",
+          "role": "Pinned GECToR verb-form vocabulary",
+          "logical_bytes": 4390076,
+          "is_symlink": false,
+          "symlink_target": null,
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/gector/fea1532608bf50d086c0b62cb9c4fdc3e5c71daa/verb-form-vocab.txt",
+          "device": 16777230,
+          "inode": 206489826
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/snapshots/722cf37b1afa9454edce342e7895e588b6ff1d59/config.json",
+          "role": "Pinned RoBERTa tokenizer/configuration; no second RoBERTa weights",
+          "logical_bytes": 482,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/b92478606f827116a06a51500cdf1fccb3b96af1",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/blobs/b92478606f827116a06a51500cdf1fccb3b96af1",
+          "device": 16777230,
+          "inode": 206489840
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/snapshots/722cf37b1afa9454edce342e7895e588b6ff1d59/tokenizer_config.json",
+          "role": "Pinned RoBERTa tokenizer/configuration; no second RoBERTa weights",
+          "logical_bytes": 25,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/34ddbd64a4cd3f2d9d8a9120d3662d0bf91baead",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/blobs/34ddbd64a4cd3f2d9d8a9120d3662d0bf91baead",
+          "device": 16777230,
+          "inode": 206489854
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/snapshots/722cf37b1afa9454edce342e7895e588b6ff1d59/tokenizer.json",
+          "role": "Pinned RoBERTa tokenizer/configuration; no second RoBERTa weights",
+          "logical_bytes": 1355863,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/ad0bcbeb288f0d1373d88e0762e66357f55b8311",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/blobs/ad0bcbeb288f0d1373d88e0762e66357f55b8311",
+          "device": 16777230,
+          "inode": 206489852
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/snapshots/722cf37b1afa9454edce342e7895e588b6ff1d59/vocab.json",
+          "role": "Pinned RoBERTa tokenizer/configuration; no second RoBERTa weights",
+          "logical_bytes": 898823,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/5606f48548d99a9829d10a96cd364b816b02cd21",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/blobs/5606f48548d99a9829d10a96cd364b816b02cd21",
+          "device": 16777230,
+          "inode": 206489845
+        },
+        {
+          "path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/snapshots/722cf37b1afa9454edce342e7895e588b6ff1d59/merges.txt",
+          "role": "Pinned RoBERTa tokenizer/configuration; no second RoBERTa weights",
+          "logical_bytes": 456318,
+          "is_symlink": true,
+          "symlink_target": "../../blobs/226b0752cac7789c48f0cb3ec53eda48b7be36cc",
+          "resolved_path": "/private/tmp/tiptoptyp-grammar-models/hub/models--FacebookAI--roberta-large/blobs/226b0752cac7789c48f0cb3ec53eda48b7be36cc",
+          "device": 16777230,
+          "inode": 206489843
+        }
+      ],
+      "listed_file_count": 8,
+      "logical_bytes": 1449359235,
+      "unique_resolved_file_count": 8,
+      "unique_resolved_logical_bytes": 1449359235,
+      "unique_inode_file_count": 8,
+      "unique_inode_logical_bytes": 1449359235,
+      "weights_logical_bytes": 1442177179,
+      "artifact_weight_dtype": "float32",
+      "inference_dtype": "float32",
+      "device": "cpu",
+      "threads": 4,
+      "batch_size": 1,
+      "max_iter": 3,
+      "input_limit_tokens": 512,
+      "reranker_included": false,
+      "source_url": "https://github.com/grammarly/pillars-of-gec",
+      "runtime_versions": {
+        "torch": "2.14.1",
+        "transformers": "5.20.2",
+        "tokenizers": "0.23.3",
+        "huggingface_hub": "2.2.0"
+      },
+      "cached_before_load": true,
+      "measured_import_ms": 902.068416995462,
+      "measured_cached_load_ms": 12078.415625030175,
+      "measured_peak_process_rss_mib": 2895.6,
+      "measurement_caveat": "Values above are taken from the completed identified CPU comparison run, not newly measured inference. Peak process RSS includes Python/runtime, loading and transient allocations; it is not idle model RAM."
+    }
+  },
+  "size_contract": {
+    "unit": "byte (MiB = bytes / 1048576)",
+    "logical_bytes": "Sum of target stat sizes through the listed snapshot symlinks; only required files are counted, not whole Hub trees or unused snapshots.",
+    "deduplication": "Both resolved-path and (device,inode) deduplicated totals are recorded. Do not count Hub blobs plus snapshot symlinks again, or sum them with another full-cache du result. Required files are shared across architecture builds; native inference runtimes still need architecture-specific binaries.",
+    "not_measured": "No gzip/download compression, quantized export size, converted-runtime overhead, or steady-state RAM measurement is claimed."
+  },
+  "python_environment": {
+    "path": "/private/tmp/tiptoptyp-grammar-venv",
+    "allocated_size_method": "du -sk (filesystem allocated KiB, multiplied by 1024; not compressed installer size)",
+    "allocated_sizes": [
+      {
+        "path": "/private/tmp/tiptoptyp-grammar-venv",
+        "allocated_kib": 943328,
+        "allocated_bytes": 965967872
+      },
+      {
+        "path": "/private/tmp/tiptoptyp-grammar-venv/lib/python3.12/site-packages/torch",
+        "allocated_kib": 596444,
+        "allocated_bytes": 610758656
+      },
+      {
+        "path": "/private/tmp/tiptoptyp-grammar-venv/lib/python3.12/site-packages/transformers",
+        "allocated_kib": 116080,
+        "allocated_bytes": 118865920
+      },
+      {
+        "path": "/private/tmp/tiptoptyp-grammar-venv/lib/python3.12/site-packages/tokenizers",
+        "allocated_kib": 9788,
+        "allocated_bytes": 10022912
+      }
+    ],
+    "pyvenv_config": "home = /opt/homebrew/opt/python@3.12/bin\ninclude-system-site-packages = false\nversion = 3.12.14\nexecutable = /opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/bin/python3.12\ncommand = /opt/homebrew/opt/python@3.12/bin/python3.12 -m venv /private/tmp/tiptoptyp-grammar-venv\n",
+    "caveat": "This is the existing evaluation environment, not a proposed bundle. Package directories are subsets of the environment total, not additive extras. The base Python interpreter referenced by environment symlinks/config may live outside this directory; its full installation is not included."
+  },
+  "licensing": {
+    "liquid": {
+      "declared_license": "Liquid LFM2.5 Encoder 350M (tagger only) — LFM Open License v1.0",
+      "model_card": "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+      "primary_terms": "https://www.liquid.ai/lfm-license",
+      "summary": "Published license provides use/modification/distribution rights subject to its terms, notice obligations and commercial revenue limitation; review the actual license before redistribution."
+    },
+    "gector": {
+      "reference_code_license": "Apache-2.0",
+      "reference_code_license_url": "https://github.com/grammarly/gector/blob/master/LICENSE",
+      "official_checkpoint_source": "https://github.com/grammarly/pillars-of-gec",
+      "checkpoint_redistribution_status": "Unresolved: no separate license for the linked 2024 checkpoint was found in the inspected primary source. Do not infer weight redistribution permission from the reference code license or include checkpoint in app packaging until clarified."
+    }
+  },
+  "intel_mac_support": {
+    "status": "The pinned PyTorch 2.14.1 evaluation environment is not a ready-made universal macOS deployment: official macOS x86_64 PyTorch binaries stopped after 2.2.x.",
+    "primary_announcement": "https://dev-discuss.pytorch.org/t/pytorch-macos-x86-builds-deprecation-starting-january-2024/1690",
+    "current_binary_index": "https://download.pytorch.org/libtorch/cpu",
+    "alternative": "A validated native ONNX export/runtime or separately maintained native build is needed; neither model was exported or validated here.",
+    "onnx_coreml_docs": "https://onnxruntime.ai/docs/execution-providers/CoreML-ExecutionProvider.html",
+    "quantization_docs": "https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html"
+  }
+}

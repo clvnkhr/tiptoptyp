@@ -46,6 +46,12 @@ fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resource
     );
     assert_eq!(
         production
+            .get("assets/liquid/SACREMOSES-LICENSE")
+            .map(String::as_str),
+        Some("licenses/Sacremoses-MIT.txt"),
+    );
+    assert_eq!(
+        production
             .get("assets/fonts/hack/LICENSE.md")
             .map(String::as_str),
         Some("licenses/Hack-LICENSE.md"),
@@ -98,6 +104,7 @@ fn packages_ship_compressed_payload_trees_without_duplicate_raw_binaries_or_asse
         for (source, target) in [
             ("toolchain/payloads", "toolchain"),
             ("toolchain/shared-assets", "assets"),
+            ("toolchain/liquid", "liquid"),
             ("toolchain/pdfium-notices", "pdfium"),
         ] {
             assert_eq!(resources.get(source).map(String::as_str), Some(target));
@@ -109,13 +116,89 @@ fn packages_ship_compressed_payload_trees_without_duplicate_raw_binaries_or_asse
                 "uncompressed native runtime duplicated in package resources: {source}"
             );
             assert!(
-                !["ttf", "otf", "onnx", "bin", "dylib", "dll", "so", "exe"]
-                    .iter()
-                    .any(|extension| Path::new(source)
-                        .extension()
-                        .is_some_and(|value| value == *extension)),
+                ![
+                    "ttf", "otf", "onnx", "pt", "bin", "dylib", "dll", "so", "exe"
+                ]
+                .iter()
+                .any(|extension| Path::new(source)
+                    .extension()
+                    .is_some_and(|value| value == *extension)),
                 "shared assets and native runtimes belong in the compressed trees: {source}"
             );
         }
+    }
+}
+
+#[test]
+fn liquid_measurements_use_the_production_engine_and_optimized_profile() {
+    let app: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+    let probe: toml::Value =
+        toml::from_str(include_str!("../scripts/liquid-native-probe/Cargo.toml")).unwrap();
+    let app_lock: toml::Value = toml::from_str(include_str!("../Cargo.lock")).unwrap();
+    let probe_lock: toml::Value =
+        toml::from_str(include_str!("../scripts/liquid-native-probe/Cargo.lock")).unwrap();
+    for name in ["tokenizers", "nix", "sha2"] {
+        let version = |lock: &toml::Value| {
+            lock["package"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|package| package["name"].as_str() == Some(name))
+                .map(|package| package["version"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            version(&app_lock).len(),
+            1,
+            "missing production runtime: {name}"
+        );
+        assert_eq!(
+            version(&app_lock),
+            version(&probe_lock),
+            "measurement runtime drifted: {name}"
+        );
+        let dependency = |manifest: &toml::Value| {
+            manifest["dependencies"]
+                .get(name)
+                .or_else(|| {
+                    manifest
+                        .get("target")
+                        .and_then(|target| target.get("cfg(unix)"))
+                        .and_then(|target| target.get("dependencies"))
+                        .and_then(|dependencies| dependencies.get(name))
+                })
+                .cloned()
+                .expect("production runtime dependency")
+        };
+        assert_eq!(
+            dependency(&app),
+            dependency(&probe),
+            "measurement dependency options drifted: {name}"
+        );
+    }
+    let task: toml::Value = toml::from_str(include_str!("../xtask/Cargo.toml")).unwrap();
+    assert_eq!(
+        app["dependencies"]["sha2"], task["dependencies"]["sha2"],
+        "package verification must use the same hardware hashing implementation"
+    );
+    assert!(
+        app["dependencies"]["sha2"]["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|feature| feature.as_str() == Some("asm"))
+    );
+    for manifest in [&app, &probe, &task] {
+        assert_eq!(
+            manifest["profile"]["dev"]["package"]["sha2"]["opt-level"].as_integer(),
+            Some(3),
+            "model verification must remain usable during cargo run"
+        );
+    }
+    for setting in ["lto", "codegen-units", "strip"] {
+        assert_eq!(
+            app["profile"]["release"][setting], probe["profile"]["release"][setting],
+            "unmatched optimized profile: {setting}"
+        );
     }
 }

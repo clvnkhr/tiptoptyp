@@ -2,12 +2,14 @@
 mod cache;
 #[cfg(test)]
 mod perf;
+pub(crate) mod prose_rules;
 mod spelling;
 pub(crate) use cache::Checker;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Options<'a> {
     pub(crate) dictionary: &'a str,
+    pub(crate) tex_prose_rules: Option<&'a prose_rules::TexProseRules>,
     pub(crate) ignore_capitalized_names: bool,
 }
 
@@ -37,21 +39,84 @@ pub(crate) fn validate_dictionary(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Manual grammar admission uses Harper's source parser, with an optional
+/// formatting mask. Automatic Harper checks retain their existing behavior.
+pub(crate) fn liquid_prose_tokens(
+    source: &[char],
+    kind: DocumentKind,
+    skip_formatted: bool,
+    tex_rules: Option<&prose_rules::TexProseRules>,
+) -> Vec<harper_core::Token> {
+    use harper_core::parsers::Parser;
+    if kind == DocumentKind::Tex
+        && let Some(rules) = tex_rules
+    {
+        let mut tokens = tex_prose::TexProse::parse_with_rules(source, rules, skip_formatted);
+        normalize_tokens(source, &mut tokens);
+        return tokens;
+    }
+    if !skip_formatted {
+        return Prose(kind).parse(source);
+    }
+    let mut tokens = match kind {
+        DocumentKind::Tex => tex_prose::TexProse::parse_skipping_formatting(source),
+        DocumentKind::Typst => typst_prose::TypstProse::parse_skipping_formatting(source),
+        _ => Vec::new(),
+    };
+    normalize_tokens(source, &mut tokens);
+    tokens
+}
+
 mod tex_prose;
 mod typst_prose;
 use crate::{
-    diagnostics::{Diagnostic, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource},
+    diagnostics::{
+        Diagnostic, DiagnosticCorrection, DiagnosticLocation, DiagnosticSeverity, DiagnosticSource,
+    },
     document::DocumentKind,
 };
+#[cfg(test)]
+use harper_core::linting::Linter;
 use harper_core::{
     Dialect, Document,
-    linting::{LintGroup, Linter},
+    linting::LintGroup,
     spell::{FstDictionary, MergedDictionary},
 };
 use std::{
     path::Path,
     sync::{Arc, LazyLock},
 };
+
+/// Keep Harper's rule identity alongside each lint, including in paragraph
+/// cache hits. A category alone cannot identify a rule or its configuration.
+#[derive(Debug, Clone, PartialEq)]
+struct NamedLint {
+    rule: String,
+    lint: harper_core::linting::Lint,
+}
+impl std::ops::Deref for NamedLint {
+    type Target = harper_core::linting::Lint;
+    fn deref(&self) -> &Self::Target {
+        &self.lint
+    }
+}
+impl std::ops::DerefMut for NamedLint {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.lint
+    }
+}
+fn named_lints(linter: &mut LintGroup, document: &Document) -> Vec<NamedLint> {
+    linter
+        .organized_lints(document)
+        .into_iter()
+        .flat_map(|(rule, lints)| {
+            lints.into_iter().map(move |lint| NamedLint {
+                rule: rule.clone(),
+                lint,
+            })
+        })
+        .collect()
+}
 
 const MATH_WORDS: &str = include_str!("../assets/dictionaries/mathematics.txt");
 
@@ -115,7 +180,7 @@ fn check_uncached(
             WRITING_DICTIONARY.as_ref(),
         );
         let mut linter = LintGroup::new_curated(Arc::clone(&WRITING_DICTIONARY), dialect);
-        lints = linter.lint(&document);
+        lints = named_lints(&mut linter, &document);
     }
     diagnostics(&characters, &tokens, lints, path, unicode, false)
 }
@@ -123,7 +188,7 @@ fn check_uncached(
 fn diagnostics(
     characters: &[char],
     tokens: &[harper_core::Token],
-    lints: Vec<harper_core::linting::Lint>,
+    lints: Vec<NamedLint>,
     path: &Path,
     unicode: bool,
     ignore_capitalized_names: bool,
@@ -131,7 +196,7 @@ fn diagnostics(
     let indentation = indentation_ranges(characters);
     // Name evidence belongs to the current whole document, not to a cached block.
     let names = spelling::Names::new(characters, tokens);
-    let mut issues: Vec<(usize, String, &'static str)> = lints
+    let mut issues: Vec<(usize, String, &'static str, Option<DiagnosticCorrection>)> = lints
         .into_iter()
         .filter(|lint| {
             let next = indentation.partition_point(|range| range.end <= lint.span.start);
@@ -149,7 +214,38 @@ fn diagnostics(
                             lint.span.end,
                         )))
         })
-        .map(|lint| (lint.span.start, lint.message, "Harper"))
+        .filter(|lint| lint.span.start <= lint.span.end && lint.span.end <= characters.len())
+        .map(|lint| {
+            let range = lint.span.start..lint.span.end;
+            let original: String = characters[range.clone()].iter().collect();
+            let safe = correction_range_is_prose(characters, tokens, &range);
+            let replacements = if safe {
+                lint.suggestions
+                    .iter()
+                    .map(|suggestion| {
+                        use harper_core::linting::Suggestion;
+                        match suggestion {
+                            Suggestion::ReplaceWith(chars) => chars.iter().collect(),
+                            Suggestion::InsertAfter(chars) => {
+                                original.chars().chain(chars.iter().copied()).collect()
+                            }
+                            Suggestion::Remove => String::new(),
+                        }
+                    })
+                    .filter(|replacement| replacement != &original)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let correction = DiagnosticCorrection::new(
+                range.clone(),
+                original,
+                Some(lint.rule),
+                Some(lint.lint.lint_kind.to_string_key()),
+                replacements,
+            );
+            (range.start, lint.lint.message, "Harper", Some(correction))
+        })
         .collect();
     if unicode {
         for (index, &ch) in characters.iter().enumerate() {
@@ -174,6 +270,7 @@ fn diagnostics(
                     index,
                     format!("U+{:04X}: {description}", ch as u32),
                     "Unicode",
+                    None,
                 ));
             }
         }
@@ -189,6 +286,7 @@ fn diagnostics(
                                 ch as u32
                             ),
                             "Unicode",
+                            None,
                         ));
                     }
                 }
@@ -202,7 +300,7 @@ fn diagnostics(
     issues
         .into_iter()
         .take(1000)
-        .map(|(offset, message, provider)| {
+        .map(|(offset, message, provider, correction)| {
             while scalar < offset.min(characters.len()) {
                 if characters[scalar] == '\n' {
                     line += 1;
@@ -218,11 +316,48 @@ fn diagnostics(
                 source: DiagnosticSource::File(path.to_owned()),
                 location: Some(DiagnosticLocation { line, column }),
                 message,
-                details: vec![],
+                details: correction
+                    .as_ref()
+                    .and_then(|correction| correction.rule.as_ref())
+                    .map(|rule| vec![format!("Code: {rule}")])
+                    .unwrap_or_default(),
+                correction,
             }
         })
         .collect()
 }
+/// A whole-span replacement must not erase formatting, a command, or math
+/// that the prose parser deliberately omitted from the spelling input.
+fn correction_range_is_prose(
+    characters: &[char],
+    tokens: &[harper_core::Token],
+    range: &std::ops::Range<usize>,
+) -> bool {
+    let mut cursor = range.start;
+    let first = tokens.partition_point(|token| token.span.end <= cursor);
+    for token in &tokens[first..] {
+        if token.span.start >= range.end {
+            break;
+        }
+        if token.kind.is_unlintable() {
+            return false;
+        }
+        let gap_end = token.span.start.min(range.end);
+        if cursor < gap_end
+            && !characters[cursor..gap_end]
+                .iter()
+                .all(|ch| ch.is_whitespace())
+        {
+            return false;
+        }
+        cursor = cursor.max(token.span.end.min(range.end));
+    }
+    cursor >= range.end
+        || characters[cursor..range.end]
+            .iter()
+            .all(|ch| ch.is_whitespace())
+}
+
 /// Preserve Harper's original scalar coordinates; indentation is source layout,
 /// not prose. Inline whitespace and all non-whitespace lints remain eligible.
 fn indentation_ranges(characters: &[char]) -> Vec<std::ops::Range<usize>> {
@@ -330,6 +465,101 @@ impl harper_core::parsers::Parser for Prose {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harper_retains_rule_ranges_categories_and_replacements_on_cache_hits() {
+        for kind in [DocumentKind::Tex, DocumentKind::Typst] {
+            let source = "é 😀 This is teh result.";
+            let mut checker = Checker::default();
+            let first = checker.check(
+                source,
+                kind,
+                Path::new("test"),
+                true,
+                false,
+                crate::settings::WritingLanguage::British,
+            );
+            let second = checker.check(
+                source,
+                kind,
+                Path::new("test"),
+                true,
+                false,
+                crate::settings::WritingLanguage::British,
+            );
+            assert_eq!(first, second);
+            let correction = first
+                .iter()
+                .filter_map(|diagnostic| diagnostic.correction.as_ref())
+                .find(|correction| correction.original == "teh")
+                .expect("a real spelling correction");
+            let start = source[..source.find("teh").unwrap()].chars().count();
+            assert_eq!(correction.range, start..start + 3);
+            assert_eq!(correction.rule.as_deref(), Some("SpellCheck"));
+            assert_eq!(correction.category.as_deref(), Some("Spelling"));
+            assert!(
+                correction
+                    .replacements
+                    .iter()
+                    .any(|replacement| replacement == "the")
+            );
+        }
+    }
+
+    #[test]
+    fn grammar_replacements_cannot_erase_masked_markup_or_math() {
+        use harper_core::{
+            Span, Token, TokenKind,
+            linting::{Lint, LintKind, Suggestion},
+        };
+        for source in ["the *the*", "the $x$ the", r"the \emph{the}"] {
+            let characters: Vec<_> = source.chars().collect();
+            let tokens = vec![
+                Token::new(Span::new(0, 3), TokenKind::Word(None)),
+                Token::new(Span::new(3, characters.len()), TokenKind::Unlintable),
+            ];
+            let lints = vec![NamedLint {
+                rule: "RepeatedWords".into(),
+                lint: Lint {
+                    span: Span::new(0, characters.len()),
+                    lint_kind: LintKind::Repetition,
+                    suggestions: vec![Suggestion::ReplaceWith("the".chars().collect())],
+                    message: "Repeated word".into(),
+                    priority: 1,
+                },
+            }];
+            let diagnostic =
+                diagnostics(&characters, &tokens, lints, Path::new("test"), false, false)
+                    .pop()
+                    .unwrap();
+            let correction = diagnostic.correction.unwrap();
+            assert_eq!(correction.original, source);
+            assert!(correction.replacements.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn insertion_and_removal_suggestions_become_exact_full_span_replacements() {
+        use harper_core::{
+            Span, Token, TokenKind,
+            linting::{Lint, Suggestion},
+        };
+        let characters: Vec<_> = "word".chars().collect();
+        let tokens = vec![Token::new(Span::new(0, 4), TokenKind::Word(None))];
+        let lints = vec![NamedLint {
+            rule: "Test".into(),
+            lint: Lint {
+                span: Span::new(0, 4),
+                suggestions: vec![Suggestion::InsertAfter(vec![',']), Suggestion::Remove],
+                message: "Test correction".into(),
+                ..Lint::default()
+            },
+        }];
+        let diagnostic = diagnostics(&characters, &tokens, lints, Path::new("test"), false, false)
+            .pop()
+            .unwrap();
+        assert_eq!(diagnostic.correction.unwrap().replacements, ["word,", ""]);
+    }
 
     #[test]
     fn personal_dictionary_validation_is_bounded_and_reports_the_bad_line() {
@@ -755,6 +985,103 @@ mod tests {
             crate::settings::WritingLanguage::Auto,
         );
         assert!(issues.is_empty(), "{issues:?}");
+    }
+
+    #[test]
+    fn formatted_prose_crossing_math_has_the_same_protected_projection() {
+        for (kind, source) in [
+            (
+                DocumentKind::Typst,
+                "#strong[She go to school every day. We estimate $u$.]",
+            ),
+            (
+                DocumentKind::Tex,
+                r"\textbf{She go to school every day. We estimate \(u\).}",
+            ),
+        ] {
+            let selection =
+                crate::liquid_grammar::Selection::new(source, kind, 0..source.chars().count())
+                    .unwrap();
+            let fragments: Vec<_> = selection
+                .fragments
+                .iter()
+                .map(|fragment| fragment.text.as_str())
+                .collect();
+            assert_eq!(
+                fragments,
+                ["She go to school every day. We estimate x."],
+                "formatting and equation syntax must stay out of model input: {kind:?}"
+            );
+            let edits = selection
+                .map_corrections(
+                    source,
+                    &["She goes to school every day. We estimate x.".into()],
+                )
+                .unwrap();
+            assert_eq!(edits.len(), 1, "{kind:?}: {edits:?}");
+            let removed: String = source
+                .chars()
+                .skip(edits[0].range.start)
+                .take(edits[0].range.len())
+                .collect();
+            assert_eq!(removed, "go");
+            assert_eq!(edits[0].replacement, "goes");
+            assert!(
+                selection
+                    .map_corrections(
+                        source,
+                        &["She goes to school every day. We estimate v.".into()],
+                    )
+                    .is_err(),
+                "the equation placeholder must remain protected: {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn formatted_tex_math_annotations_remain_prose_without_exposing_equations() {
+        use harper_core::parsers::Parser;
+
+        let source = r"\textbf{We estimate \(nonwordxyz + \text{This is is readable.}\) safely.}";
+        let chars: Vec<_> = source.chars().collect();
+        let tokens = Prose(DocumentKind::Tex).parse(&chars);
+        let words: Vec<_> = tokens
+            .iter()
+            .filter(|token| token.kind.is_word())
+            .map(|token| token.get_str(&chars))
+            .collect();
+        assert_eq!(
+            words,
+            ["We", "estimate", "This", "is", "is", "readable", "safely"],
+            "formatting must preserve readable math annotations and hide equation symbols"
+        );
+        assert!(tokens.iter().any(|token| {
+            token.kind.is_unlintable() && token.get_str(&chars).contains("nonwordxyz")
+        }));
+        let issues = check(
+            source,
+            DocumentKind::Tex,
+            Path::new("fixture.tex"),
+            true,
+            false,
+            crate::settings::WritingLanguage::Auto,
+        );
+        let repeated = source.find("is is").unwrap();
+        assert!(
+            issues.iter().any(|issue| {
+                issue.location.is_some_and(|location| {
+                    location.line == 1
+                        && (repeated + 1..=repeated + "is is".len()).contains(&location.column)
+                })
+            }),
+            "the admitted math annotation must still receive grammar checks: {issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .all(|issue| !issue.message.contains("nonwordxyz")),
+            "equation content must remain protected: {issues:?}"
+        );
     }
 
     #[test]

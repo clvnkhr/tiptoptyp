@@ -817,6 +817,7 @@ impl QaSession {
                         char_index: 2,
                     }),
                     math,
+                    liquid_selection: None,
                     anchor: Pos2::new(430.0, 250.0),
                     link: None,
                     table: None,
@@ -976,6 +977,7 @@ impl QaSession {
                 app.bottom_panel.select(PanelTab::Problems);
                 app.preview.diagnostics = vec![
                     Diagnostic {
+                        correction: None,
                         provider: Some("Tectonic".into()),
                         severity: DiagnosticSeverity::Error,
                         source: DiagnosticSource::Main,
@@ -990,6 +992,7 @@ impl QaSession {
                         ],
                     },
                     Diagnostic {
+                        correction: None,
                         provider: Some("Tectonic".into()),
                         severity: DiagnosticSeverity::Warning,
                         source: DiagnosticSource::Main,

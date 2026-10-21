@@ -313,6 +313,7 @@ impl EditorApp {
             .iter()
             .chain(self.tex_diagnostics.iter().flatten())
             .chain(self.writing.diagnostics.iter())
+            .chain(self.ltex.diagnostics.iter())
             .filter(|diagnostic| {
                 diagnostic_code(diagnostic).is_none_or(|code| {
                     !self

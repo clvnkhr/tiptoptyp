@@ -18,3 +18,8 @@ __pycache__/
 /toolchain/pdfium-targets/
 /toolchain/pdfium-notices/
 /toolchain/.tiptoptyp-payload-*/
+
+# Generated portable Liquid model and its compressed package payload.
+/toolchain/liquid-source/
+/toolchain/liquid/
+/scripts/liquid-native-probe/target/

@@ -1,0 +1,136 @@
+{
+  "reference_commit": "3d41d2841512d2690cffce1b5ac6795fe9a0a5dd",
+  "decoder": "gector==1.2.0",
+  "min_error_prob": 0.65,
+  "keep_confidence": 0.1,
+  "max_iter": 3,
+  "cases": [
+    {
+      "input": "These estimates holds for every bounded operator .",
+      "token_ids_equal": true,
+      "word_offsets_equal": true,
+      "ids": [
+        50265,
+        1216,
+        2785,
+        3106,
+        13,
+        358,
+        43490,
+        5364,
+        479
+      ],
+      "first_piece_offsets": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "reference_output": "These estimates hold for every bounded operator.",
+      "adapter_output": "These estimates hold for every bounded operator.",
+      "same_output": true
+    },
+    {
+      "input": "She has went to the school yesterday .",
+      "token_ids_equal": true,
+      "word_offsets_equal": true,
+      "ids": [
+        50265,
+        264,
+        34,
+        439,
+        7,
+        5,
+        334,
+        2350,
+        479
+      ],
+      "first_piece_offsets": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "reference_output": "She went to school yesterday.",
+      "adapter_output": "She went to school yesterday.",
+      "same_output": true
+    },
+    {
+      "input": "A ten - year - old boy go to school .",
+      "token_ids_equal": true,
+      "word_offsets_equal": true,
+      "ids": [
+        50265,
+        83,
+        2724,
+        111,
+        76,
+        111,
+        793,
+        2143,
+        213,
+        7,
+        334,
+        479
+      ],
+      "first_piece_offsets": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "reference_output": "A ten - year - old boy goes to school.",
+      "adapter_output": "A ten - year - old boy goes to school.",
+      "same_output": true
+    },
+    {
+      "input": "The nonautonomous semigroup is well-posed .",
+      "token_ids_equal": true,
+      "word_offsets_equal": true,
+      "ids": [
+        50265,
+        20,
+        786,
+        4255,
+        24239,
+        9031,
+        11725,
+        16,
+        157,
+        12,
+        32704,
+        479
+      ],
+      "first_piece_offsets": [
+        0,
+        1,
+        2,
+        5,
+        7,
+        8,
+        11
+      ],
+      "reference_output": "The nonautonomous semigroup is well-posed .",
+      "adapter_output": "The nonautonomous semigroup is well-posed .",
+      "same_output": true
+    }
+  ]
+}

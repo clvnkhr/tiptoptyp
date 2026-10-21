@@ -1,0 +1,4274 @@
+{
+  "version": 1,
+  "created_utc": "2026-10-20T11:35:41.359039+00:00",
+  "corpus": {
+    "version": 1,
+    "description": "Reviewed developer comparison of grammar-only corrections in mathematical prose. Not a held-out scientific benchmark. Models receive text, never source metadata; TeX/Typst cases use explicit reviewed prose projections.",
+    "cases": [
+      {
+        "id": "clean-agreement",
+        "category": "unchanged",
+        "text": "These estimates hold for every bounded operator.",
+        "expected": "These estimates hold for every bounded operator.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-an",
+        "category": "unchanged",
+        "text": "An unbounded operator need not be continuous.",
+        "expected": "An unbounded operator need not be continuous.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-a-unique",
+        "category": "unchanged",
+        "text": "The equation has a unique solution.",
+        "expected": "The equation has a unique solution.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-a-one",
+        "category": "unchanged",
+        "text": "We construct a one-parameter semigroup.",
+        "expected": "We construct a one-parameter semigroup.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-tao-straight",
+        "category": "unchanged",
+        "text": "Tao's argument applies to this operator.",
+        "expected": "Tao's argument applies to this operator.",
+        "format": "plain",
+        "protected": [
+          "Tao's"
+        ]
+      },
+      {
+        "id": "clean-tao-curly",
+        "category": "unchanged",
+        "text": "Tao’s argument applies to this operator.",
+        "expected": "Tao’s argument applies to this operator.",
+        "format": "plain",
+        "protected": [
+          "Tao’s"
+        ]
+      },
+      {
+        "id": "clean-mathematicians",
+        "category": "unchanged",
+        "text": "Barbato and Romito proved the corresponding result.",
+        "expected": "Barbato and Romito proved the corresponding result.",
+        "format": "plain",
+        "protected": [
+          "Barbato",
+          "Romito"
+        ]
+      },
+      {
+        "id": "clean-semigroup",
+        "category": "unchanged",
+        "text": "The semigroup preserves nonnegative functions.",
+        "expected": "The semigroup preserves nonnegative functions.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-nonautonomous",
+        "category": "unchanged",
+        "text": "The nonautonomous equation admits a mild solution.",
+        "expected": "The nonautonomous equation admits a mild solution.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-well-posedness",
+        "category": "unchanged",
+        "text": "We establish local well-posedness in the energy space.",
+        "expected": "We establish local well-posedness in the energy space.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-british-behaviour",
+        "category": "unchanged",
+        "text": "We minimise the energy to characterise the asymptotic behaviour.",
+        "expected": "We minimise the energy to characterise the asymptotic behaviour.",
+        "format": "plain",
+        "notes": "British spelling is intentional; dialect conversion is not a grammar correction."
+      },
+      {
+        "id": "clean-british-centre",
+        "category": "unchanged",
+        "text": "We recognise the centre of the ball by its symmetry.",
+        "expected": "We recognise the centre of the ball by its symmetry.",
+        "format": "plain",
+        "notes": "British spelling is intentional; dialect conversion is not a grammar correction."
+      },
+      {
+        "id": "clean-hypotheses",
+        "category": "unchanged",
+        "text": "These hypotheses imply that the solution is smooth.",
+        "expected": "These hypotheses imply that the solution is smooth.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-zero-article",
+        "category": "unchanged",
+        "text": "We prove uniqueness without assuming compactness.",
+        "expected": "We prove uniqueness without assuming compactness.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-chosen",
+        "category": "unchanged",
+        "text": "The basis has been chosen independently of the parameter.",
+        "expected": "The basis has been chosen independently of the parameter.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-legitimate-repetition",
+        "category": "unchanged",
+        "text": "We show that that operator is bounded.",
+        "expected": "We show that that operator is bounded.",
+        "format": "plain",
+        "notes": "Both occurrences of that are grammatical: the first introduces a clause and the second modifies operator. Removing an optional clause introducer is unnecessary rewriting, not a required grammar correction."
+      },
+      {
+        "id": "clean-its",
+        "category": "unchanged",
+        "text": "The operator is bounded, and its norm is finite.",
+        "expected": "The operator is bounded, and its norm is finite.",
+        "format": "plain"
+      },
+      {
+        "id": "clean-plural-possessive",
+        "category": "unchanged",
+        "text": "The authors' estimates agree.",
+        "expected": "The authors' estimates agree.",
+        "format": "plain",
+        "protected": [
+          "authors'"
+        ]
+      },
+      {
+        "id": "clean-name-reference",
+        "category": "unchanged",
+        "text": "The result of Leray remains valid in this setting.",
+        "expected": "The result of Leray remains valid in this setting.",
+        "format": "plain",
+        "protected": [
+          "Leray"
+        ]
+      },
+      {
+        "id": "clean-inline-math",
+        "category": "unchanged",
+        "text": "The norm MATH is finite.",
+        "expected": "The norm MATH is finite.",
+        "format": "tex",
+        "source": "The norm $\\lVert u\\rVert_{H^s}$ is finite.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "clean-bound-control",
+        "category": "unchanged",
+        "text": "If this bound holds, then the solution exists.",
+        "expected": "If this bound holds, then the solution exists.",
+        "format": "plain",
+        "notes": "Plain-language control for the following display-math projection cases."
+      },
+      {
+        "id": "clean-tex-display-comma",
+        "category": "unchanged",
+        "text": "If MATH, then the solution exists.",
+        "expected": "If MATH, then the solution exists.",
+        "format": "tex",
+        "source": "If\n\\[\n  \\lVert u\\rVert_{H^s} \\leq C,\n\\]\nthen the solution exists.",
+        "protected": [
+          "MATH"
+        ],
+        "notes": "The comma inside display math remains sentence punctuation in the reviewed projection."
+      },
+      {
+        "id": "clean-typst-display-comma",
+        "category": "unchanged",
+        "text": "If MATH, then the solution exists.",
+        "expected": "If MATH, then the solution exists.",
+        "format": "typst",
+        "source": "If\n$\n  norm(u)_(H^s) <= C,\n$\nthen the solution exists.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "clean-tex-display-period",
+        "category": "unchanged",
+        "text": "The energy satisfies MATH. Therefore, the solution is bounded.",
+        "expected": "The energy satisfies MATH. Therefore, the solution is bounded.",
+        "format": "tex",
+        "source": "The energy satisfies\n\\begin{equation}\n  E(t) \\leq E(0).\n\\end{equation}\nTherefore, the solution is bounded.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "clean-typst-display-period",
+        "category": "unchanged",
+        "text": "The energy satisfies MATH. Therefore, the solution is bounded.",
+        "expected": "The energy satisfies MATH. Therefore, the solution is bounded.",
+        "format": "typst",
+        "source": "The energy satisfies\n$\n  E(t) <= E(0).\n$\nTherefore, the solution is bounded.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "clean-tex-text-in-math",
+        "category": "unchanged",
+        "text": "The operator is bounded and the solution is unique.",
+        "expected": "The operator is bounded and the solution is unique.",
+        "format": "tex",
+        "source": "\\[\\text{The operator is bounded and the solution is unique.}\\]",
+        "notes": "Natural-language content inside a math text command is retained, with no placeholder."
+      },
+      {
+        "id": "clean-typst-text-in-math",
+        "category": "unchanged",
+        "text": "The operator is bounded and the solution is unique.",
+        "expected": "The operator is bounded and the solution is unique.",
+        "format": "typst",
+        "source": "$ text(\"The operator is bounded and the solution is unique.\") $",
+        "notes": "Natural-language content inside math text is retained, with no placeholder."
+      },
+      {
+        "id": "clean-math-clause",
+        "category": "unchanged",
+        "text": "Since MATH, the estimate follows.",
+        "expected": "Since MATH, the estimate follows.",
+        "format": "tex",
+        "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe estimate follows.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "clean-tex-macro",
+        "category": "unchanged",
+        "text": "We use the estimate MATH throughout this proof.",
+        "expected": "We use the estimate MATH throughout this proof.",
+        "format": "tex",
+        "source": "We use the estimate $\\energyBound$ throughout this proof.",
+        "protected": [
+          "MATH"
+        ],
+        "notes": "The macro is represented by the protected math placeholder, not passed to the grammar model as prose."
+      },
+      {
+        "id": "clean-number",
+        "category": "unchanged",
+        "text": "The constant 3.14159 is positive.",
+        "expected": "The constant 3.14159 is positive.",
+        "format": "plain",
+        "protected": [
+          "3.14159"
+        ]
+      },
+      {
+        "id": "clean-equation-reference",
+        "category": "unchanged",
+        "text": "Equation (12) gives the required estimate.",
+        "expected": "Equation (12) gives the required estimate.",
+        "format": "plain",
+        "protected": [
+          "(12)"
+        ]
+      },
+      {
+        "id": "clean-typst-macro",
+        "category": "unchanged",
+        "text": "For MATH, the nonautonomous equation is well-posed.",
+        "expected": "For MATH, the nonautonomous equation is well-posed.",
+        "format": "typst",
+        "source": "For $energy-bound$, the nonautonomous equation is well-posed.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "missing-indefinite-article",
+        "category": "article",
+        "text": "Let T be bounded operator on this space.",
+        "expected": "Let T be a bounded operator on this space.",
+        "format": "plain",
+        "protected": [
+          "T"
+        ]
+      },
+      {
+        "id": "article-before-unbounded",
+        "category": "article",
+        "text": "We construct a unbounded operator.",
+        "expected": "We construct an unbounded operator.",
+        "format": "plain"
+      },
+      {
+        "id": "article-before-unique",
+        "category": "article",
+        "text": "The equation has an unique solution.",
+        "expected": "The equation has a unique solution.",
+        "format": "plain",
+        "notes": "Plain-language control for the projected-math article cases."
+      },
+      {
+        "id": "article-before-one",
+        "category": "article",
+        "text": "This is an one-parameter semigroup.",
+        "expected": "This is a one-parameter semigroup.",
+        "format": "plain"
+      },
+      {
+        "id": "agreement-estimates",
+        "category": "agreement",
+        "text": "These estimates holds for every bounded operator.",
+        "expected": "These estimates hold for every bounded operator.",
+        "format": "plain",
+        "notes": "Plain-language control for the projected-math agreement cases."
+      },
+      {
+        "id": "agreement-theorems",
+        "category": "agreement",
+        "text": "The two theorems has the same conclusion.",
+        "expected": "The two theorems have the same conclusion.",
+        "format": "plain"
+      },
+      {
+        "id": "agreement-operator",
+        "category": "agreement",
+        "text": "This operator commute with the projection.",
+        "expected": "This operator commutes with the projection.",
+        "format": "plain"
+      },
+      {
+        "id": "agreement-each",
+        "category": "agreement",
+        "text": "Each operator are bounded.",
+        "expected": "Each operator is bounded.",
+        "format": "plain"
+      },
+      {
+        "id": "agreement-exist",
+        "category": "agreement",
+        "text": "There exists two distinct solutions.",
+        "expected": "There exist two distinct solutions.",
+        "format": "plain"
+      },
+      {
+        "id": "verb-perfect",
+        "category": "verb",
+        "text": "We have prove the estimate.",
+        "expected": "We have proved the estimate.",
+        "format": "plain",
+        "accepted": [
+          "We have proven the estimate."
+        ]
+      },
+      {
+        "id": "verb-passive",
+        "category": "verb",
+        "text": "The estimate has been prove.",
+        "expected": "The estimate has been proved.",
+        "format": "plain",
+        "accepted": [
+          "The estimate has been proven."
+        ]
+      },
+      {
+        "id": "verb-chosen",
+        "category": "verb",
+        "text": "The parameter can be chose independently.",
+        "expected": "The parameter can be chosen independently.",
+        "format": "plain"
+      },
+      {
+        "id": "verb-did",
+        "category": "verb",
+        "text": "The constant did not depended on time.",
+        "expected": "The constant did not depend on time.",
+        "format": "plain"
+      },
+      {
+        "id": "verb-does",
+        "category": "verb",
+        "text": "The bound does not depends on the parameter.",
+        "expected": "The bound does not depend on the parameter.",
+        "format": "plain"
+      },
+      {
+        "id": "number-solutions",
+        "category": "number",
+        "text": "We obtain two distinct solution.",
+        "expected": "We obtain two distinct solutions.",
+        "format": "plain"
+      },
+      {
+        "id": "number-estimates",
+        "category": "number",
+        "text": "Several estimate are needed.",
+        "expected": "Several estimates are needed.",
+        "format": "plain"
+      },
+      {
+        "id": "number-bounds",
+        "category": "number",
+        "text": "These bound hold uniformly in time.",
+        "expected": "These bounds hold uniformly in time.",
+        "format": "plain"
+      },
+      {
+        "id": "number-hypotheses",
+        "category": "number",
+        "text": "These hypothesis imply uniqueness.",
+        "expected": "These hypotheses imply uniqueness.",
+        "format": "plain"
+      },
+      {
+        "id": "possessive-its",
+        "category": "possessive",
+        "text": "The operator is bounded, and it's norm is finite.",
+        "expected": "The operator is bounded, and its norm is finite.",
+        "format": "plain"
+      },
+      {
+        "id": "contraction-it-is",
+        "category": "possessive",
+        "text": "Its clear that the solution exists.",
+        "expected": "It's clear that the solution exists.",
+        "format": "plain",
+        "accepted": [
+          "It is clear that the solution exists."
+        ]
+      },
+      {
+        "id": "repetition-the",
+        "category": "repetition",
+        "text": "The the operator is bounded.",
+        "expected": "The operator is bounded.",
+        "format": "plain"
+      },
+      {
+        "id": "repetition-of",
+        "category": "repetition",
+        "text": "The norm of of the solution is finite.",
+        "expected": "The norm of the solution is finite.",
+        "format": "plain"
+      },
+      {
+        "id": "repetition-we",
+        "category": "repetition",
+        "text": "In this section, we we prove uniqueness.",
+        "expected": "In this section, we prove uniqueness.",
+        "format": "plain"
+      },
+      {
+        "id": "repetition-since",
+        "category": "repetition",
+        "text": "Since since the operator is bounded, the norm is finite.",
+        "expected": "Since the operator is bounded, the norm is finite.",
+        "format": "plain"
+      },
+      {
+        "id": "tex-display-article",
+        "category": "article",
+        "text": "We obtain an unique solution from MATH.",
+        "expected": "We obtain a unique solution from MATH.",
+        "format": "tex",
+        "source": "We obtain an unique solution from\n\\[\n  E(t) \\leq C.\n\\]",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "typst-display-article",
+        "category": "article",
+        "text": "We obtain an unique solution from MATH.",
+        "expected": "We obtain a unique solution from MATH.",
+        "format": "typst",
+        "source": "We obtain an unique solution from\n$\n  E(t) <= C.\n$",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "tex-display-agreement",
+        "category": "agreement",
+        "text": "The estimates MATH holds uniformly in time.",
+        "expected": "The estimates MATH hold uniformly in time.",
+        "format": "tex",
+        "source": "The estimates\n\\begin{align}\n  E(t) &\\leq C, & D(t) &\\leq C\n\\end{align}\nholds uniformly in time.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "typst-display-agreement",
+        "category": "agreement",
+        "text": "The estimates MATH holds uniformly in time.",
+        "expected": "The estimates MATH hold uniformly in time.",
+        "format": "typst",
+        "source": "The estimates\n$\n  E(t) &<= C, & D(t) &<= C\n$\nholds uniformly in time.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "tex-display-clause",
+        "category": "agreement",
+        "text": "Since MATH, the solution remain bounded.",
+        "expected": "Since MATH, the solution remains bounded.",
+        "format": "tex",
+        "source": "Since\n\\[\n  E(t) \\leq C,\n\\]\nthe solution remain bounded.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "typst-display-clause",
+        "category": "agreement",
+        "text": "Since MATH, the solution remain bounded.",
+        "expected": "Since MATH, the solution remains bounded.",
+        "format": "typst",
+        "source": "Since\n$\n  E(t) <= C,\n$\nthe solution remain bounded.",
+        "protected": [
+          "MATH"
+        ]
+      },
+      {
+        "id": "tex-text-in-math-agreement",
+        "category": "agreement",
+        "text": "The operator are bounded.",
+        "expected": "The operator is bounded.",
+        "format": "tex",
+        "source": "\\[\\text{The operator are bounded.}\\]",
+        "notes": "The error is in natural-language content inside math, not in the formula."
+      },
+      {
+        "id": "typst-inline-article",
+        "category": "article",
+        "text": "We obtain a estimate from MATH.",
+        "expected": "We obtain an estimate from MATH.",
+        "format": "typst",
+        "source": "We obtain a estimate from $norm(u) <= C$.",
+        "protected": [
+          "MATH"
+        ]
+      }
+    ]
+  },
+  "corpus_sha256": "59007ee6fcf0f686b08e9ead906dbdf79118fc80319abca288f5cc3053335835",
+  "selection": {
+    "ids": [
+      "clean-agreement",
+      "clean-an",
+      "clean-a-unique",
+      "clean-a-one",
+      "clean-tao-straight",
+      "clean-tao-curly",
+      "clean-mathematicians",
+      "clean-semigroup",
+      "clean-nonautonomous",
+      "clean-well-posedness",
+      "clean-british-behaviour",
+      "clean-british-centre",
+      "clean-hypotheses",
+      "clean-zero-article",
+      "clean-chosen",
+      "clean-legitimate-repetition",
+      "clean-its",
+      "clean-plural-possessive",
+      "clean-name-reference",
+      "clean-inline-math",
+      "clean-bound-control",
+      "clean-tex-display-comma",
+      "clean-typst-display-comma",
+      "clean-tex-display-period",
+      "clean-typst-display-period",
+      "clean-tex-text-in-math",
+      "clean-typst-text-in-math",
+      "clean-math-clause",
+      "clean-tex-macro",
+      "clean-number",
+      "clean-equation-reference",
+      "clean-typst-macro",
+      "missing-indefinite-article",
+      "article-before-unbounded",
+      "article-before-unique",
+      "article-before-one",
+      "agreement-estimates",
+      "agreement-theorems",
+      "agreement-operator",
+      "agreement-each",
+      "agreement-exist",
+      "verb-perfect",
+      "verb-passive",
+      "verb-chosen",
+      "verb-did",
+      "verb-does",
+      "number-solutions",
+      "number-estimates",
+      "number-bounds",
+      "number-hypotheses",
+      "possessive-its",
+      "contraction-it-is",
+      "repetition-the",
+      "repetition-of",
+      "repetition-we",
+      "repetition-since",
+      "tex-display-article",
+      "typst-display-article",
+      "tex-display-agreement",
+      "typst-display-agreement",
+      "tex-display-clause",
+      "typst-display-clause",
+      "tex-text-in-math-agreement",
+      "typst-inline-article"
+    ]
+  },
+  "runtime": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.12.14",
+    "processor": "Apple M2 Max",
+    "logical_cpus": 12,
+    "device": "cpu",
+    "threads": 4,
+    "repeats": 3,
+    "warmup": 2
+  },
+  "scoring": "Exact target with listed alternatives; Unicode NFC and whitespace normalisation only. Not ERRANT precision/recall.",
+  "harness_sha256": {
+    "compare-grammar.py": "970da599b7a72dd19ad9ad2228a805471d03046f6c75843be5336680cf8280c9",
+    "grammar_compare/__init__.py": "4c4f9d1b227889d6fa9053637d414bd1360ee00e5b18b48d200b63822d09dbe1",
+    "grammar_compare/comparison.py": "5b3c7aea46ef5e790d4bbae8eb292fd2601ff34480ae7d1ca362693272e8df5a",
+    "grammar_compare/models.py": "ed1618411ccc052b5e1dfa28ebe9f12f610388699bb0c60209d32ef0c88268d1",
+    "grammar_compare/worker.py": "366b48cc3f551971ec425fbc303abdb747085958e4cd815ffaf3307fe969f4dc",
+    "grammar_compare/requirements.txt": "03a7c649b2faaeafd89b191541ebe8c37b4051e46cfe61e2ee9190cbe38e2d6e"
+  },
+  "models": [
+    {
+      "name": "liquid",
+      "results": [
+        {
+          "id": "clean-agreement",
+          "output": "These estimates hold for every bounded operator.",
+          "samples_ms": [
+            237.39845800446346,
+            229.81858404818922,
+            474.7236669645645
+          ],
+          "latency_ms": 237.39845800446346,
+          "distinct_outputs": [
+            "These estimates hold for every bounded operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-an",
+          "output": "An unbounded operator need not be continuous.",
+          "samples_ms": [
+            252.4545830092393,
+            237.1264590183273,
+            234.88366598030552
+          ],
+          "latency_ms": 237.1264590183273,
+          "distinct_outputs": [
+            "An unbounded operator need not be continuous."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-a-unique",
+          "output": "The equation has a unique solution.",
+          "samples_ms": [
+            244.3237499683164,
+            227.84150001825765,
+            224.99600000446662
+          ],
+          "latency_ms": 227.84150001825765,
+          "distinct_outputs": [
+            "The equation has a unique solution."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-a-one",
+          "output": "We construct a one-parameter semigroup.",
+          "samples_ms": [
+            236.65020801126957,
+            231.26912501174957,
+            241.30470800446346
+          ],
+          "latency_ms": 236.65020801126957,
+          "distinct_outputs": [
+            "We construct a one-parameter semigroup."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tao-straight",
+          "output": "Tao's argument applies to this operator.",
+          "samples_ms": [
+            232.37358400365338,
+            244.51616604346782,
+            224.68841698719189
+          ],
+          "latency_ms": 232.37358400365338,
+          "distinct_outputs": [
+            "Tao's argument applies to this operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tao-curly",
+          "output": "Tao’s argument applies to this operator.",
+          "samples_ms": [
+            229.86991697689518,
+            227.19437500927597,
+            230.3037089877762
+          ],
+          "latency_ms": 229.86991697689518,
+          "distinct_outputs": [
+            "Tao’s argument applies to this operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-mathematicians",
+          "output": "Barbato and Romito proved the corresponding result.",
+          "samples_ms": [
+            226.37891699559987,
+            227.3942080209963,
+            226.2693329830654
+          ],
+          "latency_ms": 226.37891699559987,
+          "distinct_outputs": [
+            "Barbato and Romito proved the corresponding result."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-semigroup",
+          "output": "The semigroup preserves nonnegative functions.",
+          "samples_ms": [
+            223.42412499710917,
+            223.40966598130763,
+            230.67320900736377
+          ],
+          "latency_ms": 223.42412499710917,
+          "distinct_outputs": [
+            "The semigroup preserves nonnegative functions."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-nonautonomous",
+          "output": "The nonautonomous equation admits a mild solution.",
+          "samples_ms": [
+            220.83570901304483,
+            239.41774998093024,
+            225.49250000156462
+          ],
+          "latency_ms": 225.49250000156462,
+          "distinct_outputs": [
+            "The nonautonomous equation admits a mild solution."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-well-posedness",
+          "output": "We establish local well-posedness in the energy space.",
+          "samples_ms": [
+            224.58970797015354,
+            224.8520830180496,
+            223.62420900026336
+          ],
+          "latency_ms": 224.58970797015354,
+          "distinct_outputs": [
+            "We establish local well-posedness in the energy space."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-british-behaviour",
+          "output": "We minimise the energy to characterise the asymptotic behaviour.",
+          "samples_ms": [
+            224.40745902713388,
+            229.87987496890128,
+            223.31216698512435
+          ],
+          "latency_ms": 224.40745902713388,
+          "distinct_outputs": [
+            "We minimise the energy to characterise the asymptotic behaviour."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-british-centre",
+          "output": "We recognise the centre of the ball by its symmetry.",
+          "samples_ms": [
+            230.44929100433365,
+            227.31779096648097,
+            229.55629200441763
+          ],
+          "latency_ms": 229.55629200441763,
+          "distinct_outputs": [
+            "We recognise the centre of the ball by its symmetry."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-hypotheses",
+          "output": "These hypotheses imply that the solution is smooth.",
+          "samples_ms": [
+            224.5327080017887,
+            229.9868330010213,
+            226.3551250216551
+          ],
+          "latency_ms": 226.3551250216551,
+          "distinct_outputs": [
+            "These hypotheses imply that the solution is smooth."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-zero-article",
+          "output": "We prove uniqueness without assuming compactness.",
+          "samples_ms": [
+            223.75058295438066,
+            226.3177499989979,
+            226.4039579895325
+          ],
+          "latency_ms": 226.3177499989979,
+          "distinct_outputs": [
+            "We prove uniqueness without assuming compactness."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-chosen",
+          "output": "The basis has been chosen independently of the parameter.",
+          "samples_ms": [
+            225.51937500247732,
+            224.40700000151992,
+            224.38662499189377
+          ],
+          "latency_ms": 224.40700000151992,
+          "distinct_outputs": [
+            "The basis has been chosen independently of the parameter."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-legitimate-repetition",
+          "output": "We show that that operator is bounded.",
+          "samples_ms": [
+            226.9899999955669,
+            227.70695900544524,
+            224.5298749767244
+          ],
+          "latency_ms": 226.9899999955669,
+          "distinct_outputs": [
+            "We show that that operator is bounded."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-its",
+          "output": "The operator is bounded, and its norm is finite.",
+          "samples_ms": [
+            226.6397909843363,
+            225.64062499441206,
+            227.36433299724013
+          ],
+          "latency_ms": 226.6397909843363,
+          "distinct_outputs": [
+            "The operator is bounded, and its norm is finite."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-plural-possessive",
+          "output": "The authors' estimates agree.",
+          "samples_ms": [
+            224.6919579920359,
+            225.20995797822252,
+            223.0390000040643
+          ],
+          "latency_ms": 224.6919579920359,
+          "distinct_outputs": [
+            "The authors' estimates agree."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-name-reference",
+          "output": "The result of Leray remains valid in this setting.",
+          "samples_ms": [
+            226.62920894799754,
+            228.8244169903919,
+            225.8981250342913
+          ],
+          "latency_ms": 226.62920894799754,
+          "distinct_outputs": [
+            "The result of Leray remains valid in this setting."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-inline-math",
+          "output": "The norm of MATH is finite.",
+          "samples_ms": [
+            469.7224590345286,
+            456.8995829904452,
+            453.56658298987895
+          ],
+          "latency_ms": 456.8995829904452,
+          "distinct_outputs": [
+            "The norm of MATH is finite."
+          ],
+          "assessment": {
+            "status": "false_alarm",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-bound-control",
+          "output": "If this bound holds, then the solution exists.",
+          "samples_ms": [
+            226.05966700939462,
+            226.78762499708682,
+            224.8653330025263
+          ],
+          "latency_ms": 226.05966700939462,
+          "distinct_outputs": [
+            "If this bound holds, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-display-comma",
+          "output": "If MATH, then the solution exists.",
+          "samples_ms": [
+            228.94120798446238,
+            216.36654203757644,
+            221.45641699898988
+          ],
+          "latency_ms": 221.45641699898988,
+          "distinct_outputs": [
+            "If MATH, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-display-comma",
+          "output": "If MATH, then the solution exists.",
+          "samples_ms": [
+            234.06379099469632,
+            238.96320798667148,
+            230.9055000077933
+          ],
+          "latency_ms": 234.06379099469632,
+          "distinct_outputs": [
+            "If MATH, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-display-period",
+          "output": "The energy satisfies MATH. Therefore, the solution is bounded.",
+          "samples_ms": [
+            230.2945830160752,
+            231.4587919972837,
+            228.5462089930661
+          ],
+          "latency_ms": 230.2945830160752,
+          "distinct_outputs": [
+            "The energy satisfies MATH. Therefore, the solution is bounded."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-display-period",
+          "output": "The energy satisfies MATH. Therefore, the solution is bounded.",
+          "samples_ms": [
+            230.81245803041384,
+            226.2338749715127,
+            226.79270803928375
+          ],
+          "latency_ms": 226.79270803928375,
+          "distinct_outputs": [
+            "The energy satisfies MATH. Therefore, the solution is bounded."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-text-in-math",
+          "output": "The operator is bounded and the solution is unique.",
+          "samples_ms": [
+            224.12058303598315,
+            226.34449996985495,
+            224.5002500130795
+          ],
+          "latency_ms": 224.5002500130795,
+          "distinct_outputs": [
+            "The operator is bounded and the solution is unique."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-text-in-math",
+          "output": "The operator is bounded and the solution is unique.",
+          "samples_ms": [
+            225.35295801935717,
+            222.84408297855407,
+            223.80666597746313
+          ],
+          "latency_ms": 223.80666597746313,
+          "distinct_outputs": [
+            "The operator is bounded and the solution is unique."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-math-clause",
+          "output": "Since MATH, the estimate follows.",
+          "samples_ms": [
+            224.40883400849998,
+            225.83233303157613,
+            227.96504199504852
+          ],
+          "latency_ms": 225.83233303157613,
+          "distinct_outputs": [
+            "Since MATH, the estimate follows."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-macro",
+          "output": "We use the estimate MATH throughout this proof.",
+          "samples_ms": [
+            228.1766250380315,
+            229.09683303441852,
+            230.31191696645692
+          ],
+          "latency_ms": 229.09683303441852,
+          "distinct_outputs": [
+            "We use the estimate MATH throughout this proof."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-number",
+          "output": "The constant 3.14159 is positive.",
+          "samples_ms": [
+            229.89395802142099,
+            227.38520801067352,
+            226.3572919764556
+          ],
+          "latency_ms": 227.38520801067352,
+          "distinct_outputs": [
+            "The constant 3.14159 is positive."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-equation-reference",
+          "output": "Equation (12) gives the required estimate.",
+          "samples_ms": [
+            226.0033749626018,
+            227.60649997508153,
+            226.17854102281854
+          ],
+          "latency_ms": 226.17854102281854,
+          "distinct_outputs": [
+            "Equation (12) gives the required estimate."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-macro",
+          "output": "For MATH, the nonautonomous equation is well-posed.",
+          "samples_ms": [
+            225.51345900865272,
+            224.1353330318816,
+            226.61816695472226
+          ],
+          "latency_ms": 225.51345900865272,
+          "distinct_outputs": [
+            "For MATH, the nonautonomous equation is well-posed."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "missing-indefinite-article",
+          "output": "Let T be a bounded operator on this space.",
+          "samples_ms": [
+            452.20649999100715,
+            448.22829199256375,
+            457.7419590204954
+          ],
+          "latency_ms": 452.20649999100715,
+          "distinct_outputs": [
+            "Let T be a bounded operator on this space."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-unbounded",
+          "output": "We construct an unbounded operator.",
+          "samples_ms": [
+            451.0114169679582,
+            459.5540420268662,
+            455.5384159903042
+          ],
+          "latency_ms": 455.5384159903042,
+          "distinct_outputs": [
+            "We construct an unbounded operator."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-unique",
+          "output": "The equation has a unique solution.",
+          "samples_ms": [
+            437.3275410034694,
+            459.40212497953326,
+            450.9578750003129
+          ],
+          "latency_ms": 450.9578750003129,
+          "distinct_outputs": [
+            "The equation has a unique solution."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-one",
+          "output": "This is a one-parameter semigroup.",
+          "samples_ms": [
+            447.32512498740107,
+            452.57791702169925,
+            455.9643329703249
+          ],
+          "latency_ms": 452.57791702169925,
+          "distinct_outputs": [
+            "This is a one-parameter semigroup."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-estimates",
+          "output": "These estimates hold for every bounded operator.",
+          "samples_ms": [
+            459.4387499964796,
+            462.84304099390283,
+            453.61541700549424
+          ],
+          "latency_ms": 459.4387499964796,
+          "distinct_outputs": [
+            "These estimates hold for every bounded operator."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-theorems",
+          "output": "The two theorems have the same conclusion.",
+          "samples_ms": [
+            455.53008298156783,
+            459.63266701437533,
+            453.53116700425744
+          ],
+          "latency_ms": 455.53008298156783,
+          "distinct_outputs": [
+            "The two theorems have the same conclusion."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-operator",
+          "output": "This operator commutes with the projection.",
+          "samples_ms": [
+            450.722916983068,
+            453.67675001034513,
+            455.7088750298135
+          ],
+          "latency_ms": 453.67675001034513,
+          "distinct_outputs": [
+            "This operator commutes with the projection."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-each",
+          "output": "Each operator is bounded.",
+          "samples_ms": [
+            450.4179999930784,
+            446.178208978381,
+            460.7527499902062
+          ],
+          "latency_ms": 450.4179999930784,
+          "distinct_outputs": [
+            "Each operator is bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-exist",
+          "output": "There are two distinct solutions.",
+          "samples_ms": [
+            684.8375839763321,
+            678.4448340185918,
+            658.5742080351338
+          ],
+          "latency_ms": 678.4448340185918,
+          "distinct_outputs": [
+            "There are two distinct solutions."
+          ],
+          "assessment": {
+            "status": "other_edit",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-perfect",
+          "output": "We have proven the estimate.",
+          "samples_ms": [
+            442.4804170266725,
+            457.3270409600809,
+            449.22299997415394
+          ],
+          "latency_ms": 449.22299997415394,
+          "distinct_outputs": [
+            "We have proven the estimate."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-passive",
+          "output": "The estimate has been proven.",
+          "samples_ms": [
+            444.73587500397116,
+            443.1155000347644,
+            445.1482910080813
+          ],
+          "latency_ms": 444.73587500397116,
+          "distinct_outputs": [
+            "The estimate has been proven."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-chosen",
+          "output": "The parameter can be chosen independently.",
+          "samples_ms": [
+            448.9012500271201,
+            447.1100409864448,
+            452.5147500098683
+          ],
+          "latency_ms": 448.9012500271201,
+          "distinct_outputs": [
+            "The parameter can be chosen independently."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-did",
+          "output": "The constant did not depend on time.",
+          "samples_ms": [
+            459.5870840130374,
+            461.076834006235,
+            455.0059580360539
+          ],
+          "latency_ms": 459.5870840130374,
+          "distinct_outputs": [
+            "The constant did not depend on time."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-does",
+          "output": "The bound does not depend on the parameter.",
+          "samples_ms": [
+            447.36854202346876,
+            452.1700830082409,
+            449.8730829800479
+          ],
+          "latency_ms": 449.8730829800479,
+          "distinct_outputs": [
+            "The bound does not depend on the parameter."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-solutions",
+          "output": "We obtain two distinct solutions.",
+          "samples_ms": [
+            446.7627910198644,
+            443.69762495625764,
+            446.8892919830978
+          ],
+          "latency_ms": 446.7627910198644,
+          "distinct_outputs": [
+            "We obtain two distinct solutions."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-estimates",
+          "output": "Several estimates are needed.",
+          "samples_ms": [
+            449.71762504428625,
+            447.02570798108354,
+            449.9463749816641
+          ],
+          "latency_ms": 449.71762504428625,
+          "distinct_outputs": [
+            "Several estimates are needed."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-bounds",
+          "output": "These bounds hold uniformly in time.",
+          "samples_ms": [
+            446.2148330057971,
+            454.38775001093745,
+            447.5310419802554
+          ],
+          "latency_ms": 447.5310419802554,
+          "distinct_outputs": [
+            "These bounds hold uniformly in time."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-hypotheses",
+          "output": "These hypothesis imply uniqueness.",
+          "samples_ms": [
+            228.98629197152331,
+            225.23874999023974,
+            222.19041601056233
+          ],
+          "latency_ms": 225.23874999023974,
+          "distinct_outputs": [
+            "These hypothesis imply uniqueness."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "possessive-its",
+          "output": "The operator is bounded, and its norm is finite.",
+          "samples_ms": [
+            450.84462501108646,
+            455.00837499275804,
+            456.2753749778494
+          ],
+          "latency_ms": 455.00837499275804,
+          "distinct_outputs": [
+            "The operator is bounded, and its norm is finite."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "contraction-it-is",
+          "output": "It's clear that the solution exists.",
+          "samples_ms": [
+            675.0183329568245,
+            678.9589169784449,
+            684.9282920011319
+          ],
+          "latency_ms": 678.9589169784449,
+          "distinct_outputs": [
+            "It's clear that the solution exists."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-the",
+          "output": "The operator is bounded.",
+          "samples_ms": [
+            442.7535419818014,
+            446.7863329919055,
+            443.70291696395725
+          ],
+          "latency_ms": 443.70291696395725,
+          "distinct_outputs": [
+            "The operator is bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-of",
+          "output": "The norm of of the solution is finite.",
+          "samples_ms": [
+            225.94337502960116,
+            225.0550829921849,
+            228.87562500545755
+          ],
+          "latency_ms": 225.94337502960116,
+          "distinct_outputs": [
+            "The norm of of the solution is finite."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-we",
+          "output": "In this section, we prove uniqueness.",
+          "samples_ms": [
+            455.3682919940911,
+            450.47779101878405,
+            460.1242080098018
+          ],
+          "latency_ms": 455.3682919940911,
+          "distinct_outputs": [
+            "In this section, we prove uniqueness."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-since",
+          "output": "Since since the operator is bounded, the norm is finite.",
+          "samples_ms": [
+            233.97083301097155,
+            225.97983299056068,
+            226.5028749825433
+          ],
+          "latency_ms": 226.5028749825433,
+          "distinct_outputs": [
+            "Since since the operator is bounded, the norm is finite."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-article",
+          "output": "We obtain an unique solution from MATH.",
+          "samples_ms": [
+            226.78949998226017,
+            224.80058303335682,
+            224.03466701507568
+          ],
+          "latency_ms": 224.80058303335682,
+          "distinct_outputs": [
+            "We obtain an unique solution from MATH."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-article",
+          "output": "We obtain an unique solution from MATH.",
+          "samples_ms": [
+            226.08433297136799,
+            226.18704196065664,
+            231.55237501487136
+          ],
+          "latency_ms": 226.18704196065664,
+          "distinct_outputs": [
+            "We obtain an unique solution from MATH."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-agreement",
+          "output": "The estimate MATH holds uniformly in time.",
+          "samples_ms": [
+            456.4050000044517,
+            469.74262496223673,
+            456.0070830048062
+          ],
+          "latency_ms": 456.4050000044517,
+          "distinct_outputs": [
+            "The estimate MATH holds uniformly in time."
+          ],
+          "assessment": {
+            "status": "other_edit",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-agreement",
+          "output": "The estimate MATH holds uniformly in time.",
+          "samples_ms": [
+            456.0129170422442,
+            481.98283300735056,
+            456.7650419776328
+          ],
+          "latency_ms": 456.7650419776328,
+          "distinct_outputs": [
+            "The estimate MATH holds uniformly in time."
+          ],
+          "assessment": {
+            "status": "other_edit",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-clause",
+          "output": "Since MATH, the solution remains bounded.",
+          "samples_ms": [
+            454.53033299418166,
+            454.4997090124525,
+            450.2067919820547
+          ],
+          "latency_ms": 454.4997090124525,
+          "distinct_outputs": [
+            "Since MATH, the solution remains bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-clause",
+          "output": "Since MATH, the solution remains bounded.",
+          "samples_ms": [
+            454.7537500038743,
+            453.0892499606125,
+            457.63216697378084
+          ],
+          "latency_ms": 454.7537500038743,
+          "distinct_outputs": [
+            "Since MATH, the solution remains bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-text-in-math-agreement",
+          "output": "The operators are bounded.",
+          "samples_ms": [
+            445.4280419740826,
+            442.64975003898144,
+            450.96166705479845
+          ],
+          "latency_ms": 445.4280419740826,
+          "distinct_outputs": [
+            "The operators are bounded."
+          ],
+          "assessment": {
+            "status": "other_edit",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-inline-article",
+          "output": "We obtain an estimate from MATH.",
+          "samples_ms": [
+            451.5919580007903,
+            454.55650001531467,
+            455.82795899827033
+          ],
+          "latency_ms": 454.55650001531467,
+          "distinct_outputs": [
+            "We obtain an estimate from MATH."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        }
+      ],
+      "import_ms": 665.0855409679934,
+      "label": "Liquid LFM2.5 Encoder 350M (tagger only)",
+      "load_ms": 2682.1353750419803,
+      "metadata": {
+        "name": "liquid",
+        "label": "Liquid LFM2.5 Encoder 350M (tagger only)",
+        "model_id": "LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+        "revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+        "license": "LFM Open License v1.0",
+        "artifact_bytes": 713449656,
+        "source_url": "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker",
+        "notes": "Published FP16 tagger; executed FP32 on CPU. Optional reranker excluded. Precision thresholds are an initial comparison setting, not calibrated.",
+        "device": "cpu",
+        "threads": 4,
+        "inference_dtype": "float32",
+        "batch_size": 1,
+        "artifact_weight_dtype": "float16",
+        "input_limit_tokens": 128,
+        "max_iter": 3,
+        "keep_confidence": 0.0,
+        "min_error_prob": 0.5,
+        "rerank": false,
+        "refinement_input_policy": "Full token count checked before each of up to 3 one-pass corrections; stop unchanged/cycles",
+        "tokenization": "Moses English, escape=False; word apostrophes normalized and restored",
+        "extra_artifacts": [
+          {
+            "model_id": "LiquidAI/LFM2.5-Encoder-350M",
+            "revision": "b886781f7c6f10ca9b7096e21b83e30a073c2f39",
+            "files": [
+              "config.json",
+              "modeling_lfm2_bidirectional.py"
+            ]
+          },
+          "pinned tagger config/tokenizer/modeling_gectagger.py/reranker_gectagger.py"
+        ],
+        "load_ms": 2681.8150830222294,
+        "weights_cached_before_load": true,
+        "runtime_versions": {
+          "torch": "2.14.1",
+          "transformers": "5.20.2",
+          "tokenizers": "0.23.3",
+          "huggingface_hub": "2.2.0"
+        },
+        "python": "3.12.14",
+        "torch": "2.14.1",
+        "transformers": "5.20.2",
+        "warmup_requests": 2,
+        "repeats": 3,
+        "seed": 0,
+        "cache_dir": "/private/tmp/tiptoptyp-grammar-models"
+      },
+      "warmup_ms": [
+        519.8751249699853,
+        466.77375002764165
+      ],
+      "peak_rss_mib": 2434.8,
+      "worker_wall_ms": 69076.9406670006,
+      "summary": {
+        "cases": 64,
+        "evaluated": 64,
+        "errors": 0,
+        "correct_controls": 32,
+        "changed_controls": 1,
+        "error_cases": 32,
+        "exact_corrections": 23,
+        "missed": 5,
+        "other_edits": 4,
+        "unsafe": 0,
+        "false_alarm_rate": 0.03125,
+        "exact_correction_rate": 0.71875,
+        "median_ms": 233.21868749917485,
+        "p95_ms": 459.4387499964796
+      },
+      "groups": {
+        "plain": {
+          "cases": 46,
+          "evaluated": 46,
+          "errors": 0,
+          "correct_controls": 22,
+          "changed_controls": 0,
+          "error_cases": 24,
+          "exact_corrections": 20,
+          "missed": 3,
+          "other_edits": 1,
+          "unsafe": 0,
+          "false_alarm_rate": 0.0,
+          "exact_correction_rate": 0.8333333333333334,
+          "median_ms": 236.88833351479843,
+          "p95_ms": 459.5870840130374
+        },
+        "projected_math": {
+          "cases": 18,
+          "evaluated": 18,
+          "errors": 0,
+          "correct_controls": 10,
+          "changed_controls": 1,
+          "error_cases": 8,
+          "exact_corrections": 3,
+          "missed": 2,
+          "other_edits": 3,
+          "unsafe": 0,
+          "false_alarm_rate": 0.1,
+          "exact_correction_rate": 0.375,
+          "median_ms": 229.69570802524686,
+          "p95_ms": 456.8995829904452
+        }
+      }
+    },
+    {
+      "name": "gector",
+      "results": [
+        {
+          "id": "clean-agreement",
+          "output": "These estimates hold for every bounded operator.",
+          "samples_ms": [
+            101.99420800199732,
+            103.81495801266283,
+            102.23787499126047
+          ],
+          "latency_ms": 102.23787499126047,
+          "distinct_outputs": [
+            "These estimates hold for every bounded operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-an",
+          "output": "An unbounded operator need not be continuous.",
+          "samples_ms": [
+            95.99541698116809,
+            99.33062497293577,
+            102.63704200042412
+          ],
+          "latency_ms": 99.33062497293577,
+          "distinct_outputs": [
+            "An unbounded operator need not be continuous."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-a-unique",
+          "output": "The equation has a unique solution.",
+          "samples_ms": [
+            99.5742499944754,
+            93.32033299142495,
+            97.14620898012072
+          ],
+          "latency_ms": 97.14620898012072,
+          "distinct_outputs": [
+            "The equation has a unique solution."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-a-one",
+          "output": "We construct a one-parameter semigroup.",
+          "samples_ms": [
+            98.85099995881319,
+            99.6351670473814,
+            97.74433402344584
+          ],
+          "latency_ms": 98.85099995881319,
+          "distinct_outputs": [
+            "We construct a one-parameter semigroup."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tao-straight",
+          "output": "Tao's argument applies to this operator.",
+          "samples_ms": [
+            98.44133397564292,
+            98.23041700292379,
+            97.56870899582282
+          ],
+          "latency_ms": 98.23041700292379,
+          "distinct_outputs": [
+            "Tao's argument applies to this operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tao-curly",
+          "output": "Tao’s argument applies to this operator.",
+          "samples_ms": [
+            96.50658298050985,
+            97.95995795866475,
+            101.76995897199959
+          ],
+          "latency_ms": 97.95995795866475,
+          "distinct_outputs": [
+            "Tao’s argument applies to this operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-mathematicians",
+          "output": "Barbato and Romito proved the corresponding result.",
+          "samples_ms": [
+            104.18741696048528,
+            101.61733295535669,
+            100.32887500710785
+          ],
+          "latency_ms": 101.61733295535669,
+          "distinct_outputs": [
+            "Barbato and Romito proved the corresponding result."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-semigroup",
+          "output": "The semigroup preserves nonnegative functions.",
+          "samples_ms": [
+            94.72758299671113,
+            99.30300002451986,
+            101.56787501182407
+          ],
+          "latency_ms": 99.30300002451986,
+          "distinct_outputs": [
+            "The semigroup preserves nonnegative functions."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-nonautonomous",
+          "output": "The nonautonomous equation admits a mild solution.",
+          "samples_ms": [
+            98.04558398900554,
+            99.7675420367159,
+            99.09766598138958
+          ],
+          "latency_ms": 99.09766598138958,
+          "distinct_outputs": [
+            "The nonautonomous equation admits a mild solution."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-well-posedness",
+          "output": "We establish local well-posedness in the energy space.",
+          "samples_ms": [
+            103.33966597681865,
+            102.16000000946224,
+            101.75787500338629
+          ],
+          "latency_ms": 102.16000000946224,
+          "distinct_outputs": [
+            "We establish local well-posedness in the energy space."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-british-behaviour",
+          "output": "We minimise the energy to characterise the asymptotic behaviour.",
+          "samples_ms": [
+            90.30691697262228,
+            92.06520899897441,
+            84.34566698269919
+          ],
+          "latency_ms": 90.30691697262228,
+          "distinct_outputs": [
+            "We minimise the energy to characterise the asymptotic behaviour."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-british-centre",
+          "output": "We recognise the centre of the ball by its symmetry.",
+          "samples_ms": [
+            99.05229101423174,
+            97.48916595708579,
+            100.51870800089091
+          ],
+          "latency_ms": 99.05229101423174,
+          "distinct_outputs": [
+            "We recognise the centre of the ball by its symmetry."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-hypotheses",
+          "output": "These hypotheses imply that the solution is smooth.",
+          "samples_ms": [
+            100.28708400204778,
+            100.80791701329872,
+            100.9831249830313
+          ],
+          "latency_ms": 100.80791701329872,
+          "distinct_outputs": [
+            "These hypotheses imply that the solution is smooth."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-zero-article",
+          "output": "We prove uniqueness without assuming compactness.",
+          "samples_ms": [
+            100.74824996991083,
+            93.50754198385403,
+            100.96420801710337
+          ],
+          "latency_ms": 100.74824996991083,
+          "distinct_outputs": [
+            "We prove uniqueness without assuming compactness."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-chosen",
+          "output": "The basis has been chosen independently of the parameter.",
+          "samples_ms": [
+            98.53591700084507,
+            97.92741597630084,
+            99.17495894478634
+          ],
+          "latency_ms": 98.53591700084507,
+          "distinct_outputs": [
+            "The basis has been chosen independently of the parameter."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-legitimate-repetition",
+          "output": "We show that that operator is bounded.",
+          "samples_ms": [
+            100.79758299980313,
+            99.4746659998782,
+            98.56587502872571
+          ],
+          "latency_ms": 99.4746659998782,
+          "distinct_outputs": [
+            "We show that that operator is bounded."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-its",
+          "output": "The operator is bounded, and its norm is finite.",
+          "samples_ms": [
+            101.03095800150186,
+            103.13729202607647,
+            99.81137502472848
+          ],
+          "latency_ms": 101.03095800150186,
+          "distinct_outputs": [
+            "The operator is bounded, and its norm is finite."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-plural-possessive",
+          "output": "The authors' estimates agree.",
+          "samples_ms": [
+            95.56591603904963,
+            95.87837499566376,
+            96.66279202792794
+          ],
+          "latency_ms": 95.87837499566376,
+          "distinct_outputs": [
+            "The authors' estimates agree."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-name-reference",
+          "output": "The result of Leray remains valid in this setting.",
+          "samples_ms": [
+            98.7658750382252,
+            98.432041995693,
+            100.05624999757856
+          ],
+          "latency_ms": 98.7658750382252,
+          "distinct_outputs": [
+            "The result of Leray remains valid in this setting."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-inline-math",
+          "output": "The norm MATH is finite.",
+          "samples_ms": [
+            95.10924998903647,
+            97.73600002517924,
+            99.62337499018759
+          ],
+          "latency_ms": 97.73600002517924,
+          "distinct_outputs": [
+            "The norm MATH is finite."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-bound-control",
+          "output": "If this bound holds, then the solution exists.",
+          "samples_ms": [
+            104.35212502488866,
+            99.50262500206009,
+            101.35775001253933
+          ],
+          "latency_ms": 101.35775001253933,
+          "distinct_outputs": [
+            "If this bound holds, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-display-comma",
+          "output": "If MATH, then the solution exists.",
+          "samples_ms": [
+            101.45866696257144,
+            101.37066699098796,
+            101.69420903548598
+          ],
+          "latency_ms": 101.45866696257144,
+          "distinct_outputs": [
+            "If MATH, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-display-comma",
+          "output": "If MATH, then the solution exists.",
+          "samples_ms": [
+            105.97058304119855,
+            103.24791702441871,
+            105.00187502475455
+          ],
+          "latency_ms": 105.00187502475455,
+          "distinct_outputs": [
+            "If MATH, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-display-period",
+          "output": "The energy satisfies MATH. Therefore, the solution is bounded.",
+          "samples_ms": [
+            100.68845801288262,
+            102.92316699633375,
+            99.17524998309091
+          ],
+          "latency_ms": 100.68845801288262,
+          "distinct_outputs": [
+            "The energy satisfies MATH. Therefore, the solution is bounded."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-display-period",
+          "output": "The energy satisfies MATH. Therefore, the solution is bounded.",
+          "samples_ms": [
+            99.26404198631644,
+            100.5989580298774,
+            100.47208401374519
+          ],
+          "latency_ms": 100.47208401374519,
+          "distinct_outputs": [
+            "The energy satisfies MATH. Therefore, the solution is bounded."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-text-in-math",
+          "output": "The operator is bounded and the solution is unique.",
+          "samples_ms": [
+            100.5227499990724,
+            135.00125001883134,
+            159.1054160380736
+          ],
+          "latency_ms": 135.00125001883134,
+          "distinct_outputs": [
+            "The operator is bounded and the solution is unique."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-text-in-math",
+          "output": "The operator is bounded and the solution is unique.",
+          "samples_ms": [
+            110.63208297127858,
+            115.5710419989191,
+            100.02383397659287
+          ],
+          "latency_ms": 110.63208297127858,
+          "distinct_outputs": [
+            "The operator is bounded and the solution is unique."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-math-clause",
+          "output": "Since MATH, the estimate follows.",
+          "samples_ms": [
+            119.85554196871817,
+            108.77833398990333,
+            102.70237497752532
+          ],
+          "latency_ms": 108.77833398990333,
+          "distinct_outputs": [
+            "Since MATH, the estimate follows."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-macro",
+          "output": "We use the estimate MATH throughout this proof.",
+          "samples_ms": [
+            102.18620800878853,
+            109.0945839532651,
+            113.36666601710021
+          ],
+          "latency_ms": 109.0945839532651,
+          "distinct_outputs": [
+            "We use the estimate MATH throughout this proof."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-number",
+          "output": "The constant 3.14159 is positive.",
+          "samples_ms": [
+            105.54170905379578,
+            98.02858403418213,
+            100.72370897978544
+          ],
+          "latency_ms": 100.72370897978544,
+          "distinct_outputs": [
+            "The constant 3.14159 is positive."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-equation-reference",
+          "output": "Equation (12) gives the required estimate.",
+          "samples_ms": [
+            106.98500002035871,
+            107.16416698414832,
+            102.78145800111815
+          ],
+          "latency_ms": 106.98500002035871,
+          "distinct_outputs": [
+            "Equation (12) gives the required estimate."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-macro",
+          "output": "For MATH, the nonautonomous equation is well-posed.",
+          "samples_ms": [
+            102.07849997095764,
+            99.73516699392349,
+            107.41491697262973
+          ],
+          "latency_ms": 102.07849997095764,
+          "distinct_outputs": [
+            "For MATH, the nonautonomous equation is well-posed."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "missing-indefinite-article",
+          "output": "Let T be bounded operator on this space.",
+          "samples_ms": [
+            107.15529101435095,
+            100.75033397879452,
+            101.59470903454348
+          ],
+          "latency_ms": 101.59470903454348,
+          "distinct_outputs": [
+            "Let T be bounded operator on this space."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-unbounded",
+          "output": "We construct an unbounded operator.",
+          "samples_ms": [
+            207.33779098372906,
+            199.9673749669455,
+            208.10254098614678
+          ],
+          "latency_ms": 207.33779098372906,
+          "distinct_outputs": [
+            "We construct an unbounded operator."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-unique",
+          "output": "The equation has a unique solution.",
+          "samples_ms": [
+            210.40295797865838,
+            198.77220899797976,
+            199.91870899684727
+          ],
+          "latency_ms": 199.91870899684727,
+          "distinct_outputs": [
+            "The equation has a unique solution."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-one",
+          "output": "This is an one-parameter semigroup.",
+          "samples_ms": [
+            107.64204198494554,
+            110.51008297363296,
+            114.75979199167341
+          ],
+          "latency_ms": 110.51008297363296,
+          "distinct_outputs": [
+            "This is an one-parameter semigroup."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-estimates",
+          "output": "These estimates hold for every bounded operator.",
+          "samples_ms": [
+            237.0632910169661,
+            216.18074999423698,
+            212.2061669942923
+          ],
+          "latency_ms": 216.18074999423698,
+          "distinct_outputs": [
+            "These estimates hold for every bounded operator."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-theorems",
+          "output": "The two theorems have the same conclusion.",
+          "samples_ms": [
+            212.77170797111467,
+            253.30183299956843,
+            482.36662498675287
+          ],
+          "latency_ms": 253.30183299956843,
+          "distinct_outputs": [
+            "The two theorems have the same conclusion."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-operator",
+          "output": "This operator commutes with the projection.",
+          "samples_ms": [
+            252.31787498341873,
+            238.86116599896923,
+            215.90104198548943
+          ],
+          "latency_ms": 238.86116599896923,
+          "distinct_outputs": [
+            "This operator commutes with the projection."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-each",
+          "output": "Each operator is bounded.",
+          "samples_ms": [
+            211.9796249899082,
+            200.9252499556169,
+            214.43537500454113
+          ],
+          "latency_ms": 211.9796249899082,
+          "distinct_outputs": [
+            "Each operator is bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-exist",
+          "output": "There exists two distinct solutions.",
+          "samples_ms": [
+            100.14608298661187,
+            103.8518330315128,
+            109.86279102507979
+          ],
+          "latency_ms": 103.8518330315128,
+          "distinct_outputs": [
+            "There exists two distinct solutions."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-perfect",
+          "output": "We have prove the estimate.",
+          "samples_ms": [
+            106.18533298838884,
+            100.70504096802324,
+            98.71683298842981
+          ],
+          "latency_ms": 100.70504096802324,
+          "distinct_outputs": [
+            "We have prove the estimate."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-passive",
+          "output": "The estimate has been proven.",
+          "samples_ms": [
+            200.97279199399054,
+            206.8785410374403,
+            204.1385420016013
+          ],
+          "latency_ms": 204.1385420016013,
+          "distinct_outputs": [
+            "The estimate has been proven."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-chosen",
+          "output": "The parameter can be chosen independently.",
+          "samples_ms": [
+            213.8009580085054,
+            203.3903340343386,
+            201.77095802500844
+          ],
+          "latency_ms": 203.3903340343386,
+          "distinct_outputs": [
+            "The parameter can be chosen independently."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-did",
+          "output": "The constant did not depend on time.",
+          "samples_ms": [
+            207.35083398176357,
+            201.06054202187806,
+            212.39370899274945
+          ],
+          "latency_ms": 207.35083398176357,
+          "distinct_outputs": [
+            "The constant did not depend on time."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-does",
+          "output": "The bound does not depend on the parameter.",
+          "samples_ms": [
+            206.73120801802725,
+            210.58787498623133,
+            219.41600000718608
+          ],
+          "latency_ms": 210.58787498623133,
+          "distinct_outputs": [
+            "The bound does not depend on the parameter."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-solutions",
+          "output": "We obtain two distinct solutions.",
+          "samples_ms": [
+            221.61425004014745,
+            299.63550000684336,
+            220.2524999738671
+          ],
+          "latency_ms": 221.61425004014745,
+          "distinct_outputs": [
+            "We obtain two distinct solutions."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-estimates",
+          "output": "Several estimates are needed.",
+          "samples_ms": [
+            217.1971250209026,
+            201.31679199403152,
+            211.78399998461828
+          ],
+          "latency_ms": 211.78399998461828,
+          "distinct_outputs": [
+            "Several estimates are needed."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-bounds",
+          "output": "These bound hold uniformly in time.",
+          "samples_ms": [
+            96.37029195437208,
+            98.21633400861174,
+            100.3415830200538
+          ],
+          "latency_ms": 98.21633400861174,
+          "distinct_outputs": [
+            "These bound hold uniformly in time."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-hypotheses",
+          "output": "These hypothesis imply uniqueness.",
+          "samples_ms": [
+            105.31458299374208,
+            103.36750000715256,
+            99.7585830045864
+          ],
+          "latency_ms": 103.36750000715256,
+          "distinct_outputs": [
+            "These hypothesis imply uniqueness."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "possessive-its",
+          "output": "The operator is bounded, and its norm is finite.",
+          "samples_ms": [
+            216.23829199234024,
+            214.85970896901563,
+            205.7583749992773
+          ],
+          "latency_ms": 214.85970896901563,
+          "distinct_outputs": [
+            "The operator is bounded, and its norm is finite."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "contraction-it-is",
+          "output": "It is clear that the solution exists.",
+          "samples_ms": [
+            308.9314579847269,
+            288.86133298510686,
+            302.60770797031
+          ],
+          "latency_ms": 302.60770797031,
+          "distinct_outputs": [
+            "It is clear that the solution exists."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-the",
+          "output": "The operator is bounded.",
+          "samples_ms": [
+            202.64362503075972,
+            201.26983401132748,
+            193.29708302393556
+          ],
+          "latency_ms": 201.26983401132748,
+          "distinct_outputs": [
+            "The operator is bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-of",
+          "output": "The norm of of the solution is finite.",
+          "samples_ms": [
+            111.93545802962035,
+            109.71400002017617,
+            101.230249973014
+          ],
+          "latency_ms": 109.71400002017617,
+          "distinct_outputs": [
+            "The norm of of the solution is finite."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-we",
+          "output": "In this section, we we prove uniqueness.",
+          "samples_ms": [
+            101.45870799897239,
+            99.56470795441419,
+            110.84083298919722
+          ],
+          "latency_ms": 101.45870799897239,
+          "distinct_outputs": [
+            "In this section, we we prove uniqueness."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-since",
+          "output": "Since since the operator is bounded, the norm is finite.",
+          "samples_ms": [
+            107.59887500898913,
+            99.96616700664163,
+            99.91512499982491
+          ],
+          "latency_ms": 99.96616700664163,
+          "distinct_outputs": [
+            "Since since the operator is bounded, the norm is finite."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-article",
+          "output": "We obtain a unique solution from MATH.",
+          "samples_ms": [
+            210.12941701337695,
+            211.64762502303347,
+            209.2528339708224
+          ],
+          "latency_ms": 210.12941701337695,
+          "distinct_outputs": [
+            "We obtain a unique solution from MATH."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-article",
+          "output": "We obtain a unique solution from MATH.",
+          "samples_ms": [
+            220.04091599956155,
+            209.75441596237943,
+            217.86195802269503
+          ],
+          "latency_ms": 217.86195802269503,
+          "distinct_outputs": [
+            "We obtain a unique solution from MATH."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-agreement",
+          "output": "The estimates MATH holds uniformly in time.",
+          "samples_ms": [
+            103.16283401334658,
+            101.31491697393358,
+            105.73220800142735
+          ],
+          "latency_ms": 103.16283401334658,
+          "distinct_outputs": [
+            "The estimates MATH holds uniformly in time."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-agreement",
+          "output": "The estimates MATH holds uniformly in time.",
+          "samples_ms": [
+            304.873957997188,
+            146.2595839984715,
+            110.74949998874217
+          ],
+          "latency_ms": 146.2595839984715,
+          "distinct_outputs": [
+            "The estimates MATH holds uniformly in time."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-clause",
+          "output": "From MATH, the solution remains bounded.",
+          "samples_ms": [
+            215.5615830561146,
+            205.21920797182247,
+            216.08795801876113
+          ],
+          "latency_ms": 215.5615830561146,
+          "distinct_outputs": [
+            "From MATH, the solution remains bounded."
+          ],
+          "assessment": {
+            "status": "other_edit",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-clause",
+          "output": "From MATH, the solution remains bounded.",
+          "samples_ms": [
+            204.67950002057478,
+            212.38454099511728,
+            205.76683396939188
+          ],
+          "latency_ms": 205.76683396939188,
+          "distinct_outputs": [
+            "From MATH, the solution remains bounded."
+          ],
+          "assessment": {
+            "status": "other_edit",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-text-in-math-agreement",
+          "output": "The operator are bounded.",
+          "samples_ms": [
+            96.43391601275653,
+            99.22358399489895,
+            108.78154099918902
+          ],
+          "latency_ms": 99.22358399489895,
+          "distinct_outputs": [
+            "The operator are bounded."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-inline-article",
+          "output": "We obtain an estimate from MATH.",
+          "samples_ms": [
+            208.7248339666985,
+            214.30674998555332,
+            218.9973330241628
+          ],
+          "latency_ms": 214.30674998555332,
+          "distinct_outputs": [
+            "We obtain an estimate from MATH."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        }
+      ],
+      "import_ms": 587.8428330179304,
+      "label": "GECToR-2024 (official RoBERTa-large)",
+      "load_ms": 8211.626208969392,
+      "metadata": {
+        "name": "gector",
+        "label": "GECToR-2024 (official RoBERTa-large)",
+        "model_id": "grammarly/GECToR-2024/gector-2024-roberta-large.th",
+        "revision": "sha256:77e1c9e0d7ad5507c16509fd765283dbce5221552aa7a90c37d143f1aeaddb10",
+        "license": "No separate checkpoint licence stated; reference code Apache-2.0",
+        "artifact_bytes": 1442177179,
+        "source_url": "https://github.com/grammarly/pillars-of-gec",
+        "notes": "Official 2024 large checkpoint, not the older unofficial base checkpoint. Downloaded for local evaluation; not redistributed by this repository.",
+        "device": "cpu",
+        "threads": 4,
+        "inference_dtype": "float32",
+        "batch_size": 1,
+        "artifact_weight_dtype": "float32",
+        "input_limit_tokens": 512,
+        "max_iter": 3,
+        "keep_confidence": 0.1,
+        "min_error_prob": 0.65,
+        "tokenization": "Moses English with word-apostrophe normalization; RoBERTa first-subword labels, $START anchor",
+        "operating_point_source": "https://aclanthology.org/2024.bea-1.3/ (Table 7: confidence 0.1, min error probability 0.65)",
+        "token_packing_reference": "https://github.com/grammarly/gector/blob/3d41d2841512d2690cffce1b5ac6795fe9a0a5dd/gector/tokenization.py",
+        "packing": "No BOS/EOS; $START=50265; first subword per whitespace token. Full words retained (no upstream per-word truncation).",
+        "reference_validation": {
+          "date": "2026-10-20",
+          "checks": "Exact token IDs and first-piece offsets vs official 3d41d284 tokenization.py; final corrections vs gector==1.2.0 sharing identical checkpoint tensors, confidence0.1/min_error0.65/3passes",
+          "inputs": [
+            "These estimates holds for every bounded operator .",
+            "She has went to the school yesterday .",
+            "A ten - year - old boy go to school .",
+            "The nonautonomous semigroup is well-posed ."
+          ],
+          "result": "All 4 token-ID/offset checks and all 4 final corrections matched",
+          "scope": "Short test cases, not a reproduction of the full published benchmark; current tokenizer API shim replaced removed batch_encode_plus with equivalent __call__"
+        },
+        "extra_artifacts": [
+          {
+            "model_id": "FacebookAI/roberta-large",
+            "revision": "722cf37b1afa9454edce342e7895e588b6ff1d59",
+            "files": [
+              "config.json",
+              "tokenizer.json",
+              "vocab.json",
+              "merges.txt"
+            ]
+          },
+          {
+            "vocabulary_repository": "grammarly/gector",
+            "revision": "fea1532608bf50d086c0b62cb9c4fdc3e5c71daa",
+            "files": [
+              "data/output_vocabulary/labels.txt",
+              "data/verb-form-vocab.txt"
+            ]
+          }
+        ],
+        "decoder": "gector==1.2.0 edit_src_by_tags and verb dictionary; official tensor names loaded strictly",
+        "load_ms": 8211.27654099837,
+        "weights_cached_before_load": true,
+        "runtime_versions": {
+          "torch": "2.14.1",
+          "transformers": "5.20.2",
+          "tokenizers": "0.23.3",
+          "huggingface_hub": "2.2.0"
+        },
+        "python": "3.12.14",
+        "torch": "2.14.1",
+        "transformers": "5.20.2",
+        "warmup_requests": 2,
+        "repeats": 3,
+        "seed": 0,
+        "cache_dir": "/private/tmp/tiptoptyp-grammar-models"
+      },
+      "warmup_ms": [
+        228.62583299865946,
+        213.44666701043025
+      ],
+      "peak_rss_mib": 3130.9,
+      "worker_wall_ms": 36886.38537499355,
+      "summary": {
+        "cases": 64,
+        "evaluated": 64,
+        "errors": 0,
+        "correct_controls": 32,
+        "changed_controls": 0,
+        "error_cases": 32,
+        "exact_corrections": 18,
+        "missed": 12,
+        "other_edits": 2,
+        "unsafe": 0,
+        "false_alarm_rate": 0.0,
+        "exact_correction_rate": 0.5625,
+        "median_ms": 102.70035450230353,
+        "p95_ms": 221.61425004014745
+      },
+      "groups": {
+        "plain": {
+          "cases": 46,
+          "evaluated": 46,
+          "errors": 0,
+          "correct_controls": 22,
+          "changed_controls": 0,
+          "error_cases": 24,
+          "exact_corrections": 15,
+          "missed": 9,
+          "other_edits": 0,
+          "unsafe": 0,
+          "false_alarm_rate": 0.0,
+          "exact_correction_rate": 0.625,
+          "median_ms": 101.60602099495009,
+          "p95_ms": 238.86116599896923
+        },
+        "projected_math": {
+          "cases": 18,
+          "evaluated": 18,
+          "errors": 0,
+          "correct_controls": 10,
+          "changed_controls": 0,
+          "error_cases": 8,
+          "exact_corrections": 3,
+          "missed": 3,
+          "other_edits": 2,
+          "unsafe": 0,
+          "false_alarm_rate": 0.0,
+          "exact_correction_rate": 0.375,
+          "median_ms": 108.93645897158422,
+          "p95_ms": 217.86195802269503
+        }
+      }
+    },
+    {
+      "name": "coedit",
+      "results": [
+        {
+          "id": "clean-agreement",
+          "output": "These estimates hold for every bounded operator.",
+          "samples_ms": [
+            76.11987501149997,
+            74.59475001087412,
+            82.31129200430587
+          ],
+          "latency_ms": 76.11987501149997,
+          "distinct_outputs": [
+            "These estimates hold for every bounded operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-an",
+          "output": "An unbounded operator need not be continuous.",
+          "samples_ms": [
+            82.96895900275558,
+            77.95366697246209,
+            75.36062505096197
+          ],
+          "latency_ms": 77.95366697246209,
+          "distinct_outputs": [
+            "An unbounded operator need not be continuous."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-a-unique",
+          "output": "The equation has a unique solution.",
+          "samples_ms": [
+            68.8890420133248,
+            66.05550000676885,
+            66.99999998090789
+          ],
+          "latency_ms": 66.99999998090789,
+          "distinct_outputs": [
+            "The equation has a unique solution."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-a-one",
+          "output": "We construct a one-parameter semigroup.",
+          "samples_ms": [
+            90.0005410076119,
+            88.44679105095565,
+            82.01116701820865
+          ],
+          "latency_ms": 88.44679105095565,
+          "distinct_outputs": [
+            "We construct a one-parameter semigroup."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tao-straight",
+          "output": "Tao's argument applies to this operator.",
+          "samples_ms": [
+            76.99279102962464,
+            79.55670799128711,
+            79.79795796563849
+          ],
+          "latency_ms": 79.55670799128711,
+          "distinct_outputs": [
+            "Tao's argument applies to this operator."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tao-curly",
+          "output": "Tao's argument applies to this operator.",
+          "samples_ms": [
+            84.4612920191139,
+            82.5469580013305,
+            80.75249998364598
+          ],
+          "latency_ms": 82.5469580013305,
+          "distinct_outputs": [
+            "Tao's argument applies to this operator."
+          ],
+          "assessment": {
+            "status": "unsafe",
+            "protected_issues": [
+              "Tao’s"
+            ]
+          }
+        },
+        {
+          "id": "clean-mathematicians",
+          "output": "Barbato and Romito proved the corresponding result.",
+          "samples_ms": [
+            98.57420803746209,
+            97.30758401565254,
+            102.15874999994412
+          ],
+          "latency_ms": 98.57420803746209,
+          "distinct_outputs": [
+            "Barbato and Romito proved the corresponding result."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-semigroup",
+          "output": "The semigroup preserves nonnegative functions.",
+          "samples_ms": [
+            78.53087497642264,
+            74.66729200677946,
+            70.1994999544695
+          ],
+          "latency_ms": 74.66729200677946,
+          "distinct_outputs": [
+            "The semigroup preserves nonnegative functions."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-nonautonomous",
+          "output": "The nonautonomous equation admits a mild solution.",
+          "samples_ms": [
+            90.8064580289647,
+            89.81929102446884,
+            91.30808303598315
+          ],
+          "latency_ms": 90.8064580289647,
+          "distinct_outputs": [
+            "The nonautonomous equation admits a mild solution."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-well-posedness",
+          "output": "We establish local well-posedness in the energy space.",
+          "samples_ms": [
+            95.39283299818635,
+            99.11037498386577,
+            87.21479104133323
+          ],
+          "latency_ms": 95.39283299818635,
+          "distinct_outputs": [
+            "We establish local well-posedness in the energy space."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-british-behaviour",
+          "output": "We minimise the energy to characterise the asymptotic behaviour.",
+          "samples_ms": [
+            113.68254100671038,
+            117.86283401306719,
+            120.2443340444006
+          ],
+          "latency_ms": 117.86283401306719,
+          "distinct_outputs": [
+            "We minimise the energy to characterise the asymptotic behaviour."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-british-centre",
+          "output": "We recognise the centre of the ball by its symmetry.",
+          "samples_ms": [
+            88.09925004607067,
+            87.0614160085097,
+            86.99283399619162
+          ],
+          "latency_ms": 87.0614160085097,
+          "distinct_outputs": [
+            "We recognise the centre of the ball by its symmetry."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-hypotheses",
+          "output": "These hypotheses imply that the solution is smooth.",
+          "samples_ms": [
+            93.71229202952236,
+            95.04033299162984,
+            90.63412505201995
+          ],
+          "latency_ms": 93.71229202952236,
+          "distinct_outputs": [
+            "These hypotheses imply that the solution is smooth."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-zero-article",
+          "output": "We prove uniqueness without assuming compactness.",
+          "samples_ms": [
+            75.99333301186562,
+            77.7945410227403,
+            75.40387497283518
+          ],
+          "latency_ms": 75.99333301186562,
+          "distinct_outputs": [
+            "We prove uniqueness without assuming compactness."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-chosen",
+          "output": "The basis has been chosen independently of the parameter.",
+          "samples_ms": [
+            83.46749999327585,
+            82.7682499657385,
+            79.94999998481944
+          ],
+          "latency_ms": 82.7682499657385,
+          "distinct_outputs": [
+            "The basis has been chosen independently of the parameter."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-legitimate-repetition",
+          "output": "We show that that operator is bounded.",
+          "samples_ms": [
+            76.84033300029114,
+            82.61187502648681,
+            78.31141597125679
+          ],
+          "latency_ms": 78.31141597125679,
+          "distinct_outputs": [
+            "We show that that operator is bounded."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-its",
+          "output": "The operator is bounded, and its norm is finite.",
+          "samples_ms": [
+            112.95695800799876,
+            112.865041999612,
+            100.36370804300532
+          ],
+          "latency_ms": 112.865041999612,
+          "distinct_outputs": [
+            "The operator is bounded, and its norm is finite."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-plural-possessive",
+          "output": "The authors' estimates agree.",
+          "samples_ms": [
+            53.60433302121237,
+            54.98312501003966,
+            53.060874983202666
+          ],
+          "latency_ms": 53.60433302121237,
+          "distinct_outputs": [
+            "The authors' estimates agree."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-name-reference",
+          "output": "The result of Leray remains valid in this setting.",
+          "samples_ms": [
+            85.77062503900379,
+            91.68895898619667,
+            88.43695797258988
+          ],
+          "latency_ms": 88.43695797258988,
+          "distinct_outputs": [
+            "The result of Leray remains valid in this setting."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-inline-math",
+          "output": "The norm MATH is finite.",
+          "samples_ms": [
+            65.81200001528487,
+            67.26541602984071,
+            66.36891601374373
+          ],
+          "latency_ms": 66.36891601374373,
+          "distinct_outputs": [
+            "The norm MATH is finite."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-bound-control",
+          "output": "If this bound holds, then the solution exists.",
+          "samples_ms": [
+            79.0290409931913,
+            86.69458300573751,
+            83.62820802722126
+          ],
+          "latency_ms": 83.62820802722126,
+          "distinct_outputs": [
+            "If this bound holds, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-display-comma",
+          "output": "If MATH, then the solution exists.",
+          "samples_ms": [
+            74.01462498819456,
+            73.01433297106996,
+            73.59987503150478
+          ],
+          "latency_ms": 73.59987503150478,
+          "distinct_outputs": [
+            "If MATH, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-display-comma",
+          "output": "If MATH, then the solution exists.",
+          "samples_ms": [
+            74.30879201274365,
+            74.76412499090657,
+            77.76229101000354
+          ],
+          "latency_ms": 74.76412499090657,
+          "distinct_outputs": [
+            "If MATH, then the solution exists."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-display-period",
+          "output": "The energy satisfies MATH, and therefore, the solution is bounded.",
+          "samples_ms": [
+            135.75166702503338,
+            127.3830839782022,
+            125.67800004035234
+          ],
+          "latency_ms": 127.3830839782022,
+          "distinct_outputs": [
+            "The energy satisfies MATH, and therefore, the solution is bounded."
+          ],
+          "assessment": {
+            "status": "false_alarm",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-display-period",
+          "output": "The energy satisfies MATH, and therefore, the solution is bounded.",
+          "samples_ms": [
+            146.17033302783966,
+            137.32008304214105,
+            134.9506670376286
+          ],
+          "latency_ms": 137.32008304214105,
+          "distinct_outputs": [
+            "The energy satisfies MATH, and therefore, the solution is bounded."
+          ],
+          "assessment": {
+            "status": "false_alarm",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-text-in-math",
+          "output": "The operator is bounded and the solution is unique.",
+          "samples_ms": [
+            94.44395801983774,
+            95.62391595682129,
+            95.12524999445304
+          ],
+          "latency_ms": 95.12524999445304,
+          "distinct_outputs": [
+            "The operator is bounded and the solution is unique."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-text-in-math",
+          "output": "The operator is bounded and the solution is unique.",
+          "samples_ms": [
+            88.28224998433143,
+            86.73791697947308,
+            88.93270895350724
+          ],
+          "latency_ms": 88.28224998433143,
+          "distinct_outputs": [
+            "The operator is bounded and the solution is unique."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-math-clause",
+          "output": "Since MATH, the estimate follows.",
+          "samples_ms": [
+            69.32987499749288,
+            68.96975002018735,
+            68.90387495514005
+          ],
+          "latency_ms": 68.96975002018735,
+          "distinct_outputs": [
+            "Since MATH, the estimate follows."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-tex-macro",
+          "output": "We use the estimate MATH throughout this proof.",
+          "samples_ms": [
+            77.16741698095575,
+            76.3412500382401,
+            76.21916598873213
+          ],
+          "latency_ms": 76.3412500382401,
+          "distinct_outputs": [
+            "We use the estimate MATH throughout this proof."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-number",
+          "output": "The constant 3.14159 is positive.",
+          "samples_ms": [
+            66.77329097874463,
+            69.6803749888204,
+            69.77895798627287
+          ],
+          "latency_ms": 69.6803749888204,
+          "distinct_outputs": [
+            "The constant 3.14159 is positive."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-equation-reference",
+          "output": "Equation (12) gives the required estimate.",
+          "samples_ms": [
+            76.83000003453344,
+            70.15087502077222,
+            69.03166696429253
+          ],
+          "latency_ms": 70.15087502077222,
+          "distinct_outputs": [
+            "Equation (12) gives the required estimate."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "clean-typst-macro",
+          "output": "For MATH, the nonautonomous equation is well-posed.",
+          "samples_ms": [
+            105.32079200493172,
+            108.79029199713841,
+            115.09724997449666
+          ],
+          "latency_ms": 108.79029199713841,
+          "distinct_outputs": [
+            "For MATH, the nonautonomous equation is well-posed."
+          ],
+          "assessment": {
+            "status": "unchanged",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "missing-indefinite-article",
+          "output": "Let T be bounded operator on this space.",
+          "samples_ms": [
+            82.90587505325675,
+            81.67545800097287,
+            82.72941695759073
+          ],
+          "latency_ms": 82.72941695759073,
+          "distinct_outputs": [
+            "Let T be bounded operator on this space."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-unbounded",
+          "output": "We construct a unbounded operator.",
+          "samples_ms": [
+            69.93783300276846,
+            74.78929101489484,
+            77.76533399010077
+          ],
+          "latency_ms": 74.78929101489484,
+          "distinct_outputs": [
+            "We construct a unbounded operator."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-unique",
+          "output": "The equation has an unique solution.",
+          "samples_ms": [
+            62.25449999328703,
+            59.57808397943154,
+            61.349458002950996
+          ],
+          "latency_ms": 61.349458002950996,
+          "distinct_outputs": [
+            "The equation has an unique solution."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "article-before-one",
+          "output": "This is an one-parameter semigroup.",
+          "samples_ms": [
+            79.41929198568687,
+            78.57424998655915,
+            84.19920899905264
+          ],
+          "latency_ms": 79.41929198568687,
+          "distinct_outputs": [
+            "This is an one-parameter semigroup."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-estimates",
+          "output": "These estimates hold for every bounded operator.",
+          "samples_ms": [
+            82.52379100304097,
+            76.1728750076145,
+            78.55416595702991
+          ],
+          "latency_ms": 78.55416595702991,
+          "distinct_outputs": [
+            "These estimates hold for every bounded operator."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-theorems",
+          "output": "The two theorems have the same conclusion.",
+          "samples_ms": [
+            90.83050000481308,
+            90.75087500968948,
+            95.00491601647809
+          ],
+          "latency_ms": 90.83050000481308,
+          "distinct_outputs": [
+            "The two theorems have the same conclusion."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-operator",
+          "output": "This operator commutes with the projection.",
+          "samples_ms": [
+            70.39433298632503,
+            67.90699996054173,
+            66.3803750067018
+          ],
+          "latency_ms": 67.90699996054173,
+          "distinct_outputs": [
+            "This operator commutes with the projection."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-each",
+          "output": "Each operator is bounded.",
+          "samples_ms": [
+            59.35416597640142,
+            58.4159170393832,
+            57.97462502960116
+          ],
+          "latency_ms": 58.4159170393832,
+          "distinct_outputs": [
+            "Each operator is bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "agreement-exist",
+          "output": "There exists two distinct solutions.",
+          "samples_ms": [
+            54.95004204567522,
+            57.53062496660277,
+            60.2030839654617
+          ],
+          "latency_ms": 57.53062496660277,
+          "distinct_outputs": [
+            "There exists two distinct solutions."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-perfect",
+          "output": "We have proved the estimate.",
+          "samples_ms": [
+            56.38924997765571,
+            53.277208004146814,
+            52.95024998486042
+          ],
+          "latency_ms": 53.277208004146814,
+          "distinct_outputs": [
+            "We have proved the estimate."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-passive",
+          "output": "The estimate has been proved.",
+          "samples_ms": [
+            51.696459006052464,
+            54.69858297146857,
+            52.783125021960586
+          ],
+          "latency_ms": 52.783125021960586,
+          "distinct_outputs": [
+            "The estimate has been proved."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-chosen",
+          "output": "The parameter can be chosen independently.",
+          "samples_ms": [
+            60.12062501395121,
+            62.55945801967755,
+            63.32529103383422
+          ],
+          "latency_ms": 62.55945801967755,
+          "distinct_outputs": [
+            "The parameter can be chosen independently."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-did",
+          "output": "The constant did not depend on time.",
+          "samples_ms": [
+            67.47091602301225,
+            67.03033298254013,
+            65.89641701430082
+          ],
+          "latency_ms": 67.03033298254013,
+          "distinct_outputs": [
+            "The constant did not depend on time."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "verb-does",
+          "output": "The bound does not depend on the parameter.",
+          "samples_ms": [
+            72.54795799963176,
+            73.05574999190867,
+            75.32595802331343
+          ],
+          "latency_ms": 73.05574999190867,
+          "distinct_outputs": [
+            "The bound does not depend on the parameter."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-solutions",
+          "output": "We obtain two distinct solutions.",
+          "samples_ms": [
+            57.34883400145918,
+            57.779124996159226,
+            54.394416976720095
+          ],
+          "latency_ms": 57.34883400145918,
+          "distinct_outputs": [
+            "We obtain two distinct solutions."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-estimates",
+          "output": "Several estimates are needed.",
+          "samples_ms": [
+            55.026750022079796,
+            55.00966700492427,
+            54.17658400256187
+          ],
+          "latency_ms": 55.00966700492427,
+          "distinct_outputs": [
+            "Several estimates are needed."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-bounds",
+          "output": "These bounds hold uniformly in time.",
+          "samples_ms": [
+            72.40225002169609,
+            77.0636250381358,
+            76.52279100148007
+          ],
+          "latency_ms": 76.52279100148007,
+          "distinct_outputs": [
+            "These bounds hold uniformly in time."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "number-hypotheses",
+          "output": "These hypothesis imply uniqueness.",
+          "samples_ms": [
+            63.44195897690952,
+            60.79008401138708,
+            58.512457995675504
+          ],
+          "latency_ms": 60.79008401138708,
+          "distinct_outputs": [
+            "These hypothesis imply uniqueness."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "possessive-its",
+          "output": "The operator is bounded, and it's norm is finite.",
+          "samples_ms": [
+            109.97720796149224,
+            114.51254202984273,
+            119.9299159925431
+          ],
+          "latency_ms": 114.51254202984273,
+          "distinct_outputs": [
+            "The operator is bounded, and it's norm is finite."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "contraction-it-is",
+          "output": "It's clear that the solution exists.",
+          "samples_ms": [
+            73.17325001349673,
+            70.95933303935453,
+            78.3714999561198
+          ],
+          "latency_ms": 73.17325001349673,
+          "distinct_outputs": [
+            "It's clear that the solution exists."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-the",
+          "output": "The operator is bounded.",
+          "samples_ms": [
+            60.31829200219363,
+            58.518583013210446,
+            63.066499948035926
+          ],
+          "latency_ms": 60.31829200219363,
+          "distinct_outputs": [
+            "The operator is bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-of",
+          "output": "The norm of the solution is finite.",
+          "samples_ms": [
+            76.32545899832621,
+            74.46804200299084,
+            71.14575000014156
+          ],
+          "latency_ms": 74.46804200299084,
+          "distinct_outputs": [
+            "The norm of the solution is finite."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-we",
+          "output": "In this section, we prove uniqueness.",
+          "samples_ms": [
+            72.65325001208112,
+            74.29595798021182,
+            70.85499999811873
+          ],
+          "latency_ms": 72.65325001208112,
+          "distinct_outputs": [
+            "In this section, we prove uniqueness."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "repetition-since",
+          "output": "Since since the operator is bounded, the norm is finite.",
+          "samples_ms": [
+            116.05208297260106,
+            110.09587498847395,
+            99.2561659659259
+          ],
+          "latency_ms": 110.09587498847395,
+          "distinct_outputs": [
+            "Since since the operator is bounded, the norm is finite."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-article",
+          "output": "We obtain an unique solution from MATH.",
+          "samples_ms": [
+            66.14120799349621,
+            65.87729201419279,
+            72.94287497643381
+          ],
+          "latency_ms": 66.14120799349621,
+          "distinct_outputs": [
+            "We obtain an unique solution from MATH."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-article",
+          "output": "We obtain an unique solution from MATH.",
+          "samples_ms": [
+            78.08574999216944,
+            77.02116697328165,
+            70.47345797764137
+          ],
+          "latency_ms": 77.02116697328165,
+          "distinct_outputs": [
+            "We obtain an unique solution from MATH."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-agreement",
+          "output": "The estimates MATH holds uniformly in time.",
+          "samples_ms": [
+            75.27479197597131,
+            74.68395901378244,
+            75.29241702286527
+          ],
+          "latency_ms": 75.27479197597131,
+          "distinct_outputs": [
+            "The estimates MATH holds uniformly in time."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-agreement",
+          "output": "The estimates MATH holds uniformly in time.",
+          "samples_ms": [
+            82.01324997935444,
+            82.84629200352356,
+            77.94175000162795
+          ],
+          "latency_ms": 82.01324997935444,
+          "distinct_outputs": [
+            "The estimates MATH holds uniformly in time."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-display-clause",
+          "output": "Since MATH, the solution remains bounded.",
+          "samples_ms": [
+            81.81541599333286,
+            84.130416973494,
+            81.69654099037871
+          ],
+          "latency_ms": 81.81541599333286,
+          "distinct_outputs": [
+            "Since MATH, the solution remains bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-display-clause",
+          "output": "Since MATH, the solution remains bounded.",
+          "samples_ms": [
+            87.9326660069637,
+            88.85483397170901,
+            86.70191699638963
+          ],
+          "latency_ms": 87.9326660069637,
+          "distinct_outputs": [
+            "Since MATH, the solution remains bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "tex-text-in-math-agreement",
+          "output": "The operator is bounded.",
+          "samples_ms": [
+            59.896541002672166,
+            60.07758295163512,
+            59.76958299288526
+          ],
+          "latency_ms": 59.896541002672166,
+          "distinct_outputs": [
+            "The operator is bounded."
+          ],
+          "assessment": {
+            "status": "corrected",
+            "protected_issues": []
+          }
+        },
+        {
+          "id": "typst-inline-article",
+          "output": "We obtain a estimate from MATH.",
+          "samples_ms": [
+            72.28958298219368,
+            77.18020799802616,
+            75.76141704339534
+          ],
+          "latency_ms": 75.76141704339534,
+          "distinct_outputs": [
+            "We obtain a estimate from MATH."
+          ],
+          "assessment": {
+            "status": "missed",
+            "protected_issues": []
+          }
+        }
+      ],
+      "import_ms": 679.5754580525681,
+      "label": "CoEdIT Small (community FLAN-T5)",
+      "load_ms": 2363.8535829959437,
+      "metadata": {
+        "name": "coedit",
+        "label": "CoEdIT Small (community FLAN-T5)",
+        "model_id": "jbochi/coedit-small",
+        "revision": "6ce9822b4ff6e4af86b70f979c890e9e41f04366",
+        "license": "Apache-2.0 (model card)",
+        "artifact_bytes": 307867048,
+        "source_url": "https://huggingface.co/jbochi/coedit-small",
+        "notes": "Community 77M-parameter model trained on CoEdIT, not Grammarly's 770M Large. FP32 reference weights; not the browser demo's quantized Q4 variant.",
+        "device": "cpu",
+        "threads": 4,
+        "inference_dtype": "float32",
+        "batch_size": 1,
+        "artifact_weight_dtype": "float32",
+        "input_limit_tokens": 512,
+        "max_new_tokens": 512,
+        "prompt": "Fix the grammar: ",
+        "do_sample": false,
+        "num_beams": 1,
+        "extra_artifacts": [
+          "pinned tokenizer, model config, generation config"
+        ],
+        "load_ms": 2363.3366670110263,
+        "weights_cached_before_load": true,
+        "runtime_versions": {
+          "torch": "2.14.1",
+          "transformers": "5.20.2",
+          "tokenizers": "0.23.3",
+          "huggingface_hub": "2.2.0"
+        },
+        "python": "3.12.14",
+        "torch": "2.14.1",
+        "transformers": "5.20.2",
+        "warmup_requests": 2,
+        "repeats": 3,
+        "seed": 0,
+        "cache_dir": "/private/tmp/tiptoptyp-grammar-models"
+      },
+      "warmup_ms": [
+        428.1831249827519,
+        76.60979096544906
+      ],
+      "peak_rss_mib": 645.7,
+      "worker_wall_ms": 19286.777166998945,
+      "summary": {
+        "cases": 64,
+        "evaluated": 64,
+        "errors": 0,
+        "correct_controls": 32,
+        "changed_controls": 3,
+        "error_cases": 32,
+        "exact_corrections": 19,
+        "missed": 13,
+        "other_edits": 0,
+        "unsafe": 1,
+        "false_alarm_rate": 0.09375,
+        "exact_correction_rate": 0.59375,
+        "median_ms": 76.23056252487004,
+        "p95_ms": 114.51254202984273
+      },
+      "groups": {
+        "plain": {
+          "cases": 46,
+          "evaluated": 46,
+          "errors": 0,
+          "correct_controls": 22,
+          "changed_controls": 1,
+          "error_cases": 24,
+          "exact_corrections": 16,
+          "missed": 8,
+          "other_edits": 0,
+          "unsafe": 1,
+          "false_alarm_rate": 0.045454545454545456,
+          "exact_correction_rate": 0.6666666666666666,
+          "median_ms": 76.0566040116828,
+          "p95_ms": 112.865041999612
+        },
+        "projected_math": {
+          "cases": 18,
+          "evaluated": 18,
+          "errors": 0,
+          "correct_controls": 10,
+          "changed_controls": 2,
+          "error_cases": 8,
+          "exact_corrections": 3,
+          "missed": 5,
+          "other_edits": 0,
+          "unsafe": 0,
+          "false_alarm_rate": 0.2,
+          "exact_correction_rate": 0.375,
+          "median_ms": 76.68120850576088,
+          "p95_ms": 137.32008304214105
+        }
+      }
+    }
+  ],
+  "git_revision": "2dbfd7ee0834b2416ed4a1bc6a0e3512bb02cb7e",
+  "git_dirty": true
+}

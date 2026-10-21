@@ -1240,6 +1240,7 @@ mod tests {
 
         harness.state_mut().preview.diagnostics = (0..80)
             .map(|index| crate::diagnostics::Diagnostic {
+                correction: None,
                 provider: None,
                 severity: crate::diagnostics::DiagnosticSeverity::Error,
                 source: crate::diagnostics::DiagnosticSource::Main,

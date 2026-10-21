@@ -1,7 +1,10 @@
 //! Cache semantic paragraphs after the complete source parser has established
 //! math/code boundaries. A changed line can affect arbitrarily later syntax.
+#[cfg(test)]
+mod probe;
+
 use super::*;
-use harper_core::{Token, TokenKind, linting::Lint, parsers::Parser};
+use harper_core::{Token, TokenKind, parsers::Parser};
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -19,7 +22,7 @@ impl Parser for Replay<'_> {
 struct Block {
     text: Box<[char]>,
     tokens: Vec<Token>,
-    lints: Vec<Lint>,
+    lints: Vec<NamedLint>,
     bytes: usize,
     used: u64,
 }
@@ -163,7 +166,16 @@ impl Checker {
                 normalize_tokens(&characters, &mut tokens);
                 tokens
             } else {
-                Prose(kind).parse(&characters)
+                if kind == DocumentKind::Tex
+                    && let Some(rules) = options.tex_prose_rules
+                {
+                    let mut tokens =
+                        tex_prose::TexProse::parse_with_rules(&characters, rules, false);
+                    normalize_tokens(&characters, &mut tokens);
+                    tokens
+                } else {
+                    Prose(kind).parse(&characters)
+                }
             };
             spelling::merge_dictionary_compounds(
                 &characters,
@@ -216,13 +228,14 @@ impl Checker {
                     let linter = linter.get_or_insert_with(|| {
                         LintGroup::new_curated(Arc::clone(&dictionary), dialect)
                     });
-                    let result = linter.lint(&document);
+                    let result = named_lints(linter, &document);
                     let bytes = std::mem::size_of_val(text)
                         + relative.len() * std::mem::size_of::<Token>()
                         + result
                             .iter()
                             .map(|lint| {
-                                std::mem::size_of::<Lint>()
+                                std::mem::size_of::<NamedLint>()
+                                    + lint.rule.len()
                                     + lint.message.len()
                                     + lint
                                         .suggestions
@@ -353,6 +366,183 @@ mod tests {
         );
         actual
     }
+    #[test]
+    fn changing_argument_roles_cannot_reuse_opaque_paragraph_results() {
+        use crate::writing::prose_rules::{TexArgumentRole, TexCommandRule, TexProseRules};
+        let source = r"The \mycomment{qzorthal} result is clear.";
+        let mut rules = TexProseRules::default();
+        rules.commands.push(TexCommandRule {
+            name: "mycomment".into(),
+            arguments: vec![TexArgumentRole::Literal],
+            optional_arguments: Vec::new(),
+        });
+        let mut checker = Checker::default();
+        let mut run = |rules: &TexProseRules| {
+            checker.check_with_options(
+                source,
+                DocumentKind::Tex,
+                Path::new("roles.tex"),
+                true,
+                false,
+                WritingLanguage::British,
+                Options {
+                    tex_prose_rules: Some(rules),
+                    ..Options::default()
+                },
+            )
+        };
+        assert!(
+            run(&rules)
+                .iter()
+                .all(|issue| !issue.message.contains("qzorthal"))
+        );
+        rules.commands.last_mut().unwrap().arguments = vec![TexArgumentRole::InlineProse];
+        let visible = run(&rules);
+        let word = visible
+            .iter()
+            .find_map(|issue| {
+                issue
+                    .correction
+                    .as_ref()
+                    .filter(|fix| fix.original == "qzorthal")
+            })
+            .expect("custom prose is linted after a role change");
+        let start = source[..source.find("qzorthal").unwrap()].chars().count();
+        assert_eq!(word.range, start..start + 8);
+        assert_eq!(
+            run(&rules),
+            visible,
+            "cache hits preserve source ranges and suggestions"
+        );
+        rules.commands.last_mut().unwrap().arguments = vec![TexArgumentRole::Literal];
+        assert!(
+            run(&rules)
+                .iter()
+                .all(|issue| !issue.message.contains("qzorthal"))
+        );
+    }
+
+    #[test]
+    fn inline_typst_formatting_does_not_hide_repetitions_or_invent_capitalization() {
+        let mut checker = Checker::default();
+        for wrapper in ["emph", "strong", "text"] {
+            for clean in [
+                format!("These #{wrapper}[estimates] are uniform."),
+                format!("These\n#{wrapper}[\n  estimates\n]\nare uniform."),
+                format!("The\n#{wrapper}[]\ntheorem holds."),
+            ] {
+                let issues = check(&mut checker, &clean, DocumentKind::Typst);
+                assert!(issues.is_empty(), "{clean}: {issues:?}");
+            }
+            let repeated = format!("This is the #{wrapper}[the] result.");
+            let lints = check(&mut checker, &repeated, DocumentKind::Typst);
+            assert!(
+                lints.iter().any(|lint| lint.message.contains("repeat")),
+                "{repeated}: {lints:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_typst_formatting_repetitions_keep_their_source_locations() {
+        for wrapper in ["emph", "strong", "text"] {
+            for source in [
+                format!("This is the #{wrapper}[the] result."),
+                format!("This is #{wrapper}[the] the result."),
+                format!("This is #{wrapper}[the the] result."),
+            ] {
+                let mut checker = Checker::default();
+                let issues = check(&mut checker, &source, DocumentKind::Typst);
+                let first_the = source.find("the").unwrap();
+                let expected = DiagnosticLocation {
+                    line: 1,
+                    column: source[..first_the].chars().count() + 1,
+                };
+                assert!(
+                    issues.iter().any(|issue| {
+                        issue.message.contains("repeat") && issue.location == Some(expected)
+                    }),
+                    "{source}: {issues:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inline_typst_formatting_cache_reuses_paragraphs_and_rebases_unicode_locations() {
+        for wrapper in ["emph", "strong", "text"] {
+            let mut checker = Checker::default();
+            // The curly apostrophe precedes the formatted word on its own line,
+            // so both global and line-local UTF-8 offsets differ from scalars.
+            let source = format!(
+                "The first estimate holds.\n\nTao’s argument gives these #{wrapper}[estimates].\n\nThe final estimate holds."
+            );
+            assert!(check(&mut checker, &source, DocumentKind::Typst).is_empty());
+            let characters: Vec<_> = source.chars().collect();
+            let tokens = Prose(DocumentKind::Typst).parse(&characters);
+            let paragraphs = paragraph_ranges(&tokens, characters.len());
+            let prose_paragraphs = paragraphs
+                .iter()
+                .filter(|(range, _)| {
+                    tokens[range.clone()]
+                        .iter()
+                        .any(|token| token.kind.is_word())
+                })
+                .count();
+            assert_eq!(prose_paragraphs, 3, "{source}: {tokens:?}");
+            for (range, span) in &paragraphs {
+                assert!(
+                    tokens[range.clone()].iter().all(|token| {
+                        span.start <= token.span.start && token.span.end <= span.end
+                    }),
+                    "{source}: paragraph {span:?} must own its tokens"
+                );
+            }
+            assert!(
+                tokens
+                    .windows(2)
+                    .all(|pair| pair[0].span.end <= pair[1].span.start)
+            );
+
+            assert!(check(&mut checker, &source, DocumentKind::Typst).is_empty());
+            assert_eq!(checker.stats.1, 0, "unchanged formatted prose is cached");
+            assert!(checker.stats.0 >= 3);
+
+            let edited = source.replace("estimates", "estmates");
+            let expected_location = |text: &str| {
+                let before = &text[..text.find("estmates").unwrap()];
+                DiagnosticLocation {
+                    line: before.chars().filter(|&ch| ch == '\n').count() + 1,
+                    column: before.rsplit('\n').next().unwrap().chars().count() + 1,
+                }
+            };
+            let issues = check(&mut checker, &edited, DocumentKind::Typst);
+            assert_eq!(issues.len(), 1, "{edited}: {issues:?}");
+            assert_eq!(issues[0].location, Some(expected_location(&edited)));
+            assert_eq!(
+                issues[0].source,
+                DiagnosticSource::File(Path::new("fixture").to_owned())
+            );
+            assert_eq!(checker.stats.1, 1, "only the edited paragraph is rechecked");
+            assert!(checker.stats.0 >= 2);
+
+            // A new line joins the first paragraph. The unchanged formatted
+            // paragraph must be a cache hit with rebased source coordinates.
+            let shifted = format!("Tao’s theorem applies.\n{edited}");
+            let issues = check(&mut checker, &shifted, DocumentKind::Typst);
+            assert_eq!(issues.len(), 1, "{shifted}: {issues:?}");
+            assert_eq!(issues[0].location, Some(expected_location(&shifted)));
+            assert_eq!(checker.stats.1, 1);
+            assert!(checker.stats.0 >= 2);
+            check(&mut checker, &shifted, DocumentKind::Typst);
+            assert_eq!(checker.stats.1, 0);
+
+            // Restoring the old body can reuse its earlier clean cache entry.
+            assert!(check(&mut checker, &source, DocumentKind::Typst).is_empty());
+            assert_eq!(checker.stats.1, 0);
+        }
+    }
+
     #[test]
     fn unchanged_paragraphs_are_reused_and_one_edit_only_rechecks_its_block() {
         for kind in [DocumentKind::Typst, DocumentKind::Tex] {
@@ -775,6 +965,7 @@ mod tests {
                 Options {
                     dictionary: "qzorthal",
                     ignore_capitalized_names: true,
+                    ..Options::default()
                 },
             );
             assert_eq!(positions(&names), expected[2..]);
@@ -798,7 +989,8 @@ mod tests {
                         WritingLanguage::Auto,
                         Options {
                             dictionary: "qzorthal",
-                            ignore_capitalized_names: true
+                            ignore_capitalized_names: true,
+                            ..Options::default()
                         }
                     )
                     .is_empty()

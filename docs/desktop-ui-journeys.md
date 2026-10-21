@@ -40,6 +40,8 @@ python3 scripts/test-desktop-ui.py --journey focus
 python3 scripts/test-desktop-ui.py --journey preview
 python3 scripts/test-desktop-ui.py --journey pdf_output
 python3 scripts/test-desktop-ui.py --journey tex
+python3 scripts/test-desktop-ui.py --journey tex_documentation
+python3 scripts/test-desktop-ui.py --journey citation_import
 python3 scripts/test-desktop-ui.py --journey tex_editing
 python3 scripts/test-desktop-ui.py --journey tex_intelligence
 python3 scripts/test-desktop-ui.py --journey tex_save
@@ -78,7 +80,11 @@ never written to logs.
 Normal builds contain no inspection endpoint. A feature build only starts one
 when `TIPTOPTYP_DESKTOP_TEST_DIR` names a fresh private directory (mode 0700).
 That directory owns both the settings file and a mode-0600 Unix socket.
-The socket only accepts `snapshot\n`; there is no command or state-mutation API.
+The socket accepts `snapshot\n` or `snapshot <viewport>\n`; there is no command or state-mutation API.
+The targeted form uses the exact observed document viewport identifier. It accepts
+only that document frame and labels DOM observations with their renderer viewport;
+callbacks from a previous owner are discarded. Multiwindow journeys must check
+both owners, even when the pages and selected backend look identical.
 It requests an egui repaint and one native redraw per existing viewport, then
 waits for a fresh document UI pass with a deadline. The native wakeup avoids
 losing an observation to repaint coalescing during a finishing theme-change pass.
@@ -127,14 +133,19 @@ now exercised through the real app, and the lower-level coverage retained.
 | terminal_load | A bounded, isolated Python process redraws the real PTY at requested 30/60 Hz; native per-character typing must change only the focused scratch editor, with exact source/caret and worker output advancement; completed producer receipts record actual frames and terminal Off reaps the pane. This is interaction coverage, not a key-to-pixel latency measurement |
 | terminal_theme | First output from a private real PTY queries foreground/background, all 256 palette entries, and color scheme; Light→Dark and a different dark palette each report exactly once to the opted-in application; 30 fresh frames require no notification churn; Off reaps the child and source stays unchanged |
 | explorer_toggle | Cmd+1 repeatedly hides/restores Explorer before and after divider drags with Tinymist/PDFium and both divider policies; concurrent native-key observations reject empty closed-panel frames and independent preview-edge movement; large-document typing/undo still work afterward; a nearly full-height bottom panel leaves a short vertical divider for optional framebuffer inspection |
+| inactive_preview | Full and partial Tinymist create and finish rendering while Settings owns their inactive document window and Finder is foreground; actual DOM readiness and effective backend are checked for root and secondary document windows, with no activation stealing or source mutation |
+| pdf_layout | A generated PDF opens beside a designated Tinymist partial preview; repeated Code/Preview/Split layout-picker changes and shortcuts hide the chosen pane, preserve both tab identities, render the PDF through PDFium, leave its bytes untouched, and restore the original source after closing |
 | images | Image dark mode, an explicit original-color baseline, repeated toggles and Dark/Light/Follow page choices; initial image preference restored; exact bounded RGBA/alpha observations, unchanged original file, original source restored on close; optional fresh framebuffers for separate visual inspection |
 | find | Cmd+F with Find focused, repeated Replace clicks, one close-button click; expected popup state and stable measured native height after every action |
 | empty | Cmd+W on the only tab, then Cmd+N; original window remains, new tab has no path and zero source bytes |
 | tex_editing | Named `.tex` file, Unicode caret and undo/redo, 320-line source, `%` comment round trips including active line endpoints, math/bracket selection wrapping, literal TeX command search/replace with undo/redo; disabled autosave leaves disk unchanged |
 | tex_intelligence | Real TexLab/Badness readiness and Badness lint output; Harper prose versus math/text boundaries, old Harper/Badness diagnostics retained until refreshed, Problems navigation, accepting a document-defined TexLab command with undo/redo |
 | tex_save | New untyped buffer saved as `.tex` through the native panel, exact disk contents, manual save, clean close and reopening the saved file |
-| harper_math_prose | Real Typst and TeX mathematical-prose fixtures; clean completed diagnostics across display punctuation and compounds, native typing of a typo and repeated word at exact source locations/original paths, stale results retained after correction until a fresh clean result arrives |
+| harper_math_prose | Real Typst and TeX mathematical-prose fixtures; clean completed diagnostics across display punctuation and compounds, native typing of a typo and repeated words (including across Typst inline formatting) at exact source locations/original paths, stale results retained after correction until a fresh clean result arrives |
 | harper_settings | Real Harper checks after editing the personal dictionary in Settings and removing its entry; capitalized-name filtering switches on/off without suppressing lowercase spelling errors or repeated-word grammar, and the source remains unchanged |
+| liquid_selection | Opt-in real local Liquid model: wrapped Typst/TeX prose selected by keyboard and opened through right-click; disabled empty-selection action, exact outside-selection preservation, unchanged source before Apply and after Cancel, modal Undo/Cmd+W ownership, one-step Undo after Apply, complete before/after selection fingerprints including unchanged context and wrappers in both Unified and Side by Side settings, optional fresh review framebuffer for every language/style pair. Uses a prepared read-only model reference, verifies automatic first-use preparation into an empty temporary cache without an Install action or Python, and is excluded from `all`. |
+| liquid_streaming | Focused opt-in long-selection subset: wrapped Typst and TeX paragraphs selected across visual word-wrap rows through native document navigation, then streamed partial suggestions with disabled Apply, complete model-token-bounded chunks, source fences, and one-step Undo. Uses its own initially absent cache and is excluded from `all`. |
+| latexdiff_wizard | Opt-in real LaTeXdiff through command palette and three wizard steps; native path/argument typing, Back draft retention, output/input collision rejection, original file and owner preservation, actual generated body additions/deletions, Open selects the complete `.tex` result in a separate tab, Cmd+W closes only the wizard/result, and a private sleeping tool configured through Settings JSON makes busy Cancel observable and proves its process is reaped without an output file. Requires installed LaTeXdiff; excluded from `all`. |
 | editing | Typing and Unicode replacement, undo/redo caret and saved-state indicator, acknowledged multiline paste, upward mouse/keyboard newline selection, direction-preserving comment round trips including a zero-column or blank active endpoint |
 | search | Query focus, next/previous, case/regex toggles, replace one/all, undo and Escape |
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
@@ -381,7 +392,7 @@ or as part of `all`, against named files. Initial settings are changed through t
 the journey. `harper_settings` edits the dictionary and capitalized-name filter through their Writing form controls,
 reopens the dictionary before removing its entry, and requires a fresh real Harper result after every change. They do not inject diagnostics, completion responses or editor
 handlers. The intelligence journey requires working pinned TexLab and Badness;
-Harper runs normally in its background worker. Both math-prose fixtures include Barbato/Romito at the beginning of a sentence and repeated straight/curly possessives in ordinary prose; none may produce spelling diagnostics. Its completion fixture includes
+Harper runs normally in its background worker. The Typst fixture also keeps clean sentences continuous through `#emph`, `#strong` and `#text` bodies, then checks a repetition crossing an `#emph` boundary through real typing. Both math-prose fixtures include Barbato/Romito at the beginning of a sentence and repeated straight/curly possessives in ordinary prose; none may produce spelling diagnostics. Its completion fixture includes
 a full document and a locally defined command, so it does not require external
 package completion databases. Read-only observations include provider readiness,
 diagnostic counts/current revision and fingerprints, never diagnostic text.
@@ -477,3 +488,99 @@ Control-scroll when that OS feature is enabled; it never changes the preference.
 The `partial_dividers` journey retains independent drag coverage, while the
 owned-WebView probe exercises native pinch phases and source anchors without
 system-reserved global input. An unavailable wheel check is never a passing one.
+
+### Optional selected-text Liquid grammar
+
+Liquid prepares its bundled files automatically on the first selected-text check.
+The app runs a native ONNX Runtime helper on Intel (macOS 12+) and Apple Silicon (macOS 14+); Python is not required.
+Then run the model-dependent lane explicitly:
+
+```sh
+python3 scripts/test-desktop-ui.py --journey liquid_selection \
+  --liquid-model-dir "$HOME/Library/Application Support/dev.tiptoptyp.editor/liquid" \
+  --capture-review
+```
+
+For only the long-selection streaming checks, use `--journey liquid_streaming` with the same model folder. The full `liquid_selection` lane retains its four short language/style cases plus both streaming cases. Logical prose-line selection uses native document EOF and trims the known outside suffix; it does not depend on the visual row end under word wrap.
+
+The supplied folder is a read-only artifact reference: it must contain
+`onnxruntime/lfm25-encoder-350m-onnxruntime-v1/manifest.json`, `liquid.onnx`, the current Mac runtime, and
+`tokenizer.json` from the current native model. The journey selects a fresh,
+initially absent cache inside its disposable directory through Settings JSON.
+Its first Typst request must automatically prepare the files and complete
+inference, with no setup button. It records the prepared
+manifest digest, declared asset hashes and sizes. These must match the reference.
+The app must resolve the bundled model from its resources or the development
+`toolchain/liquid` directory. No external cache is modified, no Python runtime is
+created, and no model is downloaded. The remaining Typst/TeX and diff-style
+matrix reuses the newly installed model. Two additional cases select a single
+wrapped paragraph containing 180 unchanged sentences, an early known grammar
+error, and protected math. They require an actual unfinished multi-chunk review
+with visible corrections and a fresh disabled Apply button, using model-measured
+chunk/token progress rather than estimating tokens from text length. The final
+Apply and one Undo must preserve math, wrappers, and all outside text.
+
+This lane is excluded from `all`; its lightweight failure-detector contracts
+still run in ordinary CI. It changes preferences through the real JSON editor,
+uses disposable named files, and restores its settings. Framebuffers are
+separately inspected evidence, not proof of native child-view composition.
+
+## LaTeXdiff wizard
+
+```sh
+python3 scripts/test-desktop-ui.py --journey latexdiff_wizard --release
+```
+
+This opt-in journey requires a working `latexdiff` on PATH or in MacTeX. A missing
+binary is a failed/unavailable interaction check, never a skip or pass. The
+wizard is opened through **Create LaTeX Diff** in the real command palette. All
+fields are typed into fresh focused native controls, and their path/options
+fingerprints must match the inspection state before navigation. The private
+fixtures have spaces in their names and contain both changed prose and math.
+
+The journey checks Cmd+W ownership, Files → Output and options → Review, Back
+retention, an attempted output/input collision, and recovery with a fresh output
+path plus `--math-markup=1`. It reads the actual generated file and requires
+additions/deletions in the document body, so preamble macro definitions alone
+cannot pass. Opening the result must expose its complete exact source in a new
+TeX tab; neither original input nor the previous editor buffer may change.
+
+A second run temporarily chooses a private sleeping shell executable through the
+real Settings JSON editor. After its PID receipt and busy state are observed,
+the native Cancel button must stop/reap that process without writing output.
+The wizard closes and the executable setting returns to automatic detection in
+the disposable profile. The test never edits the user's settings or runs a
+configured shell against a real document. `--capture-review` additionally saves
+fresh wizard framebuffers at each step for separate pixel inspection; the
+semantic/native journey does not itself claim visual verification.
+
+## Local TeX documentation
+
+`--journey tex_documentation` requires executable Texdoc on an absolute PATH
+entry or at MacTeX’s stable `/Library/TeX/texbin` link, plus the installed amsmath
+PDF manual. Missing tools/manuals are unavailable or failed checks, never a pass.
+The journey opens TeX Documentation from the command palette while editing a
+Typst fixture, types into its real search field, checks Escape and Cmd+W ownership,
+submits with Enter, and opens an actual local Texdoc result. It verifies that the
+manual has its own tab and that the paper retains its designated preview; closing
+the manual restores the unchanged source. It does not launch a browser or download
+manuals. This optional journey is excluded from `all`. Native interaction evidence
+is separate from framebuffer or composed-window visual verification.
+
+## Citation import review
+
+`--journey citation_import` uses a synthetic DOI and a bounded metadata fixture
+in the runner’s private directory. Only the `desktop-ui-tests` build recognizes
+that exact DOI and explicit fixture path; production builds always use the normal
+DOI/arXiv metadata services. The fixture passes through the real BibTeX parser and
+DOI verification on the lookup worker. The native journey opens the palette, checks
+Cmd+W ownership, selects real source text, reviews and edits the citation key and
+BibTeX, appends to a pre-existing bibliography, inserts the citation, and verifies
+that one Undo restores the selected source. It verifies the actual bibliography
+bytes and preview ownership. It is an offline UI/storage test, not evidence that
+the live metadata services were reachable. This focused journey is excluded from
+`all`; no user bibliography or document is touched.
+
+### Optional local LTeX+
+
+`python3 scripts/test-desktop-ui.py --journey ltex --ltex-executable /path/to/ltex-ls-plus/bin/ltex-ls-plus` uses a real server (never a diagnostic mock). It enables the checker through Settings, checks both TeX and Typst with mapped rules and correction suggestions, observes stale results during native source replacement, waits for the corrected clean response, checks that the original files were not written, then disables the provider. The optional server is excluded from `all`; a missing executable fails preflight.

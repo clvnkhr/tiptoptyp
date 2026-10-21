@@ -129,12 +129,16 @@ impl EditorApp {
         }
     }
 
-    fn restore_palette_origin(&mut self, context: &egui::Context, origin: Origin) {
+    fn restore_palette_origin_field(&self, context: &egui::Context, origin: Origin) {
         if origin.viewport == context.viewport_id()
             && let Some(focus) = origin.focus
         {
             context.memory_mut(|memory| memory.request_focus(focus));
         }
+    }
+
+    fn restore_palette_origin(&mut self, context: &egui::Context, origin: Origin) {
+        self.restore_palette_origin_field(context, origin);
         crate::window_host::focus(
             context,
             origin.viewport,
@@ -371,7 +375,19 @@ impl EditorApp {
         if !self.palette_action_enabled(action, origin, context) {
             return;
         }
-        self.restore_palette_origin(context, origin);
+        if matches!(
+            action,
+            ShortcutAction::LatexDiff
+                | ShortcutAction::TexDocumentation
+                | ShortcutAction::ImportCitation
+        ) {
+            // Preserve the source selection for the tool, but let its new child
+            // activate. Returning native focus to the owner here races that
+            // activation and leaves the modal's focused field without input.
+            self.restore_palette_origin_field(context, origin);
+        } else {
+            self.restore_palette_origin(context, origin);
+        }
         if let Some(target) = origin.preview
             && action == ShortcutAction::Find
         {

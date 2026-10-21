@@ -775,13 +775,17 @@ fn assets_keep_typst_output_and_reject_late_results_after_closing() {
 }
 
 #[test]
-fn asset_panes_keep_the_preview_in_every_source_view_mode() {
+fn asset_panes_follow_layout_and_keep_the_asset_without_a_source_preview() {
     use workspace_view::{ContentView, content_view};
     for kind in [DocumentKind::Image, DocumentKind::Pdf] {
         for mode in [ViewMode::Code, ViewMode::Split, ViewMode::Preview] {
             assert_eq!(
                 content_view(false, kind, true, mode, false),
-                ContentView::SplitAsset
+                match mode {
+                    ViewMode::Code => ContentView::Asset,
+                    ViewMode::Split => ContentView::SplitAsset,
+                    ViewMode::Preview => ContentView::Preview,
+                }
             );
             assert_eq!(
                 content_view(false, kind, false, mode, false),
@@ -1533,6 +1537,7 @@ fn pinned_typst_diagnostics_do_not_replace_the_active_tex_providers() {
         None,
     );
     app.tex_diagnostics[0] = vec![crate::diagnostics::Diagnostic {
+        correction: None,
         provider: None,
         severity: crate::diagnostics::DiagnosticSeverity::Warning,
         source: DiagnosticSource::File(root.path().join("main.tex")),
@@ -1596,6 +1601,7 @@ fn tex_edit_keeps_previous_diagnostics_until_new_results_arrive() {
     app.sync_tex(&context);
     assert!(app.tex_service.identity().is_some());
     app.tex_diagnostics[0] = vec![crate::diagnostics::Diagnostic {
+        correction: None,
         provider: Some("TexLab".into()),
         severity: crate::diagnostics::DiagnosticSeverity::Warning,
         source: DiagnosticSource::File(path),
@@ -1708,6 +1714,7 @@ fn switching_preview_entry_retires_previous_compiler_diagnostics() {
     app.preview
         .diagnostics
         .push(crate::diagnostics::Diagnostic {
+            correction: None,
             provider: Some("Tectonic".into()),
             severity: crate::diagnostics::DiagnosticSeverity::Error,
             source: DiagnosticSource::Main,
@@ -1736,6 +1743,7 @@ fn tab_activation_retires_editor_providers_before_another_keypress() {
     );
     app.update_writing_checks(&context);
     let diagnostic = crate::diagnostics::Diagnostic {
+        correction: None,
         provider: Some("Harper".into()),
         severity: crate::diagnostics::DiagnosticSeverity::Warning,
         source: DiagnosticSource::File(root.path().join("main.tex")),

@@ -200,16 +200,24 @@ close and focus ownership notify the editor. Parent snapshots invalidate Setting
 only on actual presentation changes, and font catalogs are copied only when
 their revision changes or the window reopens. Rapid preference edits coalesce
 and merge only changed fields, preserving newer history and sibling preferences.
-The native preview's wait for document-window activation is static: it must not
-animate forever behind Settings. Real loading retains its progress indicator.
+Requested Tinymist previews initialize and render while their document window is
+inactive, including behind Settings or another application. Embedded Wry child
+creation preserves application activation and the parent's first responder; it
+never waits for focus or polls for activation. Paused previews remain static;
+actual loading retains its progress indicator. This removes deferred requested
+work without adding an idle repaint loop or changing active rendering cadence.
 
 ```sh
 cargo test settings_window
-cargo test preview_focus_wait
+cargo test paused_preview_is_static_but_loading_animates
+cargo test --test webview_activation
 ```
 
 These tests exercise independent child/parent passes and wheel input, semantic
-search/edit controls, preference delivery, and the non-animating wait state.
+search/edit controls, preference delivery, static pause feedback, and child creation without activation.
+The `inactive_preview` desktop journey verifies completed full and partial
+Tinymist pages in inactive root and secondary document windows, with Finder
+remaining foreground throughout startup and repeated settled observations.
 Native idle samples measure eliminated coupled work; they are not end-to-end
 scroll-FPS benchmarks.
 
@@ -1249,3 +1257,227 @@ include raw samples, binary/source hashes and environment metadata. Full local
 logs and preserved binaries are under
 `.tiptoptyp/profiles/optimisation-2026-10-18/`. The measurement adds no runtime
 profiling overhead, workers, timers or idle repaints.
+
+## Typst inline-formatting context (20 October 2026)
+
+Known inline Typst formatters (`#emph`, `#strong`, `#text` and their inline
+variants) now retain their surrounding sentence context. A parser-only mirror
+omits wrapper syntax while keeping original Unicode scalar coordinates; real
+paragraphs, headings, lists, unknown containers and opaque math remain separate.
+The original AST still supplies language and math boundaries. The mirror replaces
+Harper's existing parse input, without adding another syntax parse; sources with
+no eligible wrapper avoid the mirror allocation. Parsing and cache work remain on
+the existing writing worker, with no new main-thread work or idle repaints.
+
+A matched optimized before/after probe uses three 160-paragraph Typst fixtures
+on an Apple M2 Max, macOS 14.6.1 arm64 and Rust 1.98.1. Each has 1,920 admitted
+words; inline and multiline fixtures wrap one word per paragraph in `#emph`.
+Four single-worker processes run before/after/after/before, with one initial
+check and seven timed samples per workload/process. No builds, tests or native
+journeys run concurrently with these measurements.
+
+| Worker workload, median | Before | After |
+| --- | ---: | ---: |
+| Plain prose, unchanged paragraph cache | 1.97 ms | 1.93 ms |
+| Inline formatting, unchanged paragraph cache | 13.21 ms | 8.40 ms |
+| Multiline formatting, unchanged paragraph cache | 17.00 ms | 7.54 ms |
+| Plain prose, initially empty paragraph cache | 238.28 ms | 239.39 ms |
+| Inline formatting, initially empty paragraph cache | 245.23 ms | 246.23 ms |
+| Multiline formatting, initially empty paragraph cache | 249.61 ms | 240.14 ms |
+
+Formatted fixtures previously produced 481 semantic cache blocks and 160 false
+capitalization diagnostics. They now produce 161 blocks, matching the plain
+control, and no diagnostics. Every admitted word and global original-source
+scalar span is identical before and after; the improvement does not discard
+visible prose. Repeated-word regressions separately check both sides of a wrapper,
+real paragraph boundaries, Unicode location rebasing, and one-paragraph cache
+invalidation after an edit.
+
+The [measurement receipt](performance-results/harper-formatting-2026-10-20.json)
+retains all samples, source and executable hashes, the exact fixture recipe and
+execution metadata. First checks, including process-first dictionary setup, are
+recorded separately. These component timings exclude GUI rendering, edit debounce,
+key-to-pixel latency, filesystem-cold startup and ML inference; they are local
+results, not a cross-platform guarantee. The final `harper_math_prose` native
+journey also passed for Typst and TeX against the current debug build, including
+real typing across an emphasis boundary and stale/fresh diagnostic replacement
+(evidence: `.tiptoptyp/desktop-ui-tests/run-87icvdxd/result.json`).
+
+## Optional Liquid selection worker — historical Python baseline (20 October 2026)
+
+These measurements describe the earlier Python integration, retained as a
+historical baseline. The app now uses the native deployment below.
+
+A matched offline CPU probe compares the pinned direct adapter with the actual
+JSONL worker, using Python 3.12.14, FP32, four CPU threads on macOS 14.6.1 arm64
+(Apple M2 Max). Four fresh processes run reference/worker/worker/reference; each
+has two warmup rounds and five measured rounds over three synthetic sentences.
+No builds, tests or native journeys ran concurrently. Outputs match exactly.
+
+| Warm request median | Direct reference + transport | App worker + transport |
+| --- | ---: | ---: |
+| Subject/verb agreement | 601.60 ms | 592.83 ms |
+| Repeated word | 596.95 ms | 600.32 ms |
+| Unchanged mathematical prose | 299.02 ms | 308.76 ms |
+
+The worker's first correction takes 5.55–5.57 s including process start, pinned
+artifact checks, import, model load and inference; OS file caches were warm.
+Subsequent selections reuse that process/model. This is an integration-cost
+comparison, not evidence of a model speedup. These component timings exclude Rust
+supervision, source projection, document application, UI rendering and installation.
+They do not establish GUI latency or performance on other platforms.
+
+The [receipt](performance-results/liquid-selection-2026-10-20.json) retains raw
+samples, exact commands, model/runtime pins and source hashes. The bounded probe
+runner is retained locally under
+`.tiptoptyp/profiles/liquid-selection-2026-10-20/benchmark-liquid-worker.py`.
+Inference and full-selection diff preparation run on the existing tracked
+application worker; the optional service does no Python/model work at startup
+and adds no idle repaint loop. The immutable review caches its layout and bounds changed-row background
+generation to visible rows.
+
+
+## Native Liquid ONNX experiment — historical Tract backend (20 October 2026)
+
+This was a rejected Tract experiment. The app now uses native ONNX Runtime,
+described below; these measurements document the earlier decision and do not
+describe the current backend.
+
+The experimental native Client, tokenizer and Tract runtime were compared with the
+pinned Python JSONL worker on Apple M2 Max, macOS 14.6.1 arm64, Python 3.12.14 and
+Rust 1.98.1. Both used CPU FP32, four threads, batch size one, the same unquantized
+weights and up to three correction passes. The optimized native probe runs the
+production modules, with Python removed from its PATH. Four fresh processes ran
+Python/native/native/Python (ABBA), each with two warmup rounds and five measured
+rounds over the same four fixtures: agreement, a repeated word, unchanged
+mathematical prose, and a longer arXiv sentence (8, 7, 13 and 77 input tokens).
+Work was serial, with no concurrent builds or GUI workloads.
+
+| Measurement | Python reference worker | Native Tract worker |
+| --- | ---: | ---: |
+| Pooled warm request median | 565.21 ms | 1,074.75 ms |
+| Fresh-process first result, two runs | 5.13–5.83 s | 8.78–9.29 s |
+| Peak process RSS, two runs | 2.37–2.38 GiB | 2.29–2.35 GiB |
+
+**Native Tract was about 1.9 times slower in this workload.** It was replaced
+because its steady-state latency did not meet the goal. It provided portability
+but neither a speedup nor a meaningful inference-memory reduction. The native model was already
+expanded and filesystem caches were warm. Fresh-process timings include loading,
+verification and the first correction; they do not measure storage-cold startup
+or first-time decompression. Warm timings measure JSONL request round trips,
+including text preparation and iterative correction on one persistent JSONL
+caller thread. They exclude application job dispatch, per-selection caller-thread
+creation, source extraction, diff preparation, Apply, GUI rendering and
+input-to-pixel latency. The app shares the loaded graph and inference pool, but
+its existing job runner may recreate caller-thread-local kernel scratch between
+selections; the warm probe does not measure that overhead.
+No physical Intel Mac performance was measured.
+
+The architecture-independent model and tokenizer occupy about **625 MiB
+compressed** in the app and **685 MiB expanded** in the prepared cache. Both
+copies remain on disk after preparation. The previous local setup occupied about
+**912 MiB for its Python environment plus 685 MiB for model files** (`du` sizes).
+The native app contains no Python/PyTorch runtime. Original trained weights are
+stored losslessly as FP16 and cast to FP32 for computation; this is not INT8
+quantization, and compression does not reduce inference RAM. One model payload
+serves both universal-app executable slices; the optional reranker is excluded.
+
+All **268 native corrections matched** the pinned reference on Apple Silicon
+and in the x86_64 build running under Rosetta. The original ONNX conversion also
+matched all 427 reference refinement passes' best tag IDs and applied edits,
+with a maximum detection-probability difference of 0.00000593; sequence lengths
+1, 2, 8, 32, 127 and 128 were checked. Rosetta verifies Intel-binary execution
+and correction behavior on this Mac, not speed on physical Intel hardware.
+Matching reference outputs does not establish grammatical correctness or improve
+the model's quality.
+
+The [deployment and measurement receipt](performance-results/liquid-onnx-2026-10-20.json)
+retains raw samples, model/tokenizer and source/binary hashes, worker metadata,
+parity results, exact commands and limitations. Its measured sources are retained in the
+[Tract source archive](performance-results/liquid-tract-2026-10-20-source.tar.gz).
+The live developer probe now exercises ONNX Runtime; use the archived probe
+and its lockfile to reproduce these historical Tract measurements.
+Native model work stays on the tracked application worker and is lazy; it adds
+no model loading at app startup or idle repaint loop.
+
+
+## Native Liquid ONNX Runtime deployment (20 October 2026)
+
+The current integration uses the official native ONNX Runtime CPU library through
+an isolated helper process. The application requires no Python and has no Install
+action: the first selection check verifies and expands its bundled compressed
+assets automatically on the application worker. Later checks reuse the tokenizer,
+helper and model. No model loads at application startup, and helper inference
+threads sleep between requests rather than spin. Apple Silicon uses ONNX Runtime
+1.31.0 with a macOS 14 minimum; Intel uses 1.19.2 with the app's macOS 12 minimum.
+The original trained weights are stored losslessly as FP16 and restored to FP32
+for computation; this is not INT8 quantization.
+
+A matched optimized probe ran the production Rust Client, text processor and
+native helper against the pinned Python reference worker on Apple M2 Max,
+macOS 14.6.1 arm64, Rust 1.98.1 and Python 3.12.14. Both used four CPU threads,
+inter-op one, batch size one, identical weights and at most three correction
+passes. Four fresh processes ran Python/native/native/Python (ABBA), with two
+warmup rounds and five measured rounds over the same four fixtures (8, 7, 13 and
+77 input tokens). The native release profile used thin LTO, one codegen unit,
+stripped binaries and hardware-accelerated SHA-256 (`sha2/asm`); exact compiler,
+source, binary, model and runtime hashes are retained. No other builds, tests or
+GUI workloads ran during this timing window. Native workers had no Python on PATH.
+
+| Measurement | Python reference | Native ONNX Runtime |
+| --- | ---: | ---: |
+| Agreement, warm request median | 451.50 ms | 61.98 ms |
+| Repeated word, warm request median | 450.10 ms | 70.63 ms |
+| Unchanged mathematical prose, warm request median | 228.75 ms | 51.70 ms |
+| Longer arXiv sentence, warm request median | 475.77 ms | 449.80 ms |
+| Mean across equally repeated fixtures | 402.98 ms | 157.83 ms |
+| Pooled warm request median | 451.26 ms | 66.85 ms |
+| Fresh-process first result, two runs | 4.14–4.62 s | 2.36–2.59 s |
+| Reported peak RSS, two runs | 2.37–2.39 GiB | 4.21–4.23 GiB |
+
+The complete measured workload was **2.55 times faster** by total request time.
+The pooled median improves by 6.75 times, largely reflecting the three short
+fixtures; the longer fixture improves by only 1.06 times. Native ONNX Runtime's
+higher peak memory is a material cost. These are macOS `time -l` peak readings,
+not idle residency or simultaneous whole-application memory measurements; the
+full correction replays reached 4.26 GiB on ARM and 4.35 GiB under Rosetta.
+
+Warm measurements include the JSONL round trip, actual Rust text preparation,
+iterative corrections and native helper inference. Process-first results include
+artifact verification, model loading and the first correction with an already
+expanded cache and warm filesystem. They exclude automatic first-time extraction,
+application job dispatch, source projection, diff preparation, Apply, GUI rendering
+and input-to-pixel latency. Python is used only as a developer reference here.
+These local measurements do not establish physical Intel or cross-platform speed.
+
+The universal Liquid resource tree occupies **640.06 MiB** (671,148,053 bytes),
+including one shared compressed model/tokenizer, both thin native runtimes and
+notices. Each process automatically expands only the shared assets and its own
+architecture's helper/library. Separate fresh-cache functional checks completed
+the first correction without Python or an explicit setup action: 5.79 seconds
+on ARM and 14.15 seconds under Rosetta. Those checks ran during builds and are
+not controlled startup benchmarks. Compression saves disk space, not inference RAM.
+
+Both final production Rust probes matched **268 of 268 corrections**, with zero
+mismatches and Python absent from their PATH. Each native engine also matched all
+427 reference refinement passes' tag IDs and applied edits. Maximum detection
+probability deltas were 0.00000593 on ARM and 0.00000558 under Rosetta. Every length
+from 1 through 128, eight repeated size transitions, and eight malformed-request
+and recovery checks passed on both targets. Rosetta proves Intel-binary execution
+and correction behavior on this Mac; physical Intel performance remains unmeasured.
+Matching the pinned reference does not establish grammatical correctness.
+
+The separate native `liquid_selection` journey passed Typst and TeX selections in
+both Unified and SideBySide review modes, including automatic first-use setup,
+Cancel/Apply, single Undo, modal shortcut ownership, wrapper/outside preservation
+and Settings input round trips. Its preserved debug binary and compact event
+ledger are recorded separately from the optimized CPU probe. This is native input
+and read-only state evidence; no screenshot or native visual composition was
+verified.
+
+The [complete measurement and validation receipt](performance-results/liquid-onnxruntime-2026-10-20.json)
+retains all benchmark samples and metadata, source/binary/runtime/model hashes,
+compact full-corpus parity summaries, first-use and packaging receipts, and the
+native interaction ledger. It references the maintained corpus by hash instead
+of duplicating its sentences. The earlier Tract and Python measurements above
+remain historical records rather than comparisons of unlike runs.

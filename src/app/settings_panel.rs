@@ -59,6 +59,8 @@ pub(super) enum SettingsAction {
     RefreshTools,
     ShowPackages,
     RetryTinymist,
+    RestartLtex,
+    ClearBiberCache,
     Update(Box<AppSettings>),
 }
 
@@ -1109,6 +1111,41 @@ impl SettingsPanel<'_> {
                 }
                 settings_target_anchor(
                     ui,
+                    SettingsTarget::TexProseRules,
+                    &mut settings_scroll_target,
+                );
+                super::settings_writing::prose_rules(ui, edited, self.settings);
+                settings_target_anchor(ui, SettingsTarget::Ltex, &mut settings_scroll_target);
+                if super::settings_writing::ltex(ui, edited, self.settings) {
+                    self.actions.push(SettingsAction::RestartLtex);
+                }
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::LiquidGrammar,
+                    &mut settings_scroll_target,
+                );
+                ui.separator();
+                ui.label(RichText::new(SettingsTarget::LiquidGrammar.label()).strong());
+                ui.label("Select text, right-click → Check selection with Liquid. Review changes before applying.");
+                settings_control_row(ui, "Model folder", |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut edited.liquid_cache_directory)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("Default app data folder"),
+                    );
+                });
+                settings_control_row(ui, "CPU threads", |ui| {
+                    ui.add(egui::DragValue::new(&mut edited.liquid_threads).range(1..=8));
+                });
+                liquid_input_controls(ui, &mut edited.liquid_input);
+                if let Err(error) = crate::liquid_runtime::validate_settings(
+                    &edited.liquid_cache_directory,
+                    edited.liquid_threads,
+                ) {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                settings_target_anchor(
+                    ui,
                     SettingsTarget::Handwriting,
                     &mut settings_scroll_target,
                 );
@@ -1321,7 +1358,9 @@ impl SettingsPanel<'_> {
                 );
                 ui.scope(|ui| {
                     ui.strong("TeX tools");
-                    show_tex_preferences(ui, &mut edited.tex, self.tex_tools, self.settings);
+                    if show_tex_preferences(ui, &mut edited.tex, self.tex_tools, self.settings) {
+                        self.actions.push(SettingsAction::ClearBiberCache);
+                    }
                     for (kind, preference, resolution) in [
                         (
                             crate::toolchain::ToolKind::Tectonic,
@@ -1817,6 +1856,114 @@ fn show_theme_color_reset(
     }
 }
 
+#[derive(Clone)]
+struct LiquidExamples {
+    options: crate::liquid_grammar::InputOptions,
+    sent: [String; 2],
+}
+const LIQUID_EXAMPLES: [(&str, crate::document::DocumentKind, &str); 2] = [
+    (
+        "TeX",
+        crate::document::DocumentKind::Tex,
+        r"Before \emph{the result} is $u$.",
+    ),
+    (
+        "Typst",
+        crate::document::DocumentKind::Typst,
+        "Before #emph[the result] is $u$.",
+    ),
+];
+fn liquid_input_controls(ui: &mut egui::Ui, options: &mut crate::liquid_grammar::InputOptions) {
+    use crate::liquid_grammar::{FormattedText, ProtectedContent, Selection};
+    ui.label("Math, code and links stay protected. Formatting syntax is never sent.");
+    settings_control_row(ui, "Math / code / links", |ui| {
+        for mode in ProtectedContent::ALL {
+            let response = ui.selectable_value(&mut options.protected_content, mode, mode.label());
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe(
+                &format!("settings.liquid.protected.{}", mode.label()),
+                &response,
+            );
+            let _ = response;
+        }
+    });
+    settings_control_row(ui, "Placeholder text", |ui| {
+        let response = ui.add_enabled(
+            options.protected_content == ProtectedContent::Placeholder,
+            egui::TextEdit::singleline(&mut options.placeholder)
+                .desired_width(110.0)
+                .char_limit(24),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::TextEdit,
+                response.enabled(),
+                "Liquid placeholder text",
+            )
+        });
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("settings.liquid.placeholder", &response);
+    });
+    settings_control_row(ui, "Formatted prose", |ui| {
+        for mode in FormattedText::ALL {
+            let response = ui.selectable_value(&mut options.formatted_text, mode, mode.label());
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe(
+                &format!("settings.liquid.formatted.{}", mode.label()),
+                &response,
+            );
+            let _ = response;
+        }
+    });
+    if let Err(error) = options.validate() {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+        return;
+    }
+    ui.weak("Placeholder keeps a protected marker in the sentence; Split passages checks each side separately.");
+    let key = ui.make_persistent_id("liquid-input-examples");
+    let cached = ui
+        .ctx()
+        .data(|data| data.get_temp::<LiquidExamples>(key))
+        .filter(|cached| cached.options == *options)
+        .unwrap_or_else(|| {
+            let sent = LIQUID_EXAMPLES.map(|(_, kind, source)| {
+                Selection::with_prose_rules(
+                    source,
+                    kind,
+                    0..source.chars().count(),
+                    options.clone(),
+                    None,
+                )
+                .map(|selection| {
+                    selection
+                        .fragments
+                        .iter()
+                        .map(|fragment| fragment.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("  |  ")
+                })
+                .unwrap_or_else(|_| "No prose sent".into())
+            });
+            let cached = LiquidExamples {
+                options: options.clone(),
+                sent,
+            };
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(key, cached.clone()));
+            cached
+        });
+    for ((label, _, source), sent) in LIQUID_EXAMPLES.iter().zip(&cached.sent) {
+        ui.horizontal_wrapped(|ui| {
+            ui.weak(*label);
+            ui.monospace(*source);
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Sent");
+            ui.monospace(sent);
+        });
+    }
+}
+
 pub(super) fn show_theme_color_controls(
     ui: &mut egui::Ui,
     transform: &mut crate::theme_transform::ThemeTransform,
@@ -1961,8 +2108,9 @@ fn show_tex_preferences(
     settings: &mut crate::tex::settings::TexSettings,
     tools: &crate::tex::tools::TexTools,
     _app_settings: &AppSettings,
-) {
-    use crate::tex::settings::{BuildEngine, Formatter};
+) -> bool {
+    use crate::tex::settings::{BuildDriver, BuildEngine, Formatter};
+    let mut clear_cache = false;
     ui.checkbox(&mut settings.build_enabled, "Build TeX documents");
     ui.horizontal_wrapped(|ui| {
         ui.label("Build engine:");
@@ -1970,21 +2118,68 @@ fn show_tex_preferences(
             ui.selectable_value(&mut settings.build_engine, engine, engine.label());
         }
     });
-    if settings.build_engine != BuildEngine::Tectonic {
+    let system = settings.build_engine != BuildEngine::Tectonic;
+    ui.horizontal_wrapped(|ui| {
+        ui.add_enabled_ui(system, |ui| {
+            ui.label("Driver:");
+            for driver in [BuildDriver::Latexmk, BuildDriver::Direct] {
+                ui.selectable_value(&mut settings.build_driver, driver, driver.label());
+            }
+            ui.add_enabled(
+                system && settings.build_driver == BuildDriver::Latexmk,
+                egui::Checkbox::new(&mut settings.bibliography_enabled, "Build bibliography"),
+            );
+        });
+        let reset = ui.add_enabled(
+            tools.biber.is_some(),
+            egui::Button::new("Clear Biber cache"),
+        );
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("settings.tex.clear_biber_cache", &reset);
+        clear_cache = reset.clicked();
+    });
+    if system {
         if let Some(path) = tools.distribution(settings.build_engine) {
             ui.weak(format!("Detected: {}", path.display()));
         } else {
-            ui.weak("Not found. Install a TeX distribution such as MacTeX and restart the app.");
+            ui.weak("Not found. Install a TeX distribution such as MacTeX and refresh tools.");
         }
-    }
-    ui.add_enabled_ui(settings.build_engine == BuildEngine::Tectonic, |ui| {
-        ui.checkbox(&mut settings.only_cached, "Use cached TeX packages only")
-            .on_hover_text(
-                "Otherwise Tectonic downloads missing packages. Shell escape is disabled.",
+        if settings.build_driver == BuildDriver::Latexmk && tools.latexmk.is_none() {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                "latexmk not found. Install it with your TeX distribution or choose Direct engine.",
             );
+        }
+        if settings.build_driver == BuildDriver::Direct {
+            ui.weak(
+                "Direct engine runs basic TeX passes. Bibliography automation requires latexmk.",
+            );
+        }
+        egui::CollapsingHeader::new("System compiler options").show(ui, |ui| {
+            egui::Grid::new("system-compiler-options").num_columns(2).show(ui, |ui| {
+                ui.label("Engine arguments");
+                ui.add(egui::TextEdit::singleline(&mut settings.system_command.arguments).desired_width(f32::INFINITY)); ui.end_row();
+                ui.label("Build environment (JSON)");
+                ui.add(egui::TextEdit::singleline(&mut settings.system_command.environment).desired_width(f32::INFINITY)); ui.end_row();
+                ui.label("Working directory");
+                ui.add(egui::TextEdit::singleline(&mut settings.system_command.directory).desired_width(f32::INFINITY)); ui.end_row();
+                for (name, tool) in [("latexmk", &mut settings.latexmk), ("BibTeX", &mut settings.bibtex), ("Biber", &mut settings.biber)] {
+                    ui.label(format!("{name} executable"));
+                    ui.add(egui::TextEdit::singleline(&mut tool.executable).hint_text("Automatic discovery").desired_width(f32::INFINITY)); ui.end_row();
+                    ui.label(format!("{name} arguments"));
+                    ui.add(egui::TextEdit::singleline(&mut tool.arguments).desired_width(f32::INFINITY)); ui.end_row();
+                }
+            });
+            ui.weak("Arguments use shell-style quotes without evaluating shell commands. Bibliography tools inherit the build environment. The app owns watching and private output paths.");
+        });
+    }
+    if !system {
+        ui.weak("Tectonic manages its own TeX/BibTeX passes; Biber requires a system engine with latexmk.");
+    }
+    ui.add_enabled_ui(!system, |ui| {
+        ui.checkbox(&mut settings.only_cached, "Use cached TeX packages only");
     });
-    ui.checkbox(&mut settings.synctex, "SyncTeX source/preview navigation")
-        .on_hover_text("Emit a SyncTeX map so source and PDF positions can follow each other.");
+    ui.checkbox(&mut settings.synctex, "SyncTeX source/preview navigation");
     ui.checkbox(&mut settings.texlab_enabled, "TexLab editor intelligence");
     ui.indent("texlab-features", |ui| {
         ui.checkbox(&mut settings.completion, "TeX completions");
@@ -2005,14 +2200,9 @@ fn show_tex_preferences(
     ui.checkbox(
         &mut settings.embedded_formatting,
         "Use TeX formatter for auto-miTeX math",
-    )
-    .on_hover_text("Only math payloads are formatted. Surrounding Typst remains unchanged.");
-    ui.label(
-        egui::RichText::new(
-            "The main buffer is built from the editor; included files are read from disk.",
-        )
-        .weak(),
     );
+    ui.weak("The main buffer is built from the editor; included files are read from disk.");
+    clear_cache
 }
 
 fn image_appearance_preference(ui: &mut egui::Ui, settings: &mut AppSettings) {
@@ -2154,6 +2344,45 @@ mod tests {
     use egui::{Color32, Pos2};
     use egui_kittest::{Harness, kittest::Queryable as _};
     use std::time::Duration;
+
+    #[test]
+    fn liquid_input_controls_edit_the_projection_policy_and_show_real_examples() {
+        use crate::liquid_grammar::{FormattedText, InputOptions, ProtectedContent};
+        use egui_kittest::kittest::NodeT as _;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(800.0, 520.0))
+            .build_ui_state(liquid_input_controls, InputOptions::default());
+        harness.run();
+        harness.get_by_label("TeX");
+        harness.get_by_label("Typst");
+        assert!(
+            !harness
+                .get_by_label("Liquid placeholder text")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("Split passages").click();
+        harness.run();
+        assert_eq!(harness.state().protected_content, ProtectedContent::Split);
+        assert!(
+            harness
+                .get_by_label("Liquid placeholder text")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("Skip").click();
+        harness.run();
+        assert_eq!(harness.state().formatted_text, FormattedText::Skip);
+        harness.get_by_label("Placeholder").click();
+        harness.run();
+        assert_eq!(harness.state().placeholder, "x");
+        assert!(
+            !harness
+                .get_by_label("Liquid placeholder text")
+                .accesskit_node()
+                .is_disabled()
+        );
+    }
 
     #[test]
     fn reveal_and_typing_effect_controls_change_only_their_own_preferences() {
@@ -2475,6 +2704,255 @@ mod tests {
     }
 
     #[test]
+    fn compiler_engine_driver_and_bibliography_controls_preserve_independent_choices() {
+        use crate::tex::settings::{BuildDriver, BuildEngine, TexSettings};
+        use egui_kittest::kittest::NodeT as _;
+        let mut tools = crate::tex::tools::TexTools::resolve(&TexSettings::default());
+        tools.latexmk = Some("/test/latexmk".into());
+        tools.biber = Some("/test/biber".into());
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(900.0, 800.0))
+            .build_ui_state(
+                move |ui, settings: &mut TexSettings| {
+                    assert!(!show_tex_preferences(
+                        ui,
+                        settings,
+                        &tools,
+                        &AppSettings::default()
+                    ));
+                },
+                TexSettings::default(),
+            );
+        harness.run();
+        for label in ["latexmk", "Direct engine", "Build bibliography"] {
+            assert!(
+                harness.get_by_label(label).accesskit_node().is_disabled(),
+                "{label}"
+            );
+        }
+        let initial = harness.state().clone();
+        harness.get_by_label("Direct engine").click();
+        harness.run();
+        harness.get_by_label("Build bibliography").click();
+        harness.run();
+        assert_eq!(
+            *harness.state(),
+            initial,
+            "Tectonic cannot change system-only choices"
+        );
+        harness.get_by_label("pdfLaTeX").click();
+        harness.run();
+        assert_eq!(harness.state().build_engine, BuildEngine::PdfLatex);
+        assert_eq!(harness.state().build_driver, BuildDriver::Latexmk);
+        for label in ["latexmk", "Direct engine", "Build bibliography"] {
+            assert!(
+                !harness.get_by_label(label).accesskit_node().is_disabled(),
+                "{label}"
+            );
+        }
+        let driver = harness.get_by_label("Driver:").rect();
+        let latexmk = harness.get_by_label("latexmk").rect();
+        let direct = harness.get_by_label("Direct engine").rect();
+        let bibliography = harness.get_by_label("Build bibliography").rect();
+        assert!(driver.right() <= latexmk.left() && latexmk.right() <= direct.left());
+        assert!(direct.right() <= bibliography.left());
+        assert!(
+            (driver.center().y - bibliography.center().y).abs() <= 1.0,
+            "driver and bibliography should share a compact row: {driver:?} {bibliography:?}"
+        );
+
+        harness.get_by_label("Build bibliography").click();
+        harness.run();
+        let mut expected = initial.clone();
+        expected.build_engine = BuildEngine::PdfLatex;
+        expected.bibliography_enabled = false;
+        assert_eq!(
+            *harness.state(),
+            expected,
+            "the bibliography toggle must only change itself"
+        );
+        harness.get_by_label("Direct engine").click();
+        harness.run();
+        expected.build_driver = BuildDriver::Direct;
+        assert_eq!(*harness.state(), expected);
+        assert!(
+            harness
+                .get_by_label("Build bibliography")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("Build bibliography").click();
+        harness.run();
+        assert_eq!(
+            *harness.state(),
+            expected,
+            "disabled bibliography controls cannot toggle"
+        );
+        harness.get_by_label("latexmk").click();
+        harness.run();
+        expected.build_driver = BuildDriver::Latexmk;
+        assert_eq!(
+            *harness.state(),
+            expected,
+            "switching back must retain the bibliography choice"
+        );
+        harness.get_by_label("Build bibliography").click();
+        harness.run();
+        expected.bibliography_enabled = true;
+        assert_eq!(*harness.state(), expected);
+        for engine in [
+            BuildEngine::XeLatex,
+            BuildEngine::LuaLatex,
+            BuildEngine::Tectonic,
+        ] {
+            harness.get_by_label(engine.label()).click();
+            harness.run();
+            expected.build_engine = engine;
+            assert_eq!(
+                *harness.state(),
+                expected,
+                "engine changes preserve all other preferences"
+            );
+            for label in ["latexmk", "Direct engine", "Build bibliography"] {
+                assert_eq!(
+                    harness.get_by_label(label).accesskit_node().is_disabled(),
+                    engine == BuildEngine::Tectonic,
+                    "{} / {label}",
+                    engine.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compiler_cache_reset_requires_a_click_and_an_available_biber() {
+        use crate::tex::settings::TexSettings;
+        use egui_kittest::kittest::NodeT as _;
+        let mut tools = crate::tex::tools::TexTools::resolve(&TexSettings::default());
+        tools.biber = Some("/test/biber".into());
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(900.0, 800.0))
+            .build_ui_state(
+                |ui, state: &mut (TexSettings, crate::tex::tools::TexTools, usize)| {
+                    if show_tex_preferences(ui, &mut state.0, &state.1, &AppSettings::default()) {
+                        state.2 += 1;
+                    }
+                },
+                (TexSettings::default(), tools, 0),
+            );
+        harness.run();
+        let preferences = harness.state().0.clone();
+        assert_eq!(
+            harness.state().2,
+            0,
+            "idle frames cannot request cache deletion"
+        );
+        assert!(
+            !harness
+                .get_by_label("Clear Biber cache")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("Clear Biber cache").click();
+        harness.run();
+        assert_eq!(harness.state().2, 1);
+        harness.run_steps(4);
+        assert_eq!(
+            harness.state().2,
+            1,
+            "a click must not repeat across later frames"
+        );
+        assert_eq!(
+            harness.state().0,
+            preferences,
+            "cache reset does not edit compiler settings"
+        );
+
+        harness.state_mut().1.biber = None;
+        harness.run();
+        assert!(
+            harness
+                .get_by_label("Clear Biber cache")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("Clear Biber cache").click();
+        harness.run();
+        assert_eq!(
+            harness.state().2,
+            1,
+            "missing Biber cannot request cache deletion"
+        );
+        assert_eq!(harness.state().0, preferences);
+        harness.state_mut().1.biber = Some("/test/biber".into());
+        harness.run();
+        assert_eq!(
+            harness.state().2,
+            1,
+            "discovery alone cannot request cache deletion"
+        );
+        harness.get_by_label("Clear Biber cache").click();
+        harness.run();
+        assert_eq!(harness.state().2, 2);
+        assert_eq!(harness.state().0, preferences);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "fresh offscreen Glow compiler-controls review; no desktop activation or input"]
+    fn compiler_preferences_framebuffer_review() {
+        use crate::tex::settings::{BuildEngine, TexSettings};
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".tiptoptyp/screenshots/agent-review/integrations");
+        for (name, dark) in [("light", false), ("dark", true)] {
+            let context = egui::Context::default();
+            let imported = crate::builtin_themes::find(if dark {
+                "catppuccin-mocha"
+            } else {
+                "catppuccin-latte"
+            })
+            .unwrap();
+            theme::set_imported_palette(&context, Some((dark, imported.palette)));
+            theme::configure_styles(&context);
+            context.set_theme(if dark {
+                egui::Theme::Dark
+            } else {
+                egui::Theme::Light
+            });
+            let mut settings = TexSettings {
+                build_engine: BuildEngine::PdfLatex,
+                ..Default::default()
+            };
+            let mut tools = crate::tex::tools::TexTools::resolve(&settings);
+            tools.latexmk = Some("/test/latexmk".into());
+            tools.biber = Some("/test/biber".into());
+            let mut renderer = crate::test_framebuffer::Framebuffer::new([900, 620]);
+            for step in 0..8 {
+                let output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 620.0))),
+                        time: Some(step as f64 / 60.0),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.painter()
+                            .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+                        ui.heading("TeX compiler");
+                        assert!(!show_tex_preferences(
+                            ui,
+                            &mut settings,
+                            &tools,
+                            &AppSettings::default()
+                        ));
+                    },
+                );
+                let path = (step == 7).then(|| directory.join(format!("compiler-{name}.png")));
+                renderer.render(&context, output, path.as_deref());
+            }
+        }
+    }
+
+    #[test]
     fn tex_controls_keep_build_intelligence_format_and_lint_independent() {
         use crate::tex::settings::{Formatter, TexSettings};
         let tools = crate::tex::tools::TexTools::resolve(&TexSettings::default());
@@ -2482,7 +2960,7 @@ mod tests {
             .with_size(Vec2::new(700.0, 600.0))
             .build_ui_state(
                 |ui, settings: &mut TexSettings| {
-                    show_tex_preferences(ui, settings, &tools, &AppSettings::default())
+                    show_tex_preferences(ui, settings, &tools, &AppSettings::default());
                 },
                 TexSettings::default(),
             );

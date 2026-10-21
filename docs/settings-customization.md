@@ -179,24 +179,74 @@ preview only: source image files and transparency remain unchanged.
 
 ## LaTeXdiff
 
-**Edit → LaTeXdiff…** opens an owned modal above the document, including native
-previews. Choose an older and newer `.tex` file. When the newer file is the
-current editor document, **Include unsaved editor changes** compares a snapshot
-against the older file on disk. By default both paths are the current file, so
-this compares the last saved version against the editor.
+Use **File → Create LaTeX Diff…**, or search `latexdiff` in the command palette.
+The wizard is available with any document open, or with no open tabs:
 
-**Generate diff** runs LaTeXdiff in the background. Choose underlined, coloured,
-or traditional markup; **Include subfiles** expands `\input` and `\include`.
-**Copy source** copies the result; **Save and open…** saves a separate `.tex`,
-opens it in a new tab, and selects it for the existing TeX/PDF preview pipeline.
-Save beside the newer document to preserve relative graphics/bibliography paths.
-Neither original may be used as the output path. Esc or Cmd+W closes the modal;
-closing cancels generation and removes its temporary snapshot. A confirmed save
-is completed even if its initiating window closes.
+1. Choose the older and newer `.tex` files. The current saved TeX document fills
+   the newer field; optionally include its unsaved editor changes.
+2. Choose a new output `.tex` file and options. The suggested name is
+   `NEWER-diff.tex` beside the newer file. Markup and subfile expansion have
+   controls; **Arguments** passes literal options such as `--math-markup=1`.
+   **Advanced** contains the executable, JSON environment and working directory.
+3. Review the paths and create the diff. **Open diff** opens the result in a new
+   editor tab and selects it for the normal TeX/PDF preview. **Copy source** is
+   available after creation.
+
+Generation, input checks and saving run on a background worker. **Cancel** stops
+an active job; Esc, Cmd+W or closing the wizard also cancels it. Original files
+and existing output files are never overwritten. Publication is atomic: canceled
+or failed jobs leave no partial output. Save beside the newer document to retain
+relative graphics/bibliography paths.
 
 LaTeXdiff is discovered in PATH or MacTeX's `/Library/TeX/texbin`; it is not
-bundled. **LaTeXdiff options**, also under Settings → Tools → TeX tools, provides its
-executable, literal arguments, JSON environment and working directory. For
-example `--math-markup=1` marks whole equations. All options are available in
-settings JSON at `latexdiff`; invalid markup choices and malformed command
-settings are rejected. See the [official manual](https://mirrors.ctan.org/support/latexdiff/doc/latexdiff-man.pdf).
+bundled. Defaults are editable under Settings → Tools → TeX tools and in settings
+JSON at `latexdiff`. Arguments use shell-style quoting to split literal values,
+without shell expansion. Explicit arguments follow the preset options, so an
+option such as `--type=CFONT` can override the selected markup. Input paths are
+supplied by the app. Environment is a JSON object of strings, for example
+`{"LC_ALL":"C"}`; blank working directory uses the newer file's directory.
+See the [official manual](https://mirrors.ctan.org/support/latexdiff/doc/latexdiff-man.pdf).
+
+## Optional Liquid grammar
+
+Writing → Liquid selection grammar configures a manual right-click action,
+independently of Harper. Liquid runs in a separate native ONNX Runtime helper, without
+Python, on Intel Macs with macOS 12 or newer and Apple Silicon Macs with macOS 14
+or newer. `liquid_cache_directory` defaults to the persistent app-data folder
+when empty, and `liquid_threads` defaults to 4 (valid range 1–8). A custom cache
+folder must be absolute. Model loading and inference run outside the UI thread;
+no model or inference library is loaded at app startup.
+
+Select prose and choose **Check selection with Liquid**. On first use the bundled
+model and current Mac runtime are prepared automatically, without downloads or
+an installation button. The complete selection is shown before and after, with changes
+highlighted using the Git diff style chosen in Settings. Apply is one undoable
+operation.
+Checking is offline after setup. See Settings Help for the workflow and supported
+runtime, or the [comparison and integration notes](grammar-comparison.md).
+
+`liquid_input` controls projection before inference:
+
+```json
+{
+  "protected_content": "placeholder",
+  "placeholder": "x",
+  "formatted_text": "include"
+}
+```
+
+`protected_content` accepts `placeholder` or `split`. The first preserves sentence
+context with a protected word; the second checks prose on either side of math,
+code and links separately. `placeholder` accepts 1–24 ASCII letters.
+`formatted_text` accepts `include` or `skip` for recognized formatting bodies
+(`*text*`, `#emph[...]`, `#strong[...]`, `#text[...]`, TeX `\emph{...}`,
+`\textbf{...}` and related standard commands). Skipped bodies become protected
+content; commands are never sent verbatim. Unknown macros retain conservative
+parser behavior. These options affect Liquid only, not Harper.
+
+The review's **Liquid input** disclosure shows the exact prepared fragments.
+These are the submitted fragments when inference runs; they remain inspectable
+when a missing model prevents inference. TeX readable text inside supported
+math-text commands can be admitted; Typst equations remain wholly protected.
+Changed placeholders, boundary-crossing edits and source-syntax changes are
+rejected rather than applied.

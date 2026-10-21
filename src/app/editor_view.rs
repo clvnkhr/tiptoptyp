@@ -53,7 +53,10 @@ impl EditorApp {
         context: &egui::Context,
         symbol: &crate::handwriting::Insertion,
     ) {
-        if self.table_editor.is_some() || self.latexdiff.is_some() || self.version_history.is_some()
+        if self.table_editor.is_some()
+            || self.tool_dialog_open()
+            || self.version_history.is_some()
+            || self.liquid.visible()
         {
             return;
         }
@@ -94,18 +97,14 @@ impl EditorApp {
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let source = self.tabs.current_record().document.source();
         let document_key = self.document().key();
+        let enabled =
+            self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible();
         let actions = {
             let _queued = crate::child_view::begin_queued_edit_events(
                 ui.ctx(),
                 &mut self.find_bar.edit_events,
             );
-            find_bar::show(
-                ui,
-                &mut self.find_bar,
-                source,
-                document_key,
-                self.table_editor.is_none() && self.latexdiff.is_none(),
-            )
+            find_bar::show(ui, &mut self.find_bar, source, document_key, enabled)
         };
         self.apply_find_actions(
             ui.ctx(),
@@ -153,7 +152,9 @@ impl EditorApp {
                 )
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
-        if replace_one && (self.table_editor.is_none() && self.latexdiff.is_none()) {
+        if replace_one
+            && (self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible())
+        {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -183,7 +184,9 @@ impl EditorApp {
                 }
             }
         }
-        if replace_all && (self.table_editor.is_none() && self.latexdiff.is_none()) {
+        if replace_all
+            && (self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible())
+        {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -256,7 +259,7 @@ impl EditorApp {
             .ctx()
             .data_mut(|data| data.remove_temp::<(PathBuf, Pos2)>(drop_id))
             && ui.max_rect().contains(position)
-            && (self.table_editor.is_none() && self.latexdiff.is_none())
+            && (self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible())
         {
             let text = self
                 .document()
@@ -271,8 +274,9 @@ impl EditorApp {
         }
 
         let _span = crate::performance::span("ui.source");
-        let read_only = self.table_editor.is_some() || self.latexdiff.is_some();
-        if read_only && self.latexdiff.is_none() {
+        let read_only =
+            self.table_editor.is_some() || self.tool_dialog_open() || self.liquid.visible();
+        if self.table_editor.is_some() {
             egui::Frame::new()
                 .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.15))
                 .inner_margin(8.0)
@@ -1046,14 +1050,21 @@ impl EditorApp {
                 pre_frame_selection,
                 &mut self.secondary_press_guard,
             ) {
-                popup_request = Some(editor_context_popup(
-                    &mut self.editor_data,
-                    document.source(),
-                    document_kind,
-                    anchor,
-                    char_index,
-                    document.key(),
-                ));
+                popup_request = Some(
+                    editor_context_popup(
+                        &mut self.editor_data,
+                        document.source(),
+                        document_kind,
+                        anchor,
+                        char_index,
+                        document.key(),
+                    )
+                    .with_liquid_selection(
+                        document.snapshot(),
+                        document_kind,
+                        output.state.cursor.char_range(),
+                    ),
+                );
             }
 
             let clicked_link = if document_kind.is_typst() {
@@ -1459,7 +1470,8 @@ impl EditorApp {
         let mut actions = find_bar::FindBarActions::default();
         let source = self.tabs.current_record().document.source();
         let key = self.document().key();
-        let editable = self.table_editor.is_none() && self.latexdiff.is_none();
+        let editable =
+            self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible();
         let shortcuts = self.settings.effective_shortcuts();
         let allow_requested_paste = self
             .pending_widget_paste
@@ -1725,6 +1737,7 @@ pub(super) fn editor_context_popup(
         math: character
             .and_then(|character| crate::math_conversion::Target::at(source, character, kind))
             .map(|target| target.bind_document(key)),
+        liquid_selection: None,
     }
 }
 

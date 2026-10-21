@@ -5,8 +5,11 @@ mod desktop_inspection;
 mod encoding_import;
 mod icon_sheet;
 pub(crate) mod icons;
+mod liquid;
+mod ltex;
 mod pdf_actions;
 mod pdf_output;
+mod settings_writing;
 mod templates;
 mod tex;
 mod writing;
@@ -16,6 +19,7 @@ use icons::{closed_eye_icon_geometry, eye_icon_geometry, refresh_icon_geometry};
 pub(crate) mod code_editor;
 mod command_palette;
 mod completion_popup;
+mod diagnostic_corrections;
 mod navigation;
 mod palette_actions;
 mod settings_controls;
@@ -58,6 +62,7 @@ mod editor_layout;
 mod editor_particle_action_tests;
 mod editor_particles;
 pub(crate) use editor_particles::Renderer as ParticleRenderer;
+mod citation;
 mod editor_scroll;
 mod editor_surface;
 mod editor_view;
@@ -67,6 +72,8 @@ mod latexdiff;
 mod table_editor;
 mod table_samples;
 mod table_workbench;
+mod tex_actions;
+mod tex_documentation;
 mod version_history;
 use crate::editor_data::TableTarget;
 use table_editor::show_table_editor_ui;
@@ -265,10 +272,6 @@ fn tinymist_restart_required(
     refresh_tools: bool,
 ) -> bool {
     preview_preference_changed || tinymist_service_changed || refresh_tools
-}
-
-fn may_create_embedded_webview(prevent_background_activation: bool, focused: Option<bool>) -> bool {
-    !prevent_background_activation || focused != Some(false)
 }
 
 const DEFAULT_SOURCE: &str = r##"#set page(paper: "a4", margin: 2.2cm)
@@ -794,6 +797,7 @@ enum EditorMenuAction {
     OpenLink(String),
     EditTable(BoundTableTarget),
     ConvertMath(crate::math_conversion::Target, String),
+    Liquid(liquid::BoundSelection),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -864,21 +868,6 @@ impl EditorWindowHost {
     }
 }
 
-fn may_create_window_webview(
-    host: EditorWindowHost,
-    prevent_background_activation: bool,
-    focused: Option<bool>,
-) -> bool {
-    match host {
-        EditorWindowHost::Root => {
-            may_create_embedded_webview(prevent_background_activation, focused)
-        }
-        // Delay secondary preview creation until the user activates it.
-        // Native parent identity is independently supplied by the renderer.
-        EditorWindowHost::Secondary => focused == Some(true),
-    }
-}
-
 #[derive(Debug, Clone)]
 enum AppPopup {
     CommandPalette {
@@ -912,6 +901,7 @@ enum AppPopup {
         link: Option<String>,
         table: Option<BoundTableTarget>,
         math: Option<crate::math_conversion::Target>,
+        liquid_selection: Option<liquid::BoundSelection>,
     },
     FontSelector {
         anchor: Pos2,
@@ -1008,6 +998,9 @@ enum SettingsTarget {
     EnglishGrammar,
     HarperDictionary,
     HarperCapitalizedNames,
+    TexProseRules,
+    Ltex,
+    LiquidGrammar,
     Handwriting,
     UnicodeWarnings,
     MitexDollars,
@@ -1045,7 +1038,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 59] = [
+    const ALL: [Self; 62] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -1071,6 +1064,9 @@ impl SettingsTarget {
         Self::EnglishGrammar,
         Self::HarperDictionary,
         Self::HarperCapitalizedNames,
+        Self::TexProseRules,
+        Self::Ltex,
+        Self::LiquidGrammar,
         Self::Handwriting,
         Self::UnicodeWarnings,
         Self::MitexDollars,
@@ -1135,6 +1131,9 @@ impl SettingsTarget {
             Self::EnglishGrammar => "Offline English spelling and grammar (Typst / TeX)",
             Self::HarperDictionary => "Personal dictionary",
             Self::HarperCapitalizedNames => "Ignore capitalized names",
+            Self::TexProseRules => "TeX prose rules",
+            Self::Ltex => "LTeX+ spelling and grammar",
+            Self::LiquidGrammar => "Liquid selection grammar",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
             Self::Snippets => "Snippets",
             Self::Templates => "Document templates",
@@ -1213,6 +1212,9 @@ impl SettingsTarget {
             | Self::EnglishGrammar
             | Self::HarperDictionary
             | Self::HarperCapitalizedNames
+            | Self::TexProseRules
+            | Self::Ltex
+            | Self::LiquidGrammar
             | Self::Handwriting
             | Self::UnicodeWarnings
             | Self::MitexDollars
@@ -1285,6 +1287,15 @@ impl SettingsTarget {
             Self::HarperDictionary => {
                 "harper spelling personal custom dictionary accepted words mathematics names word list"
             }
+            Self::LiquidGrammar => {
+                "liquid local selected text selection grammar model machine learning native onnx threads cache input filtering placeholder math code links formatted emph strong textbf"
+            }
+            Self::TexProseRules => {
+                "tex prose arguments command macro environment grammar harper liquid footnote identifier filename"
+            }
+            Self::Ltex => {
+                "ltex languagetool latex tex typst grammar spelling language server checker binary arguments environment configuration"
+            }
             Self::HarperCapitalizedNames => {
                 "harper spelling ignore proper names uppercase camelcase PascalCase capitalized names"
             }
@@ -1335,7 +1346,7 @@ impl SettingsTarget {
             Self::HoverDelay => "editor tooltip wait milliseconds timing",
             Self::TypstCompiler => "tools binary custom bundled path",
             Self::TexServices => {
-                "TeX tools: Tectonic, pdfLaTeX, XeLaTeX, LuaLaTeX, MacTeX, SyncTeX, TexLab, Badness, tex-fmt, LaTeXdiff; compare revisions, diff markup, build, completion, hover, diagnostics, formatting, linting, ignored codes, suppress warnings, configuration JSON"
+                "TeX tools: Tectonic, pdfLaTeX, XeLaTeX, LuaLaTeX, MacTeX, SyncTeX, TexLab, Badness, tex-fmt, LaTeXdiff, latexmk, bibliography, BibTeX, Biber, cache, driver; compare revisions, diff markup, build, completion, hover, diagnostics, formatting, linting, ignored codes, suppress warnings, configuration JSON"
             }
             Self::TinymistLanguageServer => {
                 "tools binary lsp custom bundled path configuration JSON formatter width indent inputs lint export"
@@ -1454,6 +1465,8 @@ pub struct EditorApp {
     tex_service: crate::tex::TexService,
     tex_diagnostics: [Vec<Diagnostic>; 2],
     writing: writing::WritingState,
+    ltex: ltex::LtexState,
+    liquid: liquid::State,
     template_picker: Option<usize>,
     encoding_import: Option<encoding_import::EncodingImport>,
     capabilities: CapabilityCache,
@@ -1523,6 +1536,9 @@ pub struct EditorApp {
     rename_overlay_had_focus: bool,
     rename_overlay_suspended: bool,
     latexdiff: Option<latexdiff::Dialog>,
+    tex_documentation: Option<tex_documentation::Dialog>,
+    citation: Option<citation::Dialog>,
+    biber_cache: tex_actions::BiberCache,
     version_history: Option<version_history::Dialog>,
     table_editor: Option<TableEditorDialog>,
     table_samples: table_samples::Job,
@@ -1785,6 +1801,8 @@ impl EditorApp {
             tex_service: Default::default(),
             tex_diagnostics: Default::default(),
             writing: Default::default(),
+            ltex: Default::default(),
+            liquid: Default::default(),
             template_picker: None,
             encoding_import: None,
             capabilities,
@@ -1858,6 +1876,9 @@ impl EditorApp {
             rename_overlay_had_focus: false,
             rename_overlay_suspended: false,
             latexdiff: None,
+            tex_documentation: None,
+            citation: None,
+            biber_cache: Default::default(),
             version_history: None,
             table_editor: None,
             table_samples: Default::default(),
@@ -3112,7 +3133,7 @@ impl EditorApp {
 
     fn handle_shortcuts(&mut self, context: &egui::Context, frame: Option<&eframe::Frame>) {
         let shortcut_viewport = focused_input_viewport(context);
-        if self.latexdiff.is_some() {
+        if self.tool_dialog_open() || self.liquid.visible() {
             handle_window_management_shortcuts(
                 context,
                 shortcut_viewport,
@@ -3563,14 +3584,27 @@ impl EditorApp {
             }
             return;
         }
-        if self.latexdiff.is_some() {
+        if self.liquid.visible() {
             if command == AppCommand::CloseTab {
-                self.close_latexdiff(context);
+                self.close_liquid(context);
+            }
+            // Review is read-only: source editing commands must never reach
+            // the editor beneath its owned modal window.
+            return;
+        }
+        if let Some(salt) = self.tool_dialog_salt() {
+            if command == AppCommand::CloseTab {
+                match salt {
+                    latexdiff::SALT => self.close_latexdiff(context),
+                    tex_documentation::SALT => self.close_tex_documentation(context),
+                    citation::SALT => self.close_citation(context),
+                    _ => unreachable!(),
+                }
             } else {
                 self.route_edit_command_to_focused_widget(
                     command,
                     context,
-                    scoped_child_viewport_id(context, latexdiff::SALT),
+                    scoped_child_viewport_id(context, salt),
                 );
             }
             return;
@@ -3623,6 +3657,8 @@ impl EditorApp {
         match command {
             AppCommand::CommandPalette => self.toggle_command_palette(context),
             AppCommand::LatexDiff => self.begin_latexdiff(context),
+            AppCommand::TexDocumentation => self.begin_tex_documentation(None, context),
+            AppCommand::ImportCitation => self.begin_citation(context),
             AppCommand::RevertTo => self.begin_version_history(context),
             AppCommand::NewTable => self.begin_new_table(context),
             AppCommand::EditTable => {
@@ -3853,6 +3889,10 @@ impl EditorApp {
         let focused = context.memory(|memory| memory.focused());
         let latexdiff_child = self.latexdiff.is_some()
             && viewport == scoped_child_viewport_id(context, latexdiff::SALT);
+        let texdoc_child = self.tex_documentation.is_some()
+            && viewport == scoped_child_viewport_id(context, tex_documentation::SALT);
+        let citation_child = self.citation.is_some()
+            && viewport == scoped_child_viewport_id(context, citation::SALT);
         let table_child = self.table_editor.is_some()
             && viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor");
         let find_child = viewport == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
@@ -3866,12 +3906,19 @@ impl EditorApp {
             && !controls_child
             && !table_child
             && !latexdiff_child
+            && !texdoc_child
+            && !citation_child
             && !self.problems_focused(context, viewport)
             && (focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input())
         {
             return false;
         }
-        if (find_child || controls_child || table_child || latexdiff_child)
+        if (find_child
+            || controls_child
+            || table_child
+            || latexdiff_child
+            || texdoc_child
+            || citation_child)
             && viewport != context.viewport_id()
         {
             let event = match command {
@@ -3893,6 +3940,14 @@ impl EditorApp {
                     self.find_bar.edit_events.push(event);
                 } else if latexdiff_child {
                     self.latexdiff.as_mut().unwrap().edit_events.push(event);
+                } else if texdoc_child {
+                    self.tex_documentation
+                        .as_mut()
+                        .unwrap()
+                        .edit_events
+                        .push(event);
+                } else if citation_child {
+                    self.citation.as_mut().unwrap().edit_events.push(event);
                 } else if table_child {
                     self.table_edit_events.push(event);
                 } else {
@@ -3937,12 +3992,28 @@ impl EditorApp {
         context.send_viewport_cmd_to(viewport, egui::ViewportCommand::RequestPaste);
     }
 
+    fn tool_dialog_salt(&self) -> Option<&'static str> {
+        if self.latexdiff.is_some() {
+            Some(latexdiff::SALT)
+        } else if self.tex_documentation.is_some() {
+            Some(tex_documentation::SALT)
+        } else if self.citation.is_some() {
+            Some(citation::SALT)
+        } else {
+            None
+        }
+    }
+    fn tool_dialog_open(&self) -> bool {
+        self.tool_dialog_salt().is_some()
+    }
+
     fn document_flow_busy(&self) -> bool {
         self.document_workflow.is_busy(
             self.rename_dialog.is_some()
                 || self.table_editor.is_some()
-                || self.latexdiff.is_some()
-                || self.version_history.is_some(),
+                || self.tool_dialog_open()
+                || self.version_history.is_some()
+                || self.liquid.visible(),
             self.pending_tool_picker.is_some(),
         )
     }
@@ -6805,7 +6876,12 @@ impl EditorApp {
     }
 
     fn prepare_hidden_preview(&mut self, context: &egui::Context, frame: Option<&eframe::Frame>) {
-        if self.preview_visible() || !self.preview_status_snapshot().should_attempt_native {
+        // An opened PDF can be visible in Code mode while its designated
+        // source preview is hidden and still needs its background preload.
+        if self.preview_source_popped_out()
+            || (self.view_mode.shows_preview() && !self.bottom_panel.is_maximized())
+            || !self.preview_status_snapshot().should_attempt_native
+        {
             return;
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -6818,7 +6894,7 @@ impl EditorApp {
             return;
         }
         // Prepare the real frontend without showing a child view or changing
-        // focus. update_webview retains its native activation guard.
+        // focus. Child creation leaves application activation with its owner.
         let rect = context.content_rect();
         let Some(native_rect) = egui_rect_to_native(context, rect) else {
             return;
@@ -7148,7 +7224,7 @@ impl EditorApp {
         if !self.settings.editor_effects.enabled
             || !self.settings.editor_effects.actions.get(action).enabled()
             || self.table_editor.is_some()
-            || self.latexdiff.is_some()
+            || self.tool_dialog_open()
             || self.version_history.is_some()
             || !self.document().kind().is_editable()
         {
@@ -7792,6 +7868,9 @@ impl EditorApp {
                     self.mark_edited();
                     self.queue_math_conversion_format(context);
                 }
+            }
+            AppPopupAction::Editor(EditorMenuAction::Liquid(target)) => {
+                self.begin_liquid_check(target, context);
             }
             AppPopupAction::Editor(EditorMenuAction::EditTable(table)) => {
                 if table.key != self.document().key() {
@@ -8812,7 +8891,6 @@ impl EditorApp {
         } else {
             show_preview_transition(
                 ui,
-                false,
                 self.compilation_paused,
                 self.compile_indicator_spinning(),
             );
@@ -8824,6 +8902,8 @@ impl EditorApp {
         let diagnostic_count =
             self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
         let mut jump_target = None;
+        let mut correction_target = None;
+        let current_key = (!self.tabs.is_empty()).then(|| self.document().key());
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -9008,6 +9088,16 @@ impl EditorApp {
                     egui::Popup::context_menu(&row)
                         .open_memory(context_requested.then_some(egui::SetOpenCommand::Bool(true)))
                         .show(|ui| {
+                            if let Some(correction) = &diagnostic.correction
+                                && let Some(index) = diagnostic_corrections::show_corrections(
+                                    ui,
+                                    correction,
+                                    current_key,
+                                )
+                            {
+                                correction_target = Some((diagnostic.clone(), index));
+                                ui.close();
+                            }
                             if ui.button("Copy diagnostic").clicked() {
                                 ui.ctx().copy_text(diagnostic.full_message());
                                 ui.close();
@@ -9078,7 +9168,11 @@ impl EditorApp {
                     });
                 }
             });
-        if let Some(diagnostic) = jump_target {
+        if let Some((diagnostic, index)) = correction_target {
+            if let Err(error) = self.apply_diagnostic_correction(&diagnostic, index, ui.ctx()) {
+                self.show_file_error(error);
+            }
+        } else if let Some(diagnostic) = jump_target {
             self.jump_to_diagnostic(diagnostic);
         }
     }
@@ -9467,7 +9561,9 @@ impl EditorApp {
         self.writing.configure(
             &self.settings.harper_dictionary,
             self.settings.harper_ignore_capitalized_names,
+            &self.settings.tex_prose_rules,
         );
+        self.ltex.configure(&self.settings.ltex);
         if snippets_changed {
             self.editor_completion = None;
             self.activity.completion = None;
@@ -9883,6 +9979,8 @@ impl EditorApp {
         self.poll_synctex(&context);
         self.symbol_drawing.poll();
         self.update_writing_checks(&context);
+        self.update_ltex_checks(&context);
+        self.update_liquid();
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);
         self.refresh_diagnostic_tooltip(&context);
@@ -9895,6 +9993,10 @@ impl EditorApp {
         self.show_rename_dialog(&context);
         self.show_table_editor_window(&context);
         self.show_latexdiff(&context, frame);
+        self.show_tex_documentation(&context);
+        self.show_citation(&context, frame);
+        self.poll_biber_cache(&context);
+        self.show_liquid_review(&context);
         self.show_app_modal_window(&context);
         self.show_asset_hover_window(&context);
         self.show_diagnostic_tooltip_window(&context);
@@ -11157,22 +11259,15 @@ fn scale_rect_from_egui_to_native(rect: Rect, viewport: Rect, scale: f32) -> Opt
     )?)
 }
 
-fn show_preview_transition(
-    ui: &mut egui::Ui,
-    waiting_for_focus: bool,
-    paused: bool,
-    spinning: bool,
-) {
+fn show_preview_transition(ui: &mut egui::Ui, paused: bool, spinning: bool) {
     show_centered_preview_message(
         ui,
-        if waiting_for_focus {
-            "Activate the document window to resume preview"
-        } else if paused {
+        if paused {
             "Preview paused"
         } else {
             "Building preview…"
         },
-        spinning && !waiting_for_focus && !paused,
+        spinning && !paused,
     );
 }
 
@@ -11565,6 +11660,7 @@ fn tinymist_diagnostic(diagnostic: LspDiagnostic, source: DiagnosticSource) -> D
         details.push(format!("code: {code}"));
     }
     Diagnostic {
+        correction: None,
         provider,
         severity,
         source,
@@ -11578,6 +11674,13 @@ fn tinymist_diagnostic(diagnostic: LspDiagnostic, source: DiagnosticSource) -> D
 }
 
 fn diagnostic_code(diagnostic: &Diagnostic) -> Option<String> {
+    if let Some(rule) = diagnostic
+        .correction
+        .as_ref()
+        .and_then(|correction| correction.rule.as_ref())
+    {
+        return Some(rule.clone());
+    }
     diagnostic.details.iter().find_map(|detail| {
         let (label, value) = detail.split_once(':')?;
         label
@@ -11662,7 +11765,7 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 19] {
+fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 22] {
     use crate::child_view::child_viewport_id;
     [
         child_viewport_id(current, find_bar::VIEWPORT_SALT),
@@ -11675,6 +11778,9 @@ fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 19] {
         child_viewport_id(current, "tiptoptyp-packages"),
         child_viewport_id(current, "tiptoptyp-table-editor"),
         child_viewport_id(current, latexdiff::SALT),
+        child_viewport_id(current, tex_documentation::SALT),
+        child_viewport_id(current, citation::SALT),
+        child_viewport_id(current, liquid::SALT),
         child_viewport_id(current, "tiptoptyp-rename-overlay"),
         child_viewport_id(current, "tiptoptyp-workspace-chooser"),
         child_viewport_id(current, "tiptoptyp-modal-overlay"),
@@ -11898,6 +12004,8 @@ fn is_child_widget_viewport(context: &egui::Context, viewport: egui::ViewportId)
             || viewport == scoped_child_viewport_id(context, preview_controls::SALT)
             || viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor")
             || viewport == scoped_child_viewport_id(context, latexdiff::SALT)
+            || viewport == scoped_child_viewport_id(context, tex_documentation::SALT)
+            || viewport == scoped_child_viewport_id(context, citation::SALT)
             || viewport
                 == crate::child_view::child_viewport_id(
                     scoped_child_viewport_id(context, "preview-window"),
@@ -12592,6 +12700,7 @@ struct EditorContextMenuOptions<'a> {
     link: Option<&'a str>,
     table: Option<&'a BoundTableTarget>,
     math: Option<&'a crate::math_conversion::Target>,
+    liquid_selection: Option<&'a liquid::BoundSelection>,
 }
 
 /// Hover-opened side menu for math conversion choices. The popup reserves a
@@ -12792,6 +12901,20 @@ fn editor_menu_rows(
     }
     if menu_item(ui, "Select All", shortcuts.egui(ShortcutAction::SelectAll)).clicked() {
         *action = Some(EditorMenuAction::Command(AppCommand::SelectAll));
+        ui.close();
+    }
+    if menu_item_enabled(
+        ui,
+        options.liquid_selection.is_some(),
+        liquid::MENU_LABEL,
+        None,
+    )
+    .clicked()
+    {
+        *action = options
+            .liquid_selection
+            .cloned()
+            .map(EditorMenuAction::Liquid);
         ui.close();
     }
     if menu_item(

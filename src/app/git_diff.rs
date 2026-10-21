@@ -188,7 +188,8 @@ impl EditorApp {
                 anchor,
                 character,
                 self.tabs.current_record().document.key(),
-            );
+            )
+            .with_liquid_selection(self.document().snapshot(), kind, Some(cursor));
             self.open_app_popup(popup);
         }
         let attention_viewport = Rect::from_min_max(

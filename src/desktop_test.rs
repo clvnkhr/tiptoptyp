@@ -16,9 +16,11 @@ struct State {
     context: Option<egui::Context>,
     requested: u64,
     published: u64,
+    requested_viewport: Option<String>,
     document: Value,
     renderer: Option<(Value, Instant)>,
     renderer_pending: bool,
+    renderer_viewport: Option<String>,
     renderer_epoch: u64,
     targets: BTreeMap<String, (Value, Instant)>,
     observed_targets: BTreeMap<String, (Value, Instant)>,
@@ -26,7 +28,21 @@ struct State {
     observed_scrolls: BTreeMap<String, Value>,
 }
 impl State {
+    fn requested_for(&self, viewport: &str) -> bool {
+        self.requested > self.published
+            && self
+                .requested_viewport
+                .as_deref()
+                .is_none_or(|owner| owner == viewport)
+    }
     fn publish_document(&mut self, document: Value) {
+        if self
+            .requested_viewport
+            .as_deref()
+            .is_some_and(|owner| document["viewport"] != owner)
+        {
+            return;
+        }
         self.document = document;
         // Freeze hit targets with their document frame. The next native pass
         // may start before the socket reader wakes; it must not mix frames.
@@ -39,7 +55,18 @@ impl State {
         self.renderer_pending = false;
         self.renderer = None;
     }
-    fn request_renderer(&mut self) -> Option<u64> {
+    fn request_renderer(&mut self, viewport: &str) -> Option<u64> {
+        if self
+            .requested_viewport
+            .as_deref()
+            .is_some_and(|owner| owner != viewport)
+        {
+            return None;
+        }
+        if self.renderer_viewport.as_deref() != Some(viewport) {
+            self.reset_renderer();
+            self.renderer_viewport = Some(viewport.to_owned());
+        }
         if self.renderer_pending {
             return None;
         }
@@ -98,8 +125,10 @@ pub(crate) fn start() -> Result<Option<PathBuf>, String> {
                 let _ = stream.set_write_timeout(timeout);
                 let mut command = String::new();
                 let read = BufReader::new((&mut stream).take(32)).read_line(&mut command);
-                let response = if read.is_ok() && command == "snapshot\n" {
-                    snapshot()
+                let response = if read.is_ok()
+                    && let Some(viewport) = snapshot_viewport(&command)
+                {
+                    snapshot(viewport.map(str::to_owned))
                 } else {
                     json!({"error": "only snapshot is supported"})
                 };
@@ -117,11 +146,29 @@ pub(crate) fn attach(context: &egui::Context) {
     }
 }
 
-fn snapshot() -> Value {
+fn snapshot_viewport(command: &str) -> Option<Option<&str>> {
+    if command == "snapshot\n" {
+        return Some(None);
+    }
+    let viewport = command.strip_prefix("snapshot ")?.strip_suffix('\n')?;
+    // egui's Debug identifier includes quotes; preserve them for exact owner
+    // matching while validating only the bounded hexadecimal payload.
+    let identifier = viewport
+        .strip_prefix('"')
+        .and_then(|text| text.strip_suffix('"'))
+        .unwrap_or(viewport);
+    (!identifier.is_empty()
+        && identifier.len() <= 16
+        && identifier.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then_some(Some(viewport))
+}
+
+fn snapshot(viewport: Option<String>) -> Value {
     let probe = PROBE.get().unwrap();
     let (context, request) = {
         let mut state = probe.state.lock().unwrap();
         state.requested += 1;
+        state.requested_viewport = viewport;
         (state.context.clone(), state.requested)
     };
     let Some(context) = context else {
@@ -159,7 +206,8 @@ fn snapshot() -> Value {
     json!({
         "schema": 1, "pid": std::process::id(), "build": crate::build_info::VERSION,
         "request": request, "renderer_generation": state.renderer_epoch, "document": state.document, "targets": targets, "scrolls": state.scrolls,
-        "renderer": state.renderer.as_ref().map(|(value, time)| json!({"value": value, "age_ms": time.elapsed().as_millis()})),
+        "renderer": state.renderer.as_ref().filter(|_| state.document["viewport"].as_str() == state.renderer_viewport.as_deref())
+            .map(|(value, time)| json!({"viewport": state.renderer_viewport, "value": value, "age_ms": time.elapsed().as_millis()})),
     })
 }
 
@@ -169,8 +217,13 @@ pub(crate) fn reset_renderer() {
     }
 }
 
-pub(crate) fn request_renderer() -> Option<u64> {
-    PROBE.get()?.state.lock().unwrap().request_renderer()
+pub(crate) fn request_renderer(viewport: &str) -> Option<u64> {
+    PROBE
+        .get()?
+        .state
+        .lock()
+        .unwrap()
+        .request_renderer(viewport)
 }
 
 pub(crate) fn renderer_observed(epoch: u64, value: String) {
@@ -187,6 +240,19 @@ pub(crate) fn fingerprint(text: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// The explicitly opted-in desktop session remains enabled between snapshots.
+/// Workers must not use `requested`, which only describes unpublished UI work.
+pub(crate) fn enabled() -> bool {
+    PROBE.get().is_some()
+}
+
+pub(crate) fn requested_for(viewport: &str) -> bool {
+    PROBE
+        .get()
+        .is_some_and(|probe| probe.state.lock().unwrap().requested_for(viewport))
+}
+
+#[cfg(test)]
 pub(crate) fn requested() -> bool {
     PROBE.get().is_some_and(|probe| {
         let state = probe.state.lock().unwrap();
@@ -224,8 +290,11 @@ pub(crate) fn observe(name: &str, response: &egui::Response) {
     let zoom = context.zoom_factor();
     let point = screen_point(origin, response.interact_rect, zoom);
     let size = response.interact_rect.size() * zoom;
+    let selection = egui::text_edit::TextEditState::load(context, response.id)
+        .and_then(|state| state.cursor.char_range())
+        .map(|range| [range.primary.index.0, range.secondary.index.0]);
     let target = json!({"x": point.x, "y": point.y, "width": size.x, "height": size.y, "enabled": response.enabled(), "hovered": response.hovered(),
-        "focused": response.has_focus() && context.input(|input| input.focused),
+        "focused": response.has_focus() && context.input(|input| input.focused), "selection": selection,
         "viewport": format!("{:?}", context.viewport_id()), "frame": context.cumulative_frame_nr()});
     probe
         .state
@@ -267,6 +336,8 @@ fn screen_point(origin: egui::Pos2, hit: egui::Rect, zoom: f32) -> egui::Pos2 {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
     #[test]
     fn hit_coordinates_include_native_origin_and_interface_zoom() {
         use eframe::egui::{Rect, pos2};
@@ -298,16 +369,67 @@ mod tests {
     #[test]
     fn navigation_releases_dropped_callback_and_rejects_previous_renderer() {
         let mut state = super::State::default();
-        let old = state.request_renderer().unwrap();
-        assert!(state.request_renderer().is_none());
+        let old = state.request_renderer("FFFF").unwrap();
+        assert!(state.request_renderer("FFFF").is_none());
         state.reset_renderer(); // Pending pre-load callback was discarded by WebView.
-        let current = state.request_renderer().unwrap();
+        let current = state.request_renderer("FFFF").unwrap();
         state.renderer_observed(old, "{}".into());
         assert!(state.renderer.is_none());
-        assert!(state.request_renderer().is_none());
+        assert!(state.request_renderer("FFFF").is_none());
         state.renderer_observed(current, "{\"ready\":true}".into());
         assert_eq!(state.renderer.as_ref().unwrap().0["ready"], true);
-        assert!(state.request_renderer().is_some());
+        assert!(state.request_renderer("FFFF").is_some());
+    }
+
+    #[test]
+    fn targeted_observation_rejects_another_window_and_its_renderer() {
+        let mut state = super::State {
+            requested: 1,
+            requested_viewport: Some("17F2".into()),
+            ..Default::default()
+        };
+        assert!(state.requested_for("17F2"));
+        assert!(!state.requested_for("FFFF"));
+        assert!(state.request_renderer("FFFF").is_none());
+        state.publish_document(serde_json::json!({"viewport": "FFFF", "frame": 1}));
+        assert_eq!(state.published, 0);
+        let secondary_epoch = state.request_renderer("17F2").unwrap();
+        state.renderer_observed(secondary_epoch, "{\"ready\":true}".into());
+        state.publish_document(serde_json::json!({"viewport": "17F2", "frame": 1}));
+        assert_eq!(state.published, 1);
+        assert!(!state.requested_for("17F2"));
+        state.requested += 1;
+        state.requested_viewport = Some("FFFF".into());
+        let root_epoch = state.request_renderer("FFFF").unwrap();
+        assert!(root_epoch > secondary_epoch);
+        assert!(state.renderer.is_none());
+        state.renderer_observed(secondary_epoch, "{\"stale\":true}".into());
+        assert!(state.renderer.is_none());
+        state.renderer_observed(root_epoch, "{\"ready\":true}".into());
+        assert_eq!(state.renderer_viewport.as_deref(), Some("FFFF"));
+    }
+
+    #[test]
+    fn snapshot_commands_accept_only_bounded_viewport_identifiers() {
+        assert_eq!(super::snapshot_viewport("snapshot\n"), Some(None));
+        assert_eq!(
+            super::snapshot_viewport("snapshot 17F2\n"),
+            Some(Some("17F2"))
+        );
+        assert_eq!(
+            super::snapshot_viewport("snapshot \"17F2\"\n"),
+            Some(Some("\"17F2\""))
+        );
+        for invalid in [
+            "snapshot \n",
+            "snapshot 17F2",
+            "snapshot nope\n",
+            "snapshot 17 F2\n",
+            "snapshot 00000000000000000\n",
+            "snapshot 17F2\nextra\n",
+        ] {
+            assert!(super::snapshot_viewport(invalid).is_none(), "{invalid:?}");
+        }
     }
 
     #[test]
@@ -319,6 +441,47 @@ mod tests {
 
     #[test]
     fn disabled_probe_does_not_request_work() {
+        assert!(!super::enabled());
         assert!(!super::requested());
+    }
+
+    #[test]
+    fn enabled_session_survives_snapshot_publication() {
+        const CHILD: &str = "TIPTOPTYP_TEST_ENABLED_PROBE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            // Isolate the process-wide OnceLock so this regression cannot enable
+            // the test endpoint in unrelated tests running in parallel.
+            let directory = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+                .unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "desktop_test::tests::enabled_session_survives_snapshot_publication",
+                ])
+                .env(CHILD, "1")
+                .env("TIPTOPTYP_DESKTOP_TEST_DIR", directory.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "isolated session check failed: {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        assert!(!super::enabled());
+        assert!(super::start().unwrap().is_some());
+        assert!(super::enabled());
+        assert!(!super::requested());
+        super::PROBE.get().unwrap().state.lock().unwrap().requested = 1;
+        assert!(super::requested());
+        super::publish(serde_json::json!({"viewport": "root", "frame": 1}));
+        assert!(!super::requested(), "the snapshot was completely published");
+        assert!(
+            super::enabled(),
+            "asynchronous fixture workers must remain enabled between inspection requests"
+        );
     }
 }

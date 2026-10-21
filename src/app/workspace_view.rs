@@ -19,6 +19,8 @@ pub(super) fn empty_workspace_command(command: AppCommand) -> bool {
             | AppCommand::Git
             | AppCommand::Packages
             | AppCommand::LatexDiff
+            | AppCommand::TexDocumentation
+            | AppCommand::ImportCitation
     )
 }
 
@@ -43,10 +45,14 @@ pub(super) fn content_view(
     if empty {
         ContentView::Empty
     } else if kind.preview_only() {
-        if source_preview {
-            ContentView::SplitAsset
-        } else {
+        if !source_preview {
             ContentView::Asset
+        } else {
+            match mode {
+                ViewMode::Code => ContentView::Asset,
+                ViewMode::Split => ContentView::SplitAsset,
+                ViewMode::Preview => ContentView::Preview,
+            }
         }
     } else if !source_preview {
         ContentView::Source
@@ -409,7 +415,11 @@ mod tests {
                     let docked = if !source_preview {
                         main
                     } else if kind.preview_only() {
-                        ContentView::SplitAsset
+                        match mode {
+                            ViewMode::Code => ContentView::Asset,
+                            ViewMode::Split => ContentView::SplitAsset,
+                            ViewMode::Preview => ContentView::Preview,
+                        }
                     } else {
                         match mode {
                             ViewMode::Code => ContentView::Source,

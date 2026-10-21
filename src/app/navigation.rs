@@ -142,7 +142,13 @@ impl EditorApp {
             return;
         };
         if self.diagnostic_targets_current_document(&diagnostic) {
-            self.apply_editor_location(None, Some((location.line, location.column)));
+            if let Some(correction) = &diagnostic.correction
+                && correction.is_current(self.document().key())
+            {
+                self.navigate_editor_range(correction.range.clone());
+            } else {
+                self.apply_editor_location(None, Some((location.line, location.column)));
+            }
             return;
         }
         let Some(path) = self.diagnostic_target_path(&diagnostic) else {
@@ -283,6 +289,7 @@ mod tests {
 
     fn diagnostic(path: PathBuf) -> Diagnostic {
         Diagnostic {
+            correction: None,
             provider: None,
             severity: DiagnosticSeverity::Error,
             source: DiagnosticSource::File(path),

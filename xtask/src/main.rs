@@ -1,6 +1,7 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod liquid;
 mod macos;
 mod payloads;
 mod pdfium;
@@ -130,6 +131,7 @@ fn run() -> Result<(), String> {
     }
     let mut target = None;
     let mut production = false;
+    let mut liquid_source = None;
     while let Some(argument) = arguments.next() {
         if argument == "--target" {
             target = Some(
@@ -137,6 +139,12 @@ fn run() -> Result<(), String> {
                     .next()
                     .ok_or_else(|| "--target requires a target triple".to_owned())?,
             );
+        } else if argument == "--source" {
+            liquid_source = Some(PathBuf::from(
+                arguments
+                    .next()
+                    .ok_or("--source requires a raw input folder")?,
+            ));
         } else if argument == "--prod" {
             production = true;
         } else {
@@ -144,13 +152,24 @@ fn run() -> Result<(), String> {
         }
     }
 
+    if liquid_source.is_some() && command != "prepare-liquid" {
+        return Err("--source is only available for prepare-liquid".into());
+    }
     match command.as_str() {
+        "prepare-liquid" => {
+            liquid::prepare(&liquid_source.ok_or("prepare-liquid requires --source PATH")?)
+        }
+        "stage-liquid" => {
+            liquid::preflight()?;
+            liquid::stage()
+        }
         "fetch-pdfium" => pdfium::fetch(&target_or_host(target)?),
         "fetch-sidecars" => {
             let target = target_or_host(target)?;
             fetch_sidecars(&target)
         }
         "package-build" => {
+            liquid::preflight()?;
             let target = package_target(target)?;
             let slices = macos::targets(&target);
             for slice in &slices {
@@ -163,6 +182,7 @@ fn run() -> Result<(), String> {
             if !slices.contains(&host.as_str()) {
                 pdfium::fetch(&host)?;
             }
+            liquid::stage()?;
             generate_third_party_notices()?;
             payloads::stage(&target)?;
             if target.ends_with("apple-darwin") {
@@ -202,7 +222,7 @@ fn run() -> Result<(), String> {
         "generate-notices" => generate_third_party_notices(),
         "help" | "--help" | "-h" => {
             println!(
-                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  fetch-pdfium [--target TRIPLE]\n  package-build [--target TRIPLE] [--prod] (macOS: universal by default)\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
+                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  fetch-pdfium [--target TRIPLE]\n  prepare-liquid --source PATH (compress reviewed raw model and native runtimes)\n  stage-liquid (verify and stage the prepared native model package)\n  package-build [--target TRIPLE] [--prod] (macOS: universal by default)\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }
@@ -253,6 +273,11 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("docs/licenses/Unicode-3.0.txt"),
         root.join("docs/licenses/zig-MIT.txt"),
         root.join("docs/licenses/mathgloss-MIT.txt"),
+        root.join("toolchain/liquid/LICENSE.txt"),
+        root.join("toolchain/liquid/PROVENANCE.json"),
+        root.join("toolchain/liquid/licenses/aarch64-apple-darwin.txt"),
+        root.join("toolchain/liquid/licenses/x86_64-apple-darwin.txt"),
+        root.join("assets/liquid/SACREMOSES-LICENSE"),
     ]
     .into_iter()
     .chain(FONT_LICENSES.iter().map(|(source, _)| root.join(source)))
@@ -325,6 +350,11 @@ fn verify_package(target: &str) -> Result<(), String> {
     verify_bundle_icon_reference(&app.join("Contents/Info.plist"), MACOS_APP_ICON)?;
     macos::verify_architectures(&executable_dir.join("tiptoptyp"), target)?;
     payloads::verify(&resources, target)?;
+    liquid::verify(&resources)?;
+    verify_hash(
+        &resources.join("licenses/Sacremoses-MIT.txt"),
+        &sha256(&root.join("assets/liquid/SACREMOSES-LICENSE"))?,
+    )?;
     for slice in macos::targets(target) {
         require_file(
             &resources

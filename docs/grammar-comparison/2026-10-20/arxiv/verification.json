@@ -1,0 +1,40 @@
+{
+  "completed_utc": "2026-10-20T13:06:48.600576+00:00",
+  "case_model_combinations": 474,
+  "inference_timing_samples": 1422,
+  "failed_requests": 0,
+  "truncated_requests": 0,
+  "baseline_outputs_reproduced": 192,
+  "all_repeated_outputs_identical": true,
+  "corpus_sha256": "4fa955e37d2fe7327cc16f270d06d8158442e1e742416c0a8bfeb206aeb00adc",
+  "checks": {
+    "python_harness": {
+      "passed": 44
+    },
+    "rust_tests": {
+      "passed": 2374,
+      "ignored": 70
+    },
+    "xtask": {
+      "passed": 32,
+      "ignored": 1
+    },
+    "cargo_fmt": "passed",
+    "cargo_clippy_all_targets_D_warnings": "passed",
+    "corpus_integrity": "passed",
+    "report_rows_and_JavaScript_syntax": "passed",
+    "git_diff_check": "passed"
+  },
+  "files": {
+    "results.json": "2b2ae51a8c64fa7a7604283b2b087c394f0f0ecdea4e56ded69f7a619215c015",
+    "report.html": "69ac7501800aaa9808e15c099b1945507f83d9cecc3adfe8a8336c60a7456af9",
+    "qualitative-review.json": "ec9fc81bcb3aae4832ade5bfd5a6868554b4bda1f2f60aa00df3543d73ab6b50"
+  },
+  "limitations": [
+    "Author-selected developer challenge set, not a representative held-out benchmark.",
+    "Qualitative review is by assistants, not blinded human annotation.",
+    "35 excerpts and3 context-dependent sentences remain unscored.",
+    "Mathematical typography is exposed to models; protected-string changes require interpretation.",
+    "No editor UI/runtime or grammar-model integration changed. No native UI interaction or visual verification claimed."
+  ]
+}

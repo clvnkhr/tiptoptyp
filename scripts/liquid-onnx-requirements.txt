@@ -1,0 +1,12 @@
+# Developer-only Python 3.12 export/validation environment. Not shipped in the app.
+-r liquid-grammar-requirements.txt
+# Pinned portable ONNX export and CPU parity tools; the app ships native C/C++
+# ONNX Runtime libraries, never this Python environment.
+onnx==1.23.2
+onnxruntime==1.31.0
+onnxscript==0.7.2
+onnx_ir==1.0.0
+ml_dtypes==0.6.0
+protobuf==7.36.2
+flatbuffers==25.12.19
+numpy==2.5.4

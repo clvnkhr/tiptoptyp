@@ -694,3 +694,222 @@ fn palette_ime_commit_enter_keeps_query_ready_for_more_typing() {
     );
     assert_eq!(app.document().source(), &source);
 }
+
+#[test]
+fn latex_diff_palette_search_and_enter_work_without_a_tex_document() {
+    for empty in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        if empty {
+            app.tabs = tabs::Tabs::default();
+        } else {
+            app.document_mut().replace_loaded_unprojected(
+                "= Unchanged Typst source".into(),
+                directory.path().join("paper.typ"),
+                DocumentKind::Typst,
+                None,
+            );
+        }
+        context
+            .run_ui(input(None, Vec::new()), |ui| {
+                app.toggle_command_palette(ui.ctx())
+            })
+            .drop_without_applying_deltas();
+        for query in ["TeX", "Create LaTeX Diff", "latexdiff"] {
+            app.command_palette.query = query.into();
+            context
+                .run_ui(input(None, Vec::new()), |ui| {
+                    let entries = app.command_palette_entries(ui.ctx());
+                    let entry = entries
+                        .iter()
+                        .find(|entry| entry.action == ShortcutAction::LatexDiff)
+                        .unwrap();
+                    assert_eq!(entry.label, "Create LaTeX Diff…");
+                    assert_eq!(entry.category, "File");
+                    assert!(entry.enabled, "standalone diff disabled (empty={empty})");
+                    let _ = app.command_palette.show(ui, &entries);
+                    assert!(
+                        app.command_palette
+                            .enabled_actions()
+                            .any(|action| action == ShortcutAction::LatexDiff),
+                        "query={query}"
+                    );
+                })
+                .drop_without_applying_deltas();
+        }
+        let enter = key(KeyboardShortcut::new(Modifiers::NONE, egui::Key::Enter));
+        context
+            .run_ui(input(None, vec![enter]), |ui| {
+                let entries = app.command_palette_entries(ui.ctx());
+                assert_eq!(
+                    app.command_palette.show(ui, &entries),
+                    Some(command_palette::Action::Execute(ShortcutAction::LatexDiff))
+                );
+                let origin = app.command_palette_origin.unwrap();
+                app.close_app_popup();
+                app.execute_palette_action(ShortcutAction::LatexDiff, origin, ui.ctx(), None);
+            })
+            .drop_without_applying_deltas();
+        assert!(
+            app.latexdiff.is_some(),
+            "palette did not open the wizard (empty={empty})"
+        );
+        if empty {
+            assert!(app.tabs.is_empty());
+        } else {
+            assert_eq!(app.document().source(), "= Unchanged Typst source");
+        }
+    }
+}
+
+#[test]
+fn documentation_and_citation_import_are_searchable_without_open_tabs() {
+    for (action, query) in [
+        (ShortcutAction::TexDocumentation, "texdoc"),
+        (ShortcutAction::ImportCitation, "import citation"),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.tabs = tabs::Tabs::default();
+        context
+            .run_ui(input(None, Vec::new()), |ui| {
+                app.toggle_command_palette(ui.ctx())
+            })
+            .drop_without_applying_deltas();
+        app.command_palette.query = query.into();
+        context
+            .run_ui(input(None, Vec::new()), |ui| {
+                let entries = app.command_palette_entries(ui.ctx());
+                let entry = entries
+                    .iter()
+                    .find(|entry| entry.action == action)
+                    .expect("command in palette");
+                assert!(entry.enabled);
+                let _ = app.command_palette.show(ui, &entries);
+                assert!(
+                    app.command_palette
+                        .enabled_actions()
+                        .any(|candidate| candidate == action)
+                );
+            })
+            .drop_without_applying_deltas();
+        context
+            .run_ui(
+                input(
+                    None,
+                    vec![key(KeyboardShortcut::new(
+                        Modifiers::NONE,
+                        egui::Key::Enter,
+                    ))],
+                ),
+                |ui| {
+                    let entries = app.command_palette_entries(ui.ctx());
+                    assert_eq!(
+                        app.command_palette.show(ui, &entries),
+                        Some(command_palette::Action::Execute(action))
+                    );
+                    let origin = app.command_palette_origin.unwrap();
+                    app.close_app_popup();
+                    app.execute_palette_action(action, origin, ui.ctx(), None);
+                },
+            )
+            .drop_without_applying_deltas();
+        assert!(app.tool_dialog_open());
+        assert_eq!(
+            app.tex_documentation.is_some(),
+            action == ShortcutAction::TexDocumentation
+        );
+        assert_eq!(
+            app.citation.is_some(),
+            action == ShortcutAction::ImportCitation
+        );
+        assert!(app.tabs.is_empty());
+    }
+}
+
+#[test]
+fn palette_tool_handoff_restores_source_without_reactivating_owner() {
+    for action in [
+        ShortcutAction::LatexDiff,
+        ShortcutAction::TexDocumentation,
+        ShortcutAction::ImportCitation,
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&context, directory.path());
+        let source = app.document().source().clone();
+        context
+            .run_ui(input(None, Vec::new()), |ui| {
+                app.toggle_command_palette(ui.ctx())
+            })
+            .drop_without_applying_deltas();
+        let origin = app.command_palette_origin.unwrap();
+        query_frame(&context, &mut app, Vec::new());
+        assert_ne!(context.memory(|memory| memory.focused()), origin.focus);
+        let output = context.run_ui(input(Some("tiptoptyp-popup-overlay"), Vec::new()), |ui| {
+            app.close_app_popup();
+            app.execute_palette_action(action, origin, ui.ctx(), None);
+            assert_eq!(ui.ctx().memory(|memory| memory.focused()), origin.focus);
+        });
+        assert!(app.tool_dialog_open(), "{action:?}");
+        assert!(
+            !output
+                .viewport_output
+                .values()
+                .any(|viewport| viewport.commands.contains(&egui::ViewportCommand::Focus)),
+            "{action:?} must let the new modal activate without a competing native owner Focus"
+        );
+        output.drop_without_applying_deltas();
+        assert_eq!(selection(&context), 2..7, "{action:?}");
+        assert_eq!(app.document().source(), &source);
+    }
+}
+
+#[test]
+fn palette_cancel_and_ordinary_commands_still_reactivate_origin() {
+    for cancel in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&context, directory.path());
+        context
+            .run_ui(input(None, Vec::new()), |ui| {
+                app.toggle_command_palette(ui.ctx())
+            })
+            .drop_without_applying_deltas();
+        let origin = app.command_palette_origin.unwrap();
+        query_frame(&context, &mut app, Vec::new());
+        let output = context.run_ui(input(Some("tiptoptyp-popup-overlay"), Vec::new()), |ui| {
+            if cancel {
+                app.dismiss_command_palette(ui.ctx(), true);
+            } else {
+                app.close_app_popup();
+                app.execute_palette_action(
+                    ShortcutAction::ToggleLineNumbers,
+                    origin,
+                    ui.ctx(),
+                    None,
+                );
+            }
+            assert_eq!(ui.ctx().memory(|memory| memory.focused()), origin.focus);
+        });
+        let native_focus: Vec<_> = output
+            .viewport_output
+            .iter()
+            .filter_map(|(id, viewport)| {
+                viewport
+                    .commands
+                    .contains(&egui::ViewportCommand::Focus)
+                    .then_some(*id)
+            })
+            .collect();
+        assert_eq!(
+            native_focus,
+            vec![egui::ViewportId::ROOT],
+            "cancel={cancel}"
+        );
+        output.drop_without_applying_deltas();
+        assert_eq!(selection(&context), 2..7);
+    }
+}

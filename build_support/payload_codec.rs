@@ -18,7 +18,19 @@ pub(crate) fn decode(
     sha256: &str,
     output: &mut impl Write,
 ) -> io::Result<()> {
-    if !(1..=MAX_PAYLOAD_BYTES).contains(&bytes) {
+    decode_bounded(source, bytes, sha256, output, MAX_PAYLOAD_BYTES)
+}
+
+/// A caller with a separately validated asset contract may allow a larger file.
+/// The decoder history, exact length, checksum and single-frame rules still apply.
+pub(crate) fn decode_bounded(
+    source: impl Read,
+    bytes: u64,
+    sha256: &str,
+    output: &mut impl Write,
+    max_bytes: u64,
+) -> io::Result<()> {
+    if bytes == 0 || bytes > max_bytes || bytes == u64::MAX {
         return Err(invalid("Packaged payload has an unsupported size"));
     }
     let mut decoder = zstd::stream::read::Decoder::new(source)?.single_frame();
@@ -77,6 +89,38 @@ mod tests {
             &mut output,
         )?;
         Ok(output)
+    }
+
+    #[test]
+    fn caller_size_limit_does_not_relax_frame_or_integrity_checks() {
+        let bytes = b"bounded native model";
+        let archive = encode_fixture(bytes);
+        let hash = format!("{:x}", Sha256::digest(bytes));
+        let mut output = Vec::new();
+        assert!(decode_bounded(&archive[..], bytes.len() as u64, &hash, &mut output, 3).is_err());
+        assert!(output.is_empty());
+        decode_bounded(
+            &archive[..],
+            bytes.len() as u64,
+            &hash,
+            &mut output,
+            2 * MAX_PAYLOAD_BYTES,
+        )
+        .unwrap();
+        assert_eq!(output, bytes);
+        assert!(decode_bounded(&archive[..], u64::MAX, &hash, &mut Vec::new(), u64::MAX).is_err());
+        let mut trailing = archive;
+        trailing.push(0);
+        assert!(
+            decode_bounded(
+                &trailing[..],
+                bytes.len() as u64,
+                &hash,
+                &mut Vec::new(),
+                2 * MAX_PAYLOAD_BYTES
+            )
+            .is_err()
+        );
     }
 
     #[test]

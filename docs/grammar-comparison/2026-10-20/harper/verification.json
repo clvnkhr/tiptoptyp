@@ -1,0 +1,147 @@
+{
+  "schema": 1,
+  "scope": "Offline production Harper input/export plus ML reference inference; no editor ML integration or source edits.",
+  "fixtures": 120,
+  "export_documents_with_references": 179,
+  "admitted_blocks": 139,
+  "unique_input_strings": 108,
+  "environment": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.12.14",
+    "processor": "Apple M2 Max",
+    "logical_cpus": 12,
+    "device": "cpu",
+    "threads": 4,
+    "repeats": 3,
+    "warmup": 2
+  },
+  "git_revision": "2dbfd7ee0834b2416ed4a1bc6a0e3512bb02cb7e",
+  "git_dirty_at_run": true,
+  "model_cases_completed": {
+    "liquid": 139,
+    "gector": 139,
+    "harper": 139,
+    "harper-spelling": 139
+  },
+  "ml_repetitions": {
+    "liquid": {
+      "all_three_outputs_identical": true,
+      "unavailable": 0
+    },
+    "gector": {
+      "all_three_outputs_identical": true,
+      "unavailable": 0
+    }
+  },
+  "request_generator_matches_measured_request": true,
+  "harper_timings_original_documents": {
+    "production_cold_cache_ms": {
+      "median_of_document_medians_ms": 8.811146,
+      "documents": 120
+    },
+    "production_cache_hit_ms": {
+      "median_of_document_medians_ms": 0.0171455,
+      "documents": 120
+    },
+    "spell_only_cold_suggestion_cache_ms": {
+      "median_of_document_medians_ms": 7.260437,
+      "documents": 120
+    },
+    "spell_only_warm_suggestion_cache_ms": {
+      "median_of_document_medians_ms": 0.025354,
+      "documents": 120
+    }
+  },
+  "harper_first_process_document_check_ms": 535.0506670000001,
+  "timing_contract": "Production includes syntax parsing, cache lookup/linting and diagnostic mapping. Cold cache uses a fresh Checker with process-resident dictionary. First process document may include dictionary initialization. Spell-only configures the curated group with only SpellCheck enabled; uses the identical already-built Documents and dictionary; excludes Document parsing/construction/diagnostic filtering (cold suggestion-cache samples include constructing the configured LintGroup), so it is not an end-to-end latency comparison. Export and serialization are outside timings.",
+  "guards": {
+    "liquid": {
+      "changed_outputs": 64,
+      "locally_mappable": 57,
+      "rejected_proposals": 7,
+      "reasons": {
+        "Insertion is adjacent to an opaque placeholder": 4,
+        "Edit touches a word joined across omitted source syntax": 3,
+        "Insertion at a fragment end has ambiguous source adjacency": 1,
+        "Insertion at a fragment start has ambiguous source adjacency": 1
+      },
+      "scope": "Conservative scalar/source-geometry guard, not semantic or syntax correctness approval. Unsafe proposals leave document source unchanged. No source file is edited."
+    },
+    "gector": {
+      "changed_outputs": 33,
+      "locally_mappable": 33,
+      "rejected_proposals": 0,
+      "reasons": {},
+      "scope": "Conservative scalar/source-geometry guard, not semantic or syntax correctness approval. Unsafe proposals leave document source unchanged. No source file is edited."
+    },
+    "harper": {
+      "changed_outputs": 43,
+      "locally_mappable": 42,
+      "rejected_proposals": 1,
+      "reasons": {
+        "Edit touches a word joined across omitted source syntax": 1
+      },
+      "scope": "Conservative scalar/source-geometry guard, not semantic or syntax correctness approval. Unsafe proposals leave document source unchanged. No source file is edited."
+    },
+    "harper-spelling": {
+      "changed_outputs": 30,
+      "locally_mappable": 29,
+      "rejected_proposals": 1,
+      "reasons": {
+        "Edit touches a word joined across omitted source syntax": 1
+      },
+      "scope": "Conservative scalar/source-geometry guard, not semantic or syntax correctness approval. Unsafe proposals leave document source unchanged. No source file is edited."
+    }
+  },
+  "measurement_isolation": "No Cargo compilation or test suite ran concurrently with the Harper export or ML inference; one ML worker at a time. Later validation builds are separate.",
+  "checks": {
+    "python_comparison_tests": 76,
+    "rust_focused_tests": "3/3 optimized regression tests plus production export passed",
+    "required_checks": "passed: cargo fmt --all -- --check; cargo clippy --all-targets -- -D warnings; cargo test --no-fail-fast; cargo test --manifest-path xtask/Cargo.toml",
+    "rust_format": "passed",
+    "clippy_all_targets": "passed with -D warnings",
+    "xtask_tests": "32 passed,1 ignored",
+    "report_html_and_inline_js": "HTML parsed; inline JavaScript syntax check passed; no visual QA claim",
+    "rust_full_suite": {
+      "passed": 2377,
+      "failed": 0,
+      "ignored": 71,
+      "test_binaries_and_doctest_groups": 17
+    },
+    "debug_test_linker_warning": "The macOS debug test linker warned about a large __eh_frame section; compilation and all tests passed. No release app performance conclusion is drawn from this warning."
+  },
+  "artifacts_sha256": {
+    "corpus.json": "5453615e6a436d7828de61dab4530badad5d2fdd64ba65f96b0e63043ac16ee5",
+    "deployment.json": "d39f310db952416ea39eb9221b056699da1d54a6d11ee6f3760ce8b11affe166",
+    "harper-export.log": "ff3168b18706028a1e6b2f25e6b3b08067c3a71a1d326d0ffc49a3aedd6cd384",
+    "ml-results.json": "a3e29fc17423aa1f6b29dab0a25f719402256515efdab89b351a81435194a9be",
+    "model-run.log": "62e510f96f0a715522bd7dedcfe60bc1e12ba189f0f57f085e5223556acea3f8",
+    "qualitative-review.json": "7282e15ab50da6e188aaaa1256b234626daefd2443d223387c85f740cb2214a0",
+    "report.html": "07a2116bc1f3c84a25c1becbee0eb70cba040be1b5aaee5e8f46175d5a021036",
+    "reproduction-export.json.gz": "3507de73d9e22e48217d73be693925877c3c3b66f703d025d22f8d8ca44f309a",
+    "request.json": "102826b21b84c6c609a8c73384b24fbbde40abd03a1541f56d70468eeaf0919a",
+    "results.json": "6b99bb3791ad98e9af87751c0c9d171b436d94303b24eecccab65c79c2671d22",
+    "sidecar.json.gz": "3a15af76d1407d81d3597d2bb8984ff17d7bf895e25b98e9dab78604836021f3",
+    "token-export.json.gz": "dbeaba3d5d5494c66fe997d22b96d4ebb8b3d65aea449a89563c0f9d9ae5c95b"
+  },
+  "reproduced_export": {
+    "documents": 179,
+    "all_source_token_projection_geometry_and_app_diagnostics_identical": true,
+    "address_protection_regression": "Urls, email addresses and hostnames are protected in the test-only adapter; no such tokens occur in the measured fixtures, so primary inputs are unchanged.",
+    "raw_sha256": "e4dd599aa812336162b8d865e44736b1ae8e0752d0954dd945b14a857e124838",
+    "samples_kept_separate": "Timings from the reproduction are not pooled with the original benchmark."
+  },
+  "reference_identity": "All duplicate ML input strings have identical expected/accepted references.",
+  "checked_source_sha256": {
+    "src/writing/cache/probe.rs": "170dd9402b2264d61e63c36c6a58cd467c313841ef217b49ca1138cb05ce8648",
+    "src/writing/cache.rs": "5cf544f8a15c0fcdcd231ed41834c4622d18a3b7104da9a0d7ad5f098d73bfb2",
+    "scripts/grammar_compare/__init__.py": "4c4f9d1b227889d6fa9053637d414bd1360ee00e5b18b48d200b63822d09dbe1",
+    "scripts/grammar_compare/comparison.py": "a880826190280940aafd5fc47a1fd6d8c44ca7baa6c1405bde36a488c7f4512c",
+    "scripts/grammar_compare/harper_comparison.py": "b02a69fe3dec48009f756ff0a8ae4372e1afd945ea429db0644bc61535cc58ac",
+    "scripts/grammar_compare/harper_mapping.py": "3bb6bb39e31e9bcc7d1a266dbac1c7b85b2e17cce0aabcb7b9f5fbfb5f71c245",
+    "scripts/grammar_compare/models.py": "ed1618411ccc052b5e1dfa28ebe9f12f610388699bb0c60209d32ef0c88268d1",
+    "scripts/grammar_compare/worker.py": "366b48cc3f551971ec425fbc303abdb747085958e4cd815ffaf3307fe969f4dc",
+    "scripts/compare-harper-grammar.py": "6cd525732e74cef18b7f574954df97ca0623ae2dd82e30757cd21a870d8a7791"
+  }
+}

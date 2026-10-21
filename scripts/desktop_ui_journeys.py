@@ -19,6 +19,13 @@ from desktop_ui_jump_journeys import PreviewJumpJourneys
 from desktop_ui_math_grid_journeys import MathGridJourneys
 from desktop_ui_effects_journeys import EffectsPacingJourneys
 from desktop_ui_version_journeys import VersionJourneys
+from desktop_ui_liquid_journeys import LiquidJourneys
+from desktop_ui_ltex_journeys import LtexJourneys
+from desktop_ui_latexdiff_journeys import LatexdiffJourneys
+from desktop_ui_texdoc_journeys import TexdocJourneys
+from desktop_ui_citation_journeys import CitationJourneys
+from desktop_ui_asset_layout_journeys import AssetLayoutJourneys
+from desktop_ui_inactive_preview_journeys import InactivePreviewJourneys
 
 PARTICLE_STYLES = ("Explosion", "Shotgun", "Flamethrower", "Railgun", "Plasma")
 PARTICLE_ACTIONS = ("Typing", "Copy", "Cut", "Paste", "Comment", "Undo", "Redo",
@@ -457,7 +464,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
+class EditorJourneys(LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
     def set_math_conversion_formatting(self, enabled):
         if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
             return

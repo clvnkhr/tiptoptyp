@@ -31,6 +31,10 @@ impl std::fmt::Display for SettingsLoadError {
         )
     }
 }
+fn default_liquid_threads() -> u8 {
+    4
+}
+
 pub(crate) const DEFAULT_HOVER_DELAY_MS: u64 = 300;
 pub(crate) const MAX_RECENT_WORKSPACES: usize = 20;
 pub(crate) const SYSTEM_THEME_ID: &str = "system";
@@ -664,6 +668,16 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) harper_ignore_capitalized_names: bool,
     #[serde(default)]
+    pub(crate) tex_prose_rules: crate::writing::prose_rules::TexProseRules,
+    #[serde(default)]
+    pub(crate) ltex: crate::ltex::LtexSettings,
+    #[serde(default)]
+    pub(crate) liquid_cache_directory: String,
+    #[serde(default = "default_liquid_threads")]
+    pub(crate) liquid_threads: u8,
+    #[serde(default)]
+    pub(crate) liquid_input: crate::liquid_grammar::InputOptions,
+    #[serde(default)]
     pub(crate) handwriting: HandwritingSettings,
     #[serde(default)]
     pub(crate) unicode_warnings: bool,
@@ -779,6 +793,11 @@ impl Default for AppSettings {
             writing_language: WritingLanguage::Auto,
             harper_dictionary: String::new(),
             harper_ignore_capitalized_names: false,
+            tex_prose_rules: Default::default(),
+            ltex: Default::default(),
+            liquid_cache_directory: String::new(),
+            liquid_threads: default_liquid_threads(),
+            liquid_input: Default::default(),
             handwriting: HandwritingSettings::default(),
             unicode_warnings: false,
             sticky_context_rows: true,
@@ -874,6 +893,11 @@ impl AppSettings {
             writing_language,
             harper_dictionary,
             harper_ignore_capitalized_names,
+            tex_prose_rules,
+            ltex,
+            liquid_cache_directory,
+            liquid_threads,
+            liquid_input,
             handwriting,
             unicode_warnings,
             sticky_context_rows,
@@ -1378,6 +1402,11 @@ mod tests {
             writing_language: WritingLanguage::Auto,
             harper_dictionary: String::new(),
             harper_ignore_capitalized_names: false,
+            tex_prose_rules: Default::default(),
+            ltex: Default::default(),
+            liquid_cache_directory: String::new(),
+            liquid_threads: default_liquid_threads(),
+            liquid_input: Default::default(),
             handwriting: HandwritingSettings::default(),
             unicode_warnings: false,
             sticky_context_rows: false,

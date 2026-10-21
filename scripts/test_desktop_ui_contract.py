@@ -14,6 +14,38 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+class TargetedSnapshotContract(unittest.TestCase):
+    def snapshot(self, document_owner, requested):
+        import json
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        journey = object.__new__(runner.Journey)
+        journey.process = SimpleNamespace(pid=42, poll=lambda: None)
+        journey.directory = Path('/private/tmp/test-inspection')
+        journey.sequence, journey.viewport, journey.multiple_windows = 0, None, True
+        journey.record = lambda *args, **kwargs: None
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        connection.makefile.return_value.readline.return_value = json.dumps({
+            'pid': 42, 'request': 1, 'document': {'viewport': document_owner}}).encode()
+        with patch.object(runner.socket, 'socket', return_value=connection):
+            result = journey.snapshot(viewport=requested)
+        return result, connection
+
+    def test_requested_owner_is_sent_over_the_read_only_socket(self):
+        result, connection = self.snapshot('17F2', '17F2')
+        connection.sendall.assert_called_once_with(b'snapshot 17F2\n')
+        self.assertEqual(result['document']['viewport'], '17F2')
+
+    def test_sibling_frame_is_rejected_even_in_multiwindow_journey(self):
+        with self.assertRaisesRegex(AssertionError, 'another document owner'):
+            self.snapshot('FFFF', '17F2')
+
+    def test_untargeted_observation_still_uses_bare_snapshot(self):
+        _, connection = self.snapshot('FFFF', None)
+        connection.sendall.assert_called_once_with(b'snapshot\n')
+
+
 class FixtureFingerprintContract(unittest.TestCase):
     def test_matches_rust_probe_vectors_without_logging_source(self):
         from desktop_ui_journeys import fingerprint

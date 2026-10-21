@@ -585,6 +585,8 @@ impl EditorApp {
                     self.open_package_manager(context);
                 }
                 SettingsAction::RetryTinymist => self.restart_tinymist(),
+                SettingsAction::RestartLtex => self.ltex.restart(),
+                SettingsAction::ClearBiberCache => self.clear_biber_cache(context),
                 SettingsAction::Update(edited) => self.queue_settings(*edited, context),
             }
         }

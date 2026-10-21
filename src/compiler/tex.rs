@@ -28,12 +28,14 @@ pub(crate) struct TexOptions {
     pub(crate) executable: PathBuf,
     pub(crate) only_cached: bool,
     pub(crate) synctex: bool,
+    pub(crate) system: Option<Box<crate::tex::tools::SystemBuildOptions>>,
 }
 
 struct Session {
     // Stop the process before its mirror and output are removed.
     child: crate::process::OwnedChild,
     mirror: PrivateSourceMirror,
+    _cache_lease: Option<std::sync::RwLockReadGuard<'static, ()>>,
     log: PathBuf,
     pdf: PathBuf,
     revision: u64,
@@ -43,6 +45,7 @@ struct Session {
     command: Command,
     pass: u8,
     standard: bool,
+    latexmk: bool,
     engine: crate::tex::settings::BuildEngine,
     synctex: bool,
 }
@@ -93,7 +96,10 @@ impl Backend {
             {
                 return Vec::new();
             }
-            Ok(Some(status)) => Ok(status),
+            Ok(Some(status)) if fs::metadata(&session.log).is_ok_and(|m| m.len() <= MAX_LOG) => {
+                Ok(status)
+            }
+            Ok(Some(_)) => Err("TeX build exceeded the log limit".to_owned()),
             Ok(None) => Err("TeX build exceeded the build time or log limit".to_owned()),
             Err(error) => Err(format!("Could not wait for TeX build: {error}")),
         };
@@ -125,13 +131,28 @@ impl Backend {
             }
         }
         let session = self.session.take().unwrap();
+        let console = read_limited(&session.log, MAX_LOG).unwrap_or_default();
+        let final_log = session
+            .latexmk
+            .then(|| read_limited(&session.pdf.with_extension("log"), MAX_LOG).ok())
+            .flatten();
         let mut report = diagnostics(
-            &read_limited(&session.log, MAX_LOG).unwrap_or_default(),
+            final_log.as_deref().unwrap_or(&console),
             session.mirror.path(),
             &session.source,
         );
+        report.raw = console;
+        if session.latexmk {
+            let bibliography =
+                read_limited(&session.pdf.with_extension("blg"), MAX_LOG).unwrap_or_default();
+            report
+                .diagnostics
+                .extend(bibliography_diagnostics(&bibliography));
+        }
         for diagnostic in &mut report.diagnostics {
-            diagnostic.provider = Some(session.engine.label().into());
+            if diagnostic.provider.as_deref() == Some("Tectonic") {
+                diagnostic.provider = Some(session.engine.label().into());
+            }
             if let DiagnosticSource::File(path) = &mut diagnostic.source {
                 let candidate = if path.is_absolute() {
                     path.clone()
@@ -203,6 +224,10 @@ impl Backend {
 }
 impl Session {
     fn start(request: &CompileRequest, options: &TexOptions) -> std::io::Result<Self> {
+        let standard_engine = options.engine != crate::tex::settings::BuildEngine::Tectonic;
+        let cache_lease = standard_engine
+            .then(crate::tex::tools::acquire_build_cache)
+            .transpose()?;
         let private = PrivateWorkspace::open(&request.input.project_root)?;
         let mirror = private.mirrored_source(
             &request.input.source_dir,
@@ -216,35 +241,65 @@ impl Session {
         let pdf = output
             .join(mirror.path().file_name().unwrap())
             .with_extension("pdf");
-        let mut command = Command::new(&options.executable);
-        let standard = options.engine != crate::tex::settings::BuildEngine::Tectonic;
-        if standard {
-            command
-                .args([
-                    "-interaction=nonstopmode",
-                    "-halt-on-error",
-                    "-file-line-error",
-                    "-no-shell-escape",
-                ])
-                .arg(format!("-output-directory={}", output.display()));
-            if options.synctex {
-                command.arg("-synctex=1");
-            }
+        let latexmk = standard_engine
+            && options
+                .system
+                .as_ref()
+                .is_some_and(|system| system.driver == crate::tex::settings::BuildDriver::Latexmk);
+        let mut command = if latexmk {
+            latexmk_command(options, mirror.path(), &output)?
         } else {
+            let mut command = Command::new(&options.executable);
+            if standard_engine {
+                crate::tex::settings::validate_engine_arguments(&options.command.arguments)
+                    .map_err(std::io::Error::other)?;
+                command
+                    .args([
+                        "-interaction=nonstopmode",
+                        "-halt-on-error",
+                        "-file-line-error",
+                        "-no-shell-escape",
+                    ])
+                    .arg(format!("-output-directory={}", output.display()));
+                if options.synctex {
+                    command.arg("-synctex=1");
+                }
+            } else {
+                command
+                    .args(options.synctex.then_some("--synctex"))
+                    .arg("--outdir")
+                    .arg(&output);
+                if options.only_cached {
+                    command.arg("--only-cached");
+                }
+            }
             command
-                .args(options.synctex.then_some("--synctex"))
-                .arg("--outdir")
-                .arg(&output);
-            if options.only_cached {
-                command.arg("--only-cached");
+                .arg(mirror.path())
+                .current_dir(mirror.path().parent().unwrap())
+                .env("NO_COLOR", "1")
+                .env("LC_ALL", "C");
+            options.command.apply(&mut command)?;
+            command
+        };
+        if standard_engine {
+            let paths = options
+                .executable
+                .parent()
+                .into_iter()
+                .map(Path::to_path_buf)
+                .chain(
+                    std::env::var_os("PATH")
+                        .into_iter()
+                        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>()),
+                );
+            if let Ok(paths) = std::env::join_paths(paths) {
+                // Respect an explicitly customized PATH. Otherwise include the
+                // discovered TeX bin for xdvipdfmx, kpsewhich and makeindex.
+                if !command.get_envs().any(|(name, _)| name == "PATH") {
+                    command.env("PATH", paths);
+                }
             }
         }
-        command
-            .arg(mirror.path())
-            .current_dir(mirror.path().parent().unwrap())
-            .env("NO_COLOR", "1")
-            .env("LC_ALL", "C");
-        options.command.apply(&mut command)?;
         command
             .stdin(Stdio::null())
             .stdout(logs.try_clone()?)
@@ -254,10 +309,12 @@ impl Session {
             child,
             command,
             pass: 1,
-            standard,
+            standard: standard_engine && !latexmk,
+            latexmk,
             engine: options.engine,
             synctex: options.synctex,
             mirror,
+            _cache_lease: cache_lease,
             log,
             pdf,
             revision: request.revision,
@@ -267,6 +324,96 @@ impl Session {
         })
     }
 }
+/// latexmk owns only the finite dependency/rerun graph; the editor retains
+/// lifecycle, output locations, source overlays, cancellation and publication.
+fn latexmk_command(options: &TexOptions, entry: &Path, output: &Path) -> std::io::Result<Command> {
+    use crate::tex::settings::{BuildEngine, SystemTool};
+    let invalid = std::io::Error::other;
+    let system = options
+        .system
+        .as_ref()
+        .ok_or_else(|| invalid("Missing system build settings"))?;
+    let driver = system.latexmk.as_ref().ok_or_else(|| invalid("latexmk was not found. Install latexmk with your TeX distribution, refresh tools, or choose Direct engine in Settings"))?;
+    SystemTool {
+        executable: driver.program.to_string_lossy().into_owned(),
+        arguments: driver.arguments.clone(),
+    }
+    .validate("latexmk")
+    .map_err(std::io::Error::other)?;
+    crate::tex::settings::validate_engine_arguments(&options.command.arguments)
+        .map_err(std::io::Error::other)?;
+    let mut command = Command::new(&driver.program);
+    let mode = match options.engine {
+        BuildEngine::PdfLatex => ("-pdf", "pdflatex"),
+        BuildEngine::XeLatex => ("-pdfxe", "xelatex"),
+        BuildEngine::LuaLatex => ("-pdflua", "lualatex"),
+        BuildEngine::Tectonic => return Err(invalid("latexmk does not drive Tectonic")),
+    };
+    let engine = literal_tool_command(&options.executable, &options.command.arguments)?;
+    let bibliography = [(&system.bibtex, "bibtex"), (&system.biber, "biber")]
+        .into_iter()
+        .map(|(tool, name)| {
+            SystemTool {
+                executable: tool.program.to_string_lossy().into_owned(),
+                arguments: tool.arguments.clone(),
+            }
+            .validate(if name == "biber" { "Biber" } else { "BibTeX" })
+            .map_err(std::io::Error::other)?;
+            let text = literal_tool_command(&tool.program, &tool.arguments)?;
+            Ok(format!(
+                "${name} = {};",
+                perl_string(&format!("{text} %O %S"))
+            ))
+        })
+        .collect::<std::io::Result<Vec<_>>>()?
+        .join(" ");
+    command.args(["-norc", "-pvc-", "-pv-", "-view=none", "-f-", mode.0])
+        .arg(format!("-outdir={}", output.display()))
+        .arg(format!("-auxdir={}", output.display()))
+        .arg("-e").arg(format!("$max_repeat = 5; ${} = {}; {bibliography}", mode.1, perl_string(&format!("{engine} -interaction=nonstopmode -halt-on-error -file-line-error -no-shell-escape %O %S"))));
+    if options.synctex {
+        command.arg("-synctex=1");
+    }
+    if !system.bibliography_enabled {
+        command.arg("-bibtex-");
+    }
+    command
+        .arg(entry)
+        .current_dir(entry.parent().unwrap())
+        .env("NO_COLOR", "1")
+        .env("LC_ALL", "C");
+    // These environment and working-directory edits apply to the finite build
+    // and its children; engine argv is already in its quoted command above.
+    let mut custom = options.command.as_ref().clone();
+    custom.arguments = driver.arguments.clone();
+    custom.apply(&mut command)?;
+    Ok(command)
+}
+
+fn literal_tool_command(program: &Path, arguments: &str) -> std::io::Result<String> {
+    let invalid = std::io::Error::other;
+    let program = program
+        .to_str()
+        .ok_or_else(|| invalid("latexmk tool paths must be Unicode"))?;
+    std::iter::once(program.to_owned())
+        .chain(
+            shlex::split(arguments)
+                .ok_or_else(|| invalid("Tool arguments contain an unmatched quote"))?,
+        )
+        .map(|token| {
+            // latexmk substitutes percent markers before invoking the command.
+            // Double literal percent signs before adding its own %O/%S fields.
+            shlex::try_quote(&token.replace('%', "%%"))
+                .map(|v| v.into_owned())
+                .map_err(std::io::Error::other)
+        })
+        .collect::<std::io::Result<Vec<_>>>()
+        .map(|tokens| tokens.join(" "))
+}
+fn perl_string(text: &str) -> String {
+    format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
 fn read_limited(path: &Path, limit: u64) -> std::io::Result<String> {
     let mut text = String::new();
     File::open(path)?.take(limit).read_to_string(&mut text)?;
@@ -281,6 +428,30 @@ fn read_pdf(path: &Path) -> Result<Arc<[u8]>, String> {
         return Err("TeX build produced an invalid or oversized PDF".into());
     }
     Ok(bytes.into())
+}
+
+fn bibliography_diagnostics(log: &str) -> Vec<Diagnostic> {
+    let biber = log.contains("This is Biber") || log.lines().any(|line| line.contains(" INFO - "));
+    log.lines()
+        .filter_map(|line| {
+            let (severity, message) = if let Some((_, message)) = line.split_once("ERROR - ") {
+                (DiagnosticSeverity::Error, message)
+            } else if let Some((_, message)) = line.split_once("WARN - ") {
+                (DiagnosticSeverity::Warning, message)
+            } else {
+                (DiagnosticSeverity::Warning, line.strip_prefix("Warning--")?)
+            };
+            Some(Diagnostic {
+                correction: None,
+                provider: Some(if biber { "Biber" } else { "BibTeX" }.into()),
+                severity,
+                source: DiagnosticSource::Global,
+                location: None,
+                message: message.trim().into(),
+                details: Vec::new(),
+            })
+        })
+        .collect()
 }
 
 /// Tectonic's status layer emits `warning: file.tex:line: message`. Preserve
@@ -332,6 +503,7 @@ fn diagnostics(raw: &str, entry: &Path, source: &str) -> DiagnosticReport {
             break;
         }
         diagnostics.push(Diagnostic {
+            correction: None,
             provider: Some("Tectonic".into()),
             severity,
             source: origin,
@@ -423,6 +595,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
             executable,
             only_cached: true,
             synctex: true,
+            system: None,
         };
         let mut request = CompileRequest {
             revision: 1,
@@ -481,6 +654,348 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         assert!(!project.path().join("main.draft.pdf").exists());
     }
 
+    #[cfg(unix)]
+    fn executable(root: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join(name);
+        fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    #[cfg(unix)]
+    fn system_options(root: &Path, driver: PathBuf) -> TexOptions {
+        use crate::tex::{
+            settings::BuildEngine,
+            tools::{SystemBuildOptions, SystemProgram},
+        };
+        TexOptions {
+            engine: BuildEngine::PdfLatex,
+            command: Default::default(),
+            executable: root.join("fake engine"),
+            only_cached: false,
+            synctex: true,
+            system: Some(Box::new(SystemBuildOptions {
+                driver: crate::tex::settings::BuildDriver::Latexmk,
+                bibliography_enabled: true,
+                latexmk: Some(SystemProgram {
+                    program: driver,
+                    arguments: "-bibtex-cond".into(),
+                }),
+                bibtex: SystemProgram {
+                    program: root.join("fake bibtex"),
+                    arguments: "-terse".into(),
+                },
+                biber: SystemProgram {
+                    program: root.join("fake biber"),
+                    arguments: "--sortlocale en_GB".into(),
+                },
+            })),
+        }
+    }
+    #[cfg(unix)]
+    fn system_request(root: &Path, options: &TexOptions, source: &str) -> CompileRequest {
+        CompileRequest {
+            revision: 8,
+            input: super::super::CompileInput {
+                language: tiptoptyp_core::document::TypesettingLanguage::Tex,
+                source: source.into(),
+                source_dir: root.into(),
+                project_root: root.into(),
+                display_name: "main.draft.tex".into(),
+            },
+            engine: super::super::EngineConfig::Tex(options.clone()),
+        }
+    }
+    #[cfg(unix)]
+    fn finish(backend: &mut Backend) -> (Arc<[u8]>, DiagnosticReport) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            for result in backend.poll() {
+                match result.event {
+                    EngineEvent::Pdf {
+                        pdf, diagnostics, ..
+                    } => return (pdf, diagnostics),
+                    EngineEvent::Failed(report) => {
+                        panic!("{}\n{:?}", report.raw, report.diagnostics)
+                    }
+                    _ => {}
+                }
+            }
+            assert!(Instant::now() < deadline, "build timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn latexmk_build_is_finite_uses_overlay_and_never_publishes_to_project() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("main.draft.tex"), "saved source").unwrap();
+        fs::write(project.path().join("library.bib"), "bibliography").unwrap();
+        fs::write(project.path().join("main.draft.pdf"), "original PDF").unwrap();
+        let driver = executable(
+            project.path(),
+            "fake latexmk",
+            r#"
+output=''
+for argument in "$@"; do
+  case "$argument" in
+    -pvc) exit 10 ;;
+    -outdir=*) output=${argument#-outdir=} ;;
+    *.tex) entry=$argument ;;
+  esac
+done
+[ "$(cat "$entry")" = 'unsaved source' ]
+[ "$(cat library.bib)" = bibliography ]
+printf '%%PDF-1.7\n' > "$output/main.draft.pdf"
+printf '%s\n' "$@" > "$output/args"
+printf '%s:1: fixture failure should map to original source\n' "$entry"
+"#,
+        );
+        let options = system_options(project.path(), driver);
+        let request = system_request(project.path(), &options, "unsaved source");
+        let mut backend = Backend::new();
+        backend.submit(&request, &options).unwrap();
+        let session = backend.session.as_ref().unwrap();
+        assert!(
+            !session.standard,
+            "latexmk reruns are not repeated by the adapter"
+        );
+        let private = session.mirror.session_dir().to_owned();
+        let (pdf, diagnostics) = finish(&mut backend);
+        assert!(pdf.starts_with(b"%PDF-"));
+        assert_eq!(diagnostics.diagnostics[0].source, DiagnosticSource::Main);
+        assert!(!private.exists());
+        assert_eq!(
+            fs::read_to_string(project.path().join("main.draft.tex")).unwrap(),
+            "saved source"
+        );
+        assert_eq!(
+            fs::read_to_string(project.path().join("main.draft.pdf")).unwrap(),
+            "original PDF"
+        );
+        assert!(!project.path().join("main.draft.aux").exists());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn latexmk_arguments_preserve_literal_tools_and_forbid_watch_modes() {
+        use crate::tex::settings::BuildEngine;
+        let root = tempfile::tempdir().unwrap();
+        let options = system_options(root.path(), root.path().join("latexmk"));
+        for (engine, mode) in [
+            (BuildEngine::PdfLatex, "-pdf"),
+            (BuildEngine::XeLatex, "-pdfxe"),
+            (BuildEngine::LuaLatex, "-pdflua"),
+        ] {
+            let mut options = options.clone();
+            options.engine = engine;
+            let command = latexmk_command(
+                &options,
+                &root.path().join("main.tex"),
+                &root.path().join("output"),
+            )
+            .unwrap();
+            let args = command
+                .get_args()
+                .map(|s| s.to_str().unwrap())
+                .collect::<Vec<_>>();
+            for required in [mode, "-norc", "-pvc-", "-pv-", "-view=none"] {
+                assert!(args.contains(&required), "{args:?}");
+            }
+            let code = args[args.iter().position(|a| *a == "-e").unwrap() + 1];
+            assert!(code.contains("$biber = ") && code.contains("$bibtex = "));
+            assert!(code.contains("-no-shell-escape") && code.contains("%O %S"));
+            assert!(!args.contains(&"-pvc"));
+        }
+        let mut options = options;
+        options
+            .system
+            .as_mut()
+            .unwrap()
+            .latexmk
+            .as_mut()
+            .unwrap()
+            .arguments = "--pvc".into();
+        assert!(latexmk_command(&options, &root.path().join("main.tex"), root.path()).is_err());
+        options.system.as_mut().unwrap().latexmk = None;
+        assert!(
+            latexmk_command(&options, &root.path().join("main.tex"), root.path())
+                .unwrap_err()
+                .to_string()
+                .contains("Install latexmk")
+        );
+        assert_eq!(
+            literal_tool_command(Path::new("/tmp/tool"), "'literal %S' '$(touch nope)'").unwrap(),
+            "/tmp/tool 'literal %%S' '$(touch nope)'"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn replacing_latexmk_build_cancels_entire_group_and_private_workspace() {
+        let project = tempfile::tempdir().unwrap();
+        let driver = executable(project.path(), "waiting latexmk", "exec /bin/sleep 30");
+        let options = system_options(project.path(), driver);
+        let mut backend = Backend::new();
+        backend
+            .submit(&system_request(project.path(), &options, "first"), &options)
+            .unwrap();
+        let session = backend.session.as_ref().unwrap();
+        let private = session.mirror.session_dir().to_owned();
+        let pid = backend.session.as_mut().unwrap().child.child_mut().id();
+        let mut invalid = options.clone();
+        invalid.system.as_mut().unwrap().latexmk = None;
+        assert!(
+            backend
+                .submit(
+                    &system_request(project.path(), &invalid, "second"),
+                    &invalid
+                )
+                .is_err()
+        );
+        assert!(!private.exists());
+        assert_eq!(
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None),
+            Err(nix::errno::Errno::ESRCH)
+        );
+        assert!(!backend.is_running());
+    }
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires a local TeX distribution with latexmk, BibTeX and Biber"]
+    fn installed_latexmk_builds_bibtex_and_biber_without_changing_sources() {
+        use crate::tex::{
+            settings::{BuildEngine, TexSettings},
+            tools::TexTools,
+        };
+        for engine in [
+            BuildEngine::PdfLatex,
+            BuildEngine::XeLatex,
+            BuildEngine::LuaLatex,
+        ] {
+            for biber in [false, true] {
+                let project = tempfile::tempdir().unwrap();
+                let bibliography = "@book{fixture, author={Ada Lovelace}, title={Analytical Engine}, year={1843}, publisher={Example}}\n";
+                fs::write(project.path().join("library.bib"), bibliography).unwrap();
+                let source = if biber {
+                    "\\documentclass{article}\n\\usepackage[backend=biber]{biblatex}\n\\addbibresource{library.bib}\n\\begin{document}\nCitation~\\cite{fixture}.\n\\printbibliography\n\\end{document}\n"
+                } else {
+                    "\\documentclass{article}\n\\begin{document}\nCitation~\\cite{fixture}.\n\\bibliographystyle{plain}\n\\bibliography{library}\n\\end{document}\n"
+                };
+                let settings = TexSettings {
+                    build_engine: engine,
+                    ..Default::default()
+                };
+                let tools = TexTools::resolve(&settings);
+                let options = TexOptions {
+                    engine,
+                    command: Default::default(),
+                    executable: tools.distribution(engine).expect("installed engine").into(),
+                    only_cached: true,
+                    synctex: true,
+                    system: tools.build_options(&settings),
+                };
+                let mut backend = Backend::new();
+                backend
+                    .submit(&system_request(project.path(), &options, source), &options)
+                    .unwrap();
+                // latexmk logs every pass, including expected first-pass
+                // undefined citations. Inspect the final engine log and bbl
+                // before the backend snapshots output and retires its mirror.
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let final_output = loop {
+                    let session = backend.session.as_mut().unwrap();
+                    if session.child.try_wait().unwrap().is_some() {
+                        break session.pdf.clone();
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "{} / biber={biber} timed out",
+                        engine.label()
+                    );
+                    std::thread::sleep(Duration::from_millis(20));
+                };
+                let final_log = fs::read_to_string(final_output.with_extension("log")).unwrap();
+                assert!(
+                    !final_log.contains("undefined citations")
+                        && !final_log.contains("Citation `fixture'"),
+                    "{} / biber={biber}: {final_log}",
+                    engine.label()
+                );
+                let bbl = fs::read_to_string(final_output.with_extension("bbl")).unwrap();
+                assert!(
+                    bbl.contains("Lovelace"),
+                    "{} / biber={biber}: {bbl}",
+                    engine.label()
+                );
+                let (pdf, diagnostics) = finish(&mut backend);
+                assert!(pdf.starts_with(b"%PDF-"));
+                assert!(
+                    diagnostics
+                        .raw
+                        .contains(if biber { "biber" } else { "bibtex" })
+                );
+                assert_eq!(
+                    fs::read_to_string(project.path().join("library.bib")).unwrap(),
+                    bibliography
+                );
+                assert!(!project.path().join("main.draft.pdf").exists());
+                assert!(!project.path().join("main.draft.aux").exists());
+                assert!(!project.path().join("main.draft.bbl").exists());
+                assert!(
+                    fs::read_dir(project.path().join(".tiptoptyp"))
+                        .unwrap()
+                        .next()
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bibliography_messages_keep_provider_and_ignore_info() {
+        let diagnostics = bibliography_diagnostics(
+            "[0] INFO - This is Biber 2.20\n[1] WARN - Missing field year\n[2] ERROR - Cannot find database\n",
+        );
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].provider.as_deref(), Some("Biber"));
+        assert_eq!(diagnostics[1].severity, DiagnosticSeverity::Error);
+        let diagnostics =
+            bibliography_diagnostics("This is BibTeX\nWarning--empty publisher in fixture\n");
+        assert_eq!(diagnostics[0].provider.as_deref(), Some("BibTeX"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn latexmk_diagnostics_discard_resolved_first_pass_citations() {
+        let project = tempfile::tempdir().unwrap();
+        let driver = executable(
+            project.path(),
+            "fixture latexmk",
+            r#"
+for argument in "$@"; do
+  case "$argument" in -outdir=*) output=${argument#-outdir=} ;; esac
+done
+printf '%%PDF-1.7\n' > "$output/main.draft.pdf"
+printf 'LaTeX Warning: persistent final warning\n' > "$output/main.draft.log"
+printf 'LaTeX Warning: Citation fixture undefined\n'
+"#,
+        );
+        let options = system_options(project.path(), driver);
+        let mut backend = Backend::new();
+        backend
+            .submit(
+                &system_request(project.path(), &options, "source"),
+                &options,
+            )
+            .unwrap();
+        let (_, report) = finish(&mut backend);
+        assert!(report.raw.contains("Citation fixture undefined"));
+        assert_eq!(report.diagnostics.len(), 1);
+        assert!(
+            report.diagnostics[0]
+                .message
+                .contains("persistent final warning")
+        );
+    }
+
     #[test]
     fn parses_status_locations_without_splitting_windows_drive() {
         let report = diagnostics(
@@ -512,6 +1027,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 command: Default::default(),
                 only_cached: true,
                 synctex: true,
+                system: None,
             };
             let request = CompileRequest {
                 revision: 1,
@@ -641,6 +1157,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                     },
                     only_cached: false,
                     synctex: false,
+                    system: None,
                 };
                 let request = CompileRequest {
                     revision: 1,
@@ -716,6 +1233,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
                 .program,
                 only_cached: false,
                 synctex: true,
+                system: None,
             }),
         };
         let super::super::EngineConfig::Tex(options) = request.engine.clone() else {
