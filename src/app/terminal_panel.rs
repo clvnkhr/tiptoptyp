@@ -162,6 +162,14 @@ impl EditorApp {
         context.memory_mut(|memory| memory.request_focus(id));
     }
 
+    pub(super) fn focus_problems_search(&mut self, context: &egui::Context) {
+        self.claim_bottom_panel_native_keyboard(context);
+        self.problems.focus_search = true;
+        let id = problems::search_id(context);
+        context.memory_mut(|memory| memory.request_focus(id));
+        context.request_repaint();
+    }
+
     fn focus_activity(&mut self, context: &egui::Context) {
         self.claim_bottom_panel_native_keyboard(context);
         let id = activity_id(context);
@@ -178,7 +186,8 @@ impl EditorApp {
             && context.input(|input| input.focused)
             && {
                 let id = problems_id(context);
-                context.memory(|memory| memory.has_focus(id))
+                self.problems.popup_open
+                    || context.memory(|memory| memory.has_focus(id))
                     || context.read_response(id).is_some_and(|response| {
                         theme::focus_is_inside(context, response.interact_rect)
                     })
@@ -260,9 +269,6 @@ impl EditorApp {
                 if problems.clicked() {
                     self.bottom_panel.select(PanelTab::Problems);
                     problems_clicked = true;
-                }
-                if count > 0 {
-                    problems.on_hover_text(format!("{count} compiler diagnostics"));
                 }
             });
             let terminal_label = if self.terminal.bell_pending() {
@@ -898,6 +904,101 @@ mod tests {
     }
 
     #[test]
+    fn problems_context_menu_focus_outside_panel_keeps_find_in_problems() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_window_for_tests(
+            &context,
+            root.path().into(),
+            egui::ViewportId::ROOT,
+        );
+        app.snapshot_scene = None;
+        app.document_mut().replace_unprojected_untitled("teh");
+        let replacements: Vec<_> = (0..20)
+            .map(|index| format!("replacement {index}"))
+            .collect();
+        let mut correction = crate::diagnostics::DiagnosticCorrection::new(
+            0..3,
+            "teh".into(),
+            Some("SpellCheck".into()),
+            Some("Spelling".into()),
+            replacements.clone(),
+        );
+        correction.document = Some(app.document().key());
+        app.preview.editor_diagnostics = vec![Diagnostic {
+            correction: Some(correction),
+            provider: Some("Harper".into()),
+            severity: DiagnosticSeverity::Help,
+            source: DiagnosticSource::Main,
+            location: Some(DiagnosticLocation { line: 1, column: 1 }),
+            message: "Spelling example".into(),
+            details: Vec::new(),
+        }];
+        app.mark_diagnostics_changed();
+        app.bottom_panel.select(PanelTab::Problems);
+        let mut configured = false;
+        let mut harness = Harness::builder()
+            .with_step_dt(0.01)
+            .with_size(Vec2::new(900.0, 620.0))
+            .with_os(egui::os::OperatingSystem::from_target_os())
+            .build_ui_state(
+                move |ui, app: &mut EditorApp| {
+                    if !configured {
+                        theme::configure_test_fonts(ui.ctx());
+                        configured = true;
+                        return;
+                    }
+                    app.handle_shortcuts(ui.ctx(), None);
+                    if !app.show_bottom_panel_container(ui) {
+                        app.show_editor(ui);
+                    }
+                },
+                app,
+            );
+        harness.run();
+        harness.get_by_label("Spelling example").click_secondary();
+        harness.run();
+        let panel = harness
+            .ctx
+            .read_response(problems_id(&harness.ctx))
+            .unwrap()
+            .interact_rect;
+        // A tall suggestions menu extends above the bottom panel. Give an
+        // actual menu button accessibility focus, rather than faking popup
+        // ownership or requesting an arbitrary widget ID.
+        let action = replacements
+            .iter()
+            .map(|replacement| format!("Replace with “{replacement}”"))
+            .find(|label| !panel.contains_rect(harness.get_by_label(label).rect()))
+            .expect("the real context menu must extend beyond Problems bounds");
+        harness.get_by_label(&action).focus();
+        harness.run();
+        assert!(harness.get_by_label(&action).is_focused());
+        assert!(!theme::focus_is_inside(&harness.ctx, panel));
+        assert!(
+            harness
+                .state()
+                .problems_focused(&harness.ctx, egui::ViewportId::ROOT)
+        );
+        let find = harness
+            .state()
+            .settings
+            .effective_shortcuts()
+            .egui(ShortcutAction::Find)
+            .unwrap();
+        harness.key_press_modifiers(find.modifiers, find.logical_key);
+        harness.run();
+        let search = problems::search_id(&harness.ctx);
+        assert!(harness.ctx.memory(|memory| memory.has_focus(search)));
+        assert!(!harness.state().find_bar.visible);
+        assert!(!harness.state().preview_controls.open);
+        harness.event(egui::Event::Text("spelling".into()));
+        harness.run();
+        assert_eq!(harness.state().problems.filter.query, "spelling");
+        assert_eq!(harness.state().document().source(), "teh");
+    }
+
+    #[test]
     fn all_bottom_panel_tabs_outline_the_whole_container_and_own_keyboard() {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -1484,7 +1585,7 @@ mod tests {
             harness.state().bottom_panel.selected(),
             Some(PanelTab::Problems)
         );
-        assert!(harness.query_by_label("No compiler diagnostics").is_some());
+        assert!(harness.query_by_label("No problems").is_some());
         // The count lives inside the tab label now, not in a separate pill.
         assert!(harness.query_by_label("0").is_none());
         assert!(harness.query_by_label("0 diagnostics").is_none());

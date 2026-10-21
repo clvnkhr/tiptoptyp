@@ -501,6 +501,7 @@ impl EditorApp {
                 && egui::PanelState::load(context, panel_id)
                     .is_some_and(|state| { theme::focus_is_inside(context, state.outer_rect) })
         );
+        interaction["problems"] = self.problems.inspect();
         interaction["problems_keyboard_focused"] =
             serde_json::json!(self.problems_focused(context, context.viewport_id()));
         interaction["editor_keyboard_focused"] =

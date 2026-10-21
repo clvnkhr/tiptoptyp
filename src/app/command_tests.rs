@@ -465,6 +465,7 @@ fn problems_keyboard_owner_blocks_source_editing_and_find_commands() {
                 .focused = Some(true);
             harness.run();
             let problems = egui::Id::new((owner, "problems-panel"));
+            let search = egui::Id::new((owner, "problems-search"));
             let source = egui::Id::new((owner, "tiptoptyp-source-editor"));
             // Context::read_response reads the current viewport (ROOT outside
             // a pass). Resolve the secondary owner's cached widget explicitly.
@@ -550,8 +551,10 @@ fn problems_keyboard_owner_blocks_source_editing_and_find_commands() {
                     "{route:?} {command:?}"
                 );
                 assert!(
-                    harness.ctx.memory(|memory| memory.has_focus(problems)),
-                    "{route:?} {command:?}"
+                    harness.ctx.memory(|memory| memory.has_focus(search)),
+                    "{owner:?} {route:?} {command:?}: focused={:?}, search={search:?}, requested={}",
+                    harness.ctx.memory(|memory| memory.focused()),
+                    harness.state().problems.focus_search
                 );
                 assert_eq!(
                     egui::text_edit::TextEditState::load(&harness.ctx, source)
@@ -565,6 +568,14 @@ fn problems_keyboard_owner_blocks_source_editing_and_find_commands() {
             harness.event(egui::Event::Text("must not reach source".into()));
             harness.run();
             assert_eq!(harness.state().document().source(), "alpha beta");
+            assert!(
+                harness
+                    .state()
+                    .problems
+                    .filter
+                    .query
+                    .contains("must not reach source")
+            );
         }
     }
 }

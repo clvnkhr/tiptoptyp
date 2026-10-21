@@ -9,6 +9,7 @@ mod liquid;
 mod ltex;
 mod pdf_actions;
 mod pdf_output;
+mod problems;
 mod settings_writing;
 mod templates;
 mod tex;
@@ -1431,6 +1432,7 @@ pub struct EditorApp {
     explorer: ExplorerPanelState,
     activity: activity_panel::ActivityTracking,
     bottom_panel: BottomPanel,
+    problems: problems::State,
     terminal: TerminalTabs,
     settings_visible: bool,
     settings_open_requested: bool,
@@ -1767,6 +1769,7 @@ impl EditorApp {
             explorer: ExplorerPanelState::default(),
             activity: Default::default(),
             bottom_panel: BottomPanel::default(),
+            problems: Default::default(),
             terminal: TerminalTabs::default(),
             settings_visible: false,
             settings_open_requested: false,
@@ -3625,6 +3628,9 @@ impl EditorApp {
         if matches!(command, AppCommand::Find | AppCommand::FindReplace)
             && self.problems_focused(context, focused_input_viewport(context))
         {
+            if command == AppCommand::Find {
+                self.focus_problems_search(context);
+            }
             return;
         }
         if command == AppCommand::Find && self.open_preview_find(context) {
@@ -8894,286 +8900,6 @@ impl EditorApp {
                 self.compilation_paused,
                 self.compile_indicator_spinning(),
             );
-        }
-    }
-
-    fn show_problems(&mut self, ui: &mut egui::Ui) {
-        ui.set_min_width(ui.available_width());
-        let diagnostic_count =
-            self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
-        let mut jump_target = None;
-        let mut correction_target = None;
-        let current_key = (!self.tabs.is_empty()).then(|| self.document().key());
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                if diagnostic_count == 0 {
-                    ui.label(RichText::new("No compiler diagnostics").weak());
-                }
-                for (index, diagnostic) in self
-                    .preview
-                    .diagnostics
-                    .iter()
-                    .chain(&self.preview.editor_diagnostics)
-                    .enumerate()
-                {
-                    let color = diagnostic_color(diagnostic.severity, ui.ctx());
-                    let code = diagnostic_code(diagnostic);
-                    let details_id = ui.make_persistent_id((
-                        "problem-details",
-                        self.tabs.active_id(),
-                        &diagnostic.source,
-                        diagnostic.location,
-                        &diagnostic.provider,
-                        &diagnostic.message,
-                        diagnostic.severity,
-                        &code,
-                    ));
-                    let has_details = diagnostic
-                        .details
-                        .iter()
-                        .any(|detail| problem_is_detail(detail));
-                    let mut expanded = ui
-                        .ctx()
-                        .data(|data| data.get_temp::<bool>(details_id).unwrap_or(false));
-                    let mut disclosure_rect = None;
-                    let background_slot = ui.painter().add(egui::Shape::Noop);
-                    let row = ui
-                        .push_id((details_id, index), |ui| {
-                            ui.set_min_width(ui.available_width());
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            ui.horizontal_top(|ui| {
-                                ui.spacing_mut().item_spacing.x = 6.0;
-                                let severity = ui.add(egui::Label::new(
-                                    RichText::new(problem_severity_glyph(diagnostic.severity))
-                                        .monospace()
-                                        .color(color),
-                                ));
-                                severity.widget_info(|| {
-                                    egui::WidgetInfo::labeled(
-                                        egui::WidgetType::Label,
-                                        true,
-                                        diagnostic.severity.label(),
-                                    )
-                                });
-                                if let Some(location) = diagnostic.location {
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(format!(
-                                                "{}:{}",
-                                                location.line, location.column,
-                                            ))
-                                            .monospace()
-                                            .weak(),
-                                        )
-                                        .selectable(true),
-                                    );
-                                }
-                                let source = match (&diagnostic.provider, &code) {
-                                    (Some(provider), Some(code)) => {
-                                        format!("{provider} · Code: {code}")
-                                    }
-                                    (Some(provider), None) => provider.clone(),
-                                    (None, Some(code)) => format!("Code: {code}"),
-                                    (None, None) => String::new(),
-                                };
-                                let provider_width = if source.is_empty() {
-                                    0.0
-                                } else {
-                                    ui.painter()
-                                        .layout_no_wrap(
-                                            source.clone(),
-                                            theme::supporting_font(),
-                                            ui.visuals().weak_text_color(),
-                                        )
-                                        .size()
-                                        .x
-                                };
-                                let (message_width, provider_width) = problem_text_widths(
-                                    ui.available_width(),
-                                    provider_width,
-                                    has_details,
-                                    ui.spacing().item_spacing.x,
-                                );
-                                ui.allocate_ui_with_layout(
-                                    Vec2::new(message_width, 0.0),
-                                    Layout::top_down(Align::Min),
-                                    |ui| {
-                                        ui.set_min_width(message_width);
-                                        ui.add(
-                                            egui::Label::new(&diagnostic.message)
-                                                .selectable(true)
-                                                .wrap(),
-                                        );
-                                    },
-                                );
-                                if provider_width > 0.0 {
-                                    ui.allocate_ui_with_layout(
-                                        Vec2::new(provider_width, 0.0),
-                                        Layout::top_down(Align::Min),
-                                        |ui| {
-                                            ui.set_min_width(provider_width);
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(source)
-                                                        .size(theme::TYPE.supporting)
-                                                        .weak(),
-                                                )
-                                                .selectable(true)
-                                                .truncate()
-                                                .show_tooltip_when_elided(false),
-                                            );
-                                        },
-                                    );
-                                }
-                                if has_details {
-                                    let label = if expanded {
-                                        "Hide diagnostic details"
-                                    } else {
-                                        "Show diagnostic details"
-                                    };
-                                    let disclosure = icons::square_icon_button(
-                                        ui,
-                                        if expanded { UiIcon::Down } else { UiIcon::Next },
-                                        label,
-                                        18.0,
-                                    );
-                                    disclosure_rect = Some(disclosure.rect);
-                                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                                    if ui.is_rect_visible(disclosure.rect) {
-                                        crate::desktop_test::observe(
-                                            &format!("problem.{index}.details"),
-                                            &disclosure,
-                                        );
-                                    }
-                                    if disclosure.clicked() {
-                                        expanded = !expanded;
-                                        ui.ctx().data_mut(|data| {
-                                            data.insert_temp(details_id, expanded)
-                                        });
-                                    }
-                                }
-                            });
-                            if expanded {
-                                for detail in diagnostic
-                                    .details
-                                    .iter()
-                                    .filter(|detail| problem_is_detail(detail))
-                                {
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(METRICS.problems.detail_indent);
-                                        ui.add(
-                                            egui::Label::new(
-                                                RichText::new(detail)
-                                                    .size(theme::TYPE.supporting)
-                                                    .monospace()
-                                                    .weak(),
-                                            )
-                                            .selectable(true)
-                                            .wrap(),
-                                        );
-                                    });
-                                }
-                            }
-                        })
-                        .response;
-                    // The parent row senses hover so its selectable text can
-                    // own pointer drags. Open its context menu from the actual
-                    // secondary release rather than making the row steal clicks.
-                    let context_requested = ui.rect_contains_pointer(row.rect)
-                        && ui.input(|input| {
-                            input.pointer.button_clicked(egui::PointerButton::Secondary)
-                        });
-                    egui::Popup::context_menu(&row)
-                        .open_memory(context_requested.then_some(egui::SetOpenCommand::Bool(true)))
-                        .show(|ui| {
-                            if let Some(correction) = &diagnostic.correction
-                                && let Some(index) = diagnostic_corrections::show_corrections(
-                                    ui,
-                                    correction,
-                                    current_key,
-                                )
-                            {
-                                correction_target = Some((diagnostic.clone(), index));
-                                ui.close();
-                            }
-                            if ui.button("Copy diagnostic").clicked() {
-                                ui.ctx().copy_text(diagnostic.full_message());
-                                ui.close();
-                            }
-                        });
-                    let row = if self.snapshot_scene == Some(UiSnapshotScene::ProblemsPanel)
-                        && index == 0
-                    {
-                        row.highlight()
-                    } else {
-                        row
-                    };
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    if ui.is_rect_visible(row.rect) {
-                        crate::desktop_test::observe(&format!("problem.{index}"), &row);
-                    }
-                    let pointer_in_row = row
-                        .ctx
-                        .pointer_latest_pos()
-                        .is_some_and(|position| row.rect.contains(position));
-                    if pointer_in_row || row.highlighted() {
-                        ui.painter().set(
-                            background_slot,
-                            egui::Shape::rect_filled(
-                                row.rect,
-                                theme::RADIUS.row as f32,
-                                ui.visuals()
-                                    .selection
-                                    .bg_fill
-                                    .gamma_multiply(METRICS.problems.hover_opacity),
-                            ),
-                        );
-                    }
-                    let hover = ui.interact(
-                        row.rect,
-                        ui.id().with(("problem-row-hover", index)),
-                        Sense::hover(),
-                    );
-                    if hover.hovered() {
-                        let mut hint = diagnostic.full_message();
-                        if diagnostic.location.is_some() {
-                            hint.push_str("\n\nDouble-click to open this location");
-                        }
-                        native_hover_text(hover, hint);
-                    }
-                    let disclosure_hovered = disclosure_rect.is_some_and(|rect| {
-                        ui.ctx()
-                            .pointer_latest_pos()
-                            .is_some_and(|point| rect.contains(point))
-                    });
-                    if diagnostic.location.is_some()
-                        && !disclosure_hovered
-                        && let Some(diagnostic) =
-                            problem_row_jump_target(diagnostic, problem_row_double_clicked(&row))
-                    {
-                        jump_target = Some(diagnostic);
-                    }
-                }
-                if !self.preview.raw_diagnostics.is_empty() {
-                    ui.collapsing("Raw CLI stdout", |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(&self.preview.raw_diagnostics).monospace(),
-                            )
-                            .selectable(true)
-                            .wrap(),
-                        );
-                    });
-                }
-            });
-        if let Some((diagnostic, index)) = correction_target {
-            if let Err(error) = self.apply_diagnostic_correction(&diagnostic, index, ui.ctx()) {
-                self.show_file_error(error);
-            }
-        } else if let Some(diagnostic) = jump_target {
-            self.jump_to_diagnostic(diagnostic);
         }
     }
 

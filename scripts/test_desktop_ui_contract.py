@@ -1674,14 +1674,18 @@ class ProblemsPanelPreparationContract(unittest.TestCase):
                          "editor_keyboard_focused": False, "bottom_panel_keyboard_focused": False,
                          "explorer_focused": None,
                          "source_fingerprint": "fixture", "source_bytes": 7,
-                         "page_dark": False, "cursor": [0, 0]}
+                         "page_dark": False, "cursor": [0, 0], "problems": {"query": ""}}
                 actions = []
                 handoffs = []
-                journey.snapshot = lambda: {"document": dict(state)}
+                search_focused, search_selection = [False], [None]
+                journey.snapshot = lambda: {"document": dict(state), "targets": {"problems.search": {
+                    "enabled": True, "focused": search_focused[0], "age_ms": 0,
+                    "selection": search_selection[0]}}}
                 journey.newest_preview_document = lambda: None
                 journey.choose_backend = lambda backend: actions.append(("backend", backend))
 
                 def panel(tab):
+                    search_focused[0] = False
                     remembered[0] = tab
                     state["panel"] = tab
                     state["problems_keyboard_focused"] = tab == "Problems"
@@ -1692,10 +1696,12 @@ class ProblemsPanelPreparationContract(unittest.TestCase):
                 def click(target):
                     actions.append(("click", target))
                     if target == "preview.page":
+                        search_focused[0] = False
                         state["preview_keyboard_focused"] = True
                         state["problems_keyboard_focused"] = False
                         state["editor_keyboard_focused"] = False
                     elif target == "panel.close":
+                        search_focused[0] = False
                         state["panel"] = None
                         state["problems_keyboard_focused"] = False
                     elif target == "panel.problems":
@@ -1705,6 +1711,7 @@ class ProblemsPanelPreparationContract(unittest.TestCase):
                     elif target == "problems.input":
                         self.assertEqual(state["panel"], "Problems")
                     elif target == "editor.source":
+                        search_focused[0] = False
                         state["editor_keyboard_focused"] = True
                         state["bottom_panel_keyboard_focused"] = False
                     else:
@@ -1720,6 +1727,12 @@ class ProblemsPanelPreparationContract(unittest.TestCase):
                             state["problems_keyboard_focused"] = False
                     elif code == 6 and state["editor_keyboard_focused"]:
                         state["source_fingerprint"] = "fixture"
+                    elif code == 3 and state["panel"] == "Problems":
+                        search_focused[0] = True
+                    elif code == 0 and search_focused[0]:
+                        search_selection[0] = [0, len(state["problems"]["query"])]
+                    elif code == 51 and search_focused[0]:
+                        state["problems"]["query"] = ""
 
                 def wait(description, predicate):
                     self.assertTrue(predicate(state), description)
@@ -1741,13 +1754,29 @@ class ProblemsPanelPreparationContract(unittest.TestCase):
                 journey.click = click
                 journey.key = key
                 journey.wait = wait
-                journey.native = lambda *args: state.update(source_fingerprint="edited") \
-                    if state["editor_keyboard_focused"] else None
+                def native(command, text):
+                    if search_focused[0]:
+                        self.assertEqual(command, "text")
+                        state["problems"]["query"] = text
+                    elif state["editor_keyboard_focused"]:
+                        state["source_fingerprint"] = "edited"
+
+                def wait_target(name, focused=False):
+                    self.assertEqual(name, "problems.search")
+                    self.assertTrue(focused and search_focused[0])
+
+                journey.native = native
+                journey.wait_target = wait_target
                 journey.stable_state = lambda predicate, **kwargs: self.assertTrue(predicate(state))
                 journey.paste_source = lambda text, check: check()
                 journey.preview_terminal_handoff = terminal_handoff
+                # This contract isolates backend focus preparation. The real
+                # mixed-provider filtering phase has its own observation contracts.
+                journey.problems_filters = lambda: actions.append(("filter-journey",))
                 journey.problems_focus()
                 self.assertEqual(handoffs, ["Problems", "Problems"])
+                self.assertEqual(state["problems"]["query"], "")
+                self.assertEqual(actions[-1], ("filter-journey",))
 
 
 class TerminalHandoffContract(unittest.TestCase):

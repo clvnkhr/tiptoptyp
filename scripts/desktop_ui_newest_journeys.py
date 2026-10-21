@@ -6,6 +6,8 @@ from pathlib import Path
 import shlex
 import time
 
+from desktop_ui_problems_journeys import ProblemsJourneys
+
 NEWEST_JOURNEYS = ("problems_focus", "preview_find", "tables", "arxiv_tables", "math_grids")
 
 
@@ -202,7 +204,7 @@ def assert_compact_table_rows(state):
     return pitch
 
 
-class NewestJourneys:
+class NewestJourneys(ProblemsJourneys):
     def newest_preview_document(self):
         self.focus_document_window()
         self.ensure_typesetting_tab()
@@ -262,9 +264,17 @@ class NewestJourneys:
                 self.stable_state(source_selection_unchanged, frames=4)
             self.paste_source("must stay out of source", check=lambda: self.stable_state(source_selection_unchanged))
             self.key(3)
-            self.wait("Problems Find does not open a source or preview Find", lambda d:
+            self.wait_target("problems.search", focused=True)
+            self.replace_problems_query("problem-filter-focus")
+            self.wait("Problems Find edits its filter without changing source or preview", lambda d:
                       d["problems_keyboard_focused"] and not d["find_visible"]
-                      and not d["preview_controls_open"] and unchanged(d))
+                      and d["problems"]["query"] == "problem-filter-focus"
+                      and not d["preview_controls_open"] and source_selection_unchanged(d))
+            self.key(3, "cmd+alt")
+            self.stable_state(lambda d: source_selection_unchanged(d) and not d["find_visible"]
+                              and d["problems"]["query"] == "problem-filter-focus", frames=4)
+            self.key(3)
+            self.replace_problems_query("")
             if getattr(self, "capture_review", False) and backend == "Pdfium":
                 self.capture_viewport("main")
             self.click("panel.activity")
@@ -289,6 +299,7 @@ class NewestJourneys:
             self.key(6)
             self.wait("source fixture restored once", unchanged)
             self.preview_terminal_handoff(backend, unchanged)
+        self.problems_filters()
 
     def preview_terminal_handoff(self, backend, unchanged):
         # Off remains off when its panel reopens. Prepare a fresh isolated pane

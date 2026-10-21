@@ -9799,6 +9799,7 @@ fn problems_distinct_codes_have_separate_disclosures_and_repeated_rows_have_uniq
     let mut second = first.clone();
     second.details = vec!["Code: second".into(), "Hint: second diagnostic".into()];
     harness.state_mut().preview.diagnostics = vec![first.clone(), second];
+    harness.state_mut().mark_diagnostics_changed();
     harness.run();
     assert_eq!(
         harness.get_all_by_label("Show diagnostic details").count(),
@@ -9813,6 +9814,7 @@ fn problems_distinct_codes_have_separate_disclosures_and_repeated_rows_have_uniq
     harness.get_by_label("Hint: first diagnostic");
     assert!(harness.query_by_label("Hint: second diagnostic").is_none());
     harness.state_mut().preview.editor_diagnostics = vec![first];
+    harness.state_mut().mark_diagnostics_changed();
     harness.run();
     assert_eq!(harness.get_all_by_label("Redundant braces").count(), 3);
     assert_eq!(
