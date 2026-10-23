@@ -133,14 +133,24 @@ impl Session {
     fn notify(&mut self, method: &str, params: Value) -> Result<(), String> {
         self.send(json!({"jsonrpc":"2.0","method":method,"params":params}))
     }
-    pub(super) fn sync(&mut self, snapshot: &Snapshot) -> Result<(), String> {
+    pub(super) fn sync(&mut self, snapshot: &Snapshot) -> Result<Vec<Event>, String> {
+        // Drain before advancing provenance: an unversioned publication already
+        // in the mailbox belongs to the source the server had before didChange.
+        // The mailbox holds at most PIPE_LIMIT entries and poll drains that many,
+        // so no notification admitted before this drain is relabeled as newer.
+        // Unversioned responses arriving later cannot prove their source revision.
+        let mut events = if self.snapshot.identity() != snapshot.identity() {
+            self.poll()?
+        } else {
+            Vec::new()
+        };
         self.snapshot = snapshot.clone();
         if !self.initialized {
-            return Ok(());
+            return Ok(events);
         }
         let version = snapshot.version();
         if self.opened.as_ref() == Some(&snapshot.identity()) {
-            return Ok(());
+            return Ok(events);
         }
         // Old interactive replies must not accumulate while the source changes.
         for id in self.pending.keys().copied().collect::<Vec<_>>() {
@@ -164,7 +174,18 @@ impl Session {
             self.notify("textDocument/didChange", json!({"textDocument":{"uri":snapshot.uri,"version":version},"contentChanges":[{"text":snapshot.source}]}))?;
         }
         self.opened = Some(snapshot.identity());
-        Ok(())
+        // Readiness belongs to this reusable server session, rather than its
+        // previous document. After didOpen/didChange succeeds, a just-initialized
+        // session is ready for the new tab too. Source-bound replies stay old.
+        for event in &mut events {
+            if let Event::Ready {
+                snapshot: ready, ..
+            } = event
+            {
+                *ready = snapshot.identity();
+            }
+        }
+        Ok(events)
     }
     pub(super) fn request(&mut self, request: Request) -> Result<(), String> {
         if !self.initialized {
@@ -299,7 +320,7 @@ impl Session {
                     "workspace/didChangeConfiguration",
                     json!({"settings":configuration(self.provider, &self.snapshot.settings)}),
                 )?;
-                self.sync(&self.snapshot.clone())?;
+                events.extend(self.sync(&self.snapshot.clone())?);
                 events.push(Event::Ready {
                     snapshot: self.snapshot.identity(),
                     provider: self.provider,
@@ -426,6 +447,159 @@ fn configuration_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn queued_unversioned_publication_keeps_its_original_snapshot_after_sync() {
+        exercise_queued_publications(true, false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queued_initialization_readies_new_document_without_relabeling_old_diagnostics() {
+        exercise_queued_publications(false, true);
+    }
+
+    #[cfg(unix)]
+    fn exercise_queued_publications(initialized_before_sync: bool, switch_document: bool) {
+        use std::{os::unix::fs::PermissionsExt, sync::Arc};
+        use tiptoptyp_core::document::{DocumentKey, WindowSessionId};
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("fake-lsp");
+        let wire = directory.path().join("messages.lsp");
+        fs::write(
+            &program,
+            "#!/bin/sh\n/bin/cat \"$TTT_TEST_MESSAGES\"\nexec /bin/cat >/dev/null\n",
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let diagnostic_capacity = PIPE_LIMIT - usize::from(!initialized_before_sync);
+        for (clear, queued_count) in [
+            (false, 1),
+            (true, 1),
+            (false, diagnostic_capacity),
+            (true, diagnostic_capacity),
+        ] {
+            let settings = crate::tex::settings::TexSettings::default();
+            let mut snapshot = Snapshot {
+                generation: crate::lsp::Generation(1),
+                key: DocumentKey::new(WindowSessionId::new(1), 2, 0),
+                uri: url::Url::from_file_path(directory.path().join("main.tex"))
+                    .unwrap()
+                    .into(),
+                source: Arc::from("old"),
+                root: directory.path().into(),
+                tools: crate::tex::tools::TexTools::resolve(&settings),
+                settings,
+            };
+            snapshot.tools.texlab.program = program.clone();
+            snapshot.tools.texlab.origin = crate::toolchain::ToolOrigin::Custom;
+            snapshot.tools.texlab.command.environment =
+                json!({"TTT_TEST_MESSAGES":wire}).to_string();
+            let diagnostics = if clear {
+                json!([])
+            } else {
+                json!([{
+                    "range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},
+                    "message":"old source warning","severity":2
+                }])
+            };
+            let mut bytes = Vec::new();
+            transport::write_lsp_message(
+                &mut bytes,
+                &json!({"jsonrpc":"2.0","id":1,
+                "result":{"capabilities":{"positionEncoding":"utf-16"}}}),
+            )
+            .unwrap();
+            for _ in 0..queued_count {
+                transport::write_lsp_message(
+                    &mut bytes,
+                    &json!({"jsonrpc":"2.0", "method":"textDocument/publishDiagnostics",
+                    "params":{"uri":snapshot.uri,"diagnostics":diagnostics}}),
+                )
+                .unwrap();
+            }
+            fs::write(&wire, bytes).unwrap();
+            let mut session = Session::start(Provider::Texlab, &snapshot).unwrap();
+            // Route actual framed subprocess output through a test-owned mailbox.
+            // Receiving each real pipe message first proves deterministic queue
+            // admission, without sleeps or assumptions about reader scheduling.
+            let incoming = session.incoming.take().unwrap();
+            let (queued, receiver) = mpsc::sync_channel(PIPE_LIMIT);
+            session.incoming = Some(receiver);
+            queued
+                .send(incoming.recv_timeout(Duration::from_secs(5)).unwrap())
+                .unwrap();
+            if initialized_before_sync {
+                assert!(
+                    session
+                        .poll()
+                        .unwrap()
+                        .iter()
+                        .any(|event| matches!(event, Event::Ready { .. }))
+                );
+            }
+            for _ in 0..queued_count {
+                let publication = incoming
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(publication["method"], "textDocument/publishDiagnostics");
+                queued.send(Ok(publication)).unwrap();
+            }
+            let old = snapshot.identity();
+            if switch_document {
+                snapshot.key = DocumentKey::new(snapshot.key.owner, snapshot.key.epoch + 1, 0);
+                snapshot.uri = url::Url::from_file_path(directory.path().join("new-document.tex"))
+                    .unwrap()
+                    .into();
+            } else {
+                snapshot.key = snapshot.key.after_edit();
+            }
+            snapshot.source = Arc::from("newer");
+            let mut events = session.sync(&snapshot).unwrap();
+            events.extend(session.poll().unwrap());
+            let ready: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Ready { snapshot, .. } => Some(snapshot.clone()),
+                    _ => None,
+                })
+                .collect();
+            let publications: Vec<_> = events
+                .into_iter()
+                .filter_map(|event| match event {
+                    Event::Diagnostics {
+                        snapshot,
+                        diagnostics,
+                        ..
+                    } => Some((snapshot, diagnostics)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                publications.len(),
+                queued_count,
+                "every queued publication must remain available, including a full mailbox"
+            );
+            for (identity, diagnostics) in publications {
+                assert_eq!(diagnostics.len(), usize::from(!clear));
+                assert_eq!(
+                    identity, old,
+                    "old diagnostics, including empty clears, cannot become a fresh revision"
+                );
+            }
+            assert_eq!(
+                ready,
+                if initialized_before_sync {
+                    Vec::new()
+                } else {
+                    vec![snapshot.identity()]
+                },
+                "the initialized session must become usable for the new document, including a tab/URI switch"
+            );
+        }
+    }
     #[test]
     fn badness_format_request_honors_configured_indentation() {
         let mut settings = crate::tex::settings::TexSettings::default();

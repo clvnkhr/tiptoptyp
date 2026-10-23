@@ -345,15 +345,22 @@ impl Worker {
                                         }),
                                     }
                                 }
-                                if let Some(session) = slot
-                                    && let Err(message) = session.sync(&snapshot)
-                                {
-                                    *slot = None;
-                                    emit(Event::Failed {
-                                        snapshot: snapshot.identity(),
-                                        provider,
-                                        message,
-                                    });
+                                if let Some(session) = slot {
+                                    match session.sync(&snapshot) {
+                                        Ok(events) => {
+                                            for event in events {
+                                                emit(event);
+                                            }
+                                        }
+                                        Err(message) => {
+                                            *slot = None;
+                                            emit(Event::Failed {
+                                                snapshot: snapshot.identity(),
+                                                provider,
+                                                message,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                             current = Some(snapshot);
