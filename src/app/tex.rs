@@ -3,6 +3,9 @@ use super::*;
 use crate::tex::{Event, Identity, Provider, RequestKind, Snapshot};
 
 impl EditorApp {
+    pub(crate) fn begin_tex_shutdown(&mut self) {
+        self.tex_service.begin_shutdown();
+    }
     pub(super) fn sync_tex(&mut self, context: &egui::Context) {
         let embedded = self.document().config().is_some();
         if (self.document().kind() != DocumentKind::Tex && !embedded)

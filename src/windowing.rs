@@ -749,6 +749,10 @@ impl AppShell {
 
 impl eframe::App for AppShell {
     fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        self.primary.borrow_mut().begin_tex_shutdown();
+        for window in &self.secondary {
+            window.editor.borrow_mut().begin_tex_shutdown();
+        }
         self.primary.borrow().begin_writing_shutdown();
         for window in &self.secondary {
             window.editor.borrow().begin_writing_shutdown();
@@ -757,6 +761,7 @@ impl eframe::App for AppShell {
         for window in &self.secondary {
             window.editor.borrow_mut().shutdown_writing_checks();
         }
+        crate::tex::finish_shutdown();
         if let Some(gl) = gl {
             self.particle_renderer.destroy(gl);
         }

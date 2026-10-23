@@ -155,6 +155,55 @@ struct Worker {
     shutdown: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
 }
+// Window closure must not join a busy tool worker on the UI thread. Retain its
+// existing thread instead, then join every retired worker during final app exit.
+// No reaper thread is created; completed handles are reaped at registration.
+#[derive(Default)]
+struct WorkerCleanup {
+    threads: Mutex<Vec<thread::JoinHandle<()>>>,
+}
+static WORKER_CLEANUP: WorkerCleanup = WorkerCleanup {
+    threads: Mutex::new(Vec::new()),
+};
+impl WorkerCleanup {
+    fn retire(&self, worker: thread::JoinHandle<()>) {
+        let mut threads = self
+            .threads
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let mut index = 0;
+        while index < threads.len() {
+            if threads[index].is_finished() {
+                let _ = threads.swap_remove(index).join();
+            } else {
+                index += 1;
+            }
+        }
+        if worker.is_finished() {
+            let _ = worker.join();
+        } else {
+            threads.push(worker);
+        }
+    }
+    fn finish(&self) {
+        let threads = std::mem::take(
+            &mut *self
+                .threads
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        for worker in threads {
+            let _ = worker.join();
+        }
+    }
+}
+/// Final-exit barrier, after all open documents have begun shutdown. Also owns
+/// cleanup retired by windows that have already closed; ordinary close is free
+/// to return while workers terminate and reap their process groups.
+pub(crate) fn finish_shutdown() {
+    WORKER_CLEANUP.finish();
+}
+
 impl TexService {
     pub(crate) fn identity(&self) -> Option<&Snapshot> {
         self.current.as_ref()
@@ -200,6 +249,10 @@ impl TexService {
             self.texlab_ready = false;
             self.badness_ready = false;
         }
+    }
+    pub(crate) fn begin_shutdown(&mut self) {
+        self.stop();
+        self.worker.take();
     }
     pub(crate) fn request(&self, kind: RequestKind) -> Result<(), String> {
         let snapshot = self.current.as_ref().ok_or("No active TeX document")?;
@@ -449,7 +502,7 @@ impl Drop for Worker {
         self.shutdown.store(true, Ordering::Release);
         let _ = self.snapshots.send(None);
         if let Some(worker) = self.thread.take() {
-            let _ = worker.join();
+            WORKER_CLEANUP.retire(worker);
         }
     }
 }
@@ -523,6 +576,105 @@ mod tests {
             settings,
         }
     }
+    #[cfg(unix)]
+    #[test]
+    fn worker_drop_returns_before_busy_cleanup_and_the_worker_still_reaps_its_child() {
+        let (snapshots, receiver) = latest_channel();
+        let (requests, _requests) = mpsc::sync_channel(1);
+        let (release, waiting) = mpsc::channel();
+        let (started, ready) = mpsc::channel();
+        let (cleaned, cleanup) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            let _receiver = receiver;
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", "exec /bin/sleep 30"]);
+            let mut child = crate::process::OwnedChild::spawn(&mut command).unwrap();
+            started.send(child.child_mut().id()).unwrap();
+            waiting.recv().unwrap();
+            drop(child);
+            cleaned.send(()).unwrap();
+        });
+        let pid = ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        let worker = Worker {
+            snapshots,
+            requests,
+            events: Default::default(),
+            shutdown: Arc::default(),
+            thread: Some(thread),
+        };
+        let (returned, result) = mpsc::channel();
+        let dropping = thread::spawn(move || {
+            drop(worker);
+            let _ = returned.send(());
+        });
+        let returned_before_cleanup = result.recv_timeout(Duration::from_secs(2)).is_ok();
+        // Always release/join the test threads before asserting a red result.
+        release.send(()).unwrap();
+        cleanup.recv_timeout(Duration::from_secs(5)).unwrap();
+        dropping.join().unwrap();
+        assert!(
+            matches!(
+                nix::sys::wait::waitpid(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    Some(nix::sys::wait::WaitPidFlag::WNOHANG)
+                ),
+                Err(nix::errno::Errno::ECHILD)
+            ),
+            "the existing worker must reap its owned process after release"
+        );
+        assert!(
+            returned_before_cleanup,
+            "dropping a busy TeX service must not wait for worker cleanup on the UI thread"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn final_exit_waits_for_retired_worker_and_reaps_its_child() {
+        let registry = Arc::new(WorkerCleanup::default());
+        let (release, waiting) = mpsc::channel();
+        let (started, ready) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut command = std::process::Command::new("/bin/sh");
+            command.args(["-c", "exec /bin/sleep 30"]);
+            let mut child = crate::process::OwnedChild::spawn(&mut command).unwrap();
+            started.send(child.child_mut().id()).unwrap();
+            waiting.recv().unwrap();
+            drop(child);
+        });
+        let pid = ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        registry.retire(worker);
+        let (finishing, entered) = mpsc::channel();
+        let (finished, result) = mpsc::channel();
+        let exiting = thread::spawn(move || {
+            finishing.send(()).unwrap();
+            registry.finish();
+            finished.send(()).unwrap();
+        });
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        let waited_for_cleanup = matches!(
+            result.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+        release.send(()).unwrap();
+        result.recv_timeout(Duration::from_secs(5)).unwrap();
+        exiting.join().unwrap();
+        assert!(
+            waited_for_cleanup,
+            "final exit cannot abandon a worker from an already-closed window"
+        );
+        assert!(
+            matches!(
+                nix::sys::wait::waitpid(
+                    nix::unistd::Pid::from_raw(pid as i32),
+                    Some(nix::sys::wait::WaitPidFlag::WNOHANG)
+                ),
+                Err(nix::errno::Errno::ECHILD)
+            ),
+            "final exit must finish reaping retired workers' children"
+        );
+    }
+
     #[test]
     fn diagnostic_batch_preserves_order_and_rejects_split_surrogates_and_invalid_lines() {
         let positions = [(1, 1), (0, 3), (0, 2), (5, 0), (0, 3), (0, 99)];
