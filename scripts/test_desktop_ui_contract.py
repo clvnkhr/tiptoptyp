@@ -815,6 +815,36 @@ class HarperMathProseContract(unittest.TestCase):
         self.assertFalse(harper_settings_applied(
             {**document, "harper_ignore_capitalized_names": 1}, "qzorthal", True))
 
+    def test_harper_rule_journey_rejects_stale_or_destructive_filter_results(self):
+        from desktop_ui_journeys import fingerprint
+        from desktop_ui_tex_journeys import harper_rule_result
+        source, path = "Short sentence.  Next sentence.", Path("/tmp/rule-test.typ")
+        locations = [[1, 12], [2, 12], [3, 26], [4, 9]]
+        document = {"path": str(path), "source_fingerprint": fingerprint(source),
+                    "writing_current": True, "writing_pending": False,
+                    "harper_rule_overrides": {"NoFrenchSpaces": True},
+                    "writing_rules": ["SpellCheck", "SpellCheck", "SpellCheck", "RepeatedWords", "NoFrenchSpaces"],
+                    "writing_count": 5, "writing_locations": [*locations, [5, 26]],
+                    "writing_paths": [str(path)] * 5}
+        self.assertTrue(harper_rule_result(document, source, path, locations, True))
+        for field, wrong in (("writing_current", False), ("writing_pending", True),
+                             ("source_fingerprint", "stale"), ("writing_count", 1),
+                             ("writing_locations", [[5, 26]]),
+                             ("writing_locations", [*locations, [5, 25]]),
+                             ("writing_paths", ["/tmp/generated.typ"] * 5),
+                             ("writing_rules", ["SpellCheck"]),
+                             ("harper_rule_overrides", {"NoFrenchSpaces": 1})):
+            with self.subTest(field=field):
+                self.assertFalse(harper_rule_result({**document, field: wrong}, source, path, locations, True))
+
+    def test_quiet_badness_journey_requires_visible_correctness_reports(self):
+        from desktop_ui_tex_journeys import quiet_badness_result
+        document = {"tex_diagnostics_current": [True, True], "badness_visible_codes": ["undefined-label"]}
+        self.assertTrue(quiet_badness_result(document))
+        for value in ([], ["redundant-script-braces"], ['"redundant-script-braces"'], [None]):
+            self.assertFalse(quiet_badness_result({**document, "badness_visible_codes": value}))
+        self.assertFalse(quiet_badness_result({**document, "tex_diagnostics_current": [True, False]}))
+
     def test_an_idle_old_writing_result_cannot_pass_freshness(self):
         from desktop_ui_tex_journeys import harper_fresh
         source, path, document = self.observation()
@@ -856,7 +886,15 @@ class HarperMathProseContract(unittest.TestCase):
         actions = []
         journey.focus_document_window = lambda: actions.append(("focus",))
         journey.key = lambda *args: actions.append(("key", *args))
-        journey.native = lambda *args: actions.append(args)
+        def native(*args):
+            actions.append(args)
+            if args[0] == "ax-button-title":
+                return dict(requested_title=args[1], count=1, complete=True,
+                            role="AXButton", title=args[1], enabled=True)
+            if args[0] == "ax-dialog-state":
+                return dict(complete=True, focused_ancestry=[],
+                            focused_window=dict(role="AXSheet", identifier="GoToWindow"))
+        journey.native = native
         journey.click = lambda *args: actions.append(("click", *args))
 
         def wait(description, predicate, **kwargs):
@@ -873,8 +911,10 @@ class HarperMathProseContract(unittest.TestCase):
         with patch("time.sleep"):
             journey.open_harper_fixture(path)
         self.assertEqual(actions, [
-            ("focus",), ("key", 31), ("key", 5, "cmd+shift"), ("key", 0),
-            ("text", str(path)), ("key", 36, "none"), ("ax-press-title", "Open"),
+            ("focus",), ("key", 31), ("ax-button-title", "Open"),
+            ("key", 5, "cmd+shift"), ("ax-dialog-state",), ("key", 0),
+            ("text", str(path)), ("key", 36, "none"),
+            ("ax-button-title", "Open"), ("ax-press-title", "Open"),
             ("verified", "named Harper fixture opened"), ("click", "editor.source"),
             ("verified", "Harper fixture owns keyboard"),
         ])
@@ -1451,6 +1491,93 @@ class SettingsSectionContract(unittest.TestCase):
         with patch.object(runner.time, "sleep"):
             journey.wait_target("settings.search", focused=True)
         self.assertEqual(list(targets), [])
+
+
+class SettingsJsonEditingContract(unittest.TestCase):
+    def state(self, selection):
+        return {"document": {"settings_json": {"visible": True, "fingerprint": "draft",
+                                             "valid": True}},
+                "targets": {"settings.json": {"enabled": True, "focused": True,
+                                               "age_ms": 0, "selection": selection}}}
+
+    def test_selection_requires_fresh_focused_unchanged_json_draft(self):
+        from desktop_ui_journeys import settings_json_editor_selection
+        for selection in ([0, 10], [10, 0], [10, 10]):
+            self.assertEqual(settings_json_editor_selection(self.state(selection), "draft"), selection)
+        for change in ({"selection": [True, 10]}, {"selection": [-1, 0]},
+                       {"selection": [0]}, {"selection": None}, {"focused": False},
+                       {"enabled": False}, {"age_ms": -1}, {"age_ms": 501},
+                       {"age_ms": True}, {"age_ms": float("nan")}):
+            state = self.state([0, 10])
+            state["targets"]["settings.json"].update(change)
+            with self.subTest(change=change):
+                self.assertIsNone(settings_json_editor_selection(state, "draft"))
+        state = self.state([0, 10])
+        self.assertIsNone(settings_json_editor_selection(state, "earlier"))
+        state["document"]["settings_json"]["visible"] = False
+        self.assertIsNone(settings_json_editor_selection(state, "draft"))
+
+    def test_whitespace_edit_waits_for_both_keys_and_rejects_old_valid_state(self):
+        from copy import deepcopy
+        journey = object.__new__(runner.Journey)
+        state = self.state([6, 6])
+        events, pending = [], []
+
+        def snapshot():
+            if pending:
+                phase, count = pending[0]
+                pending[0] = (phase, count + 1)
+                if count == 1:
+                    if phase == "select":
+                        state["targets"]["settings.json"]["selection"] = [10, 0]
+                    elif phase == "collapse":
+                        state["targets"]["settings.json"]["selection"] = [10, 10]
+                    else:
+                        state["document"]["settings_json"]["fingerprint"] = "changed"
+                    events.append(phase + ".acknowledged")
+                    pending.clear()
+            return deepcopy(state)
+
+        def key(code, flags="cmd"):
+            if code == 0:
+                phase = "select"
+            elif code == 124 and flags == "none":
+                self.assertEqual(events[-1], "select.acknowledged")
+                self.assertEqual(state["targets"]["settings.json"]["selection"], [10, 0])
+                phase = "collapse"
+            else:
+                raise AssertionError((code, flags))
+            events.append(phase)
+            pending.append((phase, 0))
+
+        def native(command, text):
+            self.assertEqual((command, text), ("text", " "))
+            self.assertEqual(events[-1], "collapse.acknowledged")
+            self.assertEqual(state["targets"]["settings.json"]["selection"], [10, 10])
+            events.append("text")
+            pending.append(("edit", 0))
+
+        def wait(description, predicate):
+            self.assertFalse(predicate(snapshot()["document"]), "old valid draft must not acknowledge typing")
+            self.assertTrue(predicate(snapshot()["document"]), description)
+
+        journey.snapshot, journey.key, journey.native, journey.wait = snapshot, key, native, wait
+        journey.wait_target = lambda name, focused=False: None
+        with patch("time.sleep"):
+            journey.settings_json_append_whitespace()
+        self.assertEqual(events, ["select", "select.acknowledged", "collapse",
+                                  "collapse.acknowledged", "text", "edit.acknowledged"])
+
+    def test_missing_right_acknowledgement_never_types_over_selected_json(self):
+        journey = object.__new__(runner.Journey)
+        state = self.state([10, 0])
+        journey.snapshot = lambda: state
+        journey.wait_target = lambda name, focused=False: None
+        journey.key = lambda *args: None
+        journey.native = lambda *args: self.fail("text preceded selection collapse")
+        with patch("time.monotonic", side_effect=[0, 0, 7]), patch("time.sleep"):
+            with self.assertRaisesRegex(AssertionError, "Right did not collapse"):
+                journey.settings_json_append_whitespace()
 
 
 class SettingsNavigationContract(unittest.TestCase):

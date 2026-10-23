@@ -1,0 +1,53 @@
+{
+  "format": 3,
+  "model_id": "lfm25-encoder-350m-onnxruntime-v1",
+  "upstream_revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+  "files": [
+    {
+      "name": "liquid.onnx",
+      "bytes": 713925894,
+      "sha256": "0e7e08c23c6bc50e0743c43cd39a7167067e4fda70cb6de1848cef5516804478",
+      "compressed_bytes": 654480143,
+      "compressed_sha256": "473283f658abb5da4c4ee2459415450d3aee0b282527282aae031e1a49ec4d7f"
+    },
+    {
+      "name": "tokenizer.json",
+      "bytes": 4733371,
+      "sha256": "1efc3a6609abf6b63b1f47188d139f3b59973a6a434dffe970a7261a51ed2711",
+      "compressed_bytes": 839069,
+      "compressed_sha256": "0b8db09d515ac7b255c06894fcf181175240b32514c5cf377426968b2377d484"
+    },
+    {
+      "name": "liquid-onnx",
+      "target": "aarch64-apple-darwin",
+      "bytes": 89968,
+      "sha256": "0bfe7ecf15a14ecedc76c60b0f6932be35d86d7242bc981e73a9d0a353a4973f",
+      "compressed_bytes": 14148,
+      "compressed_sha256": "6c8e0aaa4449647401d538392dcd0df9b166fac024a18cfe778df1807f220c2c"
+    },
+    {
+      "name": "libonnxruntime.dylib",
+      "target": "aarch64-apple-darwin",
+      "bytes": 29268768,
+      "sha256": "9500f5108f1ddf0c1386542057ba494af67fc5daec81d61ed6f61c16a0ed3dc2",
+      "compressed_bytes": 9160715,
+      "compressed_sha256": "40f54b77b59cc1132ff1604346b8b3aff9e4259b9ed7576ff98dc275bcc92b71"
+    },
+    {
+      "name": "liquid-onnx",
+      "target": "x86_64-apple-darwin",
+      "bytes": 52848,
+      "sha256": "a7a0b0b6abcba5de1be8ebb86085f7a8e594940ca03eda098c16469021c91281",
+      "compressed_bytes": 11631,
+      "compressed_sha256": "9e5cc863311c8dfb4f3eddafb9ddf217562d4f0559a2d61d8e2c82ef9fdd544e"
+    },
+    {
+      "name": "libonnxruntime.dylib",
+      "target": "x86_64-apple-darwin",
+      "bytes": 20472400,
+      "sha256": "d337f1faef653abb27633aae2d026d38f808ebbbe7c2dd1f0a9bc66c122e8052",
+      "compressed_bytes": 5938394,
+      "compressed_sha256": "1652fcd8f44e5b49b08f1d02fc8532b79fb2feb1b556f33065c1dda94a8c4592"
+    }
+  ]
+}

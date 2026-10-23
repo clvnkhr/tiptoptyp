@@ -1,0 +1,421 @@
+{
+  "format": 1,
+  "task": "Liquid optional on-demand distribution",
+  "completed_at_utc": "2026-10-21T18:51:51.231584+00:00",
+  "host": {
+    "system": "Darwin",
+    "release": "23.6.0",
+    "machine": "arm64",
+    "product_version": "14.6.1"
+  },
+  "scope": "Native production runtime, optional release distribution, universal package size and real-app interactions. No inference performance benchmark.",
+  "temurin_changed": false,
+  "ltex_bundled_by_default": true,
+  "default_liquid_payload_bundled": false,
+  "release": {
+    "repository": "clvnkhr/tiptoptyp",
+    "tag": "liquid-onnxruntime-v1",
+    "target_commit": "eefe7a3829f920c002a2ca4c4eb41142f307e5a9",
+    "url": "https://github.com/clvnkhr/tiptoptyp/releases/tag/liquid-onnxruntime-v1",
+    "release_id": 419919270,
+    "prerelease": true,
+    "latest_unchanged": true,
+    "github_immutable": false,
+    "anonymous_asset_verification": [
+      {
+        "file": "liquid.onnx.zst",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/liquid.onnx.zst",
+        "bytes": 654480143,
+        "sha256": "473283f658abb5da4c4ee2459415450d3aee0b282527282aae031e1a49ec4d7f",
+        "verified_at": "2026-10-21T18:45:17.459743+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "tokenizer.json.zst",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/tokenizer.json.zst",
+        "bytes": 839069,
+        "sha256": "0b8db09d515ac7b255c06894fcf181175240b32514c5cf377426968b2377d484",
+        "verified_at": "2026-10-21T18:45:17.976222+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "aarch64-apple-darwin-liquid-onnx.zst",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/aarch64-apple-darwin-liquid-onnx.zst",
+        "bytes": 14148,
+        "sha256": "6c8e0aaa4449647401d538392dcd0df9b166fac024a18cfe778df1807f220c2c",
+        "verified_at": "2026-10-21T18:45:18.375497+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "aarch64-apple-darwin-libonnxruntime.dylib.zst",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/aarch64-apple-darwin-libonnxruntime.dylib.zst",
+        "bytes": 9160715,
+        "sha256": "40f54b77b59cc1132ff1604346b8b3aff9e4259b9ed7576ff98dc275bcc92b71",
+        "verified_at": "2026-10-21T18:45:19.163894+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "x86_64-apple-darwin-liquid-onnx.zst",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/x86_64-apple-darwin-liquid-onnx.zst",
+        "bytes": 11631,
+        "sha256": "9e5cc863311c8dfb4f3eddafb9ddf217562d4f0559a2d61d8e2c82ef9fdd544e",
+        "verified_at": "2026-10-21T18:45:19.599075+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "x86_64-apple-darwin-libonnxruntime.dylib.zst",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/x86_64-apple-darwin-libonnxruntime.dylib.zst",
+        "bytes": 5938394,
+        "sha256": "1652fcd8f44e5b49b08f1d02fc8532b79fb2feb1b556f33065c1dda94a8c4592",
+        "verified_at": "2026-10-21T18:45:20.272444+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "manifest.json",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/manifest.json",
+        "bytes": 2002,
+        "sha256": "9e3076ff7ecaf99ace00b7c4a5213ae2ea7a6dc6e7a56a9995088799871bae85",
+        "verified_at": "2026-10-21T18:45:20.694413+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "LICENSE.txt",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/LICENSE.txt",
+        "bytes": 10574,
+        "sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
+        "verified_at": "2026-10-21T18:45:21.107466+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "PROVENANCE.json",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/PROVENANCE.json",
+        "bytes": 11941,
+        "sha256": "8652e054e684ee38f31639e1e72488beba0fc353bebcfbe359b57ab4ad25607c",
+        "verified_at": "2026-10-21T18:45:21.555993+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "aarch64-apple-darwin-LICENSES.txt",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/aarch64-apple-darwin-LICENSES.txt",
+        "bytes": 339493,
+        "sha256": "c6d442d1cb31fb9595b145dce71166e00dbe321ccbefc2776c35821252b8275c",
+        "verified_at": "2026-10-21T18:45:22.022570+00:00",
+        "authenticated": false
+      },
+      {
+        "file": "x86_64-apple-darwin-LICENSES.txt",
+        "url": "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/x86_64-apple-darwin-LICENSES.txt",
+        "bytes": 339943,
+        "sha256": "a3b526fc7fe8454f2ad8a513df123d7601078402ffe2e9a77389dd13a6d4636d",
+        "verified_at": "2026-10-21T18:45:22.759312+00:00",
+        "authenticated": false
+      }
+    ]
+  },
+  "native_first_use": {
+    "started_at_utc": "2026-10-21T18:45:24.271384+00:00",
+    "scope": "Functional native production-module download/correction and offline reuse, not a latency benchmark",
+    "cache_initially_absent": true,
+    "cache": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/releases/liquid-onnxruntime-v1/fresh-cache",
+    "probe_sha256": "d423c61454b3e5cbb921220f8a5f01334c575588e4506ff655f9d929f8e5cf96",
+    "python_path_disabled": true,
+    "checks": [
+      {
+        "phase": "fresh_download_and_correction",
+        "success": true,
+        "functional_elapsed_seconds": 26.351814583991654,
+        "offline_proxy_blocks_downloads": false,
+        "input_sha256": "5c19c169118d9809c1eb7a4a98a2da610c11eaa1ee2f8d1a82d8b6b5119ea64d",
+        "expected_output_sha256": "5631182db18aa7d13083d64f8755e4a5266685a129412e4862168fa1c521d42d",
+        "output_sha256": "5631182db18aa7d13083d64f8755e4a5266685a129412e4862168fa1c521d42d"
+      },
+      {
+        "phase": "offline_new_process_cache_reuse",
+        "success": true,
+        "functional_elapsed_seconds": 3.7180501249385998,
+        "offline_proxy_blocks_downloads": true,
+        "input_sha256": "5c19c169118d9809c1eb7a4a98a2da610c11eaa1ee2f8d1a82d8b6b5119ea64d",
+        "expected_output_sha256": "5631182db18aa7d13083d64f8755e4a5266685a129412e4862168fa1c521d42d",
+        "output_sha256": "5631182db18aa7d13083d64f8755e4a5266685a129412e4862168fa1c521d42d"
+      }
+    ],
+    "verified_cache": {
+      "target": "aarch64-apple-darwin",
+      "catalog_sha256": "9e3076ff7ecaf99ace00b7c4a5213ae2ea7a6dc6e7a56a9995088799871bae85",
+      "notices_catalog_sha256": "d33c05e0250571d20f5fd5ce1484c7c39952b24575cdb28e20e54af91e0e3465",
+      "installed_manifest_sha256": "8df851f649ed8694f608613db54bc8922a40160ea7b7166af534ff2169dc9daa",
+      "asset_sha256": {
+        "liquid.onnx": "0e7e08c23c6bc50e0743c43cd39a7167067e4fda70cb6de1848cef5516804478",
+        "tokenizer.json": "1efc3a6609abf6b63b1f47188d139f3b59973a6a434dffe970a7261a51ed2711",
+        "runtime/aarch64-apple-darwin/liquid-onnx": "0bfe7ecf15a14ecedc76c60b0f6932be35d86d7242bc981e73a9d0a353a4973f",
+        "runtime/aarch64-apple-darwin/libonnxruntime.dylib": "9500f5108f1ddf0c1386542057ba494af67fc5daec81d61ed6f61c16a0ed3dc2"
+      },
+      "notice_sha256": {
+        "LICENSE.txt": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c",
+        "PROVENANCE.json": "8652e054e684ee38f31639e1e72488beba0fc353bebcfbe359b57ab4ad25607c",
+        "licenses/aarch64-apple-darwin.txt": "c6d442d1cb31fb9595b145dce71166e00dbe321ccbefc2776c35821252b8275c"
+      }
+    },
+    "other_architecture_absent": true,
+    "passed": true,
+    "finished_at_utc": "2026-10-21T18:45:54.852436+00:00"
+  },
+  "first_use_download_bytes": {
+    "aarch64-apple-darwin": 664856083,
+    "x86_64-apple-darwin": 661631695
+  },
+  "universal_package": {
+    "started_at_utc": "2026-10-21T18:33:44.963105+00:00",
+    "scope": "Universal bundle build/verification only; installed /Applications app untouched",
+    "commands": [
+      {
+        "argv": [
+          "cargo",
+          "packager",
+          "--config",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/packager-prod.toml",
+          "--target",
+          "universal-apple-darwin"
+        ],
+        "exit_code": 0,
+        "log": "/private/tmp/ttt-liquid-optional-package-build.log"
+      },
+      {
+        "argv": [
+          "cargo",
+          "run",
+          "--manifest-path",
+          "xtask/Cargo.toml",
+          "--",
+          "verify-package",
+          "--target",
+          "universal-apple-darwin"
+        ],
+        "exit_code": 0,
+        "log": "/private/tmp/ttt-liquid-optional-package-verify.log"
+      }
+    ],
+    "before_regular_file_bytes": 1292978551,
+    "before_liquid_bytes": 671148053,
+    "finished_at_utc": "2026-10-21T18:47:23.525468+00:00",
+    "after_regular_file_bytes": 621158383,
+    "liquid_payload_absent": true,
+    "architectures": "x86_64 arm64"
+  },
+  "real_app": {
+    "passed": true,
+    "journey": "liquid_selection",
+    "evidence": ".tiptoptyp/desktop-ui-tests/run-0mnogl_1",
+    "version": "tiptoptyp Dev 0.1.0 (eefe7a3829f9-dirty.1792607175)",
+    "phases": [
+      {
+        "time": 565568.236773,
+        "action": "liquid.input.settings.roundtrip",
+        "saved": {
+          "protected_content": "split",
+          "placeholder": "MATH",
+          "formatted_text": "skip"
+        },
+        "restored": {
+          "protected_content": "placeholder",
+          "placeholder": "x",
+          "formatted_text": "include"
+        }
+      },
+      {
+        "time": 565608.404195375,
+        "action": "liquid.first-use.prepared",
+        "cache_initially_absent": true,
+        "automatic": true,
+        "cache_scope": "journey temporary directory",
+        "python_runtime_created": false,
+        "model_id": "lfm25-encoder-350m-onnxruntime-v1",
+        "upstream_revision": "4e2f724c10985e9ec90f34189c22be5d5f2e41e0",
+        "manifest_sha256": "8df851f649ed8694f608613db54bc8922a40160ea7b7166af534ff2169dc9daa",
+        "files": [
+          {
+            "name": "liquid.onnx",
+            "bytes": 713925894,
+            "declared_sha256": "0e7e08c23c6bc50e0743c43cd39a7167067e4fda70cb6de1848cef5516804478"
+          },
+          {
+            "name": "runtime/aarch64-apple-darwin/libonnxruntime.dylib",
+            "bytes": 29268768,
+            "declared_sha256": "9500f5108f1ddf0c1386542057ba494af67fc5daec81d61ed6f61c16a0ed3dc2"
+          },
+          {
+            "name": "runtime/aarch64-apple-darwin/liquid-onnx",
+            "bytes": 89968,
+            "declared_sha256": "0bfe7ecf15a14ecedc76c60b0f6932be35d86d7242bc981e73a9d0a353a4973f"
+          },
+          {
+            "name": "tokenizer.json",
+            "bytes": 4733371,
+            "declared_sha256": "1efc3a6609abf6b63b1f47188d139f3b59973a6a434dffe970a7261a51ed2711"
+          }
+        ]
+      },
+      {
+        "time": 565620.657327833,
+        "action": "liquid.selection",
+        "kind": "typst",
+        "style": "Unified",
+        "source_fingerprint": "1cab2e5d28a083d9",
+        "corrected_fingerprint": "78f242f044920b31",
+        "outside_unchanged": true,
+        "wrapper_preserved": true,
+        "cancel_unchanged": true,
+        "modal_shortcuts_owned": true,
+        "single_undo": true,
+        "active_tab_id": 1
+      },
+      {
+        "time": 565645.662753333,
+        "action": "liquid.selection",
+        "kind": "tex",
+        "style": "Unified",
+        "source_fingerprint": "4e13c429f1d24e66",
+        "corrected_fingerprint": "2b58752c5175d67e",
+        "outside_unchanged": true,
+        "wrapper_preserved": true,
+        "cancel_unchanged": true,
+        "modal_shortcuts_owned": true,
+        "single_undo": true,
+        "active_tab_id": 2
+      },
+      {
+        "time": 565680.443622916,
+        "action": "liquid.selection",
+        "kind": "typst",
+        "style": "SideBySide",
+        "source_fingerprint": "1cab2e5d28a083d9",
+        "corrected_fingerprint": "78f242f044920b31",
+        "outside_unchanged": true,
+        "wrapper_preserved": true,
+        "cancel_unchanged": true,
+        "modal_shortcuts_owned": true,
+        "single_undo": true,
+        "active_tab_id": 3
+      },
+      {
+        "time": 565705.505355333,
+        "action": "liquid.selection",
+        "kind": "tex",
+        "style": "SideBySide",
+        "source_fingerprint": "4e13c429f1d24e66",
+        "corrected_fingerprint": "2b58752c5175d67e",
+        "outside_unchanged": true,
+        "wrapper_preserved": true,
+        "cancel_unchanged": true,
+        "modal_shortcuts_owned": true,
+        "single_undo": true,
+        "active_tab_id": 4
+      },
+      {
+        "time": 565715.924468041,
+        "action": "liquid.streaming.partial",
+        "apply_enabled": false,
+        "source_unchanged": true,
+        "chunk": 1,
+        "chunks": 6,
+        "model_tokens": 128,
+        "passage": 1,
+        "passages": 1
+      },
+      {
+        "time": 565721.017003416,
+        "action": "liquid.streaming",
+        "kind": "typst",
+        "style": "SideBySide",
+        "single_undo": true,
+        "math_preserved": true,
+        "wrapper_preserved": true,
+        "outside_unchanged": true,
+        "source_fingerprint": "ad23dacebcf3934c",
+        "corrected_fingerprint": "7693d7e51850eea0",
+        "chunk": 6,
+        "chunks": 6,
+        "model_tokens": 109,
+        "passage": 1,
+        "passages": 1
+      },
+      {
+        "time": 565732.11304375,
+        "action": "liquid.streaming.partial",
+        "apply_enabled": false,
+        "source_unchanged": true,
+        "chunk": 1,
+        "chunks": 6,
+        "model_tokens": 128,
+        "passage": 1,
+        "passages": 1
+      },
+      {
+        "time": 565737.334839875,
+        "action": "liquid.streaming",
+        "kind": "tex",
+        "style": "SideBySide",
+        "single_undo": true,
+        "math_preserved": true,
+        "wrapper_preserved": true,
+        "outside_unchanged": true,
+        "source_fingerprint": "5fbae59d048e80a8",
+        "corrected_fingerprint": "1272a7fe2ec06f04",
+        "chunk": 6,
+        "chunks": 6,
+        "model_tokens": 109,
+        "passage": 1,
+        "passages": 1
+      },
+      {
+        "time": 565770.723099458,
+        "action": "journey.passed",
+        "name": "liquid_selection"
+      }
+    ]
+  },
+  "checks": {
+    "fmt": "passed",
+    "clippy_all_targets": "passed",
+    "main_unit_tests": {
+      "passed": 2477,
+      "ignored": 75
+    },
+    "remaining_integration_and_doc_tests": "passed",
+    "xtask_tests": {
+      "passed": 55,
+      "ignored": 1
+    },
+    "installer_contracts": 8,
+    "native_journey_contracts": 21,
+    "liquid_python_contracts": {
+      "passed": 41,
+      "skipped": 1
+    },
+    "probe_format_clippy_build": "passed"
+  },
+  "source_sha256": {
+    "src/liquid_runtime.rs": "cf357336387a9a6834ef384fe0f825228a2e50483fc4b32a7ca737e1dc4c6f0b",
+    "src/liquid_resources.rs": "99da90e0efd45f2ad0364b48cabb7d3f7dcf64697fb8e4bd8582f6978f7d2cc4",
+    "src/liquid_notices.rs": "9d321edb8d7224aae8119df58208617eb1c16145e6c6545b013d560170a33e7f",
+    "src/liquid_process.rs": "e5aabfaed0d9503c01dedfb7f293aedbfda7198d559ced84293dfe4ad52ca271",
+    "src/resource_repair.rs": "2b9f2f87b252f24827a6c320632621d5f0259b4fd1f4c682306c516758f73214",
+    "resources/liquid/manifest.json": "9e3076ff7ecaf99ace00b7c4a5213ae2ea7a6dc6e7a56a9995088799871bae85",
+    "resources/liquid/notices.json": "d33c05e0250571d20f5fd5ce1484c7c39952b24575cdb28e20e54af91e0e3465",
+    "scripts/liquid-native-probe/src/main.rs": "906a7a5ce15e4f4e3a2f204d0f3319fb11acc07ae887b5b98de348e56ecc234c"
+  },
+  "limitations": [
+    "Native correction and real-app interaction checks ran on Apple Silicon. Intel assets were anonymously downloaded and hash-verified, and the universal package passed both architecture checks; physical Intel inference was not exercised.",
+    "Functional first-use elapsed times include download/setup and concurrent build work; they are not inference latency measurements.",
+    "App size counts regular-file bytes in an unsigned-for-distribution local universal bundle; filesystem allocation and notarized distribution size may differ.",
+    "No viewport screenshot or composed-desktop visual claim is made; this change was checked through real input and semantic app state.",
+    "The installed /Applications/tiptoptyp.app was not replaced."
+  ],
+  "cleanup": {
+    "at_utc": "2026-10-21T18:52:14.022215+00:00",
+    "owned_disposable_reference_cache_removed": true,
+    "bytes_freed": 748381659,
+    "user_cache_changed": false,
+    "native_journey_passed_before_cleanup": true
+  }
+}

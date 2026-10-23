@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "files": [
+    {
+      "name": "LICENSE.txt",
+      "asset_name": "LICENSE.txt",
+      "bytes": 10574,
+      "sha256": "4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c"
+    },
+    {
+      "name": "PROVENANCE.json",
+      "asset_name": "PROVENANCE.json",
+      "bytes": 11941,
+      "sha256": "8652e054e684ee38f31639e1e72488beba0fc353bebcfbe359b57ab4ad25607c"
+    },
+    {
+      "name": "licenses/aarch64-apple-darwin.txt",
+      "asset_name": "aarch64-apple-darwin-LICENSES.txt",
+      "bytes": 339493,
+      "sha256": "c6d442d1cb31fb9595b145dce71166e00dbe321ccbefc2776c35821252b8275c",
+      "target": "aarch64-apple-darwin"
+    },
+    {
+      "name": "licenses/x86_64-apple-darwin.txt",
+      "asset_name": "x86_64-apple-darwin-LICENSES.txt",
+      "bytes": 339943,
+      "sha256": "a3b526fc7fe8454f2ad8a513df123d7601078402ffe2e9a77389dd13a6d4636d",
+      "target": "x86_64-apple-darwin"
+    }
+  ]
+}

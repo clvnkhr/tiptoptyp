@@ -301,12 +301,7 @@ impl EditorApp {
                         .collect();
                     let sent = SentInput::new(texts);
                     let result = (|| {
-                        let mut worker = client.lock().unwrap_or_else(|poisoned| {
-                            let mut guard = poisoned.into_inner();
-                            *guard = Client::default();
-                            client.clear_poison();
-                            guard
-                        });
+                        let mut worker = crate::liquid_runtime::lock_client(&client, &cancel)?;
                         let mut chunks = Vec::new();
                         let mut incremental_edits = Vec::new();
                         let mut latest_review = None;
@@ -713,7 +708,7 @@ fn review_ui(
                     progress.passage, progress.passages, progress.chunk, progress.chunks
                 ));
             } else {
-                ui.label("Checking selection…");
+                ui.label("Preparing Liquid / checking selection…");
             }
         });
     }
@@ -1058,9 +1053,9 @@ mod tests {
         use egui_kittest::kittest::{NodeT as _, Queryable as _};
         let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 1, 1);
         for error in [
-            "Liquid’s local files are unavailable. Check its data folder in Settings → Writing.",
+            "Liquid’s local files are unavailable. Check its data folder in Settings → Grammar & spelling.",
             "A selected paragraph is too long for Liquid. Select shorter sentences.",
-            "Liquid setup cannot find its bundled model. Reinstall the complete app package.",
+            "Liquid download failed. Check your connection and try again.",
         ] {
             let selected = BoundSelection::new(
                 crate::document::DocumentSnapshot::fixture(key, "A result."),
@@ -1204,7 +1199,7 @@ outside";
         });
         app.liquid.active = Some(1);
         app.liquid.job.start_and_repaint("test-liquid-failure", &context, || Ok(Reply {
-            id: 1, sent: SentInput::new(vec!["She go.".into()]), result: Err("Liquid’s local files are unavailable. Check its data folder in Settings → Writing.".into()),
+            id: 1, sent: SentInput::new(vec!["She go.".into()]), result: Err("Liquid’s local files are unavailable. Check its data folder in Settings → Grammar & spelling.".into()),
         })).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.liquid.busy() {

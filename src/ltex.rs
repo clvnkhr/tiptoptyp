@@ -21,6 +21,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread,
@@ -35,6 +36,7 @@ const SOURCE_LIMIT: usize = 2 * 1024 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 4096;
 const STDERR_LIMIT: usize = 8192;
 
+mod profile;
 mod settings;
 pub(crate) use settings::LtexSettings;
 
@@ -43,11 +45,15 @@ pub(crate) struct LtexSnapshot {
     pub(crate) key: DocumentKey,
     pub(crate) uri: String,
     pub(crate) language_id: String,
+    pub(crate) writing_language: crate::settings::WritingLanguage,
     pub(crate) source: Arc<str>,
 }
 impl LtexSnapshot {
     fn same(&self, other: &Self) -> bool {
-        self.key == other.key && self.uri == other.uri && self.language_id == other.language_id
+        self.key == other.key
+            && self.uri == other.uri
+            && self.language_id == other.language_id
+            && self.writing_language == other.writing_language
     }
 }
 pub(crate) enum LtexEvent {
@@ -63,7 +69,7 @@ struct Shared {
     desired: Option<LtexSnapshot>,
     changed: Instant,
     serial: u64,
-    stop: bool,
+    stop: Arc<AtomicBool>,
     ready: bool,
     result: Option<LtexEvent>,
     error: Option<String>,
@@ -80,7 +86,7 @@ impl LtexService {
             desired: None,
             changed: Instant::now(),
             serial: 0,
-            stop: false,
+            stop: Arc::default(),
             ready: false,
             result: None,
             error: None,
@@ -112,7 +118,11 @@ impl LtexService {
     }
     /// Begin all windows' shutdown before waiting on any one worker.
     pub(crate) fn begin_stop(&self) {
-        self.shared.lock().unwrap().stop = true;
+        self.shared
+            .lock()
+            .unwrap()
+            .stop
+            .store(true, Ordering::Release);
         let _ = self.wake.try_send(());
     }
     /// App-exit cleanup only. Ordinary settings/document changes use nonblocking Drop.
@@ -132,6 +142,10 @@ impl LtexService {
             return;
         }
         shared.desired = Some(snapshot);
+        // Source keys do not change for a language-only preference edit. An
+        // unconsumed publication from its previous language must not become
+        // current again; displayed stale diagnostics remain owned by the UI.
+        shared.result = None;
         shared.changed = Instant::now();
         shared.serial = shared.serial.wrapping_add(1);
         drop(shared);
@@ -164,6 +178,48 @@ impl Drop for LtexService {
     }
 }
 
+fn launch_command(
+    settings: &LtexSettings,
+    root: &std::path::Path,
+    prepared: Option<&crate::ltex_resources::Prepared>,
+) -> Result<Command, String> {
+    let mut command = if let Some(prepared) = prepared {
+        let mut command = Command::new(&prepared.program);
+        command.env("JAVA_HOME", &prepared.java_home);
+        command.env("JAVACMD", prepared.java_home.join("bin/java"));
+        command
+    } else {
+        Command::new(settings.executable.trim())
+    };
+    command.current_dir(root);
+    settings
+        .command
+        .apply(&mut command)
+        .map_err(|error| format!("Invalid LTeX+ command: {error}"))?;
+    Ok(command)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn validate_bundled() -> Result<(), String> {
+    let prepared = crate::ltex_resources::prepare()?;
+    let output = launch_command(
+        &LtexSettings::default(),
+        &std::env::temp_dir(),
+        Some(&prepared),
+    )?
+    .arg("--version")
+    .output()
+    .map_err(|error| format!("Cannot start bundled LTeX+: {error}"))?;
+    let reported: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Bundled LTeX+ returned an invalid version response")?;
+    if !output.status.success()
+        || reported["ltex-ls"].as_str() != Some(crate::ltex_resources::manifest::VERSION)
+    {
+        return Err("Bundled LTeX+ or its Java runtime failed its version check".into());
+    }
+    Ok(())
+}
+
 struct Session {
     child: Option<OwnedChild>,
     outgoing: Option<SyncSender<Value>>,
@@ -176,18 +232,23 @@ impl Session {
         settings: &LtexSettings,
         root: &std::path::Path,
         wake: SyncSender<()>,
+        shared: &Mutex<Shared>,
     ) -> Result<Self, String> {
-        let mut command = Command::new(settings.executable.trim());
-        command.current_dir(root);
-        settings
-            .command
-            .apply(&mut command)
-            .map_err(|e| format!("Invalid LTeX+ command: {e}"))?;
+        let prepared = if settings.mode == crate::settings::ToolMode::Bundled {
+            let cancel = shared.lock().unwrap().stop.clone();
+            Some(crate::ltex_resources::prepare_with_cancel(&cancel)?)
+        } else {
+            None
+        };
+        if shared.lock().unwrap().stop.load(Ordering::Acquire) {
+            return Err("LTeX+ start cancelled".into());
+        }
+        let mut command = launch_command(settings, root, prepared.as_ref())?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = OwnedChild::spawn(&mut command).map_err(|e| format!("Could not start LTeX+: {e}. Install ltex-ls-plus or select its executable in Settings → Writing."))?;
+        let mut child = OwnedChild::spawn(&mut command).map_err(|e| format!("Could not start LTeX+: {e}. Restore the bundled app resources or select a custom executable in Settings → Grammar & spelling."))?;
         let mut stdin = child.child_mut().stdin.take().unwrap();
         let stdout = child.child_mut().stdout.take().unwrap();
         let mut stderr_pipe = child.child_mut().stderr.take().unwrap();
@@ -313,11 +374,11 @@ fn run(
     incoming_wake: SyncSender<()>,
     context: &egui::Context,
 ) -> Result<(), String> {
-    if shared.lock().unwrap().stop {
+    if shared.lock().unwrap().stop.load(Ordering::Acquire) {
         return Ok(());
     }
     settings.validate()?;
-    let mut session = Session::start(&settings, &root, incoming_wake)?;
+    let mut session = Session::start(&settings, &root, incoming_wake, shared)?;
     let result = run_session(&settings, &root, shared, wake, context, &mut session);
     session.shutdown();
     result.map_err(|message| {
@@ -355,7 +416,7 @@ fn run_session(
         "initializationOptions":{"customCapabilities":{"workspaceSpecificConfiguration":true}}
     }}))?;
     let created = Instant::now();
-    let configuration = settings.effective_configuration();
+    let mut configuration = settings.effective_configuration();
     let mut initialized = false;
     let mut next_id = 2u64;
     let mut last_serial = 0;
@@ -366,7 +427,7 @@ fn run_session(
         let (stop, desired, serial, changed) = {
             let shared = shared.lock().unwrap();
             (
-                shared.stop,
+                shared.stop.load(Ordering::Acquire),
                 shared.desired.clone(),
                 shared.serial,
                 shared.changed,
@@ -429,6 +490,10 @@ fn run_session(
                 if !matches!(snapshot.language_id.as_str(), "latex" | "typst") {
                     return Err("LTeX+ supports LaTeX and Typst documents here".into());
                 }
+                // Each explicit check pulls workspace configuration. Change
+                // only that reply: didChangeConfiguration would trigger an
+                // extra unversioned server check, even in manual mode.
+                configuration["language"] = settings.language_for_snapshot(&snapshot).into();
                 let id = next_id;
                 next_id += 1;
                 session.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":"_ltex.checkDocument","arguments":[{"uri":snapshot.uri,"codeLanguageId":snapshot.language_id,"text":snapshot.source.as_ref()}]}}))?;
@@ -559,7 +624,7 @@ fn run_session(
 fn publish(shared: &Mutex<Shared>, context: &egui::Context, check: &Pending, actions: &Value) {
     let diagnostics = convert_diagnostics(&check.snapshot, &check.diagnostics, actions);
     let mut shared = shared.lock().unwrap();
-    if shared.serial == check.serial && !shared.stop {
+    if shared.serial == check.serial && !shared.stop.load(Ordering::Acquire) {
         shared.result = Some(LtexEvent::Diagnostics {
             key: check.snapshot.key,
             uri: check.snapshot.uri.clone(),

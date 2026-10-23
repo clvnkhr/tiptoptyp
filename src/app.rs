@@ -938,6 +938,7 @@ enum SettingsSection {
     #[default]
     Appearance,
     Editor,
+    Grammar,
     Writing,
     Preview,
     Tools,
@@ -947,9 +948,10 @@ enum SettingsSection {
 }
 
 impl SettingsSection {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Appearance,
         Self::Editor,
+        Self::Grammar,
         Self::Writing,
         Self::Preview,
         Self::Tools,
@@ -962,6 +964,7 @@ impl SettingsSection {
         match self {
             Self::Appearance => "Appearance",
             Self::Editor => "Editor",
+            Self::Grammar => "Grammar & spelling",
             Self::Writing => "Writing",
             Self::Preview => "Preview",
             Self::Tools => "Tools",
@@ -998,6 +1001,7 @@ enum SettingsTarget {
     AsciiPunctuation,
     EnglishGrammar,
     HarperDictionary,
+    HarperRules,
     HarperCapitalizedNames,
     TexProseRules,
     Ltex,
@@ -1039,7 +1043,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 62] = [
+    const ALL: [Self; 63] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -1064,6 +1068,7 @@ impl SettingsTarget {
         Self::AsciiPunctuation,
         Self::EnglishGrammar,
         Self::HarperDictionary,
+        Self::HarperRules,
         Self::HarperCapitalizedNames,
         Self::TexProseRules,
         Self::Ltex,
@@ -1129,9 +1134,10 @@ impl SettingsTarget {
             Self::Indentation => "Tab inserts",
             Self::AsciiPunctuation => "Convert CJK punctuation to ASCII when typing",
             Self::Handwriting => "Handwriting recognition",
-            Self::EnglishGrammar => "Offline English spelling and grammar (Typst / TeX)",
-            Self::HarperDictionary => "Personal dictionary",
-            Self::HarperCapitalizedNames => "Ignore capitalized names",
+            Self::EnglishGrammar => "Harper spelling and grammar",
+            Self::HarperDictionary => "Harper dictionary",
+            Self::HarperRules => "Harper rule overrides",
+            Self::HarperCapitalizedNames => "Harper: ignore capitalized names",
             Self::TexProseRules => "TeX prose rules",
             Self::Ltex => "LTeX+ spelling and grammar",
             Self::LiquidGrammar => "Liquid selection grammar",
@@ -1209,13 +1215,14 @@ impl SettingsTarget {
             | Self::CodeFont
             | Self::CodeFontWeight
             | Self::HoverDelay => SettingsSection::Editor,
-            Self::AsciiPunctuation
-            | Self::EnglishGrammar
+            Self::EnglishGrammar
             | Self::HarperDictionary
+            | Self::HarperRules
             | Self::HarperCapitalizedNames
             | Self::TexProseRules
             | Self::Ltex
-            | Self::LiquidGrammar
+            | Self::LiquidGrammar => SettingsSection::Grammar,
+            Self::AsciiPunctuation
             | Self::Handwriting
             | Self::UnicodeWarnings
             | Self::MitexDollars
@@ -1288,6 +1295,9 @@ impl SettingsTarget {
             Self::HarperDictionary => {
                 "harper spelling personal custom dictionary accepted words mathematics names word list"
             }
+            Self::HarperRules => {
+                "harper grammar spelling rule overrides style quiet profile configuration JSON long sentences hedging comma typography"
+            }
             Self::LiquidGrammar => {
                 "liquid local selected text selection grammar model machine learning native onnx threads cache input filtering placeholder math code links formatted emph strong textbf"
             }
@@ -1347,7 +1357,7 @@ impl SettingsTarget {
             Self::HoverDelay => "editor tooltip wait milliseconds timing",
             Self::TypstCompiler => "tools binary custom bundled path",
             Self::TexServices => {
-                "TeX tools: Tectonic, pdfLaTeX, XeLaTeX, LuaLaTeX, MacTeX, SyncTeX, TexLab, Badness, tex-fmt, LaTeXdiff, latexmk, bibliography, BibTeX, Biber, cache, driver; compare revisions, diff markup, build, completion, hover, diagnostics, formatting, linting, ignored codes, suppress warnings, configuration JSON"
+                "TeX tools: Tectonic, pdfLaTeX, XeLaTeX, LuaLaTeX, MacTeX, SyncTeX, TexLab, Badness, tex-fmt, LaTeXdiff, latexmk, bibliography, BibTeX, Biber, cache, driver; compare revisions, diff markup, build, completion, hover, diagnostics, formatting, linting, ignored codes, suppress warnings, underfull box warnings cosmetic, configuration JSON"
             }
             Self::TinymistLanguageServer => {
                 "tools binary lsp custom bundled path configuration JSON formatter width indent inputs lint export"
@@ -9288,6 +9298,7 @@ impl EditorApp {
             &self.settings.harper_dictionary,
             self.settings.harper_ignore_capitalized_names,
             &self.settings.tex_prose_rules,
+            &self.settings.harper_rule_overrides,
         );
         self.ltex.configure(&self.settings.ltex);
         if snippets_changed {

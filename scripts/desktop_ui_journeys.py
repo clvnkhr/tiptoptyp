@@ -21,6 +21,7 @@ from desktop_ui_effects_journeys import EffectsPacingJourneys
 from desktop_ui_version_journeys import VersionJourneys
 from desktop_ui_liquid_journeys import LiquidJourneys
 from desktop_ui_ltex_journeys import LtexJourneys
+from desktop_ui_settings_links_journeys import SettingsLinksJourneys
 from desktop_ui_latexdiff_journeys import LatexdiffJourneys
 from desktop_ui_texdoc_journeys import TexdocJourneys
 from desktop_ui_citation_journeys import CitationJourneys
@@ -263,6 +264,22 @@ def settings_category_target_visible(state, category):
                 and target["frame"] == search["frame"] and target["viewport"] == search["viewport"])
 
 
+def settings_json_editor_selection(state, draft):
+    """Acknowledge keys only in the fresh focused editor for this exact draft."""
+    settings = state.get("document", {}).get("settings_json", {})
+    target = state.get("targets", {}).get("settings.json")
+    if not isinstance(target, dict) or settings.get("visible") is not True \
+            or settings.get("fingerprint") != draft:
+        return None
+    age, selection = target.get("age_ms"), target.get("selection")
+    if target.get("enabled") is not True or target.get("focused") is not True \
+            or type(age) not in (int, float) or not 0 <= age <= 500 \
+            or not isinstance(selection, list) or len(selection) != 2 \
+            or not all(type(position) is int and position >= 0 for position in selection):
+        return None
+    return selection
+
+
 def settings_navigation_matches(document, category, query, source):
     return (document["settings_visible"] and not document["settings_json"]["visible"]
             and not document["settings_help_visible"] and document["settings_category"] == category
@@ -464,7 +481,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
+class EditorJourneys(SettingsLinksJourneys, LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
     def set_math_conversion_formatting(self, enabled):
         if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
             return
@@ -2399,6 +2416,43 @@ class EditorJourneys(LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys,
             self.record("typing_particles.restored", preferences=preferences, appearance=appearance)
         self.close_scratch(count)
 
+    def settings_json_select_all(self):
+        """Wait for the native Select All command before replacing the JSON draft."""
+        import time
+        self.wait_target("settings.json", focused=True)
+        state = self.snapshot()
+        draft = state["document"]["settings_json"]["fingerprint"]
+        if not isinstance(draft, str):
+            raise AssertionError("Settings JSON draft fingerprint is unavailable")
+        selection = settings_json_editor_selection(state, draft)
+        # An already selected draft needs no duplicate asynchronous menu command.
+        if selection is not None and min(selection) == 0 and max(selection) > 0:
+            return draft, max(selection)
+        self.key(0)
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            selection = settings_json_editor_selection(self.snapshot(), draft)
+            if selection is not None and min(selection) == 0 and max(selection) > 0:
+                return draft, max(selection)
+            time.sleep(0.05)
+        raise AssertionError("Settings JSON did not acknowledge Select All")
+
+    def settings_json_append_whitespace(self):
+        """Prove selection collapse before typing, then observe the changed valid draft."""
+        import time
+        draft, end = self.settings_json_select_all()
+        self.key(124, "none")
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            if settings_json_editor_selection(self.snapshot(), draft) == [end, end]:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("Settings JSON Right did not collapse the acknowledged selection at its end")
+        self.native("text", " ")
+        self.wait("changed JSON remains valid after appending whitespace", lambda d:
+                  d["settings_json"]["fingerprint"] != draft and d["settings_json"]["valid"])
+
     def settings_category(self, category, query, source, size):
         import time
         if not settings_category_target_visible(self.snapshot(), category):
@@ -2434,7 +2488,7 @@ class EditorJourneys(LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys,
         self.wait("Settings search receives typed text", lambda d: d["settings_query_fingerprint"] == fingerprint("backend"))
         self.key(3)
         self.wait("repeated Cmd+F keeps Settings search focused", lambda d: d["settings_text_input_focused"] and not d["find_visible"])
-        for category in ("Appearance", "Editor", "Writing", "Tools"):
+        for category in ("Appearance", "Editor", "Writing", "Grammar & spelling", "Tools"):
             self.settings_category(category, "backend", source, size)
         self.setting_section("wrap", "Wrap lines")
         self.wait("search routes to Editor", lambda d:
@@ -2449,7 +2503,9 @@ class EditorJourneys(LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys,
         self.wait("form edit restores after category navigation", lambda d: d["line_wrap"] == wrap)
         for query, label, category in (
             ("backend", "Typst preview backend", "Preview"),
-            ("grammar", "Offline English spelling and grammar (Typst / TeX)", "Writing"),
+            ("Harper", "Harper spelling and grammar", "Grammar & spelling"),
+            ("LTeX", "LTeX+ spelling and grammar", "Grammar & spelling"),
+            ("Liquid", "Liquid selection grammar", "Grammar & spelling"),
             ("compiler", "Typst compiler", "Tools"),
             ("appearance", "Appearance", "Appearance"),
         ):
@@ -2483,9 +2539,11 @@ class EditorJourneys(LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys,
             self.capture_viewport("settings")
         self.click("settings.json")
         self.wait_target("settings.json", focused=True)
-        self.key(0)  # Select all in the focused JSON editor.
+        self.settings_json_select_all()
         self.native("text", "{broken")
-        self.wait("invalid JSON cannot be saved", lambda d: not d["settings_json"]["valid"])
+        self.wait("invalid JSON replaces the complete draft and cannot be saved", lambda d:
+                  d["settings_json"]["fingerprint"] == fingerprint("{broken")
+                  and not d["settings_json"]["valid"])
         state = self.snapshot()
         if state["targets"]["settings.json.save"]["enabled"]:
             raise AssertionError("invalid settings left Save enabled")
@@ -2503,10 +2561,7 @@ class EditorJourneys(LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys,
         self.wait("Reload restores valid settings", lambda d: d["settings_json"]["valid"])
         self.click("settings.json")
         self.wait_target("settings.json", focused=True)
-        self.key(0)
-        self.key(124, "none")  # Collapse selection at EOF; append valid whitespace.
-        self.native("text", " ")
-        self.wait("valid JSON is accepted", lambda d: d["settings_json"]["valid"])
+        self.settings_json_append_whitespace()
         self.click("settings.json.save")
         self.wait("JSON saves through normal settings updates", lambda d: d["settings_json"]["saved"])
         settings_window = next(w for w in self.native("windows")["windows"] if "Settings" in w["AXTitle"])

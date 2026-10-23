@@ -131,6 +131,7 @@ impl EditorApp {
         let preview_failure = preview_status.failure_reason();
         let requested_backend = preview_status.requested_backend;
         let interactive_active = preview_status.native_ready;
+        let resource_status = crate::resource_repair::status();
         let input = SettingsWindowInput {
             visible,
             retain_when_closed: retain,
@@ -149,6 +150,9 @@ impl EditorApp {
                 requested_backend,
                 interactive_active,
                 capabilities,
+                resource_repair_component: resource_status.component,
+                resource_repair_busy: resource_status.busy,
+                resource_repair_status: resource_status.message,
             },
             project_root: self.project_root(),
             appearance,
@@ -586,6 +590,22 @@ impl EditorApp {
                 }
                 SettingsAction::RetryTinymist => self.restart_tinymist(),
                 SettingsAction::RestartLtex => self.ltex.restart(),
+                SettingsAction::RedownloadLtex | SettingsAction::DownloadLiquid => {
+                    let component = if matches!(action, SettingsAction::RedownloadLtex) {
+                        crate::resource_repair::Component::Ltex
+                    } else {
+                        crate::resource_repair::Component::Liquid
+                    };
+                    if let Err(error) =
+                        crate::resource_repair::start(component, &self.settings_snapshot(), context)
+                    {
+                        self.notice = Some(Notice {
+                            message: error,
+                            kind: NoticeKind::Error,
+                        });
+                    }
+                }
+                SettingsAction::CancelResourceRepair => crate::resource_repair::cancel(),
                 SettingsAction::ClearBiberCache => self.clear_biber_cache(context),
                 SettingsAction::Update(edited) => self.queue_settings(*edited, context),
             }

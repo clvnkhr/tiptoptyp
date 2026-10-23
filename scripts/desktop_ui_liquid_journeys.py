@@ -1,8 +1,8 @@
 """Opt-in native Liquid review, including installation into a fresh private cache.
 
 Only keyboard, pointer, and the real Settings JSON editor perform app actions.
-The first request automatically expands the bundled native model without Python,
-network, or an installation button. A reference cache supplies artifact identity.
+The first request downloads and prepares the optional native model without Python
+or an installation button. A reference cache supplies artifact identity.
 """
 import hashlib
 import json
@@ -356,7 +356,7 @@ class LiquidJourneys:
                 raise AssertionError('Liquid did not stream a partial diff before the remaining model chunks')
         self.wait('Liquid reviews the complete selection in the configured diff style',
                   lambda d: liquid_comparison(d, fixture, style) and liquid_sent(d, fixture),
-                  timeout=300 if first_use else 180)
+                  timeout=900 if first_use else 180)
         if first_use:
             metadata = liquid_preparation_evidence(self.liquid_preparation_cache, self.liquid_reference_model)
             self.record('liquid.first-use.prepared', cache_initially_absent=True, automatic=True,

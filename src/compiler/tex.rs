@@ -28,6 +28,7 @@ pub(crate) struct TexOptions {
     pub(crate) executable: PathBuf,
     pub(crate) only_cached: bool,
     pub(crate) synctex: bool,
+    pub(crate) show_underfull_box_warnings: bool,
     pub(crate) system: Option<Box<crate::tex::tools::SystemBuildOptions>>,
 }
 
@@ -48,6 +49,7 @@ struct Session {
     latexmk: bool,
     engine: crate::tex::settings::BuildEngine,
     synctex: bool,
+    show_underfull_box_warnings: bool,
 }
 
 pub(super) struct Backend {
@@ -142,13 +144,20 @@ impl Backend {
             &session.source,
         );
         report.raw = console;
+        if let Some(log) = final_log.as_deref() {
+            append_raw_log(&mut report.raw, "Final TeX log", log);
+        }
         if session.latexmk {
             let bibliography =
                 read_limited(&session.pdf.with_extension("blg"), MAX_LOG).unwrap_or_default();
             report
                 .diagnostics
                 .extend(bibliography_diagnostics(&bibliography));
+            append_raw_log(&mut report.raw, "Bibliography log", &bibliography);
         }
+        report.diagnostics.retain(|diagnostic| {
+            compiler_diagnostic_visible(diagnostic, session.show_underfull_box_warnings)
+        });
         for diagnostic in &mut report.diagnostics {
             if diagnostic.provider.as_deref() == Some("Tectonic") {
                 diagnostic.provider = Some(session.engine.label().into());
@@ -225,6 +234,12 @@ impl Backend {
 impl Session {
     fn start(request: &CompileRequest, options: &TexOptions) -> std::io::Result<Self> {
         let standard_engine = options.engine != crate::tex::settings::BuildEngine::Tectonic;
+        if !standard_engine {
+            options
+                .command
+                .validate_for_tool(crate::toolchain::ToolKind::Tectonic)
+                .map_err(std::io::Error::other)?;
+        }
         let cache_lease = standard_engine
             .then(crate::tex::tools::acquire_build_cache)
             .transpose()?;
@@ -313,6 +328,7 @@ impl Session {
             latexmk,
             engine: options.engine,
             synctex: options.synctex,
+            show_underfull_box_warnings: options.show_underfull_box_warnings,
             mirror,
             _cache_lease: cache_lease,
             log,
@@ -428,6 +444,23 @@ fn read_pdf(path: &Path) -> Result<Arc<[u8]>, String> {
         return Err("TeX build produced an invalid or oversized PDF".into());
     }
     Ok(bytes.into())
+}
+
+fn append_raw_log(raw: &mut String, label: &str, log: &str) {
+    if !log.is_empty() {
+        raw.push_str("\n--- ");
+        raw.push_str(label);
+        raw.push_str(" ---\n");
+        raw.push_str(log);
+    }
+}
+
+fn compiler_diagnostic_visible(diagnostic: &Diagnostic, show_underfull: bool) -> bool {
+    show_underfull
+        || diagnostic.severity != DiagnosticSeverity::Warning
+        || !["Underfull \\hbox", "Underfull \\vbox"]
+            .iter()
+            .any(|prefix| diagnostic.message.starts_with(prefix))
 }
 
 fn bibliography_diagnostics(log: &str) -> Vec<Diagnostic> {
@@ -595,6 +628,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
             executable,
             only_cached: true,
             synctex: true,
+            show_underfull_box_warnings: false,
             system: None,
         };
         let mut request = CompileRequest {
@@ -674,12 +708,13 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
             executable: root.join("fake engine"),
             only_cached: false,
             synctex: true,
+            show_underfull_box_warnings: false,
             system: Some(Box::new(SystemBuildOptions {
                 driver: crate::tex::settings::BuildDriver::Latexmk,
                 bibliography_enabled: true,
                 latexmk: Some(SystemProgram {
                     program: driver,
-                    arguments: "-bibtex-cond".into(),
+                    arguments: "-quiet -bibtex-cond".into(),
                 }),
                 bibtex: SystemProgram {
                     program: root.join("fake bibtex"),
@@ -891,6 +926,7 @@ printf '%s:1: fixture failure should map to original source\n' "$entry"
                     executable: tools.distribution(engine).expect("installed engine").into(),
                     only_cached: true,
                     synctex: true,
+                    show_underfull_box_warnings: false,
                     system: tools.build_options(&settings),
                 };
                 let mut backend = Backend::new();
@@ -996,6 +1032,170 @@ printf 'LaTeX Warning: Citation fixture undefined\n'
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn underfull_warning_visibility_preserves_real_diagnostics_and_raw_logs_for_every_engine() {
+        use crate::tex::settings::BuildEngine;
+        for engine in BuildEngine::ALL {
+            for show_underfull in [false, true] {
+                let project = tempfile::tempdir().unwrap();
+                let driver = executable(
+                    project.path(),
+                    "fixture compiler",
+                    r#"
+output=''
+next_output=no
+for argument in "$@"; do
+  if [ "$next_output" = yes ]; then output=$argument; next_output=no; fi
+  case "$argument" in
+    --outdir) next_output=yes ;;
+    -outdir=*) output=${argument#-outdir=} ;;
+  esac
+done
+printf '%%PDF-1.7\n' > "$output/main.draft.pdf"
+cat > "$output/main.draft.log" <<'LOG'
+Underfull \hbox (badness 10000) in paragraph at lines 1--2
+Underfull \vbox (badness 10000) while output is active
+Overfull \hbox (12.0pt too wide) at line 2
+LaTeX Warning: Reference `missing' on page 1 undefined on input line 2.
+main.draft.tex:2: Undefined control sequence.
+LOG
+cat "$output/main.draft.log"
+cat > "$output/main.draft.blg" <<'LOG'
+[0] INFO - This is Biber 2.20
+[1] WARN - Missing bibliography field year
+[2] ERROR - Cannot find bibliography database
+LOG
+"#,
+                );
+                let mut options = system_options(project.path(), driver.clone());
+                options.engine = engine;
+                options.show_underfull_box_warnings = show_underfull;
+                if engine == BuildEngine::Tectonic {
+                    options.executable = driver;
+                    options.command = crate::tool_command::CommandCustomization::for_tool(
+                        crate::toolchain::ToolKind::Tectonic,
+                    )
+                    .into();
+                    options.system = None;
+                }
+                let mut backend = Backend::new();
+                backend
+                    .submit(
+                        &system_request(project.path(), &options, "first\nsecond"),
+                        &options,
+                    )
+                    .unwrap();
+                let (_, report) = finish(&mut backend);
+                assert_eq!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .filter(|d| d.message.starts_with("Underfull "))
+                        .count(),
+                    if show_underfull { 2 } else { 0 },
+                    "{engine:?}"
+                );
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.message.starts_with("Overfull ")),
+                    "{engine:?}"
+                );
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("Reference `missing'")),
+                    "{engine:?}"
+                );
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.severity == DiagnosticSeverity::Error
+                            && d.message.contains("Undefined control sequence")),
+                    "{engine:?}"
+                );
+                assert!(report.raw.contains("Underfull \\hbox"), "{engine:?}");
+                if engine != BuildEngine::Tectonic {
+                    assert!(
+                        report
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.provider.as_deref() == Some("Biber")
+                                && d.message.contains("Missing bibliography field")),
+                        "{engine:?}"
+                    );
+                    assert!(
+                        report
+                            .diagnostics
+                            .iter()
+                            .any(|d| d.provider.as_deref() == Some("Biber")
+                                && d.severity == DiagnosticSeverity::Error),
+                        "{engine:?}"
+                    );
+                    assert!(
+                        report.raw.contains("Final TeX log")
+                            && report.raw.contains("Bibliography log"),
+                        "{engine:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn underfull_filter_cannot_hide_an_error_or_an_unrelated_warning() {
+        for (severity, message, visible) in [
+            (
+                DiagnosticSeverity::Warning,
+                "Underfull \\hbox (badness 10000)",
+                false,
+            ),
+            (
+                DiagnosticSeverity::Warning,
+                "Underfull \\vbox (badness 10000)",
+                false,
+            ),
+            (
+                DiagnosticSeverity::Error,
+                "Underfull \\hbox is an actual fixture error",
+                true,
+            ),
+            (
+                DiagnosticSeverity::Warning,
+                "Overfull \\hbox (10pt too wide)",
+                true,
+            ),
+            (
+                DiagnosticSeverity::Warning,
+                "LaTeX Warning: Citation missing undefined",
+                true,
+            ),
+            (
+                DiagnosticSeverity::Warning,
+                "Package warning mentioning Underfull \\hbox",
+                true,
+            ),
+        ] {
+            let diagnostic = Diagnostic {
+                severity,
+                message: message.into(),
+                ..DiagnosticReport::error("fixture".into())
+                    .diagnostics
+                    .remove(0)
+            };
+            assert_eq!(
+                compiler_diagnostic_visible(&diagnostic, false),
+                visible,
+                "{message}"
+            );
+            assert!(compiler_diagnostic_visible(&diagnostic, true), "{message}");
+        }
+    }
+
     #[test]
     fn parses_status_locations_without_splitting_windows_drive() {
         let report = diagnostics(
@@ -1027,6 +1227,7 @@ printf 'LaTeX Warning: Citation fixture undefined\n'
                 command: Default::default(),
                 only_cached: true,
                 synctex: true,
+                show_underfull_box_warnings: false,
                 system: None,
             };
             let request = CompileRequest {
@@ -1157,6 +1358,7 @@ printf 'LaTeX Warning: Citation fixture undefined\n'
                     },
                     only_cached: false,
                     synctex: false,
+                    show_underfull_box_warnings: false,
                     system: None,
                 };
                 let request = CompileRequest {
@@ -1233,6 +1435,7 @@ printf 'LaTeX Warning: Citation fixture undefined\n'
                 .program,
                 only_cached: false,
                 synctex: true,
+                show_underfull_box_warnings: false,
                 system: None,
             }),
         };

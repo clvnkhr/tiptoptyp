@@ -1,19 +1,75 @@
 //! Cached Problems browsing. Filtering never mutates provider diagnostics.
 mod filter;
 #[cfg(test)]
+mod scroll_tests;
+#[cfg(test)]
 mod tests;
 use super::*;
 use filter::{Filter, Model};
 use std::collections::HashSet;
 
-#[derive(Default)]
 pub(super) struct State {
     pub(super) filter: Filter,
     pub(super) model: Model,
     pub(super) focus_search: bool,
     pub(super) popup_open: bool,
+    pub(super) grouped: bool,
+    pub(super) controls_visible: bool,
+    pub(super) sticky_filters: bool,
+    pub(super) scroll_offset: f32,
+    pub(super) scroll_rect: Rect,
+    pub(super) controls_rect: Rect,
+    filters_popup_open: bool,
+    controls_height: f32,
+    scroll_layout: Option<ScrollLayout>,
     collapsed: HashSet<(String, DiagnosticSeverity)>,
 }
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            filter: Filter::default(),
+            model: Model::default(),
+            focus_search: false,
+            popup_open: false,
+            grouped: false,
+            controls_visible: false,
+            sticky_filters: false,
+            scroll_offset: 0.0,
+            scroll_rect: Rect::NOTHING,
+            controls_rect: Rect::NOTHING,
+            filters_popup_open: false,
+            controls_height: 0.0,
+            scroll_layout: None,
+            collapsed: HashSet::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ScrollLayout {
+    sticky: bool,
+    height: f32,
+}
+
+/// Translate the content offset only when the toolbar moves in or out of the
+/// scroll area. Applying an offset on ordinary frames would fight the wheel.
+fn initial_offset(
+    previous: Option<ScrollLayout>,
+    offset: Option<f32>,
+    sticky: bool,
+    height: f32,
+) -> Option<f32> {
+    match (previous, offset) {
+        (_, None) | (None, _) => Some(if sticky { 0.0 } else { height }),
+        (Some(previous), Some(offset)) if previous.sticky != sticky => Some(if sticky {
+            (offset - previous.height).max(0.0)
+        } else {
+            offset + height
+        }),
+        _ => None,
+    }
+}
+
 impl State {
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn inspect(&self) -> serde_json::Value {
@@ -22,23 +78,22 @@ impl State {
             serde_json::json!({"provider":group.provider,"type":format!("{:?}",group.severity),
                 "count":group.indices.len(),"open":open,"target":group_target(&group.provider, group.severity)})
         }).collect::<Vec<_>>();
-        let visible_indices = self
-            .model
-            .groups()
-            .iter()
-            .flat_map(|g| g.indices.iter().copied())
-            .collect::<Vec<_>>();
-        let displayed_count = self
-            .model
-            .groups()
-            .iter()
-            .filter(|g| !self.collapsed.contains(&(g.provider.clone(), g.severity)))
-            .map(|g| g.indices.len())
-            .sum::<usize>();
+        let visible_indices = self.model.indices();
+        let displayed_count = if self.grouped {
+            self.model
+                .groups()
+                .iter()
+                .filter(|g| !self.collapsed.contains(&(g.provider.clone(), g.severity)))
+                .map(|g| g.indices.len())
+                .sum::<usize>()
+        } else {
+            self.model.visible_count()
+        };
         serde_json::json!({"query":self.filter.query,"source":self.filter.provider,
             "type":self.filter.severity.map(|s|format!("{s:?}")),"category":self.filter.category,
             "visible_count":self.model.visible_count(),"total_count":self.model.total_count(),
-            "visible_indices":visible_indices,"displayed_count":displayed_count,"groups":groups})
+            "visible_indices":visible_indices,"displayed_count":displayed_count,"groups":groups,
+            "grouped":self.grouped,"controls_visible":self.controls_visible,"sticky_filters":self.sticky_filters})
     }
 }
 pub(super) fn search_id(context: &egui::Context) -> egui::Id {
@@ -48,18 +103,19 @@ pub(super) fn search_id(context: &egui::Context) -> egui::Id {
 fn group_target(provider: &str, severity: DiagnosticSeverity) -> String {
     format!("problems.group.{provider}.{severity:?}")
 }
-fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
+fn controls_contents(ui: &mut egui::Ui, state: &mut State) -> bool {
     let State {
         filter,
         model,
         focus_search,
-        popup_open,
+        filters_popup_open,
+        grouped,
         ..
     } = state;
-    *popup_open = false;
+    *filters_popup_open = false;
     let category_visible = !model.categories().is_empty() || filter.category.is_some();
     let field_width =
-        (ui.available_width() - if category_visible { 436.0 } else { 312.0 }).max(110.0);
+        (ui.available_width() - if category_visible { 460.0 } else { 336.0 }).max(110.0);
     let changed = ui
         .horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -117,7 +173,7 @@ fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
                             .clicked();
                     }
                 });
-            *popup_open |= source_popup.inner.is_some();
+            *filters_popup_open |= source_popup.inner.is_some();
             let source = source_popup.response;
             source.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Source")
@@ -164,7 +220,7 @@ fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
                             .clicked();
                     }
                 });
-            *popup_open |= severity_popup.inner.is_some();
+            *filters_popup_open |= severity_popup.inner.is_some();
             let severity = severity_popup.response;
             severity.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Type")
@@ -200,11 +256,19 @@ fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
                                 .clicked();
                         }
                     });
-                *popup_open |= category_popup.inner.is_some();
+                *filters_popup_open |= category_popup.inner.is_some();
                 let category = category_popup.response;
                 category.widget_info(|| {
                     egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Category")
                 });
+            }
+            let grouping =
+                icons::quiet_square_icon_button(ui, UiIcon::Menu, "Group problems", 20.0, *grouped);
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("problems.grouping", &grouping);
+            if grouping.clicked() {
+                *grouped = !*grouped;
+                refocus = true;
             }
             let reset = ui
                 .add_enabled_ui(filter.is_active(), |ui| {
@@ -236,9 +300,32 @@ fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
     changed
 }
 
+fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
+    let start = ui.cursor().top();
+    let width = ui.available_width();
+    let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(width, ui.available_height()));
+    let id = viewport_scoped_id(ui.ctx(), "problems-controls");
+    // A wrapped toolbar must not enlarge a vertical-only scroll area's width.
+    // Allocate its measured height while keeping its width within the viewport.
+    let mut child = ui.new_child(egui::UiBuilder::new().id(id).max_rect(rect));
+    child.set_clip_rect(ui.clip_rect().intersect(Rect::from_x_y_ranges(
+        rect.x_range(),
+        ui.clip_rect().y_range(),
+    )));
+    let changed = controls_contents(&mut child, state);
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(width, child.min_rect().height()), Sense::hover());
+    state.controls_rect = rect;
+    state.controls_visible = rect.intersect(ui.clip_rect()).is_positive();
+    state.controls_height = (ui.cursor().top() - start).max(0.0);
+    state.popup_open = state.filters_popup_open;
+    changed
+}
+
 impl EditorApp {
     pub(super) fn show_problems(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 2.0;
         let main_path = self.preview_document_path();
         self.problems.model.update(
             self.preview.diagnostics_generation,
@@ -247,19 +334,65 @@ impl EditorApp {
             Some(&main_path),
         );
         let refreshed = self.problems.model.refilter(&self.problems.filter);
-        let filtered = controls(ui, &mut self.problems);
-        if refreshed || filtered {
-            self.dismiss_hover_on_scroll(ui.ctx());
+        let search = search_id(ui.ctx());
+        let sticky = self.problems.filter.is_active()
+            || self.problems.focus_search
+            || self.problems.filters_popup_open
+            || ui.ctx().memory(|memory| memory.has_focus(search));
+        let body_height = ui.available_height();
+        let height = if self.problems.controls_height > 0.0 {
+            self.problems.controls_height
+        } else {
+            ui.spacing().interact_size.y + 8.0
+        };
+        let scroll_id = ui.make_persistent_id(egui::IdSalt::new("problems-scroll"));
+        let saved = egui::scroll_area::State::load(ui.ctx(), scroll_id);
+        let offset = initial_offset(
+            self.problems.scroll_layout,
+            saved.map(|state| state.offset.y),
+            sticky,
+            height,
+        );
+        let mut filtered = false;
+        self.problems.sticky_filters = sticky;
+        if sticky {
+            filtered = controls(ui, &mut self.problems);
         }
         let mut groups_changed = false;
         let mut copied = false;
         let mut jump_target = None;
         let mut correction_target = None;
         let current_key = (!self.tabs.is_empty()).then(|| self.document().key());
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
+        // Floating scrollbars expand on hover. Keep row actions outside the
+        // full hit area, including when only the hidden toolbar overflows.
+        let bars = ui.spacing().scroll;
+        let right_inset = if bars.floating {
+            (bars.bar_width + bars.bar_outer_margin - bars.floating_allocated_width + 2.0).max(0.0)
+        } else {
+            0.0
+        };
+        let mut scroll = egui::ScrollArea::vertical()
+            .id_salt("problems-scroll")
+            .content_margin(egui::Margin {
+                right: right_inset.ceil() as i8,
+                ..egui::Margin::ZERO
+            })
+            .min_scrolled_height(0.0)
+            .auto_shrink([false, false]);
+        if let Some(offset) = offset {
+            scroll = scroll.vertical_scroll_offset(offset);
+        }
+        let mut output = scroll.show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 2.0;
+            if !sticky {
+                filtered = controls(ui, &mut self.problems);
+                // A short/empty list must still allow scrolling up into
+                // the controls, while its initial first row remains flush.
+                ui.set_min_height(body_height + self.problems.controls_height);
+            }
+            let list_id = viewport_scoped_id(ui.ctx(), "problems-list");
+            ui.scope_builder(egui::UiBuilder::new().id(list_id), |ui| {
                 if self.problems.model.visible_count() == 0 {
                     ui.label(
                         RichText::new(if self.problems.model.total_count() == 0 {
@@ -270,46 +403,60 @@ impl EditorApp {
                         .weak(),
                     );
                 }
-                for group in self.problems.model.groups() {
-                    let group_key = (group.provider.clone(), group.severity);
-                    let mut open = !self.problems.collapsed.contains(&group_key);
-                    let label = format!("{} ({})", group.label, group.indices.len());
-                    let header = ui
-                        .push_id((&group.provider, group.severity), |ui| {
-                            ui.add(
-                                egui::Button::new(
-                                    RichText::new(format!(
-                                        "{} {label}",
-                                        if open { "▾" } else { "▸" }
-                                    ))
-                                    .strong(),
+                let grouped = self.problems.grouped;
+                let sections = self
+                    .problems
+                    .model
+                    .groups()
+                    .iter()
+                    .map(Some)
+                    .take(if grouped { usize::MAX } else { 0 })
+                    .chain(std::iter::once(None).take(usize::from(!grouped)));
+                for group in sections {
+                    let indices = if let Some(group) = group {
+                        let group_key = (group.provider.clone(), group.severity);
+                        let mut open = !self.problems.collapsed.contains(&group_key);
+                        let label = format!("{} ({})", group.label, group.indices.len());
+                        let header = ui
+                            .push_id((&group.provider, group.severity), |ui| {
+                                ui.add(
+                                    egui::Button::new(
+                                        RichText::new(format!(
+                                            "{} {label}",
+                                            if open { "▾" } else { "▸" }
+                                        ))
+                                        .strong(),
+                                    )
+                                    .frame(false),
                                 )
-                                .frame(false),
-                            )
-                        })
-                        .inner;
-                    header.widget_info(|| {
-                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label)
-                    });
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe(
-                        &group_target(&group.provider, group.severity),
-                        &header,
-                    );
-                    if header.clicked() {
-                        header.request_focus();
-                        groups_changed = true;
-                        open = !open;
-                        if open {
-                            self.problems.collapsed.remove(&group_key);
-                        } else {
-                            self.problems.collapsed.insert(group_key);
+                            })
+                            .inner;
+                        header.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label)
+                        });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe(
+                            &group_target(&group.provider, group.severity),
+                            &header,
+                        );
+                        if header.clicked() {
+                            header.request_focus();
+                            groups_changed = true;
+                            open = !open;
+                            if open {
+                                self.problems.collapsed.remove(&group_key);
+                            } else {
+                                self.problems.collapsed.insert(group_key);
+                            }
                         }
-                    }
-                    if !open {
-                        continue;
-                    }
-                    for &index in &group.indices {
+                        if !open {
+                            continue;
+                        }
+                        group.indices.as_slice()
+                    } else {
+                        self.problems.model.indices()
+                    };
+                    for &index in indices {
                         let diagnostic = if index < self.preview.diagnostics.len() {
                             &self.preview.diagnostics[index]
                         } else {
@@ -542,6 +689,10 @@ impl EditorApp {
                         });
                         if diagnostic.location.is_some()
                             && !disclosure_hovered
+                            // Offscreen row rectangles can sit behind the sticky
+                            // filters or another popup; only their visible layer
+                            // may respond to a diagnostic double-click.
+                            && ui.rect_contains_pointer(row.rect)
                             && let Some(diagnostic) = problem_row_jump_target(
                                 diagnostic,
                                 problem_row_double_clicked(&row),
@@ -563,7 +714,35 @@ impl EditorApp {
                     });
                 }
             });
-        if groups_changed {
+        });
+        debug_assert_eq!(output.id, scroll_id);
+        let measured = self.problems.controls_height;
+        if !sticky
+            && (measured - height).abs() > 0.5
+            && (saved.is_none() || output.state.offset.y >= height - 0.5)
+        {
+            output.state.offset.y = (output.state.offset.y + measured - height).max(0.0);
+            output.state.store(ui.ctx(), scroll_id);
+            // Finish measuring a wrapped toolbar before painting its first
+            // visible list frame. This is bounded to a layout-height change.
+            ui.ctx().request_discard("Problems filter toolbar height");
+        }
+        self.problems.scroll_layout = Some(ScrollLayout {
+            sticky,
+            height: measured,
+        });
+        self.problems.scroll_offset = output.state.offset.y;
+        self.problems.scroll_rect = output.inner_rect;
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe_scroll(
+            "problems",
+            ui.ctx(),
+            output.inner_rect,
+            output.content_size.y,
+            output.state.offset.y,
+            sticky,
+        );
+        if refreshed || filtered || groups_changed {
             self.dismiss_hover_on_scroll(ui.ctx());
         }
         if copied {

@@ -62,6 +62,7 @@ pub(crate) struct Model {
     categories: Vec<Facet<String>>,
     applied: Option<Filter>,
     groups: Vec<Group>,
+    matched_indices: Vec<usize>,
     visible_count: usize,
     #[cfg(test)]
     rebuilds: usize,
@@ -159,6 +160,7 @@ impl Model {
         let mut category_counts = vec![0; self.categories.len()];
         let mut severity_counts = [0; 5];
         self.visible_count = 0;
+        self.matched_indices.clear();
         for (index, entry) in self.entries.iter().enumerate() {
             let provider_matches = filter
                 .provider
@@ -198,6 +200,7 @@ impl Model {
                 })
                 .indices
                 .push(index);
+            self.matched_indices.push(index);
             self.visible_count += 1;
         }
         for (facet, count) in self.providers.iter_mut().zip(provider_counts) {
@@ -223,6 +226,11 @@ impl Model {
             self.filter_runs += 1;
         }
         true
+    }
+
+    /// Original compiler-then-editor order, cached alongside the grouped view.
+    pub(crate) fn indices(&self) -> &[usize] {
+        &self.matched_indices
     }
 
     pub(crate) fn groups(&self) -> &[Group] {
@@ -297,7 +305,11 @@ fn entry(diagnostic: &Diagnostic, fallback: &str, main_path: Option<&Path>) -> E
     let mut search = String::new();
     for field in std::iter::once(diagnostic.message.as_str())
         .chain(diagnostic.details.iter().map(String::as_str))
-        .chain([provider.as_str(), diagnostic.severity.label()])
+        .chain([
+            provider.as_str(),
+            diagnostic.severity.label(),
+            type_label(diagnostic.severity),
+        ])
         .chain(
             diagnostic
                 .correction
@@ -389,6 +401,31 @@ mod tests {
             .iter()
             .flat_map(|group| group.indices.iter().copied())
             .collect()
+    }
+
+    #[test]
+    fn search_matches_the_visible_other_type_for_unknown_severity() {
+        let unknown = diagnostic(Some("Compiler"), DiagnosticSeverity::Unknown, "Tool output");
+        let mut model = Model::default();
+        model.update(1, &[unknown], &[], None);
+        model.refilter(&Filter {
+            query: "Other".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            model.indices(),
+            [0],
+            "the visible Other type must be searchable"
+        );
+        model.refilter(&Filter {
+            query: "diagnostic".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            model.indices(),
+            [0],
+            "the underlying severity spelling remains searchable"
+        );
     }
 
     #[test]
@@ -664,6 +701,49 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(model.visible_count(), 0);
+    }
+
+    #[test]
+    fn flat_indices_preserve_original_order_across_filters_and_reuse_cached_view() {
+        let diagnostics = sample();
+        let mut model = Model::default();
+        model.update(7, &diagnostics[..2], &diagnostics[2..], None);
+        let all = Filter::default();
+        assert!(model.refilter(&all));
+        assert_eq!(model.indices(), [0, 1, 2, 3]);
+        assert_ne!(indices(&model), model.indices());
+
+        let pointer = model.indices().as_ptr();
+        for _ in 0..20 {
+            model.update(7, &diagnostics[..2], &diagnostics[2..], None);
+            assert!(!model.refilter(&all));
+            assert_eq!(model.indices().as_ptr(), pointer);
+            assert_eq!(model.indices(), [0, 1, 2, 3]);
+        }
+        assert_eq!((model.rebuilds, model.filter_runs), (1, 1));
+
+        assert!(model.refilter(&Filter {
+            provider: Some("Harper".into()),
+            ..Default::default()
+        }));
+        assert_eq!(model.indices(), [0, 2]);
+        assert!(model.refilter(&Filter {
+            severity: Some(DiagnosticSeverity::Warning),
+            ..Default::default()
+        }));
+        assert_eq!(model.indices(), [1, 3]);
+        assert!(model.refilter(&Filter {
+            provider: Some("Harper".into()),
+            severity: Some(DiagnosticSeverity::Warning),
+            ..Default::default()
+        }));
+        assert!(model.indices().is_empty());
+        assert_eq!(model.visible_count(), 0);
+
+        assert!(model.refilter(&all));
+        assert_eq!(model.indices(), [0, 1, 2, 3]);
+        assert_eq!(model.visible_count(), model.indices().len());
+        assert_eq!((model.rebuilds, model.filter_runs), (1, 5));
     }
 
     #[test]

@@ -5,11 +5,13 @@ use crate::ltex::{LtexEvent, LtexService, LtexSettings, LtexSnapshot};
 #[derive(Default)]
 pub(super) struct LtexState {
     settings: Option<LtexSettings>,
+    resource_generation: u64,
     root: Option<PathBuf>,
     service: Option<LtexService>,
     observed: Option<DocumentKey>,
     observed_uri: Option<String>,
     observed_path: Option<PathBuf>,
+    observed_language: Option<crate::settings::WritingLanguage>,
     completed: Option<DocumentKey>,
     diagnostics_key: Option<DocumentKey>,
     ready: bool,
@@ -26,6 +28,7 @@ impl LtexState {
         self.settings = Some(settings.clone());
         self.service = None;
         self.observed = None;
+        self.observed_language = None;
         self.completed = None;
         self.ready = false;
         self.failed = false;
@@ -37,15 +40,35 @@ impl LtexState {
     pub(super) fn restart(&mut self) {
         self.service = None;
         self.observed = None;
+        self.observed_language = None;
         self.completed = None;
         self.ready = false;
         self.failed = false;
         self.error = None;
     }
+    fn refresh_resources(&mut self, generation: u64, mode: crate::settings::ToolMode) {
+        if self.resource_generation != generation {
+            self.resource_generation = generation;
+            if mode == crate::settings::ToolMode::Bundled {
+                self.restart();
+            }
+        }
+    }
     #[cfg(any(test, feature = "desktop-ui-tests"))]
     pub(super) fn current(&self, key: DocumentKey) -> bool {
         !self.failed && self.completed == Some(key) && self.observed == Some(key)
     }
+    fn needs_snapshot(
+        &self,
+        key: DocumentKey,
+        path: Option<&std::path::Path>,
+        language: Option<crate::settings::WritingLanguage>,
+    ) -> bool {
+        self.observed != Some(key)
+            || self.observed_path.as_deref() != path
+            || self.observed_language != language
+    }
+
     fn accepts(&self, key: DocumentKey, uri: &str) -> bool {
         !self.failed && self.observed == Some(key) && self.observed_uri.as_deref() == Some(uri)
     }
@@ -81,6 +104,10 @@ impl EditorApp {
         }
     }
     pub(super) fn update_ltex_checks(&mut self, context: &egui::Context) {
+        self.ltex.refresh_resources(
+            crate::resource_repair::ltex_generation(),
+            self.settings.ltex.mode,
+        );
         if self.ltex.settings.is_none() {
             self.ltex.configure(&self.settings.ltex);
         }
@@ -99,6 +126,7 @@ impl EditorApp {
             self.ltex.completed = None;
             self.ltex.observed_uri = None;
             self.ltex.observed_path = None;
+            self.ltex.observed_language = None;
             self.ltex.diagnostics_key = None;
             if !self.ltex.diagnostics.is_empty() {
                 self.ltex.diagnostics.clear();
@@ -124,8 +152,14 @@ impl EditorApp {
             ));
         }
         let key = self.document().key();
-        if self.ltex.observed != Some(key)
-            || self.ltex.observed_path.as_ref() != self.document().path().as_ref()
+        let language = self
+            .settings
+            .ltex
+            .follow_document_language
+            .then_some(self.settings.writing_language);
+        if self
+            .ltex
+            .needs_snapshot(key, self.document().path().as_deref(), language)
         {
             let keep = self
                 .ltex
@@ -137,6 +171,8 @@ impl EditorApp {
             }
             self.ltex.observed = Some(key);
             self.ltex.observed_path = self.document().path().clone();
+            self.ltex.observed_language = language;
+            self.ltex.completed = None;
             self.ltex.observed_uri = None;
             if self.ltex.failed {
                 return;
@@ -171,6 +207,7 @@ impl EditorApp {
                         "typst"
                     }
                     .into(),
+                    writing_language: self.settings.writing_language,
                     source: Arc::from(self.document().source().as_str()),
                 });
             }
@@ -239,6 +276,26 @@ mod tests {
     }
 
     #[test]
+    fn following_language_changes_recheck_unchanged_source_without_restarting_service() {
+        use crate::settings::WritingLanguage;
+        let state = LtexState {
+            observed: Some(key(3)),
+            observed_path: Some(PathBuf::from("/tmp/paper.typ")),
+            observed_language: Some(WritingLanguage::Auto),
+            ..Default::default()
+        };
+        let path = Some(std::path::Path::new("/tmp/paper.typ"));
+        assert!(!state.needs_snapshot(key(3), path, Some(WritingLanguage::Auto)));
+        assert!(state.needs_snapshot(key(3), path, Some(WritingLanguage::American)));
+        assert!(state.needs_snapshot(key(4), path, Some(WritingLanguage::Auto)));
+        let explicit = LtexState {
+            observed_language: None,
+            ..state
+        };
+        assert!(!explicit.needs_snapshot(key(3), path, None));
+    }
+
+    #[test]
     fn result_admission_requires_matching_document_revision_and_exact_uri() {
         let mut state = LtexState {
             observed: Some(key(3)),
@@ -255,6 +312,22 @@ mod tests {
         assert!(state.accepts(key(3), "file:///tmp/renamed.tex"));
         state.observed_uri = None;
         assert!(!state.accepts(key(3), "file:///tmp/renamed.tex"));
+    }
+
+    #[test]
+    fn bundled_resource_refresh_restarts_only_the_bundled_checker_once() {
+        let mut state = LtexState {
+            observed: Some(key(3)),
+            completed: Some(key(3)),
+            ..Default::default()
+        };
+        state.refresh_resources(1, crate::settings::ToolMode::Custom);
+        assert_eq!(state.observed, Some(key(3)));
+        state.refresh_resources(2, crate::settings::ToolMode::Bundled);
+        assert_eq!(state.observed, None);
+        state.observed = Some(key(4));
+        state.refresh_resources(2, crate::settings::ToolMode::Bundled);
+        assert_eq!(state.observed, Some(key(4)));
     }
 
     #[test]

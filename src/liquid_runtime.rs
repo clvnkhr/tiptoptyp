@@ -1,5 +1,6 @@
 //! Optional native grammar model. The shared client is inert until an explicit
-//! selected-text request runs on an application worker; preparation is automatic and offline.
+//! selected-text request runs on an application worker. Missing assets are downloaded
+//! on demand; a verified installed model works offline.
 use crate::{
     bundled_payload::codec,
     liquid_text::{Prediction, TextProcessor},
@@ -8,7 +9,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
 };
@@ -16,6 +17,10 @@ use std::{process::Command, time::Duration};
 #[path = "liquid_process.rs"]
 mod process;
 use process::JsonLineProcess;
+#[path = "liquid_notices.rs"]
+mod notices;
+#[path = "liquid_resources.rs"]
+mod resources;
 
 #[path = "../build_support/liquid_manifest.rs"]
 mod manifest;
@@ -69,7 +74,7 @@ fn default_directory() -> Result<PathBuf, String> {
     base.filter(|p| p.is_absolute())
         .map(|p| p.join("dev.tiptoptyp.editor/liquid"))
         .ok_or_else(|| {
-            "Cannot find the application data folder. Choose a Liquid folder in Settings → Writing."
+            "Cannot find the application data folder. Choose a Liquid folder in Settings → Grammar & spelling."
                 .into()
         })
 }
@@ -85,7 +90,45 @@ pub(crate) fn shared_client() -> Arc<Mutex<Client>> {
         LazyLock::new(|| Arc::new(Mutex::new(Client::default())));
     Arc::clone(&CLIENT)
 }
+/// Wait only on a worker, keeping a cancelled selection or download independent
+/// of another window's potentially lengthy first-use setup.
+pub(crate) fn lock_client<'a>(
+    client: &'a Mutex<Client>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<std::sync::MutexGuard<'a, Client>, String> {
+    loop {
+        check_cancelled(cancel)?;
+        match client.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::Poisoned(error)) => {
+                let mut guard = error.into_inner();
+                *guard = Client::default();
+                client.clear_poison();
+                return Ok(guard);
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
+}
 impl Client {
+    /// Called only by the explicit recovery worker while holding the shared
+    /// client lock, so no inference can race replacement of cached resources.
+    pub(crate) fn redownload(
+        &mut self,
+        config: &Config,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        check_cancelled(cancel)?;
+        check_platform()?;
+        let catalog = trusted_manifest()?;
+        self.model = None;
+        let _lock = setup_lock(&config.directory)?;
+        prepare_assets(&catalog, config, cancel, true, download_asset)?;
+        notices::prepare(config, cancel, true)
+    }
+
     #[cfg(test)]
     pub(crate) fn correct(
         &mut self,
@@ -117,7 +160,7 @@ impl Client {
             self.model = None;
         }
         if self.model.is_none() {
-            self.model = Some(LoadedModel::load(config.clone())?);
+            self.model = Some(LoadedModel::load(config.clone(), cancel)?);
         }
         let loaded = self.model.as_mut().unwrap();
         let result: Result<Vec<String>, String> = texts
@@ -129,7 +172,7 @@ impl Client {
                     text,
                     |ids| {
                         check_cancelled(cancel)?;
-                        loaded.inference.predict(ids)
+                        loaded.inference.predict_cancellable(ids, cancel)
                     },
                     |chunk| {
                         check_cancelled(cancel)?;
@@ -171,15 +214,18 @@ struct LoadedModel {
     inference: NativeModel,
 }
 impl LoadedModel {
-    fn load(config: Config) -> Result<Self, String> {
+    fn load(config: Config, cancel: &std::sync::atomic::AtomicBool) -> Result<Self, String> {
+        check_cancelled(cancel)?;
         check_platform()?;
         let _lock = setup_lock(&config.directory)?;
         let root = config.model_directory();
-        // First use transparently verifies/expands the bundled files. This
-        // remains entirely on the application worker, never the frame path.
-        prepare_assets(&packaged_directory()?, &config)?;
+        // Verification and first-use downloading run only on this worker.
+        // A healthy installed cache never needs a network connection.
+        prepare_assets(&trusted_manifest()?, &config, cancel, false, download_asset)?;
+        notices::prepare(&config, cancel, false)?;
         let processor = TextProcessor::load(&root.join(manifest::TOKENIZER_NAME))?;
-        let inference = NativeModel::load(&root, config.threads)?;
+        check_cancelled(cancel)?;
+        let inference = NativeModel::load(&root, config.threads, cancel)?;
         Ok(Self {
             config,
             processor,
@@ -194,14 +240,15 @@ fn verify_installed_assets(config: &Config, packaged: &manifest::Manifest) -> Re
     read_manifest(&root).map_err(|_| unavailable_files())?;
     for file in packaged.files_for_target(current_target()) {
         verify_file(&root.join(file.relative_path()), file.bytes, &file.sha256).map_err(|_| {
-            "Liquid's runtime or model failed its integrity check. Check its data folder in Settings → Writing.".to_owned()
+            "Liquid's runtime or model failed its integrity check. Check its data folder in Settings → Grammar & spelling.".to_owned()
         })?;
     }
     Ok(())
 }
 #[cfg(test)]
 fn unavailable_files() -> String {
-    "Liquid’s local files are unavailable. Check its data folder in Settings → Writing.".into()
+    "Liquid’s local files are unavailable. Check its data folder in Settings → Grammar & spelling."
+        .into()
 }
 fn current_target() -> &'static str {
     if cfg!(target_arch = "aarch64") {
@@ -241,7 +288,7 @@ fn check_platform() -> Result<(), String> {
         ))
     }
     #[cfg(not(target_os = "macos"))]
-    Err("The bundled Liquid runtime currently supports macOS only.".into())
+    Err("Liquid currently supports macOS only.".into())
 }
 struct NativeModel {
     process: JsonLineProcess,
@@ -266,7 +313,12 @@ struct Reply {
     error: Option<String>,
 }
 impl NativeModel {
-    fn load(root: &Path, threads: u8) -> Result<Self, String> {
+    fn load(
+        root: &Path,
+        threads: u8,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Self, String> {
+        check_cancelled(cancel)?;
         let executable = root
             .join("runtime")
             .join(current_target())
@@ -292,7 +344,7 @@ impl NativeModel {
             command.env(key, threads.to_string());
         }
         let mut process = JsonLineProcess::spawn(&mut command)?;
-        let line = process.receive(Duration::from_secs(120))?;
+        let line = process.receive_cancellable(Duration::from_secs(120), cancel)?;
         validate_ready(&line, current_target(), threads)?;
         Ok(Self {
             process,
@@ -300,20 +352,33 @@ impl NativeModel {
             failed: false,
         })
     }
+    #[cfg(test)]
     fn predict(&mut self, ids: &[i64]) -> Result<Prediction, String> {
+        self.predict_cancellable(ids, &std::sync::atomic::AtomicBool::new(false))
+    }
+    fn predict_cancellable(
+        &mut self,
+        ids: &[i64],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Prediction, String> {
+        check_cancelled(cancel)?;
         if ids.is_empty() || ids.len() > 128 || ids.iter().any(|id| !(0..64_400).contains(id)) {
             return Err(
                 "A selected sentence is too long or invalid for Liquid. Select shorter sentences."
                     .into(),
             );
         }
-        let result = self.predict_validated(ids);
+        let result = self.predict_validated(ids, cancel);
         if result.is_err() {
             self.failed = true;
         }
         result
     }
-    fn predict_validated(&mut self, ids: &[i64]) -> Result<Prediction, String> {
+    fn predict_validated(
+        &mut self,
+        ids: &[i64],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Prediction, String> {
         self.next_id = self.next_id.checked_add(1).ok_or_else(protocol_error)?;
         let mut request = self.next_id.to_string();
         for id in ids {
@@ -321,7 +386,9 @@ impl NativeModel {
             write!(&mut request, " {id}").map_err(|_| protocol_error())?;
         }
         self.process.send(request.as_bytes())?;
-        let line = self.process.receive(Duration::from_secs(30))?;
+        let line = self
+            .process
+            .receive_cancellable(Duration::from_secs(30), cancel)?;
         prediction_from_reply(&line, self.next_id, ids.len())
     }
 }
@@ -365,27 +432,35 @@ fn prediction_from_reply(line: &[u8], id: u64, length: usize) -> Result<Predicti
     })
 }
 
-fn packaged_directory() -> Result<PathBuf, String> {
-    let executable =
-        std::env::current_exe().map_err(|_| "Cannot locate Liquid's bundled model.".to_owned())?;
-    let candidates = crate::bundled_payload::resource_roots(&executable)
-        .into_iter()
-        .map(|root| root.join("liquid"))
-        .collect::<Vec<_>>();
-    #[cfg(not(feature = "production"))]
-    let candidates = {
-        let mut candidates = candidates;
-        candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("toolchain/liquid"));
-        candidates
-    };
-    candidates
-        .into_iter()
-        .find(|root| root.join(manifest::MANIFEST_NAME).is_file())
-        .ok_or_else(|| {
-            "Liquid setup cannot find its bundled model. Reinstall the complete app package."
-                .to_owned()
-        })
+const DOWNLOAD_BASE: &str =
+    "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/";
+
+fn trusted_manifest() -> Result<manifest::Manifest, String> {
+    manifest::Manifest::parse(include_bytes!("../resources/liquid/manifest.json")).map_err(
+        |error| format!("Liquid's download catalog is invalid: {error}. Reinstall the app."),
+    )
 }
+fn archive_url(file: &manifest::Asset) -> String {
+    let name = match file.target.as_deref() {
+        Some(target) => format!("{target}-{}.zst", file.name),
+        None => format!("{}.zst", file.name),
+    };
+    format!("{DOWNLOAD_BASE}{name}")
+}
+fn download_asset(
+    file: &manifest::Asset,
+    output: &mut fs::File,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    resources::download(
+        &archive_url(file),
+        file.compressed_bytes,
+        &file.compressed_sha256,
+        cancel,
+        output,
+    )
+}
+#[cfg(test)]
 fn read_manifest(directory: &Path) -> Result<manifest::Manifest, String> {
     let path = directory.join(manifest::MANIFEST_NAME);
     if !fs::symlink_metadata(&path).is_ok_and(|metadata| {
@@ -400,32 +475,137 @@ fn read_manifest(directory: &Path) -> Result<manifest::Manifest, String> {
         .map_err(|_| "Cannot read Liquid manifest".to_owned())?;
     manifest::Manifest::parse(&bytes)
 }
+/// File I/O can span a large model; cancellation must interrupt each bounded
+/// read/write rather than waiting until the next complete asset. Use Other:
+/// std::io helpers retry Interrupted, which would spin on a cancelled token.
+struct CancellableIo<'a, T> {
+    inner: T,
+    cancel: &'a std::sync::atomic::AtomicBool,
+}
+impl<T: Read> Read for CancellableIo<'_, T> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        check_io_cancelled(self.cancel)?;
+        let count = self.inner.read(output)?;
+        check_io_cancelled(self.cancel)?;
+        Ok(count)
+    }
+}
+impl<T: Write> Write for CancellableIo<'_, T> {
+    fn write(&mut self, input: &[u8]) -> std::io::Result<usize> {
+        check_io_cancelled(self.cancel)?;
+        let count = self.inner.write(input)?;
+        check_io_cancelled(self.cancel)?;
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        check_io_cancelled(self.cancel)?;
+        self.inner.flush()?;
+        check_io_cancelled(self.cancel)
+    }
+}
+fn check_io_cancelled(cancel: &std::sync::atomic::AtomicBool) -> std::io::Result<()> {
+    check_cancelled(cancel).map_err(std::io::Error::other)
+}
+fn cancellation_or(cancel: &std::sync::atomic::AtomicBool, error: impl Into<String>) -> String {
+    check_cancelled(cancel)
+        .err()
+        .unwrap_or_else(|| error.into())
+}
+#[cfg(test)]
 fn verify_file(path: &Path, bytes: u64, expected: &str) -> Result<(), String> {
+    verify_file_cancellable(
+        path,
+        bytes,
+        expected,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
+fn verify_file_cancellable(
+    path: &Path,
+    bytes: u64,
+    expected: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    check_cancelled(cancel)?;
     let metadata = fs::symlink_metadata(path).map_err(|_| "Liquid file is missing".to_owned())?;
     if !metadata.file_type().is_file() || metadata.len() != bytes {
         return Err("Liquid file has an invalid size or type".into());
     }
-    let mut file = fs::File::open(path)
-        .map_err(|_| "Cannot read Liquid file".to_owned())?
-        .take(bytes + 1);
+    let file = fs::File::open(path).map_err(|_| "Cannot read Liquid file".to_owned())?;
+    verify_contents(file, bytes, expected, cancel)
+}
+fn verify_contents(
+    reader: impl Read,
+    bytes: u64,
+    expected: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    let mut file = CancellableIo {
+        inner: reader.take(bytes + 1),
+        cancel,
+    };
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut actual = 0u64;
     loop {
         let count = file
             .read(&mut buffer)
-            .map_err(|_| "Cannot verify Liquid file".to_owned())?;
+            .map_err(|_| cancellation_or(cancel, "Cannot verify Liquid file"))?;
         if count == 0 {
             break;
         }
         actual += count as u64;
         hasher.update(&buffer[..count]);
     }
+    check_cancelled(cancel)?;
     if actual != bytes || format!("{:x}", hasher.finalize()) != expected {
         return Err("Liquid file checksum does not match".into());
     }
     Ok(())
 }
+fn unpack_asset(
+    input: impl Read,
+    file: &manifest::Asset,
+    root: &Path,
+    target: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    check_cancelled(cancel)?;
+    let mut output = tempfile::NamedTempFile::new_in(root)
+        .map_err(|e| format!("Liquid setup cannot prepare its model: {e}"))?;
+    codec::decode_bounded(
+        CancellableIo {
+            inner: input,
+            cancel,
+        },
+        file.bytes,
+        &file.sha256,
+        &mut CancellableIo {
+            inner: &mut output,
+            cancel,
+        },
+        manifest::MAX_FILE_BYTES,
+    )
+    .map_err(|e| cancellation_or(cancel, format!("Liquid setup cannot unpack its model: {e}")))?;
+    #[cfg(unix)]
+    if file.name == manifest::HELPER_NAME {
+        use std::os::unix::fs::PermissionsExt;
+        output
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("Liquid setup cannot make its helper executable: {e}"))?;
+    }
+    output
+        .as_file()
+        .sync_all()
+        .map_err(|e| format!("Liquid setup cannot save its model: {e}"))?;
+    check_cancelled(cancel)?;
+    output
+        .persist(target)
+        .map_err(|e| format!("Liquid setup cannot publish its model: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 fn verify_model_directories(config: &Config) -> Result<(), String> {
     let root = config.model_directory();
@@ -437,19 +617,28 @@ fn verify_model_directories(config: &Config) -> Result<(), String> {
     ] {
         if !fs::symlink_metadata(directory).is_ok_and(|metadata| metadata.file_type().is_dir()) {
             return Err(
-                "Liquid’s local files are unavailable. Check its data folder in Settings → Writing."
+                "Liquid’s local files are unavailable. Check its data folder in Settings → Grammar & spelling."
                     .into(),
             );
         }
     }
     Ok(())
 }
-fn prepare_assets(source: &Path, config: &Config) -> Result<(), String> {
-    let packaged = read_manifest(source).map_err(|e| {
-        format!(
-            "Liquid setup found an invalid bundled model: {e}. Reinstall the complete app package."
-        )
-    })?;
+fn prepare_assets(
+    catalog: &manifest::Manifest,
+    config: &Config,
+    cancel: &std::sync::atomic::AtomicBool,
+    force_download: bool,
+    mut fetch: impl FnMut(
+        &manifest::Asset,
+        &mut fs::File,
+        &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String>,
+) -> Result<(), String> {
+    check_cancelled(cancel)?;
+    catalog
+        .validate()
+        .map_err(|error| format!("Liquid's download catalog is invalid: {error}"))?;
     let root = config.model_directory();
     for directory in [
         config.directory.join("onnxruntime"),
@@ -470,57 +659,65 @@ fn prepare_assets(source: &Path, config: &Config) -> Result<(), String> {
             return Err("Liquid setup model folder must be a regular directory.".into());
         }
     }
-    for file in packaged.files_for_target(current_target()) {
+    for file in catalog.files_for_target(current_target()) {
+        check_cancelled(cancel)?;
         let target = root.join(file.relative_path());
-        if verify_file(&target, file.bytes, &file.sha256).is_ok() {
+        let ready = verify_file_cancellable(&target, file.bytes, &file.sha256, cancel);
+        check_cancelled(cancel)?;
+        if ready.is_ok() {
             #[cfg(unix)]
             if file.name == manifest::HELPER_NAME {
                 use std::os::unix::fs::PermissionsExt;
                 fs::set_permissions(&target, fs::Permissions::from_mode(0o700))
                     .map_err(|e| format!("Liquid setup cannot make its helper executable: {e}"))?;
             }
+            if !force_download {
+                continue;
+            }
+        }
+        let mut archive = tempfile::NamedTempFile::new_in(&root)
+            .map_err(|error| format!("Liquid setup cannot prepare a download: {error}"))?;
+        fetch(file, archive.as_file_mut(), cancel)?;
+        archive
+            .rewind()
+            .map_err(|error| format!("Liquid setup cannot read its download: {error}"))?;
+        verify_contents(
+            &mut archive,
+            file.compressed_bytes,
+            &file.compressed_sha256,
+            cancel,
+        )
+        .map_err(|error| cancellation_or(cancel, format!("Liquid download is damaged: {error}")))?;
+        if ready.is_ok() {
+            // A successful explicit redownload verifies the source again but
+            // does not rewrite identical installed files or disturb mmap users.
             continue;
         }
-        let archive = source.join(file.archive_relative_path());
-        verify_file(&archive, file.compressed_bytes, &file.compressed_sha256).map_err(|_| {
-            "Liquid setup found a damaged bundled model. Reinstall the complete app package."
-                .to_owned()
-        })?;
-        let input = fs::File::open(archive)
-            .map_err(|e| format!("Liquid setup cannot read its bundled model: {e}"))?;
-        let mut output = tempfile::NamedTempFile::new_in(&root)
-            .map_err(|e| format!("Liquid setup cannot prepare its model: {e}"))?;
-        codec::decode_bounded(
-            input,
-            file.bytes,
-            &file.sha256,
-            &mut output,
-            manifest::MAX_FILE_BYTES,
-        )
-        .map_err(|e| format!("Liquid setup cannot unpack its model: {e}"))?;
-        #[cfg(unix)]
-        if file.name == manifest::HELPER_NAME {
-            use std::os::unix::fs::PermissionsExt;
-            output
-                .as_file()
-                .set_permissions(fs::Permissions::from_mode(0o700))
-                .map_err(|e| format!("Liquid setup cannot make its helper executable: {e}"))?;
-        }
-        output
-            .as_file()
-            .sync_all()
-            .map_err(|e| format!("Liquid setup cannot save its model: {e}"))?;
-        output
-            .persist(target)
-            .map_err(|e| format!("Liquid setup cannot publish its model: {e}"))?;
+        archive
+            .rewind()
+            .map_err(|error| format!("Liquid setup cannot read its download: {error}"))?;
+        unpack_asset(archive, file, &root, &target, cancel)?;
     }
+    check_cancelled(cancel)?;
     let mut output = tempfile::NamedTempFile::new_in(&root)
         .map_err(|e| format!("Liquid setup cannot prepare its manifest: {e}"))?;
-    serde_json::to_writer(&mut output, &packaged)
-        .map_err(|e| format!("Liquid setup cannot save its manifest: {e}"))?;
+    serde_json::to_writer(
+        &mut CancellableIo {
+            inner: &mut output,
+            cancel,
+        },
+        catalog,
+    )
+    .map_err(|e| {
+        cancellation_or(
+            cancel,
+            format!("Liquid setup cannot save its manifest: {e}"),
+        )
+    })?;
     output
         .flush()
         .map_err(|e| format!("Liquid setup cannot save its manifest: {e}"))?;
+    check_cancelled(cancel)?;
     output
         .persist(root.join(manifest::MANIFEST_NAME))
         .map_err(|e| format!("Liquid setup cannot publish its manifest: {e}"))?;
@@ -529,7 +726,28 @@ fn prepare_assets(source: &Path, config: &Config) -> Result<(), String> {
 #[cfg(test)]
 fn prepare_for_test(source: &Path, config: &Config) -> Result<(), String> {
     let _lock = setup_lock(&config.directory)?;
-    prepare_assets(source, config)
+    prepare_assets_cancellable(source, config, &std::sync::atomic::AtomicBool::new(false))
+}
+#[cfg(test)]
+fn prepare_assets_cancellable(
+    source: &Path,
+    config: &Config,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    check_cancelled(cancel)?;
+    let catalog = read_manifest(source).map_err(|error| {
+        format!("Liquid's download catalog is invalid: {error}. Reinstall the app.")
+    })?;
+    prepare_assets(&catalog, config, cancel, false, |file, output, token| {
+        let mut input = CancellableIo {
+            inner: fs::File::open(source.join(file.archive_relative_path()))
+                .map_err(|error| format!("Liquid download is unavailable: {error}"))?,
+            cancel: token,
+        };
+        std::io::copy(&mut input, output)
+            .map(|_| ())
+            .map_err(|error| cancellation_or(token, format!("Liquid download failed: {error}")))
+    })
 }
 /// Explicitly unlock before dropping the descriptor. Another thread can fork a
 /// sidecar between acquiring this lock and dropping it; that child temporarily
@@ -569,13 +787,13 @@ fn setup_lock(directory: &Path) -> Result<SetupLock, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn config(directory: &Path) -> Config {
+    pub(super) fn config(directory: &Path) -> Config {
         Config {
             directory: directory.into(),
             threads: 4,
         }
     }
-    fn fixture(directory: &Path) -> manifest::Manifest {
+    pub(super) fn fixture(directory: &Path) -> manifest::Manifest {
         fs::create_dir_all(directory).unwrap();
         let mut files = Vec::new();
         for target in std::iter::once(None).chain(manifest::MACOS_TARGETS.map(Some)) {
@@ -634,6 +852,61 @@ mod tests {
         );
     }
     #[test]
+    fn cancelled_shared_client_wait_does_not_wait_for_the_other_window() {
+        let client = Mutex::new(Client::default());
+        let held = client.lock().unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let (entered, started) = std::sync::mpsc::channel();
+            let (finished, result) = std::sync::mpsc::channel();
+            let client = &client;
+            let cancel = &cancel;
+            scope.spawn(move || {
+                entered.send(()).unwrap();
+                let error = match lock_client(client, cancel) {
+                    Ok(_) => panic!("the other window still holds the shared client"),
+                    Err(error) => error,
+                };
+                finished.send(error).unwrap();
+            });
+            started.recv_timeout(Duration::from_secs(5)).unwrap();
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+            assert!(
+                result
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .contains("cancelled")
+            );
+            assert!(
+                client.try_lock().is_err(),
+                "the first window remains active"
+            );
+        });
+        drop(held);
+        cancel.store(false, std::sync::atomic::Ordering::Release);
+        drop(lock_client(&client, &cancel).unwrap());
+    }
+    #[test]
+    fn shared_client_lock_recovers_a_poisoned_worker_without_staying_poisoned() {
+        let client = Mutex::new(Client::default());
+        std::thread::scope(|scope| {
+            assert!(
+                scope
+                    .spawn(|| {
+                        let _held = client.lock().unwrap();
+                        panic!("a failed application worker");
+                    })
+                    .join()
+                    .is_err()
+            );
+        });
+        assert!(client.is_poisoned());
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        assert!(lock_client(&client, &cancel).unwrap().model.is_none());
+        assert!(!client.is_poisoned());
+        drop(lock_client(&client, &cancel).unwrap());
+    }
+    #[test]
     fn invalid_requests_fail_before_any_model_or_filesystem_work() {
         let root = tempfile::tempdir().unwrap();
         let config = config(&root.path().join("absent"));
@@ -668,7 +941,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_preparation_expands_verified_assets_offline_and_reuses_existing_files() {
+    fn on_demand_install_expands_verified_downloads_and_reuses_cache_offline() {
         let source = tempfile::tempdir().unwrap();
         let manifest = fixture(source.path());
         let cache = tempfile::tempdir().unwrap();
@@ -696,7 +969,7 @@ mod tests {
         );
     }
     #[test]
-    fn automatic_preparation_rejects_corrupt_or_incomplete_bundled_model() {
+    fn on_demand_install_rejects_corrupt_or_incomplete_downloads() {
         let source = tempfile::tempdir().unwrap();
         let manifest = fixture(source.path());
         let cache = tempfile::tempdir().unwrap();
@@ -719,20 +992,307 @@ mod tests {
         assert!(!config.model_directory().join(manifest::MODEL_NAME).exists());
     }
     #[test]
-    fn invalid_bundled_manifest_requires_repairing_the_app_package() {
+    fn compiled_catalog_uses_exact_pinned_release_assets_for_each_architecture() {
+        let catalog = trusted_manifest().unwrap();
+        assert_eq!(catalog.files.len(), 6);
+        assert_eq!(
+            archive_url(&catalog.files[0]),
+            format!("{DOWNLOAD_BASE}liquid.onnx.zst")
+        );
+        for target in manifest::MACOS_TARGETS {
+            let helper = catalog
+                .files_for_target(target)
+                .find(|file| file.name == manifest::HELPER_NAME)
+                .unwrap();
+            assert_eq!(
+                archive_url(helper),
+                format!("{DOWNLOAD_BASE}{target}-liquid-onnx.zst")
+            );
+            assert!(catalog.files_for_target(target).all(|file| {
+                let url = archive_url(file);
+                url.starts_with(
+                    "https://github.com/clvnkhr/tiptoptyp/releases/download/liquid-onnxruntime-v1/",
+                ) && !url.contains("/latest/")
+                    && !url.contains("..")
+            }));
+        }
+    }
+
+    #[test]
+    fn force_redownload_verifies_current_architecture_and_reuses_healthy_files() {
+        let source = tempfile::tempdir().unwrap();
+        let catalog = fixture(source.path());
+        let cache = tempfile::tempdir().unwrap();
+        let config = config(cache.path());
+        prepare_for_test(source.path(), &config).unwrap();
+        let before: Vec<_> = catalog
+            .files_for_target(current_target())
+            .map(|file| {
+                let metadata =
+                    fs::metadata(config.model_directory().join(file.relative_path())).unwrap();
+                (file.relative_path(), metadata.modified().unwrap())
+            })
+            .collect();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut fetched = Vec::new();
+        prepare_assets(&catalog, &config, &cancel, true, |file, output, _| {
+            fetched.push(file.relative_path());
+            std::io::copy(
+                &mut fs::File::open(source.path().join(file.archive_relative_path())).unwrap(),
+                output,
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fetched.len(), 4);
+        for (path, modified) in before {
+            assert!(fetched.contains(&path));
+            assert_eq!(
+                fs::metadata(config.model_directory().join(path))
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                modified
+            );
+        }
+        verify_installed_assets(&config, &catalog).unwrap();
+        prepare_assets(&catalog, &config, &cancel, false, |_, _, _| {
+            panic!("a complete verified cache must not make a network request")
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn failed_or_cancelled_download_preserves_installed_asset_and_cleans_staging() {
+        let source = tempfile::tempdir().unwrap();
+        let catalog = fixture(source.path());
+        for cancelled in [false, true] {
+            let cache = tempfile::tempdir().unwrap();
+            let config = config(cache.path());
+            prepare_for_test(source.path(), &config).unwrap();
+            let root = config.model_directory();
+            let model = root.join(manifest::MODEL_NAME);
+            let before = fs::read(&model).unwrap();
+            let names: std::collections::BTreeSet<_> = fs::read_dir(&root)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let error = prepare_assets(&catalog, &config, &cancel, true, |_, output, token| {
+                output.write_all(b"partial download").unwrap();
+                if cancelled {
+                    token.store(true, std::sync::atomic::Ordering::Release);
+                    check_cancelled(token)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+            assert_eq!(error.contains("cancelled"), cancelled, "{error}");
+            assert_eq!(fs::read(&model).unwrap(), before);
+            assert_eq!(
+                fs::read_dir(&root)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                names
+            );
+            verify_installed_assets(&config, &catalog).unwrap();
+        }
+    }
+
+    #[test]
+    fn interrupted_first_install_reuses_complete_assets_without_publishing_a_receipt() {
+        let source = tempfile::tempdir().unwrap();
+        let catalog = fixture(source.path());
+        let cache = tempfile::tempdir().unwrap();
+        let config = config(cache.path());
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut count = 0;
+        prepare_assets(&catalog, &config, &cancel, false, |file, output, _| {
+            count += 1;
+            if count == 2 {
+                return Err("interrupted".into());
+            }
+            std::io::copy(
+                &mut fs::File::open(source.path().join(file.archive_relative_path())).unwrap(),
+                output,
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(count, 2);
+        assert!(
+            config
+                .model_directory()
+                .join(manifest::MODEL_NAME)
+                .is_file()
+        );
+        assert!(
+            !config
+                .model_directory()
+                .join(manifest::MANIFEST_NAME)
+                .exists()
+        );
+        let mut fetched = Vec::new();
+        prepare_assets(&catalog, &config, &cancel, false, |file, output, _| {
+            fetched.push(file.name.clone());
+            std::io::copy(
+                &mut fs::File::open(source.path().join(file.archive_relative_path())).unwrap(),
+                output,
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fetched.len(), 3);
+        assert!(!fetched.iter().any(|name| name == manifest::MODEL_NAME));
+        verify_installed_assets(&config, &catalog).unwrap();
+    }
+
+    #[test]
+    fn cancelled_restore_preserves_existing_files_and_does_not_create_new_assets() {
+        let source = tempfile::tempdir().unwrap();
+        let package = fixture(source.path());
+        let cache = tempfile::tempdir().unwrap();
+        let config = config(cache.path());
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert!(
+            prepare_assets_cancellable(source.path(), &config, &cancel)
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        assert!(!config.model_directory().exists());
+        prepare_for_test(source.path(), &config).unwrap();
+        let model = config.model_directory().join(manifest::MODEL_NAME);
+        fs::write(&model, b"preserve interrupted recovery").unwrap();
+        assert!(prepare_assets_cancellable(source.path(), &config, &cancel).is_err());
+        assert_eq!(fs::read(&model).unwrap(), b"preserve interrupted recovery");
+        cancel.store(false, std::sync::atomic::Ordering::Release);
+        prepare_assets_cancellable(source.path(), &config, &cancel).unwrap();
+        verify_installed_assets(&config, &package).unwrap();
+    }
+
+    struct CancelDuringRead<'a, R> {
+        inner: R,
+        cancel: &'a std::sync::atomic::AtomicBool,
+        at_eof: bool,
+    }
+    impl<R: Read> Read for CancelDuringRead<'_, R> {
+        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(output)?;
+            if (count == 0) == self.at_eof {
+                self.cancel
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+            Ok(count)
+        }
+    }
+    #[test]
+    fn cancellation_during_hashing_is_reported_as_cancelled_without_retrying_or_finishing() {
+        let bytes = vec![b'x'; 128 * 1024];
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let input = CancelDuringRead {
+            inner: &bytes[..],
+            cancel: &cancel,
+            at_eof: false,
+        };
+        let error = verify_contents(input, bytes.len() as u64, &hash, &cancel).unwrap_err();
+        assert!(error.contains("cancelled"));
+        assert!(!error.contains("checksum"));
+        let error = CancellableIo {
+            inner: &bytes[..],
+            cancel: &cancel,
+        }
+        .read(&mut [0; 1])
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    }
+    #[test]
+    fn cancellation_during_decode_and_its_final_read_never_replaces_the_existing_asset() {
+        let source = tempfile::tempdir().unwrap();
+        let package = fixture(source.path());
+        let file = package
+            .files
+            .iter()
+            .find(|file| file.name == manifest::MODEL_NAME)
+            .unwrap();
+        for at_eof in [false, true] {
+            let cache = tempfile::tempdir().unwrap();
+            let target = cache.path().join(manifest::MODEL_NAME);
+            fs::write(&target, b"preserve existing model").unwrap();
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            let input = CancelDuringRead {
+                inner: fs::File::open(source.path().join(file.archive_relative_path())).unwrap(),
+                cancel: &cancel,
+                at_eof,
+            };
+            let error = unpack_asset(input, file, cache.path(), &target, &cancel).unwrap_err();
+            assert!(error.contains("cancelled"), "{error}");
+            assert_eq!(fs::read(&target).unwrap(), b"preserve existing model");
+            assert_eq!(
+                fs::read_dir(cache.path()).unwrap().count(),
+                1,
+                "temporary decode output must be removed"
+            );
+        }
+    }
+    #[test]
+    fn codec_output_observes_cancellation_even_when_the_input_is_already_buffered() {
+        struct CancelDuringWrite<'a> {
+            bytes: Vec<u8>,
+            cancel: &'a std::sync::atomic::AtomicBool,
+        }
+        impl Write for CancelDuringWrite<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.bytes.extend_from_slice(bytes);
+                self.cancel
+                    .store(true, std::sync::atomic::Ordering::Release);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let bytes = b"decoded but not published";
+        let archive = codec::encode_fixture(bytes);
+        let hash = format!("{:x}", Sha256::digest(bytes));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let mut output = CancelDuringWrite {
+            bytes: Vec::new(),
+            cancel: &cancel,
+        };
+        let error = codec::decode_bounded(
+            &archive[..],
+            bytes.len() as u64,
+            &hash,
+            &mut CancellableIo {
+                inner: &mut output,
+                cancel: &cancel,
+            },
+            manifest::MAX_FILE_BYTES,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(error.to_string().contains("cancelled"));
+        assert_eq!(output.bytes, bytes);
+    }
+
+    #[test]
+    fn invalid_download_catalog_requires_repairing_the_app_package() {
         let source = tempfile::tempdir().unwrap();
         fs::write(source.path().join(manifest::MANIFEST_NAME), b"{}").unwrap();
         let cache = tempfile::tempdir().unwrap();
         let error = prepare_for_test(source.path(), &config(cache.path())).unwrap_err();
-        assert!(
-            error.contains("Reinstall the complete app package"),
-            "{error}"
-        );
+        assert!(error.contains("Reinstall the app"), "{error}");
         assert!(!error.contains("Install Liquid"));
     }
     #[cfg(unix)]
     #[test]
-    fn automatic_preparation_rejects_redirected_cache_directories_before_writing_assets() {
+    fn on_demand_install_rejects_redirected_cache_directories_before_writing_assets() {
         let source = tempfile::tempdir().unwrap();
         fixture(source.path());
         let cache = tempfile::tempdir().unwrap();
@@ -836,7 +1396,7 @@ mod tests {
         assert!(!supports_macos("unknown", 99, 0));
     }
     #[test]
-    fn automatic_preparation_extracts_only_this_architecture_and_sets_helper_permissions() {
+    fn on_demand_install_downloads_only_this_architecture_and_sets_helper_permissions() {
         let source = tempfile::tempdir().unwrap();
         let value = fixture(source.path());
         let cache = tempfile::tempdir().unwrap();

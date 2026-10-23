@@ -78,7 +78,7 @@ impl CommandCustomization {
                     })
             }
             Tinymist | Badness => tokens.first().is_some_and(|token| token == "lsp"),
-            Tectonic => tokens.starts_with(&["-X".into(), "compile".into()]),
+            Tectonic => return validate_tectonic_arguments(&tokens),
             TexFmt => ["--stdin", "--quiet"]
                 .iter()
                 .all(|flag| flags.iter().any(|token| token == flag)),
@@ -149,6 +149,123 @@ impl CommandCustomization {
         Ok(())
     }
 }
+/// Tectonic's root options precede `compile`; operation paths and toggles are
+/// supplied by the compiler adapter. Validate the pinned CLI without spawning it.
+fn validate_tectonic_arguments(tokens: &[String]) -> Result<(), String> {
+    fn error(message: impl std::fmt::Display) -> String {
+        format!("Tectonic arguments: {message}. Reset command restores the defaults.")
+    }
+    if tokens.first().map(String::as_str) != Some("-X") {
+        return Err(error(
+            "must retain -X followed by optional root flags and compile",
+        ));
+    }
+    let mut index = 1;
+    let mut chatter = false;
+    let mut color = false;
+    loop {
+        let token = tokens
+            .get(index)
+            .ok_or_else(|| error("retain the compile subcommand"))?;
+        if token == "compile" {
+            index += 1;
+            break;
+        }
+        let (flag, inline) = token
+            .split_once('=')
+            .map_or((token.as_str(), None), |(flag, value)| (flag, Some(value)));
+        let (seen, values): (&mut bool, &[&str]) = match flag {
+            "--chatter" | "-c" => (&mut chatter, &["default", "minimal"]),
+            "--color" => (&mut color, &["always", "auto", "never"]),
+            _ => {
+                return Err(error(format!(
+                    "unsupported root option {token:?}; place compile options after compile"
+                )));
+            }
+        };
+        if *seen {
+            return Err(error(format!("{flag} may only be supplied once")));
+        }
+        *seen = true;
+        let value = if let Some(value) = inline {
+            value
+        } else {
+            index += 1;
+            tokens
+                .get(index)
+                .map(String::as_str)
+                .ok_or_else(|| error(format!("{flag} needs a value")))?
+        };
+        if !values.contains(&value) {
+            return Err(error(format!(
+                "{flag} must be one of {}",
+                values.join(", ")
+            )));
+        }
+        index += 1;
+    }
+    while let Some(token) = tokens.get(index) {
+        let (flag, inline) = token
+            .split_once('=')
+            .map_or((token.as_str(), None), |(flag, value)| (flag, Some(value)));
+        match flag {
+            "--chatter" | "-c" | "--color" => {
+                return Err(error(format!("{flag} belongs before compile")));
+            }
+            "--" | "--outdir" | "-o" | "--outfmt" | "--pass" | "--synctex" | "--only-cached"
+            | "-C" => {
+                return Err(error(format!(
+                    "{flag} is managed by the app; use the dedicated Settings controls"
+                )));
+            }
+            "--untrusted" | "--keep-logs" | "--keep-intermediates" | "-k" | "--print" | "-p" => {
+                if inline.is_some() {
+                    return Err(error(format!("{flag} does not take a value")));
+                }
+            }
+            "--format" | "-f" | "--bundle" | "-b" | "--hide" | "--makefile-rules" | "--reruns"
+            | "-r" | "-Z" => {
+                let value = if let Some(value) = inline {
+                    value
+                } else {
+                    index += 1;
+                    tokens
+                        .get(index)
+                        .map(String::as_str)
+                        .ok_or_else(|| error(format!("{flag} needs a value")))?
+                };
+                if value.is_empty() || value.starts_with('-') {
+                    return Err(error(format!("{flag} needs a nonempty value")));
+                }
+                if matches!(flag, "--reruns" | "-r") && value.parse::<u32>().is_err() {
+                    return Err(error(format!("{flag} needs a nonnegative integer")));
+                }
+                if flag == "-Z"
+                    && matches!(
+                        value.split('=').next().unwrap_or(value),
+                        "help"
+                            | "shell-escape"
+                            | "shell-escape-cwd"
+                            | "continue-on-errors"
+                            | "deterministic-mode"
+                    )
+                {
+                    return Err(error(format!(
+                        "-Z {value} conflicts with app-managed compilation and source navigation"
+                    )));
+                }
+            }
+            _ => {
+                return Err(error(format!(
+                    "unsupported compile option {token:?}; input/output paths are supplied by the app"
+                )));
+            }
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,7 +294,11 @@ mod tests {
             );
             assert!(!options.arguments.contains('{'));
             let mut changed = options.clone();
-            changed.arguments.push_str(" --optional 'two words'");
+            changed.arguments.push_str(if kind == Tectonic {
+                " --reruns 2"
+            } else {
+                " --optional 'two words'"
+            });
             changed.validate_for_tool(kind).unwrap();
             if kind != Texlab {
                 changed.arguments.clear();
@@ -187,6 +308,86 @@ mod tests {
                     "{error}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn tectonic_root_options_are_validated_in_their_actual_cli_position() {
+        use crate::toolchain::ToolKind::Tectonic;
+        for arguments in [
+            Tectonic.default_arguments(),
+            "-X compile --untrusted --print --reruns 2 --bundle '/tmp/TeX bundle.tar'",
+            "-X --color=auto -c minimal compile --keep-logs",
+            "-X --chatter=default --color never compile -Z min-crossrefs=3",
+        ] {
+            CommandCustomization {
+                arguments: arguments.into(),
+                ..Default::default()
+            }
+            .validate_for_tool(Tectonic)
+            .unwrap_or_else(|error| panic!("{arguments}: {error}"));
+        }
+        for arguments in [
+            "-X compile --chatter minimal",
+            "-X compile --color never",
+            "-X --chatter compile",
+            "-X --chatter noisy compile",
+            "-X --color invisible compile",
+            "-X --color never --color always compile",
+            "-X --print compile",
+            "-X --color never build",
+            "-X --chatter minimal",
+            "-X --color compile",
+            "-X -- compile",
+            "-X compile --reruns nope",
+            "-X compile --reruns",
+            "-X compile --keep-logs=false",
+            "-X compile --print main.tex",
+            "-X compile --help",
+        ] {
+            assert!(
+                CommandCustomization {
+                    arguments: arguments.into(),
+                    ..Default::default()
+                }
+                .validate_for_tool(Tectonic)
+                .is_err(),
+                "{arguments}"
+            );
+        }
+    }
+
+    #[test]
+    fn tectonic_custom_options_cannot_redirect_or_disable_managed_build_outputs() {
+        use crate::toolchain::ToolKind::Tectonic;
+        for option in [
+            "--outdir /tmp",
+            "--outdir=/tmp",
+            "-o/tmp",
+            "-o /tmp",
+            "--outfmt xdv",
+            "--outfmt=aux",
+            "--pass tex",
+            "--pass=tex",
+            "--synctex",
+            "--only-cached",
+            "-C",
+            "-- main.tex",
+            "-Z shell-escape",
+            "-Z shell-escape-cwd=/tmp",
+            "-Z continue-on-errors",
+            "-Z deterministic-mode",
+        ] {
+            let arguments = format!("{} {option}", Tectonic.default_arguments());
+            assert!(
+                CommandCustomization {
+                    arguments,
+                    ..Default::default()
+                }
+                .validate_for_tool(Tectonic)
+                .is_err(),
+                "{option}"
+            );
         }
     }
 

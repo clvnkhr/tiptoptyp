@@ -48,9 +48,34 @@ pub(crate) fn write_checked(
 fn checkpoint_due(intent: SaveIntent, latest: Option<SystemTime>, now: SystemTime) -> bool {
     intent != SaveIntent::Auto
         || latest.is_none_or(|last| {
-            now.duration_since(last)
-                .is_ok_and(|elapsed| elapsed >= std::time::Duration::from_secs(60))
+            now.duration_since(last).map_or(true, |elapsed| {
+                elapsed >= std::time::Duration::from_secs(60)
+            })
         })
+}
+
+/// Foreign/future revisions remain available in history but cannot postpone a
+/// new checkpoint after the wall clock moves backwards.
+#[cfg(any(target_os = "macos", test))]
+fn latest_checkpoint_time(
+    times: impl IntoIterator<Item = SystemTime>,
+    now: SystemTime,
+) -> Option<SystemTime> {
+    times.into_iter().filter(|time| *time <= now).max()
+}
+
+/// A process-local monotonic floor prevents repeated backwards clock changes
+/// from creating a native revision for every edit. Explicit saves stay immediate.
+#[cfg(any(target_os = "macos", test))]
+fn checkpoint_due_with_session(
+    intent: SaveIntent,
+    latest: Option<SystemTime>,
+    now: SystemTime,
+    since_checkpoint: Option<std::time::Duration>,
+) -> bool {
+    !(intent == SaveIntent::Auto
+        && since_checkpoint.is_some_and(|elapsed| elapsed < std::time::Duration::from_secs(60)))
+        && checkpoint_due(intent, latest, now)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -101,13 +126,44 @@ mod platform {
         path::PathBuf,
         ptr::NonNull,
         sync::{Mutex, OnceLock},
-        time::{Duration, UNIX_EPOCH},
+        time::{Duration, Instant, UNIX_EPOCH},
     };
 
     const RECENT_SAVES: usize = 128;
     type DiskStamp = (u64, u64, u64, i64, i64);
     type SavedFiles = VecDeque<(PathBuf, DiskStamp)>;
     static SAVED_FILES: OnceLock<Mutex<SavedFiles>> = OnceLock::new();
+    type CheckpointTimes = VecDeque<(PathBuf, Instant)>;
+    static CHECKPOINT_TIMES: OnceLock<Mutex<CheckpointTimes>> = OnceLock::new();
+
+    fn checkpoint_elapsed(path: &Path) -> Option<Duration> {
+        CHECKPOINT_TIMES.get().and_then(|times| {
+            times
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .iter()
+                .find(|(saved_path, _)| saved_path == path)
+                .map(|(_, time)| time.elapsed())
+        })
+    }
+
+    fn remember_checkpoint(times: &mut CheckpointTimes, path: &Path, now: Instant) {
+        times.retain(|(saved_path, _)| saved_path != path);
+        if times.len() == RECENT_SAVES {
+            times.pop_front();
+        }
+        times.push_back((path.to_owned(), now));
+    }
+
+    fn note_checkpoint(url: &NSURL) {
+        if let Some(path) = url.to_file_path() {
+            let mut times = CHECKPOINT_TIMES
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            remember_checkpoint(&mut times, &path, Instant::now());
+        }
+    }
 
     fn disk_stamp(metadata: &fs::Metadata) -> DiskStamp {
         (
@@ -353,6 +409,7 @@ mod platform {
             latest_version(url).and_then(|(_, version)| version.URL().to_file_path())
             && files_equal(path, &latest)?
         {
+            note_checkpoint(url);
             return Ok(());
         }
         let contents_url = file_url(path)?;
@@ -361,8 +418,9 @@ mod platform {
             &contents_url,
             NSFileVersionAddingOptions::empty(),
         )
-        .map(|_| ())
-        .map_err(|error| io::Error::other(error.localizedDescription().to_string()))
+        .map_err(|error| io::Error::other(error.localizedDescription().to_string()))?;
+        note_checkpoint(url);
+        Ok(())
     }
 
     #[cfg(test)]
@@ -406,8 +464,15 @@ mod platform {
                 Err(error) => return Err(error),
             };
             let mut warning = None;
-            let latest = latest_version(url).map(|(time, _)| time);
-            let due = checkpoint_due(intent, latest, SystemTime::now());
+            let now = SystemTime::now();
+            let latest = latest_checkpoint_time(
+                versions(url)
+                    .iter()
+                    .filter_map(|version| version_time(version)),
+                now,
+            );
+            let due = existing.is_none()
+                || checkpoint_due_with_session(intent, latest, now, checkpoint_elapsed(path));
             // Process bookkeeping contains no source or revision data. It only
             // recognizes our last successful write so the first overwrite (or
             // an external inode/mtime change) preserves the exact disk baseline.
@@ -513,6 +578,28 @@ mod platform {
         }
 
         #[test]
+        fn monotonic_checkpoint_bookkeeping_is_bounded_and_refreshes_existing_paths() {
+            let mut times = CheckpointTimes::new();
+            let now = Instant::now();
+            for index in 0..RECENT_SAVES + 10 {
+                remember_checkpoint(&mut times, Path::new(&index.to_string()), now);
+            }
+            assert_eq!(times.len(), RECENT_SAVES);
+            assert_eq!(times.front().unwrap().0, Path::new("10"));
+            let later = now + Duration::from_secs(10);
+            remember_checkpoint(&mut times, Path::new("10"), later);
+            assert_eq!(times.len(), RECENT_SAVES);
+            assert_eq!(times.back().unwrap().1, later);
+            assert_eq!(
+                times
+                    .iter()
+                    .filter(|(path, _)| path == Path::new("10"))
+                    .count(),
+                1
+            );
+        }
+
+        #[test]
         fn recent_save_bookkeeping_is_bounded_and_replaces_old_disk_ownership() {
             let mut saved = SavedFiles::new();
             for index in 0..RECENT_SAVES + 10 {
@@ -558,6 +645,78 @@ mod tests {
             SaveIntent::ExplicitConfirmed { observed: None },
             Some(last),
             last
+        ));
+    }
+
+    #[test]
+    fn autosave_checkpoint_is_due_when_clock_moves_before_last_native_version() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        let future_revision = now + Duration::from_secs(86_400);
+        assert!(
+            checkpoint_due(SaveIntent::Auto, Some(future_revision), now),
+            "A future native timestamp must not disable automatic backups until that date"
+        );
+        assert!(!checkpoint_due(SaveIntent::Auto, Some(now), now));
+        assert!(!checkpoint_due(
+            SaveIntent::Auto,
+            Some(now),
+            now + Duration::from_secs(59)
+        ));
+        assert!(checkpoint_due(
+            SaveIntent::Auto,
+            Some(now),
+            now + Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn future_revisions_and_repeated_clock_rollbacks_keep_autosave_cadence_bounded() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let now = UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let future = now + Duration::from_secs(86_400);
+        let recent = now - Duration::from_secs(30);
+        assert_eq!(latest_checkpoint_time([future, recent], now), Some(recent));
+        assert!(!checkpoint_due_with_session(
+            SaveIntent::Auto,
+            Some(recent),
+            now,
+            None
+        ));
+        assert_eq!(
+            latest_checkpoint_time([future, future + Duration::from_secs(1)], now),
+            None
+        );
+        assert!(checkpoint_due_with_session(
+            SaveIntent::Auto,
+            None,
+            now,
+            None
+        ));
+        // First use creates one current checkpoint. Further backwards jumps
+        // cannot manufacture a revision for each subsequent edit.
+        for elapsed in 0..60 {
+            let backwards = now - Duration::from_secs(elapsed * 100);
+            let latest = latest_checkpoint_time([future, now], backwards);
+            assert!(!checkpoint_due_with_session(
+                SaveIntent::Auto,
+                latest,
+                backwards,
+                Some(Duration::from_secs(elapsed))
+            ));
+        }
+        let backwards = now - Duration::from_secs(10_000);
+        assert!(checkpoint_due_with_session(
+            SaveIntent::Auto,
+            None,
+            backwards,
+            Some(Duration::from_secs(60))
+        ));
+        assert!(checkpoint_due_with_session(
+            SaveIntent::Explicit,
+            Some(future),
+            backwards,
+            Some(Duration::ZERO)
         ));
     }
 

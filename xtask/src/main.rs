@@ -2,6 +2,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod liquid;
+mod ltex;
 mod macos;
 mod payloads;
 mod pdfium;
@@ -143,7 +144,7 @@ fn run() -> Result<(), String> {
             liquid_source = Some(PathBuf::from(
                 arguments
                     .next()
-                    .ok_or("--source requires a raw input folder")?,
+                    .ok_or("--source requires an input folder")?,
             ));
         } else if argument == "--prod" {
             production = true;
@@ -152,24 +153,25 @@ fn run() -> Result<(), String> {
         }
     }
 
-    if liquid_source.is_some() && command != "prepare-liquid" {
-        return Err("--source is only available for prepare-liquid".into());
+    if liquid_source.is_some() && !matches!(command.as_str(), "prepare-liquid" | "ensure-liquid") {
+        return Err("--source is only available for prepare-liquid or ensure-liquid".into());
     }
     match command.as_str() {
         "prepare-liquid" => {
             liquid::prepare(&liquid_source.ok_or("prepare-liquid requires --source PATH")?)
         }
+        "ensure-liquid" => liquid::ensure_prepared(liquid_source.as_deref()),
         "stage-liquid" => {
             liquid::preflight()?;
             liquid::stage()
         }
+        "fetch-ltex" => ltex::stage(&package_target(target)?),
         "fetch-pdfium" => pdfium::fetch(&target_or_host(target)?),
         "fetch-sidecars" => {
             let target = target_or_host(target)?;
             fetch_sidecars(&target)
         }
         "package-build" => {
-            liquid::preflight()?;
             let target = package_target(target)?;
             let slices = macos::targets(&target);
             for slice in &slices {
@@ -182,7 +184,7 @@ fn run() -> Result<(), String> {
             if !slices.contains(&host.as_str()) {
                 pdfium::fetch(&host)?;
             }
-            liquid::stage()?;
+            ltex::stage(&target)?;
             generate_third_party_notices()?;
             payloads::stage(&target)?;
             if target.ends_with("apple-darwin") {
@@ -222,7 +224,7 @@ fn run() -> Result<(), String> {
         "generate-notices" => generate_third_party_notices(),
         "help" | "--help" | "-h" => {
             println!(
-                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  fetch-pdfium [--target TRIPLE]\n  prepare-liquid --source PATH (compress reviewed raw model and native runtimes)\n  stage-liquid (verify and stage the prepared native model package)\n  package-build [--target TRIPLE] [--prod] (macOS: universal by default)\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
+                "tiptoptyp tasks\n\n  profile --help\n  fetch-sidecars [--target TRIPLE]\n  fetch-pdfium [--target TRIPLE]\n  fetch-ltex [--target TRIPLE] (bundle LTeX+ with Java for the package targets)\n  prepare-liquid --source PATH (compress reviewed raw model and native runtimes)\n  ensure-liquid [--source PATH] (recover prepared assets from a staged or installed package)\n  stage-liquid (verify and stage the prepared native model package)\n  package-build [--target TRIPLE] [--prod] (macOS: universal by default)\n  verify-package [--target TRIPLE]\n  generate-notices\n\n{PACKAGE_TARGET_ENV} supplies the target to cargo-packager's hook."
             );
             Ok(())
         }
@@ -273,11 +275,10 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("docs/licenses/Unicode-3.0.txt"),
         root.join("docs/licenses/zig-MIT.txt"),
         root.join("docs/licenses/mathgloss-MIT.txt"),
-        root.join("toolchain/liquid/LICENSE.txt"),
-        root.join("toolchain/liquid/PROVENANCE.json"),
-        root.join("toolchain/liquid/licenses/aarch64-apple-darwin.txt"),
-        root.join("toolchain/liquid/licenses/x86_64-apple-darwin.txt"),
         root.join("assets/liquid/SACREMOSES-LICENSE"),
+        root.join("toolchain/ltex/LICENSE.md"),
+        root.join("toolchain/ltex/ACKNOWLEDGMENTS.md"),
+        root.join("toolchain/ltex/PROVENANCE.json"),
     ]
     .into_iter()
     .chain(FONT_LICENSES.iter().map(|(source, _)| root.join(source)))
@@ -350,7 +351,8 @@ fn verify_package(target: &str) -> Result<(), String> {
     verify_bundle_icon_reference(&app.join("Contents/Info.plist"), MACOS_APP_ICON)?;
     macos::verify_architectures(&executable_dir.join("tiptoptyp"), target)?;
     payloads::verify(&resources, target)?;
-    liquid::verify(&resources)?;
+    verify_liquid_is_on_demand(&resources)?;
+    ltex::verify(&resources, target)?;
     verify_hash(
         &resources.join("licenses/Sacremoses-MIT.txt"),
         &sha256(&root.join("assets/liquid/SACREMOSES-LICENSE"))?,
@@ -438,6 +440,18 @@ fn verify_package(target: &str) -> Result<(), String> {
 
     println!("verified {}", app.display());
     Ok(())
+}
+
+fn verify_liquid_is_on_demand(resources: &Path) -> Result<(), String> {
+    let liquid = resources.join("liquid");
+    match fs::symlink_metadata(&liquid) {
+        Ok(_) => Err(format!(
+            "package unexpectedly contains on-demand Liquid assets: {}",
+            liquid.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not inspect {}: {error}", liquid.display())),
+    }
 }
 
 fn verify_font_licenses(root: &Path, resources: &Path) -> Result<(), String> {
@@ -947,6 +961,39 @@ fn run_output(command: &mut Command, purpose: &str) -> Result<Output, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_packaging_configurations_bundle_ltex_and_leave_liquid_on_demand() {
+        for config in [
+            include_str!("../../Cargo.toml"),
+            include_str!("../../packager-prod.toml"),
+        ] {
+            assert!(config.contains(r#"src = "toolchain/ltex", target = "ltex""#));
+            assert!(!config.contains(r#"src = "toolchain/liquid""#));
+        }
+    }
+
+    #[test]
+    fn on_demand_liquid_verification_rejects_stale_payloads() {
+        let resources = tempfile::tempdir().unwrap();
+        verify_liquid_is_on_demand(resources.path()).unwrap();
+        let liquid = resources.path().join("liquid");
+        fs::create_dir(&liquid).unwrap();
+        assert!(
+            verify_liquid_is_on_demand(resources.path())
+                .unwrap_err()
+                .contains("on-demand Liquid assets")
+        );
+        fs::remove_dir(&liquid).unwrap();
+        fs::write(&liquid, "stale payload").unwrap();
+        assert!(verify_liquid_is_on_demand(resources.path()).is_err());
+        fs::remove_file(&liquid).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(resources.path().join("missing"), &liquid).unwrap();
+            assert!(verify_liquid_is_on_demand(resources.path()).is_err());
+        }
+    }
 
     #[test]
     fn font_notice_registry_covers_all_bundled_fonts_and_package_resources() {

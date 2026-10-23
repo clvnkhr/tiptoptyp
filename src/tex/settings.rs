@@ -183,6 +183,8 @@ pub(crate) struct TexSettings {
     pub(crate) only_cached: bool,
     /// Emit a SyncTeX map for source/preview navigation.
     pub(crate) synctex: bool,
+    /// Include cosmetic underfull box warnings in compiler diagnostics. Raw logs stay intact.
+    pub(crate) show_underfull_box_warnings: bool,
     pub(crate) texlab_enabled: bool,
     pub(crate) completion: bool,
     pub(crate) hover: bool,
@@ -215,13 +217,17 @@ impl Default for TexSettings {
             bibliography_enabled: true,
             system_command: Default::default(),
             latexmk: SystemTool {
-                arguments: "-bibtex-cond".into(),
+                arguments: "-quiet -bibtex-cond".into(),
                 ..Default::default()
             },
-            bibtex: Default::default(),
+            bibtex: SystemTool {
+                arguments: "-terse".into(),
+                ..Default::default()
+            },
             biber: Default::default(),
             only_cached: false,
             synctex: true,
+            show_underfull_box_warnings: false,
             texlab_enabled: true,
             completion: true,
             hover: true,
@@ -235,8 +241,23 @@ impl Default for TexSettings {
             badness: ToolPreference::for_tool(crate::toolchain::ToolKind::Badness),
             tex_fmt: ToolPreference::for_tool(crate::toolchain::ToolKind::TexFmt),
             texlab_ignored_codes: Vec::new(),
-            badness_ignored_codes: Vec::new(),
-            texlab_configuration: serde_json::json!({"texlab": {"build":{"onSave":false,"forwardSearchAfter":false},"chktex":{"onOpenAndSave":false,"onEdit":false},"latexFormatter":"none","bibtexFormatter":"none","hover":{"symbols":"glyph"},"completion":{"matcher":"fuzzy-ignore-case"},"diagnosticsDelay":300}}),
+            badness_ignored_codes: [
+                "abbreviation-spacing",
+                "dollar-display-math",
+                "ellipsis",
+                "hard-coded-reference",
+                "missing-nonbreaking-space",
+                "obsolete-environment",
+                "primitive-command",
+                "redundant-script-braces",
+                "sectioning-level-jump",
+                "space-before-command",
+                "straight-quotes",
+                "unreferenced-label",
+            ]
+            .map(str::to_owned)
+            .into(),
+            texlab_configuration: serde_json::json!({"texlab": {"build":{"onSave":false,"forwardSearchAfter":false},"chktex":{"onOpenAndSave":false,"onEdit":false},"latexFormatter":"none","bibtexFormatter":"none","hover":{"symbols":"glyph"},"completion":{"matcher":"fuzzy-ignore-case"},"diagnosticsDelay":300,"diagnostics":{"allowedPatterns":[],"ignoredPatterns":["^Unused label$","^Unused entry$"]}}}),
             badness_configuration: serde_json::json!({"lineWidth":80,"indentWidth":2}),
         }
     }
@@ -347,6 +368,93 @@ mod tests {
             settings
         );
     }
+    #[test]
+    fn quieter_defaults_keep_texlab_syntax_and_reference_errors_enabled() {
+        let settings = TexSettings::default();
+        assert!(!settings.show_underfull_box_warnings);
+        assert_eq!(settings.latexmk.arguments, "-quiet -bibtex-cond");
+        assert_eq!(settings.bibtex.arguments, "-terse");
+        assert!(settings.biber.arguments.is_empty());
+        assert!(settings.texlab_ignored_codes.is_empty());
+        assert!(
+            settings.texlab_configuration["texlab"]["diagnostics"]["allowedPatterns"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let patterns = settings.texlab_configuration["texlab"]["diagnostics"]["ignoredPatterns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| regex::Regex::new(value.as_str().unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        for (message, ignored) in [
+            ("Unused label", true),
+            ("Unused entry", true),
+            ("Unexpected \"}\"", false),
+            ("Mismatched environment", false),
+            ("Undefined reference", false),
+            ("Duplicate label", false),
+            ("Duplicate entry key", false),
+            ("Unused label appears inside a genuine diagnostic", false),
+            ("Expecting a field value", false),
+        ] {
+            assert_eq!(
+                patterns.iter().any(|pattern| pattern.is_match(message)),
+                ignored,
+                "{message}"
+            );
+        }
+        for code in [
+            "1", "2", "3", "4", "5", "6", "7", "8", "10", "11", "13", "14",
+        ] {
+            assert!(
+                !settings.ignores_diagnostic_code(Some("TexLab"), code),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn cosmetic_badness_defaults_remain_editable_without_disabling_real_checks() {
+        let mut settings = TexSettings::default();
+        assert_eq!(settings.badness_ignored_codes.len(), 12);
+        for code in [
+            "abbreviation-spacing",
+            "dollar-display-math",
+            "ellipsis",
+            "hard-coded-reference",
+            "missing-nonbreaking-space",
+            "obsolete-environment",
+            "primitive-command",
+            "redundant-script-braces",
+            "sectioning-level-jump",
+            "space-before-command",
+            "straight-quotes",
+            "unreferenced-label",
+        ] {
+            assert!(
+                settings.ignores_diagnostic_code(Some("Badness"), code),
+                "{code}"
+            );
+            assert!(
+                !settings.ignores_diagnostic_code(Some("TexLab"), code),
+                "{code}"
+            );
+        }
+        assert!(!settings.ignores_diagnostic_code(Some("Badness"), "deprecated-command"));
+        assert!(!settings.ignores_diagnostic_code(Some("Badness"), "parse-error"));
+        settings.badness_ignored_codes.clear();
+        settings.texlab_configuration["texlab"]["diagnostics"]["ignoredPatterns"] =
+            serde_json::json!([]);
+        settings.show_underfull_box_warnings = true;
+        let restored: TexSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+        assert!(!restored.ignores_diagnostic_code(Some("Badness"), "redundant-script-braces"));
+        assert!(restored.lint && restored.diagnostics && restored.texlab_enabled);
+    }
+
     #[test]
     fn system_build_settings_reject_background_watch_and_output_redirection() {
         for arguments in [

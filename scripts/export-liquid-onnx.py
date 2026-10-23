@@ -6,16 +6,18 @@ Optional developer setup (Apple Silicon, Python 3.12):
   /private/tmp/liquid-onnx-build/bin/python -m pip install -r scripts/liquid-onnx-requirements.txt
   /private/tmp/liquid-onnx-build/bin/python scripts/liquid-grammar-worker.py --cache-dir /private/tmp/liquid-reference --install
 
-Export, verify, build both thin native helpers, then prepare the app payload:
+Export, verify, build both thin native helpers, then prepare optional release assets:
   /private/tmp/liquid-onnx-build/bin/python scripts/export-liquid-onnx.py --cache-dir /private/tmp/liquid-reference --output-dir /private/tmp/liquid-onnx-raw --export
   /private/tmp/liquid-onnx-build/bin/python scripts/export-liquid-onnx.py --cache-dir /private/tmp/liquid-reference --output-dir /private/tmp/liquid-onnx-raw --verify
   python3 scripts/build-liquid-onnx.py --source /private/tmp/liquid-onnx-raw --work-dir /private/tmp/liquid-onnx-vendor
   cargo xtask prepare-liquid --source /private/tmp/liquid-onnx-raw
   cargo xtask stage-liquid
 
-Python is a BUILD-TIME reference/export tool only. End users install no Python or
-model runtime: the app automatically unpacks its bundled model/tokenizer and
-matching native helper on first use. The optional reranker is not included.
+Python is a BUILD-TIME reference/export tool only. End users install no Python;
+the app downloads the pinned model/tokenizer and matching native helper on first
+use, then reuses its verified cache offline. These optional assets are excluded
+from the default app bundle. Preparing/staging them locally does not publish the
+release downloads. The optional reranker is not included.
 Reference installation and the native builder explicitly download pinned files;
 export and verification are offline. Build-only receipts stay in the sibling
 OUTPUT-evidence folder, outside the strict ten-file raw payload. Lossless FP16

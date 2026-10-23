@@ -179,15 +179,24 @@ and virtual messages anchor after the last one.
 - Bundling `tinymist-viewer` would add a second viewer executable but would not
   satisfy the existing LSP and source-navigation protocol.
 
-## Native Liquid model and runtime payload (2026-10-20)
+## Optional Liquid model and runtime downloads (2026-10-21)
 
 Liquid uses a separate native ONNX Runtime helper, started only when checking
-selected text. The inference library is not linked into the editor and incurs
-no application startup loading cost. Python is a developer export tool, not an
-application runtime requirement. The universal app includes one shared ONNX
-model and tokenizer, plus a signed helper and inference library for each Mac
-architecture. The model retains trained FP16 parameters losslessly and restores
-FP32 arithmetic through explicit casts; the optional reranker is not included.
+selected text. Its model, tokenizer, helper and inference library are optional
+downloads, excluded from the default app bundle. Neither application startup nor
+ordinary packaging needs a prepared Liquid payload. Python remains a developer
+export tool, not an application runtime requirement. LTeX+ and its Temurin Java
+runtime remain bundled independently.
+
+The app embeds the small, reviewed `resources/liquid/manifest.json` catalog. It
+pins the model revision, supported targets, compressed and expanded sizes, and
+SHA-256 hashes. A selected-text check installs missing shared assets and only
+the current Mac architecture's helper and inference library on its background
+worker. Downloads support cancellation and are verified before atomic publication
+into the persistent app-data cache. Valid cached assets are reused offline;
+Settings can explicitly redownload them. Neither downloaded metadata nor an
+editable cache manifest can replace the app's trusted catalog. The signed app
+bundle is never modified.
 
 The model export and native runtime build recipe is documented in
 [grammar comparison](../grammar-comparison.md#native-liquid-export-and-packaging).
@@ -198,7 +207,9 @@ directory. Inputs are checked before compression and are never modified.
 Provenance binds the maintained 268-case, 427-pass corpus to the exact
 model/tokenizer hashes, with all six dynamic-shape checks and lossless weight
 storage evidence passing. It also records both pinned official ONNX Runtime
-archives, post-signing native file hashes and runtime licence bundles.
+archives, post-signing native file hashes and runtime licence bundles. The model
+retains trained FP16 parameters losslessly and restores FP32 arithmetic through
+explicit casts; the optional reranker is not included.
 
 The generated `toolchain/liquid-source` tree contains exactly 11 files:
 
@@ -208,27 +219,64 @@ The generated `toolchain/liquid-source` tree contains exactly 11 files:
 - `liquid-onnx.zst` and `libonnxruntime.dylib.zst` in each `runtime/<target>/`.
 - `LICENSE.txt`, `PROVENANCE.json`, and the two `licenses/<target>.txt` bundles.
 
-The installer remains the production build entry point. Packaging checks these
-inputs before downloading sidecars or compiling, stages them atomically to
-`toolchain/liquid`, and includes that tree under `Resources/liquid`.
-`cargo xtask stage-liquid` stages and verifies it without building the app.
-Verification checks the complete file set, hashes, bounded decompression, native
-architectures and signatures. Missing model or runtime assets fail production
-packaging; ordinary development builds and tests do not require them.
+`cargo xtask stage-liquid` verifies and stages these developer distribution
+inputs atomically under `toolchain/liquid` without building the app. Verification
+checks the complete file set, hashes, bounded decompression, native architectures
+and signatures. `ensure-liquid --source PATH` can recover a verified compressed
+distribution tree when developer inputs are missing. These explicit tools remain
+available for preparing release assets, but the installer and `package-build`
+do not invoke them. Default package verification rejects a stale
+`Contents/Resources/liquid` tree. Preparing or staging assets locally does not
+publish them. The pinned [`liquid-onnxruntime-v1` resource release](https://github.com/clvnkhr/tiptoptyp/releases/tag/liquid-onnxruntime-v1)
+was published and its public downloads verified on 2026-10-21. It is a prerelease
+to keep resource assets separate from the application release returned by
+`/releases/latest`; first-use downloading uses the pinned tag directly.
 
-The first selected-text check automatically verifies and expands the bundled
-model and current Mac's runtime into its persistent app-data cache. No user
-installation, Python environment or download is needed. Later checks reuse those
-files offline. The bundled manifest is authoritative; an editable installed
-manifest cannot substitute different code or weights. Neither model loading nor
-archive hashing runs at application startup. The Intel helper uses ONNX Runtime
-1.19.2 and supports the app's macOS 12 floor; Apple Silicon uses ONNX Runtime
-1.31.0 and requires macOS 14. Other editor features keep their existing macOS
-support.
+The Intel helper uses ONNX Runtime 1.19.2 and supports the app's macOS 12 floor;
+Apple Silicon uses ONNX Runtime 1.31.0 and requires macOS 14. Other editor features
+keep their existing macOS support. Payload decoding uses a bounded 8 MiB history
+and rejects wrong sizes, hashes, trailing data and extra Zstandard frames. Model
+assets permit up to 2 GiB per file; the helper is capped at 64 MiB, native
+libraries at 1 GiB each, and the tokenizer at 32 MiB. Existing general sidecar
+payload limits remain unchanged. Hardware SHA-256 is enabled and its kernel stays
+optimized in ordinary debug builds so first-use verification does not spend
+minutes hashing model files.
 
-Payload decoding uses a bounded 8 MiB history and rejects wrong sizes, hashes,
-trailing data and extra Zstandard frames. Model assets permit up to 2 GiB per
-file; the helper is capped at 64 MiB, native libraries at 1 GiB each, and the
-tokenizer at 32 MiB. Existing general sidecar payload limits remain unchanged.
-Hardware SHA-256 is enabled and its kernel stays optimized in ordinary debug
-builds so automatic preparation does not spend minutes hashing model files.
+
+## Self-contained LTeX+ and Java payloads (2026-10-21)
+
+macOS packages include [LTeX+ 18.7.0](https://github.com/ltex-plus/ltex-ls-plus/releases/tag/18.7.0)
+and its Java 21 runtime. Grammar checking remains an independent Grammar & spelling toggle;
+Bundled is the default executable choice. Neither a system Java installation nor
+a first-use download is required. A custom launcher remains available explicitly.
+
+`build_support/ltex_manifest.rs` pins the official Intel and Apple Silicon
+archives by exact size and SHA-256. `cargo xtask fetch-ltex` stages the universal
+package without compiling the editor; `--target` prepares a thin package.
+Packaging runs this stage automatically. It compares every shared server path,
+content hash, executable mode and link target between the official distributions
+before storing the common files once. Java runtimes remain separate.
+
+`Contents/Resources/ltex/` contains a small `manifest.json`, `shared.tar.zst`,
+`aarch64-apple-darwin.tar.zst` and `x86_64-apple-darwin.tar.zst` (thin packages
+contain only their matching runtime). The manifest records raw tar and compressed
+sizes and hashes. Readable `LICENSE.md`, `ACKNOWLEDGMENTS.md` and `PROVENANCE.json`
+are also included and incorporated into the aggregate notices. Complete JDK
+licences and their contained relative symbolic links remain in the native trees.
+The universal payload is about 346 MiB compressed, versus about 602 MiB for the
+two upstream archives without deduplication.
+
+The existing background grammar worker verifies and expands the shared server
+and only the running CPU's Java runtime into a private app-data generation.
+The launcher receives that runtime's `JAVA_HOME` and `JAVACMD`, so an unrelated
+inherited Java installation cannot break the bundled default. Explicit
+per-tool environment customization is applied afterwards.
+
+Settings can redownload the pinned complete official distribution for the
+current CPU. Preparation, download and verification stay off the interface
+thread and support cancellation. After verification, a healthy existing generation
+is reused without creating another expanded copy. Only a missing or damaged cache
+gets a new immutable generation; the previous generation is retained for existing
+server processes. The signed application resources are never modified or deleted.
+Package verification checks exact resource layout, hashes, bounded decompression,
+pinned notices, and the Java executable and VM library's native architecture.

@@ -114,7 +114,7 @@ The accepted scenes and their framebuffer targets are:
 | `terminal-maximized` | `main` | Terminal filling available content height, with restore control |
 | `explorer-maximized` | `main` | Files section filling Explorer, with sibling sections hidden |
 | `terminal-panel` | `main` | Shared bottom panel with deterministic libghostty colors, Unicode and cursor; no shell is spawned |
-| `problems-panel` | `main` | Problems search and source/type filters with counted, collapsible provider/severity groups |
+| `problems-panel` | `main` | Compact flat Problems list with scroll-away filters and optional provider/severity grouping |
 | `activity-panel` | `main` | Compact subsystem status chips; mixed idle, queued, busy, failure and inactive fixture. |
 | `icons` | `main` | All shared vector icons at 1× and 4×, plus production/development application icons |
 | `find-replace` | `find-replace` | Find and replace controls |

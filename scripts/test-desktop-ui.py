@@ -30,7 +30,8 @@ from desktop_ui_terminal_theme import terminal_theme
 from desktop_ui_newest_journeys import NEWEST_JOURNEYS
 from desktop_ui_effects_journeys import effects_pacing_fixture
 from desktop_ui_liquid_journeys import LIQUID_JOURNEYS, liquid_model_directory
-from desktop_ui_ltex_journeys import LTEX_JOURNEYS, ltex_program
+from desktop_ui_ltex_journeys import LTEX_JOURNEYS, ltex_program, ltex_environment
+from desktop_ui_settings_links_journeys import SETTINGS_LINK_JOURNEYS
 from desktop_ui_latexdiff_journeys import LATEXDIFF_JOURNEYS
 from desktop_ui_texdoc_journeys import TEXDOC_JOURNEYS, texdoc_program
 from desktop_ui_citation_journeys import CITATION_JOURNEYS, CITATION_METADATA, CITATION_EXISTING, CITATION_SOURCE
@@ -40,7 +41,7 @@ from desktop_ui_inactive_preview_journeys import INACTIVE_PREVIEW_JOURNEYS
 ROOT = Path(__file__).resolve().parent.parent
 
 JOURNEY_NAMES = (
-    "all", *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
+    "all", *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
     *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find",
     "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview",
     "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
@@ -932,7 +933,7 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journey", choices=JOURNEY_NAMES, default="all")
-    parser.add_argument("--liquid-model-dir", type=Path, help="Liquid journeys only: read-only prepared model reference; prepares a temporary cache, never downloads")
+    parser.add_argument("--liquid-model-dir", type=Path, help="Liquid journeys only: read-only prepared model reference; downloads optional assets into a temporary cache")
     parser.add_argument("--ltex-executable", type=Path, help="LTeX journey only: path to an installed ltex-ls-plus launcher")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--executable", type=Path, help="reuse a preserved build for paired benchmarks; record its version and binary hash")
@@ -1072,6 +1073,8 @@ def main():
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)
+            if args.journey in LTEX_JOURNEYS:
+                environment = ltex_environment(environment, directory, args.ltex_executable)
             if args.journey in CITATION_JOURNEYS:
                 environment["TIPTOPTYP_UI_TEST_CITATION_METADATA"] = str(directory / "citation-metadata.bib")
             if args.journey == "effects_pacing":

@@ -82,16 +82,45 @@ fn diagnostic(
     }
 }
 
-fn harness() -> Harness<'static, EditorApp> {
+fn harness_with_size(app: EditorApp, size: Vec2) -> Harness<'static, EditorApp> {
     let mut harness = Harness::builder()
-        .with_size(Vec2::new(900.0, 600.0))
+        .with_size(size)
         .with_step_dt(0.01)
-        .build_ui_state(
-            |ui, app: &mut EditorApp| app.show_problems(ui),
-            app_with_problems(),
-        );
+        .build_ui_state(|ui, app: &mut EditorApp| app.show_problems(ui), app);
     harness.run();
     harness
+}
+
+fn harness() -> Harness<'static, EditorApp> {
+    harness_with_size(app_with_problems(), Vec2::new(900.0, 600.0))
+}
+
+fn wheel(harness: &mut Harness<'_, EditorApp>, delta: f32) {
+    harness.hover_at(harness.state().problems.scroll_rect.center());
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, delta),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.run_steps(12);
+}
+
+fn many_problems() -> EditorApp {
+    let mut app = app_with_problems();
+    app.preview.diagnostics = (0..100)
+        .map(|index| {
+            diagnostic(
+                "Tinymist",
+                DiagnosticSeverity::Warning,
+                &format!("Problem {index}"),
+                index + 1,
+            )
+        })
+        .collect();
+    app.preview.editor_diagnostics.clear();
+    app.mark_diagnostics_changed();
+    app
 }
 
 fn workspace_harness(mut app: EditorApp) -> Harness<'static, EditorApp> {
@@ -129,6 +158,19 @@ fn workspace_harness(mut app: EditorApp) -> Harness<'static, EditorApp> {
     harness
 }
 
+fn reveal_filters(harness: &mut Harness<'_, EditorApp>) {
+    let context = harness.ctx.clone();
+    harness.state_mut().focus_problems_search(&context);
+    harness.run();
+    assert!(harness.get_by_label("Search problems").is_focused());
+}
+
+fn enable_grouping(harness: &mut Harness<'_, EditorApp>) {
+    reveal_filters(harness);
+    harness.get_by_label("Group problems").click();
+    harness.run();
+}
+
 fn assert_search_owns_keyboard(harness: &Harness<'_, EditorApp>) {
     assert!(harness.get_by_label("Search problems").is_focused());
     assert!(
@@ -141,8 +183,130 @@ fn assert_search_owns_keyboard(harness: &Harness<'_, EditorApp>) {
 }
 
 #[test]
+fn default_problems_rows_are_flat_and_start_at_the_top() {
+    let harness = harness();
+    let first = harness.get_by_label("Unknown variable").rect();
+    let second = harness.get_by_label("Redundant braces").rect();
+    let state = &harness.state().problems;
+    assert!(!state.grouped);
+    assert!(!state.controls_visible);
+    assert!(!state.sticky_filters);
+    assert!(
+        state.controls_rect.bottom() <= state.scroll_rect.top() + 1.0,
+        "empty filters occupy the list: {:?}",
+        state.controls_rect
+    );
+    assert!(first.top() <= state.scroll_rect.top() + 4.0);
+    assert!(second.top() > first.top());
+    assert!(
+        second.top() - first.top() <= first.height() + 12.0,
+        "plain one-line diagnostics acquired vertical gaps: {first:?}, {second:?}"
+    );
+    for group in [
+        "Tinymist · Error (1)",
+        "Badness · Warning (1)",
+        "Harper · Help (1)",
+    ] {
+        assert!(harness.query_by_label(group).is_none(), "{group}");
+    }
+    harness.get_by_label("Check spelling");
+    harness.get_by_label("Repeated word");
+}
+
+#[test]
+fn scrolling_up_reveals_empty_filters_and_scrolling_down_hides_them() {
+    // A short list still has enough scroll range to uncover its search row.
+    let mut harness = harness();
+    let top = harness.state().problems.scroll_rect.top();
+    wheel(&mut harness, 160.0);
+    let revealed = harness.get_by_label("Search problems").rect();
+    assert!(harness.state().problems.controls_visible);
+    assert!(!harness.state().problems.sticky_filters);
+    assert!(revealed.top() >= top - 1.0, "{revealed:?}");
+    assert!(revealed.bottom() < harness.get_by_label("Unknown variable").rect().top());
+    harness.run_steps(12);
+    assert_eq!(harness.get_by_label("Search problems").rect(), revealed);
+
+    wheel(&mut harness, -160.0);
+    assert!(!harness.state().problems.controls_visible);
+    assert!(harness.state().problems.controls_rect.bottom() <= top + 1.0);
+    assert!(harness.get_by_label("Unknown variable").rect().top() <= top + 4.0);
+    harness.run_steps(12);
+    assert!(!harness.state().problems.controls_visible);
+}
+
+#[test]
+fn wheel_scrolling_does_not_fight_back_with_empty_or_active_filters() {
+    let mut harness = harness_with_size(many_problems(), Vec2::new(900.0, 260.0));
+    let initial = harness.state().problems.scroll_offset;
+    wheel(&mut harness, -160.0);
+    let scrolled = harness.state().problems.scroll_offset;
+    assert!(scrolled > initial + 100.0);
+    harness.run_steps(12);
+    assert!(harness.state().problems.scroll_offset >= scrolled - 1.0);
+
+    reveal_filters(&mut harness);
+    harness.get_by_label("Search problems").type_text("Problem");
+    harness.run();
+    let pinned = harness.get_by_label("Search problems").rect();
+    let initial = harness.state().problems.scroll_offset;
+    wheel(&mut harness, -160.0);
+    let scrolled = harness.state().problems.scroll_offset;
+    assert!(scrolled > initial + 100.0);
+    assert!(harness.state().problems.sticky_filters);
+    assert_eq!(harness.get_by_label("Search problems").rect(), pinned);
+    harness.run_steps(12);
+    assert!(harness.state().problems.scroll_offset >= scrolled - 1.0);
+    assert_eq!(harness.get_by_label("Search problems").rect(), pinned);
+}
+
+#[test]
+fn double_clicking_sticky_search_cannot_navigate_a_clipped_diagnostic_under_it() {
+    let mut harness = workspace_harness(many_problems());
+    reveal_filters(&mut harness);
+    harness.get_by_label("Search problems").type_text("Problem");
+    harness.run();
+    wheel(&mut harness, -160.0);
+    assert!(harness.state().problems.scroll_offset > 100.0);
+    let search = harness.get_by_label("Search problems").rect();
+    assert!(search.bottom() < harness.state().problems.scroll_rect.top());
+    for _ in 0..2 {
+        harness.get_by_label("Search problems").click();
+        harness.step();
+    }
+    assert!(
+        harness.state().pending_editor_selection.is_none(),
+        "a double-click in the search field navigated an offscreen row beneath it"
+    );
+    assert_search_owns_keyboard(&harness);
+}
+
+#[test]
+fn find_reveals_hidden_filters_and_keeps_typing_out_of_source() {
+    let mut harness = harness();
+    assert!(!harness.state().problems.controls_visible);
+    reveal_filters(&mut harness);
+    let search = harness.get_by_label("Search problems").rect();
+    assert!(harness.state().problems.controls_visible);
+    assert!(harness.state().problems.sticky_filters);
+    assert!(search.top() < harness.state().problems.scroll_rect.top());
+    harness
+        .get_by_label("Search problems")
+        .type_text("spelling");
+    harness.run();
+    harness.get_by_label("Check spelling");
+    assert_eq!(harness.get_by_label("Search problems").rect(), search);
+    assert!(harness.query_by_label("Unknown variable").is_none());
+    assert_eq!(
+        harness.state().document().source(),
+        "first\nteh\nthird\nfourth"
+    );
+}
+
+#[test]
 fn source_type_and_typed_search_combine_and_reset_together() {
     let mut harness = workspace_harness(app_with_problems());
+    reveal_filters(&mut harness);
     harness.get_by_label("Source").click();
     harness.run();
     harness.get_by_label("Harper (2)").click();
@@ -285,6 +449,7 @@ fn filtering_and_refresh_preserve_detail_expansion_without_navigating() {
 #[test]
 fn source_type_groups_collapse_independently_and_remember_their_state() {
     let mut harness = harness();
+    enable_grouping(&mut harness);
     harness.get_by_label("Harper · Help (1)").click();
     harness.run();
     assert!(harness.get_by_label("Harper · Help (1)").is_focused());
@@ -303,6 +468,44 @@ fn source_type_groups_collapse_independently_and_remember_their_state() {
     harness.get_by_label("Harper · Help (1)").click();
     harness.run();
     harness.get_by_label("Check spelling");
+    assert!(harness.state().pending_editor_selection.is_none());
+}
+
+#[test]
+fn grouped_header_keeps_its_hit_target_while_search_focus_changes() {
+    let mut harness = harness();
+    enable_grouping(&mut harness);
+    // With no filters, only search focus keeps the toolbar above the list.
+    // Pressing a group must not move its eventual release target as that focus
+    // transfers away from the search field.
+    reveal_filters(&mut harness);
+    assert!(!harness.state().problems.filter.is_active());
+    assert!(harness.state().problems.sticky_filters);
+    let label = "Harper · Help (1)";
+    let initial = harness.get_by_label(label).rect();
+    let position = initial.center();
+    harness.hover_at(position);
+    harness.event(egui::Event::PointerButton {
+        pos: position,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    harness.run_steps(8);
+    assert_eq!(harness.get_by_label(label).rect(), initial);
+    harness.get_by_label("Check spelling");
+
+    // Keep raw coordinates fixed: resolving the widget again for the release
+    // would conceal any intervening toolbar-induced layout shift.
+    harness.event(egui::Event::PointerButton {
+        pos: position,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    harness.run_steps(8);
+    assert!(harness.query_by_label("Check spelling").is_none());
+    assert!(harness.get_by_label(label).is_focused());
     assert!(harness.state().pending_editor_selection.is_none());
 }
 
@@ -352,8 +555,7 @@ fn assert_no_problem_hover(harness: &Harness<'_, EditorApp>) {
 #[test]
 fn filtering_retires_tooltip_handoff_and_problem_rows_do_not_recreate_it() {
     let mut harness = workspace_harness(app_with_problems());
-    harness.get_by_label("Search problems").click();
-    harness.run();
+    reveal_filters(&mut harness);
     let origin = harness.get_by_label("Redundant braces").rect();
     seed_problem_hover(
         &harness,
@@ -382,6 +584,7 @@ fn filtering_retires_tooltip_handoff_and_problem_rows_do_not_recreate_it() {
 #[test]
 fn publication_and_group_toggles_retire_tooltips_anchored_to_previous_rows() {
     let mut harness = workspace_harness(app_with_problems());
+    enable_grouping(&mut harness);
     let origin = harness.get_by_label("Redundant braces").rect();
     let detail = harness.state().preview.diagnostics[1].full_message();
     seed_problem_hover(&harness, origin, detail.clone());
@@ -529,8 +732,7 @@ fn filtering_in_a_narrow_bottom_panel_never_changes_the_users_height() {
         })
     };
     let initial = height(&mut harness);
-    harness.get_by_label("Search problems").click();
-    harness.run();
+    reveal_filters(&mut harness);
     harness
         .get_by_label("Search problems")
         .type_text("nothing matches this");

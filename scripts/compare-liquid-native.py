@@ -14,6 +14,7 @@ from pathlib import Path
 import platform
 import re
 import selectors
+import stat
 import statistics
 import subprocess
 import sys
@@ -21,6 +22,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "assets/liquid/correction-cases.json"
+CATALOG_ROOT = ROOT / "resources/liquid"
+MODEL_ID = "lfm25-encoder-350m-onnxruntime-v1"
 
 
 def sha(path):
@@ -109,10 +112,113 @@ class Worker:
 
 
 def native_command(args):
-    return [args.native_probe, "--cache-dir", args.native_cache, "--threads", str(args.threads), "--resources", args.native_resources]
+    return [args.native_probe, "--cache-dir", args.native_cache, "--threads", str(args.threads)]
+
+
+def regular_directory(path):
+    if not stat.S_ISDIR(path.lstat().st_mode):
+        raise ValueError(f"Liquid cache folder must be a regular directory: {path}")
+
+
+def read_catalog(path, limit):
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+        raise ValueError(f"Liquid catalog must be a bounded regular file: {path}")
+    return json.loads(path.read_bytes())
+
+
+def verified_asset(root, relative, entry):
+    path = root / relative
+    for parent in path.relative_to(root).parents:
+        regular_directory(root / parent)
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != entry["bytes"]:
+        raise ValueError(f"Liquid cache asset has the wrong size or type: {relative}")
+    actual = sha(path)
+    if actual != entry["sha256"]:
+        raise ValueError(f"Liquid cache asset failed SHA-256 verification: {relative}")
+    if path.name == "liquid-onnx" and not metadata.st_mode & 0o111:
+        raise ValueError(f"Liquid cache helper is not executable: {relative}")
+    return actual
+
+
+def verify_prepared_cache(directory, *, target, catalog_root=None):
+    """Reject first-use setup before starting any measured worker.
+
+    The production client may download missing or damaged assets. A comparison
+    must instead use a completely verified cache matching the current catalogs;
+    file verification and ordinary native model loading still occur in its first
+    measured request. Other-architecture assets are unnecessary.
+    """
+    catalog_root = CATALOG_ROOT if catalog_root is None else catalog_root
+    if target not in ("aarch64-apple-darwin", "x86_64-apple-darwin"):
+        raise ValueError(f"Unsupported native Liquid target: {target}")
+    directory = Path(directory)
+    if not directory.is_absolute():
+        raise ValueError("Use an absolute native Liquid cache directory")
+    try:
+        catalog_path = catalog_root / "manifest.json"
+        notices_path = catalog_root / "notices.json"
+        catalog = read_catalog(catalog_path, 64 * 1024)
+        notices = read_catalog(notices_path, 16 * 1024)
+        if catalog["format"] != 3 or catalog["model_id"] != MODEL_ID or notices["format"] != 1:
+            raise ValueError("Liquid comparison catalogs have an unsupported format or model")
+        root = directory / "onnxruntime" / MODEL_ID
+        for path in (directory, directory / "onnxruntime", root, root / "runtime",
+                     root / "runtime" / target, root / "licenses"):
+            regular_directory(path)
+        installed_path = root / "manifest.json"
+        if read_catalog(installed_path, 64 * 1024) != catalog:
+            raise ValueError("Liquid installed manifest differs from the current download catalog")
+        expected = {"liquid.onnx", "tokenizer.json", f"runtime/{target}/liquid-onnx",
+                    f"runtime/{target}/libonnxruntime.dylib"}
+        assets = {}
+        for entry in catalog["files"]:
+            architecture = entry.get("target")
+            if architecture is None or architecture == target:
+                relative = f"runtime/{target}/{entry['name']}" if architecture else entry["name"]
+                if relative not in expected or relative in assets:
+                    raise ValueError("Liquid catalog contains an unexpected or duplicate cache asset")
+                assets[relative] = verified_asset(root, relative, entry)
+        if assets.keys() != expected:
+            raise ValueError("Liquid catalog must contain the model and complete current-architecture runtime")
+        expected_notices = {"LICENSE.txt", "PROVENANCE.json", f"licenses/{target}.txt"}
+        notice_assets = {}
+        for entry in notices["files"]:
+            if entry.get("target") in (None, target):
+                if entry["name"] not in expected_notices or entry["name"] in notice_assets:
+                    raise ValueError("Liquid catalog contains an unexpected or duplicate notice")
+                notice_assets[entry["name"]] = verified_asset(root, entry["name"], entry)
+        if notice_assets.keys() != expected_notices:
+            raise ValueError("Liquid catalog must contain the model and current-architecture notices")
+        return dict(target=target, catalog_sha256=sha(catalog_path),
+                    notices_catalog_sha256=sha(notices_path),
+                    installed_manifest_sha256=sha(installed_path),
+                    asset_sha256=assets, notice_sha256=notice_assets)
+    except (OSError, KeyError, TypeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(
+            "Native Liquid cache is not prepared for comparison. Complete a first-use correction "
+            f"or redownload Liquid before benchmarking; setup is excluded from timing. {error}"
+        ) from error
+
+
+def verified_native_inputs(args):
+    # Query the compiled executable, not the Python driver's architecture: an
+    # Intel probe can run under Rosetta on an ARM host.
+    metadata = json.loads(subprocess.check_output(
+        [args.native_probe, "--metadata"], text=True, timeout=10))
+    if not isinstance(metadata, dict) or metadata.get("schema_version") != 1:
+        raise ValueError("Native probe returned unsupported metadata")
+    preflight = verify_prepared_cache(args.native_cache, target=metadata.get("target", ""))
+    for field in ("catalog_sha256", "notices_catalog_sha256"):
+        if metadata.get(field) != preflight[field]:
+            raise ValueError("Native probe has stale compiled Liquid catalogs; rebuild it before comparison")
+    preflight["probe_metadata"] = metadata
+    return preflight
 
 
 def verify(args):
+    preflight = verified_native_inputs(args)
     cases = json.loads(FIXTURES.read_text())["cases"]
     worker = Worker(native_command(args), args.output / "native-parity.stderr", native=True)
     rows = []
@@ -126,9 +232,10 @@ def verify(args):
     except BaseException:
         worker.abort()
         raise
-    report = dict(schema_version=1, driver_architecture=platform.machine(),
+    report = dict(schema_version=2, driver_architecture=platform.machine(),
                   native_binary_architecture=command_output(["file", "-b", args.native_probe]),
                   native_python_path_disabled=True,
+                  native_cache_preflight=preflight, native_network_setup_excluded=True,
                   cases=len(rows), matched=sum(r["match"] for r in rows),
                   mismatches=[r for r in rows if not r["match"]], max_rss_bytes=rss,
                   fixture_sha256=sha(FIXTURES), native_binary_sha256=sha(args.native_probe),
@@ -151,6 +258,7 @@ def require_correction(runtime, case, actual):
 def benchmark(args):
     if not args.python or not args.python_cache:
         raise ValueError("Benchmark needs --python and --python-cache")
+    preflight = verified_native_inputs(args)
     cases = json.loads(FIXTURES.read_text())["cases"]
     by_text = {case["text"]: case for case in cases}
     texts = ["She go to school every day.", "This is is the result.",
@@ -196,17 +304,14 @@ def benchmark(args):
     sources = ["src/liquid_runtime.rs", "src/liquid_process.rs", "src/liquid_text.rs", "build_support/liquid_manifest.rs",
                "build_support/payload_codec.rs", "Cargo.lock", "scripts/liquid-grammar-worker.py",
                "scripts/grammar_compare/models.py", "scripts/liquid-grammar-requirements.txt",
-               "scripts/liquid-native-probe/Cargo.lock", "scripts/compare-liquid-native.py"]
-    model_root = args.native_cache / "onnxruntime/lfm25-encoder-350m-onnxruntime-v1"
-    model_hashes = {name: sha(model_root / name) for name in ["manifest.json", "liquid.onnx", "tokenizer.json"]}
-    for asset in json.loads((model_root / "manifest.json").read_text())["files"]:
-        if asset.get("target") == ("aarch64-apple-darwin" if platform.machine() == "arm64" else "x86_64-apple-darwin"):
-            relative = str(Path("runtime") / asset["target"] / asset["name"])
-            model_hashes[relative] = sha(model_root / relative)
-    report = dict(schema_version=1, platform=platform.platform(), machine=platform.machine(),
+               "scripts/liquid-native-probe/Cargo.lock", "scripts/liquid-native-probe/src/main.rs",
+               "src/liquid_notices.rs", "src/liquid_resources.rs", "resources/liquid/manifest.json",
+               "resources/liquid/notices.json", "scripts/compare-liquid-native.py"]
+    report = dict(schema_version=2, platform=platform.platform(), machine=platform.machine(),
                   cpu=command_output(["sysctl", "-n", "machdep.cpu.brand_string"]) if sys.platform == "darwin" else None,
                   rustc=command_output(["rustc", "--version"]),
-                  native_binary_sha256=sha(args.native_probe), native_cache_sha256=model_hashes,
+                  native_binary_sha256=sha(args.native_probe),
+                  native_cache_preflight=preflight, native_network_setup_excluded=True,
                   native_binary_architecture=command_output(["file", "-b", args.native_probe]),
                   native_model_already_expanded=True,
                   python=command_output([args.python, "--version"]),
@@ -219,7 +324,7 @@ def benchmark(args):
                   source_sha256={p: sha(ROOT / p) for p in sources},
                   fixture_sha256=sha(FIXTURES), summary=summary, runs=runs,
                   caller_thread="One persistent JSONL caller thread per process; application job dispatch is not measured; the persistent native helper owns its inference thread",
-                  scope="Actual production native Client/tokenizer/ONNX Runtime helper vs pinned Python JSONL worker; serial CPU, request round trip. No application job dispatch, GUI, source extraction or Apply timing. Native runs have no Python on PATH.")
+                  scope="Verified prepared native cache: model, tokenizer, current-architecture runtime and notices; network setup excluded. Actual production native Client/tokenizer/ONNX Runtime helper vs pinned Python JSONL worker; serial CPU, request round trip. No application job dispatch, GUI, source extraction or Apply timing. Native runs have no Python on PATH.")
     (args.output / "benchmark.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
 
@@ -228,7 +333,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-probe", type=Path, required=True)
     parser.add_argument("--native-cache", type=Path, required=True)
-    parser.add_argument("--native-resources", type=Path, default=ROOT / "toolchain")
     parser.add_argument("--python", type=Path)
     parser.add_argument("--python-cache", type=Path)
     parser.add_argument("--output", type=Path, required=True)

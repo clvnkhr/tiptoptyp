@@ -3,14 +3,18 @@ mod cache;
 #[cfg(test)]
 mod perf;
 pub(crate) mod prose_rules;
+mod rules;
 mod spelling;
 pub(crate) use cache::Checker;
+use rules::DEFAULT_RULE_OVERRIDES;
+pub(crate) use rules::RuleOverrides;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Options<'a> {
     pub(crate) dictionary: &'a str,
     pub(crate) tex_prose_rules: Option<&'a prose_rules::TexProseRules>,
     pub(crate) ignore_capitalized_names: bool,
+    pub(crate) rule_overrides: Option<&'a RuleOverrides>,
 }
 
 /// Validate the editable dictionary before publishing it to background checks.
@@ -105,6 +109,16 @@ impl std::ops::DerefMut for NamedLint {
         &mut self.lint
     }
 }
+fn configured_linter(
+    dictionary: Arc<MergedDictionary>,
+    dialect: Dialect,
+    overrides: &RuleOverrides,
+) -> LintGroup {
+    let mut linter = LintGroup::new_curated(dictionary, dialect);
+    overrides.apply(&mut linter);
+    linter
+}
+
 fn named_lints(linter: &mut LintGroup, document: &Document) -> Vec<NamedLint> {
     linter
         .organized_lints(document)
@@ -179,7 +193,11 @@ fn check_uncached(
             &cache::Replay(&tokens),
             WRITING_DICTIONARY.as_ref(),
         );
-        let mut linter = LintGroup::new_curated(Arc::clone(&WRITING_DICTIONARY), dialect);
+        let mut linter = configured_linter(
+            Arc::clone(&WRITING_DICTIONARY),
+            dialect,
+            &DEFAULT_RULE_OVERRIDES,
+        );
         lints = named_lints(&mut linter, &document);
     }
     diagnostics(&characters, &tokens, lints, path, unicode, false)
@@ -385,12 +403,21 @@ fn writing_dialect(
     language: crate::settings::WritingLanguage,
 ) -> Option<Dialect> {
     use crate::settings::WritingLanguage;
-    use typst_syntax::ast::{Arg, Expr, SetRule};
     match language {
         WritingLanguage::British => return Some(Dialect::British),
         WritingLanguage::American => return Some(Dialect::American),
         WritingLanguage::Auto => {}
     }
+    let (lang, region) = document_language(source, kind);
+    resolve_dialect(language, lang.as_deref(), region.as_deref())
+}
+
+/// Literal unconditional top-level Typst text language; no dictionary or lint work.
+pub(crate) fn document_language(
+    source: &str,
+    kind: DocumentKind,
+) -> (Option<String>, Option<String>) {
+    use typst_syntax::ast::{Arg, Expr, SetRule};
     let mut lang = None;
     let mut region = None;
     if kind == DocumentKind::Typst {
@@ -409,15 +436,15 @@ fn writing_dialect(
                     && let Expr::Str(value) = named.expr()
                 {
                     match named.name().as_str() {
-                        "lang" => lang = Some(value.get().to_ascii_lowercase()),
-                        "region" => region = Some(value.get().to_ascii_lowercase()),
+                        "lang" => lang = Some(value.get().to_ascii_lowercase().to_string()),
+                        "region" => region = Some(value.get().to_ascii_lowercase().to_string()),
                         _ => {}
                     }
                 }
             }
         }
     }
-    resolve_dialect(language, lang.as_deref(), region.as_deref())
+    (lang, region)
 }
 
 fn resolve_dialect(

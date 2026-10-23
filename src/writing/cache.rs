@@ -35,6 +35,7 @@ pub(crate) struct Checker {
     dictionary_source: String,
     personal_words: Vec<String>,
     dictionary: Option<Arc<MergedDictionary>>,
+    rule_overrides: Option<RuleOverrides>,
     max_personal_compound_scalars: usize,
     #[cfg(test)]
     stats: (usize, usize),
@@ -159,6 +160,12 @@ impl Checker {
             self.context = context;
         }
         if let Some(dialect) = dialect {
+            let rule_overrides = options.rule_overrides.unwrap_or(&DEFAULT_RULE_OVERRIDES);
+            if self.rule_overrides.as_ref() != Some(rule_overrides) {
+                self.blocks.clear();
+                self.bytes = 0;
+                self.rule_overrides = Some(rule_overrides.clone());
+            }
             self.configure_dictionary(options.dictionary);
             let dictionary = Arc::clone(self.dictionary.as_ref().unwrap());
             tokens = if let Some(parsed) = parsed {
@@ -226,7 +233,7 @@ impl Checker {
                         dictionary.as_ref(),
                     );
                     let linter = linter.get_or_insert_with(|| {
-                        LintGroup::new_curated(Arc::clone(&dictionary), dialect)
+                        configured_linter(Arc::clone(&dictionary), dialect, rule_overrides)
                     });
                     let result = named_lints(linter, &document);
                     let bytes = std::mem::size_of_val(text)
@@ -722,6 +729,71 @@ mod tests {
         assert!(checker.bytes <= MAX_CACHE_BYTES);
         check(&mut checker, "This is the the result.", DocumentKind::Tex);
         assert!(checker.blocks.len() <= MAX_BLOCKS);
+    }
+
+    #[test]
+    fn quiet_profile_retains_grammar_and_rule_edits_invalidate_only_cached_lints() {
+        let source = "This is a short sentence.  This is another short sentence.\n\nWe use an uniform bound.\n\nThis is the the result.\n\nThis sentence is misspelld.";
+        let has_rule = |diagnostics: &[Diagnostic], rule: &str| {
+            diagnostics
+                .iter()
+                .filter_map(|diagnostic| diagnostic.correction.as_ref())
+                .any(|correction| correction.rule.as_deref() == Some(rule))
+        };
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let mut checker = Checker::default();
+            let quiet = configured(&mut checker, source, kind, Options::default());
+            for rule in ["AnA", "RepeatedWords", "SpellCheck"] {
+                assert!(
+                    has_rule(&quiet, rule),
+                    "{kind:?}: {rule} must remain active"
+                );
+            }
+            assert!(!has_rule(&quiet, "NoFrenchSpaces"));
+            let hit = configured(&mut checker, source, kind, Options::default());
+            assert_eq!(hit, quiet);
+            assert!(checker.cache_stats().0 > 0);
+            assert_eq!(checker.cache_stats().1, 0);
+            let dictionary = Arc::clone(checker.dictionary.as_ref().unwrap());
+            let mut value = serde_json::to_value(RuleOverrides::default()).unwrap();
+            value["NoFrenchSpaces"] = serde_json::json!(true);
+            let custom = serde_json::from_value::<RuleOverrides>(value).unwrap();
+            let options = Options {
+                rule_overrides: Some(&custom),
+                ..Options::default()
+            };
+            let noisy = configured(&mut checker, source, kind, options);
+            assert!(
+                has_rule(&noisy, "NoFrenchSpaces"),
+                "explicit user override must run the real rule"
+            );
+            assert_eq!(
+                checker.cache_stats().0,
+                0,
+                "old profile cannot reuse paragraph lints"
+            );
+            assert!(checker.cache_stats().1 > 0);
+            assert!(
+                Arc::ptr_eq(&dictionary, checker.dictionary.as_ref().unwrap()),
+                "rule edits must not rebuild the dictionary"
+            );
+            assert_eq!(configured(&mut checker, source, kind, options), noisy);
+            assert_eq!(
+                checker.cache_stats().1,
+                0,
+                "unchanged overrides must retain cache hits"
+            );
+            assert_eq!(
+                configured(&mut checker, source, kind, Options::default()),
+                quiet
+            );
+            assert_eq!(
+                checker.cache_stats().0,
+                0,
+                "restoring the quiet profile invalidates noisy cached lints"
+            );
+            assert!(checker.cache_stats().1 > 0);
+        }
     }
 
     fn configured(

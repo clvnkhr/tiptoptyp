@@ -8,6 +8,36 @@ HARPER_TYPOS = "This sentence contains a misspelld word.\nThis is the the simple
 HARPER_FORMATTED_REPETITION = "This is the #emph[the] result.\n"
 
 
+def native_button_ready(receipt, title, require_enabled=True):
+    """Require one complete native button observation; never guess from sleeps."""
+    return (isinstance(receipt, dict) and receipt.get('requested_title') == title
+            and type(receipt.get('count')) is int and receipt['count'] == 1
+            and receipt.get('complete') is True and receipt.get('role') == 'AXButton'
+            and receipt.get('title') == title and type(receipt.get('enabled')) is bool
+            and (receipt['enabled'] or not require_enabled))
+
+
+def native_path_entry_ready(receipt):
+    """macOS 14 exposes Go to Folder as GoToWindow, without a Go button."""
+    if not isinstance(receipt, dict) or receipt.get('complete') is not True:
+        return False
+    window = receipt.get('focused_window')
+    if (not isinstance(window, dict) or window.get('role') != 'AXSheet'
+            or window.get('identifier') != 'GoToWindow'):
+        return False
+    ancestry = receipt.get('focused_ancestry')
+    if not isinstance(ancestry, list):
+        return False
+    # Some native Go-to-Folder sheets expose no focused UI element at all.
+    # Their exact focused-window identity proves the phase. When focus ancestry
+    # is exposed, insist it belongs to that sheet and starts at an input field.
+    return not ancestry or (
+        isinstance(ancestry[0], dict)
+        and ancestry[0].get('role') in ('AXTextField', 'AXComboBox', 'AXTextArea')
+        and any(isinstance(parent, dict) and parent.get('identifier') == 'GoToWindow'
+                and parent.get('role') == 'AXSheet' for parent in ancestry))
+
+
 def harper_fresh(document, source, path, locations):
     """Require the completed writing result, not merely an idle old result."""
     from desktop_ui_journeys import fingerprint
@@ -26,6 +56,37 @@ def harper_settings_applied(document, dictionary, ignore_names):
     from desktop_ui_journeys import fingerprint
     return document.get("harper_dictionary_fingerprint") == fingerprint(dictionary) \
         and document.get("harper_ignore_capitalized_names") is ignore_names
+
+
+
+def harper_rule_result(document, source, path, locations, enabled):
+    """An applied rule must produce fresh results while preserving real findings."""
+    from desktop_ui_journeys import fingerprint
+    rules = document.get("writing_rules")
+    overrides = document.get("harper_rule_overrides")
+    actual = document.get("writing_locations")
+    return (document.get("path") == str(path)
+            and document.get("source_fingerprint") == fingerprint(source)
+            and document.get("writing_current") is True
+            and document.get("writing_pending") is False
+            and isinstance(overrides, dict)
+            and overrides.get("NoFrenchSpaces") is enabled
+            and isinstance(rules, list) and rules.count("NoFrenchSpaces") == int(enabled)
+            and document.get("writing_count") == len(locations) + int(enabled)
+            and isinstance(actual, list)
+            and actual == locations + ([[5, 26]] if enabled else [])
+            and document.get("writing_paths") == [str(path)] * len(actual))
+
+
+
+def quiet_badness_result(document):
+    """The visible result must keep correctness findings and omit brace-style advice."""
+    current = document.get("tex_diagnostics_current")
+    codes = document.get("badness_visible_codes")
+    return (isinstance(current, list) and len(current) >= 2 and current[1] is True
+            and isinstance(codes, list) and bool(codes)
+            and all(isinstance(code, str) and code.strip('"') != "redundant-script-braces"
+                    for code in codes))
 
 
 def assert_harper_stale(document, previous):
@@ -111,18 +172,37 @@ class TexJourneys:
         self.close_settings()
         self.click("editor.source")
 
-    def open_harper_fixture(self, path):
-        """Select the complete real file path in macOS's native Open panel."""
+    def wait_native_button(self, title, require_enabled=True):
         import time
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            receipt = self.native("ax-button-title", title)
+            if native_button_ready(receipt, title, require_enabled):
+                return
+            time.sleep(.05)
+        raise AssertionError("Native dialog button did not become ready: " + title)
+
+    def wait_native_path_entry(self):
+        import time
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            if native_path_entry_ready(self.native("ax-dialog-state")):
+                return
+            time.sleep(.05)
+        raise AssertionError("Native Go-to-Folder path entry did not become ready")
+
+    def open_harper_fixture(self, path):
+        """Select the complete real path only after each native dialog is ready."""
         self.focus_document_window()
         self.key(31)
-        time.sleep(0.8)
+        # No selected file is required yet; the Open button may be disabled.
+        self.wait_native_button("Open", require_enabled=False)
         self.key(5, "cmd+shift")
-        time.sleep(0.3)
+        self.wait_native_path_entry()
         self.key(0)
         self.native("text", str(path))
         self.key(36, "none")
-        time.sleep(0.5)
+        self.wait_native_button("Open")
         self.native("ax-press-title", "Open")
         self.wait("named Harper fixture opened", lambda d: d["path"] == str(path), timeout=15)
         self.click("editor.source")
@@ -201,7 +281,8 @@ class TexJourneys:
         source = ("We inspect qzorthal today.\n"
                   "We inspect QzorNim today.\n"
                   "This sentence contains a misspelld word.\n"
-                  "This is the the simple result.\n")
+                  "This is the the simple result.\n"
+                  "This is a short sentence.  This is another short sentence.\n")
         path = self.directory / "harper-settings.typ"
         path.write_text(source)
         self.open_harper_fixture(path)
@@ -211,7 +292,7 @@ class TexJourneys:
 
         def dictionary_edit(value, ignore_names, expected):
             self.settings()
-            self.setting_section("personal dictionary", "Personal dictionary")
+            self.setting_section("Harper dictionary", "Harper dictionary")
             self.click("settings.harper.dictionary")
             self.wait_target("settings.harper.dictionary", focused=True)
             self.key(0)
@@ -231,7 +312,7 @@ class TexJourneys:
 
         def toggle_names(value, dictionary, expected):
             self.settings()
-            self.setting_section("capitalized names", "Ignore capitalized names")
+            self.setting_section("capitalized names", "Harper: ignore capitalized names")
             self.click("settings.harper.ignore_names")
             self.wait("capitalized name preference applies", lambda d:
                       harper_settings_applied(d, dictionary, value)
@@ -247,6 +328,13 @@ class TexJourneys:
         # removing the entry must immediately restore that word's diagnostic.
         dictionary_edit("", True, [locations[0], *locations[2:]])
         toggle_names(False, "", locations)
+        self.tex_settings([('"NoFrenchSpaces": false', '"NoFrenchSpaces": true')])
+        self.wait("enabling a style rule refreshes results without dropping real errors", lambda d:
+                  harper_rule_result(d, source, path, locations, True), timeout=30)
+        self.tex_settings([('"NoFrenchSpaces": true', '"NoFrenchSpaces": false')])
+        self.wait("restoring quiet defaults removes only the style finding", lambda d:
+                  harper_rule_result(d, source, path, locations, False), timeout=30)
+        self.stable_state(lambda d: harper_rule_result(d, source, path, locations, False))
         if path.read_text() != source:
             raise AssertionError("Harper settings altered the fixture on disk")
         self.record("harper.settings", source_fingerprint=fingerprint(source),
@@ -346,13 +434,13 @@ class TexJourneys:
                            ('"auto_save": true', '"auto_save": false'),
                            ('"build_enabled": true', '"build_enabled": false')])
         self.wait("real TeX providers ready", lambda d: d["texlab_ready"] and d["badness_ready"], timeout=30)
-        body = "This is is a sentnce.\n\\[ nonwordxyz + nonwordxyz \\]\n\\[ \\text{This is is readable.} \\]\n$x^{2}$\n"
+        body = "This is is a sentnce.\n\\[ nonwordxyz + nonwordxyz \\]\n\\[ \\text{This is is readable.} \\]\n$x^{2}$\n\\ref{missing-fixture-label}\n"
         text = TEX_SOURCE.replace("A sample with $\\alpha + \\alpha$.\n", body)
         self.key(0)
         self.paste_source(text)
         self.key(23)
         self.wait("TeX Problems and Harper refresh", lambda d: d["panel"] == "Problems" and not d["writing_pending"] and d["writing_count"] >= 2, timeout=30)
-        self.wait("Badness publishes a real TeX lint", lambda d: d["tex_diagnostics_current"][1] and d["tex_diagnostic_counts"][1] > 0, timeout=30)
+        self.wait("Badness keeps a real reference problem and hides brace-style advice", quiet_badness_result, timeout=30)
         before = self.snapshot()["document"]
         if 4 in before["writing_lines"]:
             raise AssertionError("Harper incorrectly checks TeX display-math identifiers")
@@ -436,13 +524,7 @@ class TexJourneys:
             raise AssertionError("TeX manual Save lost the last edit")
         self.key(13)
         self.wait("saved TeX tab closes without a discard prompt", lambda d: d["path"] != str(destination) and not d["modal_open"])
-        self.key(31)
-        time.sleep(0.8)
-        self.native("ax-press-description", "search")
-        self.native("text", destination.name)
-        time.sleep(0.8)
-        self.native("ax-press-title", "Open")
-        self.wait("saved TeX file reopens", lambda d: d["path"] == str(destination), timeout=15)
+        self.open_harper_fixture(destination)
         self.source_is(edited)
         # TeX uses its single engine gear for both building and saving a PDF.
         # Pin this tab so an aggregate run cannot build a previous Typst entry.

@@ -60,6 +60,9 @@ pub(super) enum SettingsAction {
     ShowPackages,
     RetryTinymist,
     RestartLtex,
+    RedownloadLtex,
+    DownloadLiquid,
+    CancelResourceRepair,
     ClearBiberCache,
     Update(Box<AppSettings>),
 }
@@ -70,6 +73,9 @@ pub(super) struct SettingsStatus {
     pub(super) preview_failure: Option<String>,
     pub(super) requested_backend: PreviewPreference,
     pub(super) interactive_active: bool,
+    pub(super) resource_repair_component: Option<crate::resource_repair::Component>,
+    pub(super) resource_repair_busy: bool,
+    pub(super) resource_repair_status: Option<String>,
     pub(super) capabilities: CapabilitySnapshot,
 }
 
@@ -1031,102 +1037,176 @@ impl SettingsPanel<'_> {
                     );
                 });
             }
-            SettingsSection::Writing => {
+            SettingsSection::Grammar => {
+                let reveal_harper = matches!(
+                    settings_scroll_target,
+                    Some(
+                        SettingsTarget::EnglishGrammar
+                            | SettingsTarget::HarperRules
+                            | SettingsTarget::HarperDictionary
+                            | SettingsTarget::HarperCapitalizedNames
+                    )
+                );
                 settings_target_anchor(
                     ui,
                     SettingsTarget::EnglishGrammar,
                     &mut settings_scroll_target,
                 );
-                ui.checkbox(&mut edited.english_grammar, SettingsTarget::EnglishGrammar.label()).on_hover_text("Offline checks after a short typing pause. Documents up to 2 MB; suggestions appear in Problems and inline diagnostics.");
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Writing language");
-                    for language in crate::settings::WritingLanguage::ALL {
-                        ui.selectable_value(&mut edited.writing_language, language, language.label());
-                    }
-                }).response.on_hover_text("Auto reads top-level #set text(lang: \"en\", region: \"us\") in Typst. Use region: \"gb\" for UK English. lang: \"uk\" means Ukrainian. Other languages are not checked by Harper. Computed/imported settings use the UK fallback.");
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::HarperCapitalizedNames,
-                    &mut settings_scroll_target,
-                );
-                let names = ui.checkbox(
-                    &mut edited.harper_ignore_capitalized_names,
-                    SettingsTarget::HarperCapitalizedNames.label(),
+                let harper = ui.checkbox(
+                    &mut edited.english_grammar,
+                    SettingsTarget::EnglishGrammar.label(),
                 );
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("settings.harper.ignore_names", &names);
+                crate::desktop_test::observe("settings.harper.enabled", &harper);
                 #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
-                let _ = names;
-                ui.label(
-                    RichText::new("Leray, MacDonald — spelling only; grammar checks stay on.")
-                        .weak(),
-                );
-                settings_target_anchor(
-                    ui,
-                    SettingsTarget::HarperDictionary,
-                    &mut settings_scroll_target,
-                );
-                let label =
-                    ui.label(RichText::new(SettingsTarget::HarperDictionary.label()).strong());
-                ui.label(
-                    RichText::new(
-                        "One word per line. Built-in English and mathematics words stay included.",
-                    )
-                    .weak(),
-                );
-                let mut dictionary = self
-                    .state
-                    .harper_dictionary_draft
-                    .take()
-                    .filter(|(base, _)| base == &edited.harper_dictionary)
-                    .map(|(_, text)| text)
-                    .unwrap_or_else(|| edited.harper_dictionary.clone());
-                let dictionary_response = egui::ScrollArea::vertical()
-                    .id_salt("harper-personal-dictionary-scroll")
-                    .max_height(140.0)
+                let _ = harper;
+                let harper_setup = egui::CollapsingHeader::new("Harper configuration")
+                    .open(reveal_harper.then_some(true))
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut dictionary)
-                                .id_salt("harper-personal-dictionary")
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY)
-                                .desired_rows(6)
-                                .char_limit(65_536)
-                                .hint_text("One word per line"),
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Harper language");
+                        for language in crate::settings::WritingLanguage::ALL {
+                            ui.selectable_value(&mut edited.writing_language, language, language.label());
+                        }
+                    });
+                    settings_target_anchor(
+                        ui,
+                        SettingsTarget::HarperCapitalizedNames,
+                        &mut settings_scroll_target,
+                    );
+                    let names = ui.checkbox(
+                        &mut edited.harper_ignore_capitalized_names,
+                        SettingsTarget::HarperCapitalizedNames.label(),
+                    );
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.harper.ignore_names", &names);
+                    #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+                    let _ = names;
+                    ui.label(
+                        RichText::new("Leray, MacDonald — spelling only; grammar checks stay on.")
+                            .weak(),
+                    );
+                    settings_target_anchor(
+                        ui,
+                        SettingsTarget::HarperDictionary,
+                        &mut settings_scroll_target,
+                    );
+                    let label =
+                        ui.label(RichText::new(SettingsTarget::HarperDictionary.label()).strong());
+                    ui.label(
+                        RichText::new(
+                            "One word per line. Built-in English and mathematics words stay included.",
                         )
-                        .labelled_by(label.id)
-                    })
-                    .inner;
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                crate::desktop_test::observe("settings.harper.dictionary", &dictionary_response);
-                #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
-                let _ = dictionary_response;
-                match crate::writing::validate_dictionary(&dictionary) {
-                    Ok(()) => edited.harper_dictionary = dictionary,
-                    Err(error) => {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                        self.state.harper_dictionary_draft =
-                            Some((edited.harper_dictionary.clone(), dictionary));
+                        .weak(),
+                    );
+                    let mut dictionary = self
+                        .state
+                        .harper_dictionary_draft
+                        .take()
+                        .filter(|(base, _)| base == &edited.harper_dictionary)
+                        .map(|(_, text)| text)
+                        .unwrap_or_else(|| edited.harper_dictionary.clone());
+                    let dictionary_response = egui::ScrollArea::vertical()
+                        .id_salt("harper-personal-dictionary-scroll")
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut dictionary)
+                                    .id_salt("harper-personal-dictionary")
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY)
+                                    .desired_rows(6)
+                                    .char_limit(65_536)
+                                    .hint_text("One word per line"),
+                            )
+                            .labelled_by(label.id)
+                        })
+                        .inner;
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.harper.dictionary", &dictionary_response);
+                    #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+                    let _ = dictionary_response;
+                    match crate::writing::validate_dictionary(&dictionary) {
+                        Ok(()) => edited.harper_dictionary = dictionary,
+                        Err(error) => {
+                            ui.colored_label(ui.visuals().error_fg_color, error);
+                            self.state.harper_dictionary_draft =
+                                Some((edited.harper_dictionary.clone(), dictionary));
+                        }
                     }
-                }
+                    settings_target_anchor(
+                        ui,
+                        SettingsTarget::HarperRules,
+                        &mut settings_scroll_target,
+                    );
+                    super::settings_writing::harper_rules(ui, edited, self.settings);
+                    });
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe(
+                    "settings.harper.setup",
+                    &harper_setup.header_response,
+                );
+                #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+                let _ = harper_setup;
+                settings_target_anchor(ui, SettingsTarget::Ltex, &mut settings_scroll_target);
+                super::settings_writing::ltex(
+                    ui,
+                    edited,
+                    self.settings,
+                    self.actions,
+                    self.status.resource_repair_busy,
+                    self.status.resource_repair_component
+                        == Some(crate::resource_repair::Component::Ltex),
+                    self.status.resource_repair_status.as_deref(),
+                );
                 settings_target_anchor(
                     ui,
                     SettingsTarget::TexProseRules,
                     &mut settings_scroll_target,
                 );
                 super::settings_writing::prose_rules(ui, edited, self.settings);
-                settings_target_anchor(ui, SettingsTarget::Ltex, &mut settings_scroll_target);
-                if super::settings_writing::ltex(ui, edited, self.settings) {
-                    self.actions.push(SettingsAction::RestartLtex);
-                }
                 settings_target_anchor(
                     ui,
                     SettingsTarget::LiquidGrammar,
                     &mut settings_scroll_target,
                 );
                 ui.separator();
-                ui.label(RichText::new(SettingsTarget::LiquidGrammar.label()).strong());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(SettingsTarget::LiquidGrammar.label()).strong());
+                    let download = ui.add_enabled(
+                        !self.status.resource_repair_busy,
+                        egui::Button::new("Download Liquid"),
+                    );
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.liquid.download", &download);
+                    if download.clicked() {
+                        self.actions.push(SettingsAction::DownloadLiquid);
+                    }
+                    let repair_active = self.status.resource_repair_component
+                        == Some(crate::resource_repair::Component::Liquid);
+                    if self.status.resource_repair_busy && repair_active {
+                        let cancel = ui.small_button("Cancel");
+                        cancel.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                "Cancel Liquid download",
+                            )
+                        });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe("settings.liquid.cancel_download", &cancel);
+                        if cancel.clicked() {
+                            self.actions.push(SettingsAction::CancelResourceRepair);
+                        }
+                    }
+                    if repair_active
+                        && let Some(status) = self.status.resource_repair_status.as_deref()
+                    {
+                        ui.weak(status);
+                    }
+                });
                 ui.label("Select text, right-click → Check selection with Liquid. Review changes before applying.");
+                ui.weak("Downloads automatically on first use. Later checks work offline.");
                 settings_control_row(ui, "Model folder", |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut edited.liquid_cache_directory)
@@ -1144,6 +1224,8 @@ impl SettingsPanel<'_> {
                 ) {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
+            }
+            SettingsSection::Writing => {
                 settings_target_anchor(
                     ui,
                     SettingsTarget::Handwriting,
@@ -2180,6 +2262,10 @@ fn show_tex_preferences(
         ui.checkbox(&mut settings.only_cached, "Use cached TeX packages only");
     });
     ui.checkbox(&mut settings.synctex, "SyncTeX source/preview navigation");
+    ui.checkbox(
+        &mut settings.show_underfull_box_warnings,
+        "Show underfull box warnings",
+    );
     ui.checkbox(&mut settings.texlab_enabled, "TexLab editor intelligence");
     ui.indent("texlab-features", |ui| {
         ui.checkbox(&mut settings.completion, "TeX completions");
@@ -2249,6 +2335,7 @@ fn configuration_editor(
     ignored_codes: Option<&mut Vec<String>>,
 ) {
     use crate::toolchain::ToolKind;
+    let mut ignored_codes = ignored_codes;
     let (example, docs) = match kind {
         ToolKind::Tinymist => (
             r#"{"formatterPrintWidth":100,"typstExtraArgs":["--input=mode=draft"]}"#,
@@ -2272,7 +2359,7 @@ fn configuration_editor(
         if kind == ToolKind::Tinymist {
             ui.weak("Use flat keys. typstExtraArgs accepts --input=KEY=VALUE options; the app controls the entry and preview connection.");
         }
-        if let Some(codes) = ignored_codes {
+        if let Some(codes) = ignored_codes.as_deref_mut() {
             ignored_codes_editor(ui, codes);
         }
         ui.weak(
@@ -2311,6 +2398,14 @@ fn configuration_editor(
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
         if ui.button("Reset configuration").clicked() {
+            if let Some(codes) = ignored_codes {
+                let defaults = crate::tex::settings::TexSettings::default();
+                *codes = match kind {
+                    ToolKind::Badness => defaults.badness_ignored_codes,
+                    ToolKind::Texlab => defaults.texlab_ignored_codes,
+                    _ => Vec::new(),
+                };
+            }
             *value = match kind {
                 ToolKind::Tinymist => crate::tinymist::default_server_configuration(),
                 ToolKind::Texlab => {
@@ -2676,6 +2771,66 @@ mod tests {
     }
 
     #[test]
+    fn provider_reset_restores_quiet_defaults_and_only_its_ignored_codes() {
+        use crate::{tex::settings::TexSettings, toolchain::ToolKind};
+        for kind in [ToolKind::Badness, ToolKind::Texlab] {
+            let mut initial = AppSettings::default();
+            initial.tex.badness_ignored_codes = vec!["custom-badness".into()];
+            initial.tex.texlab_ignored_codes = vec!["custom-texlab".into()];
+            initial.tex.badness_configuration = serde_json::json!({"lineWidth":99});
+            initial.tex.texlab_configuration =
+                serde_json::json!({"texlab":{"diagnosticsDelay":999}});
+            let mut expected = initial.clone();
+            let defaults = TexSettings::default();
+            match kind {
+                ToolKind::Badness => {
+                    expected.tex.badness_configuration = defaults.badness_configuration;
+                    expected.tex.badness_ignored_codes = defaults.badness_ignored_codes;
+                }
+                ToolKind::Texlab => {
+                    expected.tex.texlab_configuration = defaults.texlab_configuration;
+                    expected.tex.texlab_ignored_codes = defaults.texlab_ignored_codes;
+                }
+                _ => unreachable!(),
+            }
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(1000.0, 900.0))
+                .build_ui_state(
+                    move |ui, settings: &mut AppSettings| {
+                        let original = settings.clone();
+                        let (configuration, codes) = match kind {
+                            ToolKind::Badness => (
+                                &mut settings.tex.badness_configuration,
+                                &mut settings.tex.badness_ignored_codes,
+                            ),
+                            ToolKind::Texlab => (
+                                &mut settings.tex.texlab_configuration,
+                                &mut settings.tex.texlab_ignored_codes,
+                            ),
+                            _ => unreachable!(),
+                        };
+                        configuration_editor(ui, kind, configuration, &original, Some(codes));
+                    },
+                    initial,
+                );
+            theme::configure_test_fonts(&harness.ctx);
+            harness.run();
+            harness
+                .get_by_label(&format!("{} configuration (JSON)", kind.label()))
+                .click();
+            harness.run();
+            harness.get_by_label("Reset configuration").click();
+            harness.run();
+            assert_eq!(
+                *harness.state(),
+                expected,
+                "{} reset must remain provider-specific",
+                kind.label()
+            );
+        }
+    }
+
+    #[test]
     fn ignored_diagnostic_codes_keep_the_comma_while_typing() {
         use crate::tex::settings::TexSettings;
         use egui_kittest::kittest::by;
@@ -2692,6 +2847,7 @@ mod tests {
             .get(by().role(egui::accesskit::Role::TextInput))
             .focus();
         harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         harness
             .get(by().role(egui::accesskit::Role::TextInput))
             .type_text("first,");
@@ -2701,6 +2857,39 @@ mod tests {
             .type_text(" second");
         harness.run();
         assert_eq!(harness.state().badness_ignored_codes, ["first", "second"]);
+    }
+
+    #[test]
+    fn underfull_box_preference_is_editable_and_independent_for_every_compiler() {
+        use crate::tex::settings::{BuildEngine, TexSettings};
+        let tools = crate::tex::tools::TexTools::resolve(&TexSettings::default());
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(900.0, 1400.0))
+            .build_ui_state(
+                move |ui, settings: &mut TexSettings| {
+                    show_tex_preferences(ui, settings, &tools, &AppSettings::default());
+                },
+                TexSettings::default(),
+            );
+        harness.run();
+        assert!(!harness.state().show_underfull_box_warnings);
+        for engine in BuildEngine::ALL {
+            harness.get_by_label(engine.label()).click();
+            harness.run();
+            let original = harness.state().clone();
+            harness.get_by_label("Show underfull box warnings").click();
+            harness.run();
+            let mut expected = original.clone();
+            expected.show_underfull_box_warnings = true;
+            assert_eq!(*harness.state(), expected);
+            assert_eq!(
+                serde_json::to_value(harness.state()).unwrap()["show_underfull_box_warnings"],
+                true
+            );
+            harness.get_by_label("Show underfull box warnings").click();
+            harness.run();
+            assert_eq!(*harness.state(), original);
+        }
     }
 
     #[test]
@@ -3048,6 +3237,9 @@ mod tests {
                             preview_failure: None,
                             requested_backend: PreviewPreference::Interactive,
                             interactive_active: false,
+                            resource_repair_component: None,
+                            resource_repair_busy: false,
+                            resource_repair_status: None,
                             capabilities: CapabilitySnapshot {
                                 editing: ServiceState::Ready("ready".into()),
                                 lsp: ServiceState::Failed("failure".into()),

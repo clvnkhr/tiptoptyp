@@ -276,6 +276,7 @@ cat "$source" >> "$output/${name%.tex}.pdf"
             executable: program,
             only_cached: true,
             synctex: true,
+            show_underfull_box_warnings: false,
             system: None,
         });
         let original = request.original.clone();

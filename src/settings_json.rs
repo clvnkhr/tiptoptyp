@@ -620,7 +620,7 @@ mod tests {
             ("/tinymist", "lsp"),
             (
                 "/tex/tectonic",
-                "-X compile --untrusted --keep-logs --keep-intermediates",
+                "-X --chatter minimal --color never compile --untrusted --keep-logs --keep-intermediates",
             ),
             ("/tex/texlab", ""),
             ("/tex/badness", "lsp"),

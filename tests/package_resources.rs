@@ -104,11 +104,16 @@ fn packages_ship_compressed_payload_trees_without_duplicate_raw_binaries_or_asse
         for (source, target) in [
             ("toolchain/payloads", "toolchain"),
             ("toolchain/shared-assets", "assets"),
-            ("toolchain/liquid", "liquid"),
+            ("toolchain/ltex", "ltex"),
             ("toolchain/pdfium-notices", "pdfium"),
         ] {
             assert_eq!(resources.get(source).map(String::as_str), Some(target));
         }
+        assert!(
+            !resources.contains_key("toolchain/liquid")
+                && !resources.values().any(|target| target == "liquid"),
+            "Liquid's model and native runtimes must be installed on demand"
+        );
         for source in resources.keys() {
             assert!(
                 !source.starts_with("toolchain/bin")

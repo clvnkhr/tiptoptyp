@@ -16,22 +16,22 @@ changes highlighted using the Git diff style chosen in Settings (Unified or Side
 by Side). **Apply** makes one undoable edit; **Cancel** leaves the source alone. Only the captured selection
 is eligible, and editing/replacing its document invalidates the review. The
 source-aware projection protects equations, commands, links and omitted markup;
-a proposal crossing an ambiguous boundary is rejected as a whole. Writing settings
+a proposal crossing an ambiguous boundary is rejected as a whole. Grammar & spelling settings
 choose a protected placeholder or separate fragments around math/code/links, and
 whether recognized formatting bodies are checked. The review can disclose the
 exact submitted text; see [input settings](settings-customization.md#optional-liquid-grammar).
 
-The first check automatically verifies and expands the Liquid model and native
-ONNX Runtime helper already bundled with the app. There is no install button,
-Python environment, external grammar service or model download. One shared ONNX
-graph/tokenizer serves both architectures; each uses its matching native CPU
-runtime. Liquid needs macOS 14 on Apple Silicon and macOS 12 on Intel; the editor
-itself keeps its existing macOS minimum. Writing settings expose the optional
+Liquid is an optional download, excluded from the default app bundle. The first
+check downloads and verifies its shared ONNX model/tokenizer and only the native
+ONNX Runtime helper/library for the current Mac. Grammar & spelling also has **Download
+Liquid** to download or repair these files explicitly. No Python environment or
+external grammar service is used; selected text stays on this Mac. Liquid needs macOS 14 on Apple Silicon and macOS 12 on Intel; the editor
+itself keeps its existing macOS minimum. Grammar & spelling settings expose the optional
 model/cache directory and 1–8 CPU threads. An empty directory setting uses the
 persistent app-data folder. The model loads only for an explicit selected-text
 request, never at app startup.
 
-Preparation and correction are local and offline. All document windows share one lazy
+After setup, correction is local and offline. All document windows share one lazy
 native model worker and serialize setup/checks. Compressed and expanded model
 files have SHA256 checksums, with integrity checked before loading. Background
 work is tracked through shutdown, and the loaded model remains resident for
@@ -337,8 +337,8 @@ not remove the remaining extraction and math-text coverage gaps above.
 
 The editor runs Liquid's tagger in a persistent, private native **ONNX Runtime**
 helper. This is Microsoft's C/C++ engine, distinct from the earlier Tract
-experiment. The portable graph and tokenizer are bundled once with two thin CPU
-runtimes: ONNX Runtime 1.31.0 for Apple Silicon (macOS 14+) and 1.19.2 for Intel
+experiment. The optional distribution contains one portable graph/tokenizer and
+two thin CPU runtimes; an installation fetches only its own architecture: ONNX Runtime 1.31.0 for Apple Silicon (macOS 14+) and 1.19.2 for Intel
 (the library itself needs macOS 11; our helper keeps the app's macOS 12 floor).
 Intel 1.20.1 requires macOS 13.3 and 1.23.2 requires 13.4, so those newer Intel
 binaries would raise the existing deployment requirement. No Python interpreter,
@@ -395,10 +395,30 @@ checksum-verified archives already in the developer work directory.
 `prepare-liquid` verifies the raw model/tokenizer, exact canonical 268-input /
 427-pass parity and native provenance before compressing the payload.
 `stage-liquid` checks compressed and expanded files and licences before staging
-under `toolchain/liquid`. The strict raw tree has ten files; build-only export
+under `toolchain/liquid` for the separate optional download release. Default app
+packaging does not require, stage or include this generated tree. The strict raw
+tree has ten files; build-only export
 and parity receipts stay in a sibling `OUTPUT-evidence` folder. These generated
 payloads are ignored by Git. Rebuilding from prepared assets requires neither
 Python nor model downloads. See the scripts' `--help` for the same commands.
+
+The macOS installer and default packaging no longer read an installed app or
+prepared Liquid model. To prepare a separate optional distribution from an
+existing verified payload, `cargo xtask ensure-liquid --source PATH` remains an
+explicit developer tool; it is never invoked by the app installer. Existing
+prepared inputs are validated and preserved rather than silently replaced.
+
+`resources/liquid/manifest.json` is the small compiled trust catalog: compressed
+and expanded file sizes and SHA256 hashes bind the exact reviewed export and
+native runtimes. Download URLs use the published
+[`liquid-onnxruntime-v1` release](https://github.com/clvnkhr/tiptoptyp/releases/tag/liquid-onnxruntime-v1),
+whose public assets were verified on 2026-10-21. It is marked as a prerelease so
+model resources do not replace the application release at `/releases/latest`.
+The local `.tiptoptyp/releases/liquid-onnxruntime-v1/publication-receipt.json`
+records publication and public-download verification; `release-plan.json`
+retains the original prepared-file plan. Model and native-runtime
+licences/provenance are installed alongside the downloaded files. Healthy cached
+files are reused offline; incomplete or canceled downloads are never loaded. Older bundled-model caches fetch about 362 KB of missing licence/provenance files once without redownloading the model.
 
 The earlier [Tract source/evidence archive](performance-results/liquid-tract-2026-10-20-source.tar.gz)
 and [native PyTorch source/evidence archive](performance-results/liquid-pytorch-2026-10-20-source.tar.gz)

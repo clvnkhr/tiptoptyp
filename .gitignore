@@ -23,3 +23,6 @@ __pycache__/
 /toolchain/liquid-source/
 /toolchain/liquid/
 /scripts/liquid-native-probe/target/
+
+# Generated self-contained LTeX+ server and Java payloads.
+/toolchain/ltex/

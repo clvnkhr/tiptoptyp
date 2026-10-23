@@ -6,6 +6,7 @@ fn snapshot(revision: u64, source: &str) -> LtexSnapshot {
         key: DocumentKey::new(WindowSessionId::new(7), 2, revision),
         uri: "file:///tmp/paper.tex".into(),
         language_id: "latex".into(),
+        writing_language: crate::settings::WritingLanguage::Auto,
         source: Arc::from(source),
     }
 }
@@ -51,6 +52,212 @@ fn settings_are_explicit_local_and_validate_types_and_owned_mode() {
     remote.configuration["languageToolHttpServerUri"] = "https://example.com/v2".into();
     remote.validate().unwrap();
 }
+#[test]
+fn academic_defaults_are_visible_and_preserve_spelling_and_grammar() {
+    let settings = LtexSettings::default();
+    settings.validate().unwrap();
+    assert!(!settings.enabled);
+    assert!(settings.follow_document_language);
+    assert_eq!(settings.configuration["language"], "en-GB");
+    assert_eq!(settings.configuration["checkFrequency"], "manual");
+    assert_eq!(settings.configuration["completionEnabled"], false);
+    assert_eq!(
+        settings.configuration["additionalRules"]["enablePickyRules"],
+        false
+    );
+    assert_eq!(settings.configuration["ltex-ls"]["logLevel"], "warning");
+    assert_eq!(settings.effective_configuration(), settings.configuration);
+    for language in ["en-GB", "en-US"] {
+        let disabled = settings.configuration["disabledRules"][language]
+            .as_array()
+            .unwrap();
+        assert_eq!(disabled.len(), 11);
+        for rule in [
+            "WHITESPACE_RULE",
+            "TOO_LONG_SENTENCE",
+            "EN_PLAIN_ENGLISH_REPLACE",
+        ] {
+            assert!(disabled.contains(&json!(rule)));
+        }
+        for rule in [
+            "MORFOLOGIK_RULE_EN_GB",
+            "MORFOLOGIK_RULE_EN_US",
+            "EN_A_VS_AN",
+            "ENGLISH_WORD_REPEAT_RULE",
+            "SUBJECT_VERB_AGREEMENT",
+            "UPPERCASE_SENTENCE_START",
+            "EN_UNPAIRED_BRACKETS",
+            "EN_UNPAIRED_QUOTES",
+        ] {
+            assert!(!disabled.contains(&json!(rule)), "{language}: {rule}");
+        }
+        let words = settings.configuration["dictionary"][language]
+            .as_array()
+            .unwrap();
+        for word in include_str!("../../assets/dictionaries/mathematics.txt").lines() {
+            assert!(words.contains(&json!(word)), "{language}: {word}");
+        }
+        assert!(words.contains(&json!("well-posedness")));
+        assert!(words.contains(&json!("well\u{2010}posedness")));
+        assert!(words.contains(&json!("well\u{2011}posedness")));
+        assert!(!words.contains(&json!("posedness")));
+        assert!(!words.contains(&json!("well-posedniss")));
+    }
+    assert_eq!(
+        settings.configuration["dictionary"]["en-GB"],
+        settings.configuration["dictionary"]["en-US"]
+    );
+}
+
+#[test]
+fn edited_ltex_profile_round_trips_without_hidden_dictionary_or_rule_additions() {
+    let mut settings = LtexSettings::default();
+    settings.configuration["dictionary"] = json!({"en-GB":["Romito"]});
+    settings.configuration["disabledRules"] = json!({"en-GB":["EN_DASH_RULE"]});
+    settings.configuration["language"] = "fr-FR".into();
+    settings.follow_document_language = false;
+    let encoded = serde_json::to_value(&settings).unwrap();
+    let restored: LtexSettings = serde_json::from_value(encoded).unwrap();
+    restored.validate().unwrap();
+    assert_eq!(restored.effective_configuration(), settings.configuration);
+    assert_eq!(
+        restored.language_for_snapshot(&snapshot(1, "This is a result.")),
+        "fr-FR"
+    );
+    let error = serde_json::from_value::<LtexSettings>(json!({"follow_document_language":"yes"}))
+        .unwrap_err();
+    assert!(error.to_string().contains("boolean"));
+}
+
+#[test]
+fn ltex_follows_effective_document_language_with_uk_fallback() {
+    use crate::settings::WritingLanguage;
+    let settings = LtexSettings::default();
+    for (language_id, source, preference, expected) in [
+        (
+            "typst",
+            "#set text(lang: \"en\", region: \"us\")\nThis is a result.",
+            WritingLanguage::Auto,
+            "en-US",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"en-GB\")\nThis is a result.",
+            WritingLanguage::Auto,
+            "en-GB",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"fr\")\nThis is a result.",
+            WritingLanguage::Auto,
+            "fr-FR",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"de\")\nDies ist ein Ergebnis.",
+            WritingLanguage::Auto,
+            "de-DE",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"de\", region: \"at\")\nDies ist ein Ergebnis.",
+            WritingLanguage::Auto,
+            "de-AT",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"fr\", region: \"ca\")\nCe résultat est correct.",
+            WritingLanguage::Auto,
+            "fr-CA",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"fr\")\nCe résultat est correct.",
+            WritingLanguage::American,
+            "fr-FR",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"xx-invalid\")\nThis is a result.",
+            WritingLanguage::Auto,
+            "en-GB",
+        ),
+        ("typst", "This is a result.", WritingLanguage::Auto, "en-GB"),
+        (
+            "typst",
+            "// #set text(lang: \"en\", region: \"us\")\nThis is a result.",
+            WritingLanguage::Auto,
+            "en-GB",
+        ),
+        (
+            "typst",
+            "#let example() = { set text(lang: \"en\", region: \"us\") }\nThis is a result.",
+            WritingLanguage::Auto,
+            "en-GB",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"en-US\")\nThis is a result.",
+            WritingLanguage::British,
+            "en-GB",
+        ),
+        (
+            "typst",
+            "#set text(lang: \"en-GB\")\nThis is a result.",
+            WritingLanguage::American,
+            "en-US",
+        ),
+        ("latex", "This is a result.", WritingLanguage::Auto, "en-GB"),
+        (
+            "latex",
+            "This is a result.",
+            WritingLanguage::American,
+            "en-US",
+        ),
+    ] {
+        let mut request = snapshot(1, source);
+        request.language_id = language_id.into();
+        request.writing_language = preference;
+        assert_eq!(
+            settings.language_for_snapshot(&request),
+            expected,
+            "{source}"
+        );
+    }
+    assert_eq!(settings.configuration["language"], "en-GB");
+}
+
+#[test]
+fn missing_or_unsupported_document_language_keeps_configured_fallback() {
+    let mut settings = LtexSettings::default();
+    settings.configuration["language"] = "de-DE".into();
+    let mut request = snapshot(1, "#set text(lang: \"xx-invalid\")\nText.");
+    request.language_id = "typst".into();
+    assert_eq!(settings.language_for_snapshot(&request), "de-DE");
+    request.source = Arc::from("Text.");
+    assert_eq!(settings.language_for_snapshot(&request), "de-DE");
+    request.source = Arc::from("#set text(lang: \"fr\")\nTexte.");
+    assert_eq!(settings.language_for_snapshot(&request), "fr-FR");
+    assert_eq!(settings.configuration["language"], "de-DE");
+}
+
+#[test]
+fn explicit_ltex_language_override_ignores_document_and_shared_language() {
+    let mut settings = LtexSettings {
+        follow_document_language: false,
+        ..Default::default()
+    };
+    let mut request = snapshot(1, "#set text(lang: \"en-US\")\nThis is a result.");
+    request.language_id = "typst".into();
+    request.writing_language = crate::settings::WritingLanguage::American;
+    for language in ["en-GB", "en-US", "fr-FR", "auto"] {
+        settings.configuration["language"] = language.into();
+        settings.validate().unwrap();
+        assert_eq!(settings.language_for_snapshot(&request), language);
+        assert_eq!(settings.configuration["language"], language);
+    }
+}
+
 #[test]
 fn configuration_pulls_keep_nested_language_maps_and_sections() {
     let settings = json!({"language":"en-US","dictionary":{"en-US":["semigroup"]},"latex":{"commands":{"\\foo{}":"ignore"}}});
@@ -120,7 +327,7 @@ fn shared(snapshot: LtexSnapshot) -> Arc<Mutex<Shared>> {
         desired: Some(snapshot),
         changed: Instant::now() - DEBOUNCE,
         serial: 1,
-        stop: false,
+        stop: Arc::default(),
         ready: false,
         result: None,
         error: None,
@@ -236,9 +443,97 @@ fn real_scheduler_checks_before_opening_and_enriches_current_diagnostics() {
     wait_until(
         || matches!(state.lock().unwrap().result.as_ref(), Some(LtexEvent::Diagnostics { diagnostics,.. }) if diagnostics.first().and_then(|d|d.correction.as_ref()).is_some_and(|c|!c.replacements.is_empty())),
     );
-    state.lock().unwrap().stop = true;
+    state.lock().unwrap().stop.store(true, Ordering::Release);
     worker.join().unwrap().unwrap();
 }
+#[test]
+fn sequential_checks_pull_each_document_language_without_automatic_checks() {
+    let mut first = snapshot(
+        1,
+        "#set text(lang: \"en\", region: \"us\")\nThis is a result.",
+    );
+    first.language_id = "typst".into();
+    let state = shared(first);
+    let languages = Arc::new(Mutex::new(Vec::new()));
+    let received = languages.clone();
+    let mut pending_request = None;
+    let mut session = mock_session(move |message, responses| {
+        if initialize(&message, responses) {
+            return;
+        }
+        match message["method"].as_str().unwrap_or("") {
+            "workspace/didChangeConfiguration" => {
+                panic!("language following must not trigger an unversioned automatic check")
+            }
+            "workspace/executeCommand" => {
+                let id = message["id"].as_u64().unwrap();
+                let text = message["params"]["arguments"][0]["text"].as_str().unwrap();
+                let expected = if text.contains("region: \"us\"") {
+                    "en-US"
+                } else {
+                    "en-GB"
+                };
+                pending_request = Some((id, expected));
+                responses.send(Ok(json!({"jsonrpc":"2.0","id":100 + id,"method":"workspace/configuration","params":{"items":[{"section":"ltex.language"},{"section":"ltex.dictionary"},{"section":"ltex.disabledRules"}]}}))).unwrap();
+            }
+            _ if message["id"].as_u64().is_some_and(|id| id >= 100) => {
+                let (id, expected) = pending_request.take().unwrap();
+                assert_eq!(message["id"], 100 + id);
+                assert_eq!(message["result"][0], expected);
+                assert!(
+                    message["result"][1][expected]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("semigroup"))
+                );
+                assert_eq!(message["result"][2][expected].as_array().unwrap().len(), 11);
+                received.lock().unwrap().push(expected);
+                responses.send(Ok(json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///tmp/paper.tex","diagnostics":[]}}))).unwrap();
+                responses
+                    .send(Ok(
+                        json!({"jsonrpc":"2.0","id":id,"result":{"success":true}}),
+                    ))
+                    .unwrap();
+            }
+            _ => {}
+        }
+    });
+    let worker_state = state.clone();
+    let (wake, receiver) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        run_session(
+            &LtexSettings::default(),
+            std::path::Path::new("/tmp"),
+            &worker_state,
+            receiver,
+            &egui::Context::default(),
+            &mut session,
+        )
+    });
+    wait_until(
+        || matches!(state.lock().unwrap().result.as_ref(), Some(LtexEvent::Diagnostics { key, .. }) if key.revision == 1),
+    );
+    {
+        let mut shared = state.lock().unwrap();
+        let mut next = snapshot(
+            2,
+            "#set text(lang: \"en\", region: \"gb\")\nThis is a result.",
+        );
+        next.language_id = "typst".into();
+        shared.desired = Some(next);
+        shared.serial += 1;
+        shared.changed = Instant::now() - DEBOUNCE;
+    }
+    wake.try_send(()).unwrap();
+    wait_until(
+        || matches!(state.lock().unwrap().result.as_ref(), Some(LtexEvent::Diagnostics { key, .. }) if key.revision == 2),
+    );
+    state.lock().unwrap().stop.store(true, Ordering::Release);
+    let _ = wake.try_send(());
+    worker.join().unwrap().unwrap();
+    assert_eq!(*languages.lock().unwrap(), ["en-US", "en-GB"]);
+}
+
 #[test]
 fn superseded_checks_drain_the_original_response_without_unsafe_cancellation() {
     let state = shared(snapshot(1, "old are"));
@@ -308,7 +603,7 @@ fn superseded_checks_drain_the_original_response_without_unsafe_cancellation() {
     wait_until(
         || matches!(state.lock().unwrap().result.as_ref(), Some(LtexEvent::Diagnostics { key,diagnostics,.. }) if key.revision==2 && diagnostics.is_empty()),
     );
-    state.lock().unwrap().stop = true;
+    state.lock().unwrap().stop.store(true, Ordering::Release);
     worker.join().unwrap().unwrap();
 }
 
@@ -348,6 +643,48 @@ fn grouped_quick_fixes_become_individual_replacements_only() {
 }
 
 #[test]
+fn queued_old_language_result_is_retired_before_rechecking_the_same_revision() {
+    let request = snapshot(1, "This is a result.");
+    let state = shared(request.clone());
+    let old_result = || LtexEvent::Diagnostics {
+        key: request.key,
+        uri: request.uri.clone(),
+        diagnostics: Vec::new(),
+    };
+    let (wake, _) = mpsc::sync_channel(1);
+    let service = LtexService {
+        shared: state.clone(),
+        wake,
+        worker: None,
+    };
+    state.lock().unwrap().result = Some(old_result());
+    service.update(request.clone());
+    assert!(matches!(
+        service.try_recv(),
+        Some(LtexEvent::Diagnostics { .. })
+    ));
+    state.lock().unwrap().result = Some(old_result());
+    let mut changed_language = request.clone();
+    changed_language.writing_language = crate::settings::WritingLanguage::American;
+    service.update(changed_language);
+    assert!(service.try_recv().is_none());
+    assert_eq!(
+        state.lock().unwrap().desired.as_ref().unwrap().key,
+        request.key
+    );
+    assert_eq!(
+        state
+            .lock()
+            .unwrap()
+            .desired
+            .as_ref()
+            .unwrap()
+            .writing_language,
+        crate::settings::WritingLanguage::American
+    );
+}
+
+#[test]
 fn latest_slot_replaces_inputs_and_clear_flushes_results() {
     let state = shared(snapshot(1, "old"));
     let (wake, _) = mpsc::sync_channel(1);
@@ -362,6 +699,21 @@ fn latest_slot_replaces_inputs_and_clear_flushes_results() {
     assert_eq!(
         state.lock().unwrap().desired.as_ref().unwrap().key.revision,
         999
+    );
+    let serial = state.lock().unwrap().serial;
+    let mut changed_language = snapshot(999, "latest");
+    changed_language.writing_language = crate::settings::WritingLanguage::American;
+    service.update(changed_language);
+    assert_eq!(state.lock().unwrap().serial, serial + 1);
+    assert_eq!(
+        state
+            .lock()
+            .unwrap()
+            .desired
+            .as_ref()
+            .unwrap()
+            .writing_language,
+        crate::settings::WritingLanguage::American
     );
     service.close();
     assert!(state.lock().unwrap().desired.is_none());
@@ -382,6 +734,7 @@ fn app_exit_shutdown_reaps_the_owned_process_without_protocol_cooperation() {
     .unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut settings = LtexSettings {
+        mode: crate::settings::ToolMode::Custom,
         executable: executable.to_str().unwrap().into(),
         ..Default::default()
     };
@@ -410,6 +763,7 @@ fn official_server_checks_latex_and_typst_and_returns_suggestions() {
     let executable = std::env::var("TIPTOPTYP_LTEX_TEST_EXECUTABLE").expect("LTeX+ executable");
     let settings = LtexSettings {
         enabled: true,
+        mode: crate::settings::ToolMode::Custom,
         executable,
         ..Default::default()
     };
@@ -467,5 +821,98 @@ fn official_server_checks_latex_and_typst_and_returns_suggestions() {
             }
         }
     }
+    // Keep the complete document identity and text fixed: a language-only
+    // update must invalidate LanguageTool's cached paragraph result too.
+    request = snapshot(
+        5,
+        "\\documentclass{article}\n\\begin{document}\nThe color is red.\n\\end{document}",
+    );
+    for writing_language in [
+        crate::settings::WritingLanguage::British,
+        crate::settings::WritingLanguage::American,
+    ] {
+        request.writing_language = writing_language;
+        service.update(request.clone());
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "LTeX+ language-only live check timed out for {writing_language:?}"
+            );
+            match service.try_recv() {
+                Some(LtexEvent::Error(error)) => panic!("{error}"),
+                Some(LtexEvent::Diagnostics {
+                    key,
+                    uri,
+                    diagnostics,
+                }) if key == request.key && uri == request.uri => {
+                    if writing_language == crate::settings::WritingLanguage::British {
+                        let correction = diagnostics
+                            .iter()
+                            .find_map(|diagnostic| {
+                                diagnostic.correction.as_ref().filter(|correction| {
+                                    correction.rule.as_deref() == Some("MORFOLOGIK_RULE_EN_GB")
+                                        && correction.original == "color"
+                                })
+                            })
+                            .unwrap_or_else(|| {
+                                panic!("UK spelling should flag color: {diagnostics:?}")
+                            });
+                        // Diagnostics arrive before their code-action enrichment.
+                        // Await the real replacement before switching languages.
+                        if correction.replacements.is_empty() {
+                            continue;
+                        }
+                        assert!(
+                            correction.replacements.iter().any(|word| word == "colour"),
+                            "UK spelling must offer colour: {diagnostics:?}"
+                        );
+                    } else {
+                        assert!(
+                            diagnostics.is_empty(),
+                            "US spelling must not reuse the UK paragraph result: {diagnostics:?}"
+                        );
+                    }
+                    break;
+                }
+                _ => thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
     service.shutdown();
+}
+
+#[test]
+fn bundled_launch_uses_its_java_and_explicit_custom_environment_still_wins() {
+    let prepared = crate::ltex_resources::Prepared {
+        program: "/private/bundled/bin/ltex-ls-plus".into(),
+        java_home: "/private/bundled/jdk".into(),
+    };
+    let mut settings = LtexSettings::default();
+    assert_eq!(settings.mode, crate::settings::ToolMode::Bundled);
+    settings.validate().unwrap();
+    let command = launch_command(&settings, std::path::Path::new("/tmp"), Some(&prepared)).unwrap();
+    assert_eq!(command.get_program(), prepared.program.as_os_str());
+    let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+    assert_eq!(
+        environment[std::ffi::OsStr::new("JAVA_HOME")],
+        Some(prepared.java_home.as_os_str())
+    );
+    assert_eq!(
+        environment[std::ffi::OsStr::new("JAVACMD")],
+        Some(std::ffi::OsStr::new("/private/bundled/jdk/bin/java"))
+    );
+    settings.command.environment =
+        r#"{"JAVA_HOME":"/chosen/java","JAVACMD":"/chosen/java/bin/java"}"#.into();
+    let command = launch_command(&settings, std::path::Path::new("/tmp"), Some(&prepared)).unwrap();
+    let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+    assert_eq!(
+        environment[std::ffi::OsStr::new("JAVA_HOME")],
+        Some(std::ffi::OsStr::new("/chosen/java"))
+    );
+    settings.mode = crate::settings::ToolMode::Custom;
+    assert!(settings.validate().is_err());
+    settings.executable = "/custom/ltex".into();
+    let command = launch_command(&settings, std::path::Path::new("/tmp"), None).unwrap();
+    assert_eq!(command.get_program(), std::ffi::OsStr::new("/custom/ltex"));
 }

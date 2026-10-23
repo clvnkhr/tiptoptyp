@@ -73,9 +73,54 @@ fn descriptor(target: Option<&str>, name: &str) -> manifest::Asset {
 
 /// Fail before downloading unrelated sidecars or compiling both app slices.
 pub(super) fn preflight() -> Result<(), String> {
-    check_package_layout(&repository_root().join(SOURCE)).map(|_| ()).map_err(|error| {
-        format!("The native Liquid package is not prepared: {error}. Build/export raw inputs as described in docs/grammar-comparison.md, then run cargo xtask prepare-liquid --source PATH. Python is a developer export tool only; the app does not need it.")
+    preflight_tree(&repository_root().join(SOURCE))
+}
+fn preflight_tree(source: &Path) -> Result<(), String> {
+    check_package_layout(source).map(|_| ()).map_err(|error| {
+        format!("The native Liquid package is not prepared: {error}. Recover an existing compressed package with cargo xtask ensure-liquid --source APP/Contents/Resources/liquid, or build/export raw inputs as described in docs/grammar-comparison.md and run cargo xtask prepare-liquid --source PATH. Python is a developer export tool only; the app does not need it.")
     })
+}
+
+/// Recover generated assets without exporting the model again. An existing
+/// prepared source remains authoritative, including any validation errors.
+pub(super) fn ensure_prepared(installed: Option<&Path>) -> Result<(), String> {
+    let root = repository_root();
+    let mut candidates = vec![root.join(DESTINATION)];
+    candidates.extend(installed.map(Path::to_path_buf));
+    if let Some(recovered) = ensure_prepared_tree(&root.join(SOURCE), &candidates, verify_native)? {
+        println!(
+            "Restored the verified Liquid package from {}",
+            recovered.display()
+        );
+    }
+    Ok(())
+}
+fn exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("{}: {error}", path.display())),
+    }
+}
+fn ensure_prepared_tree(
+    prepared: &Path,
+    candidates: &[PathBuf],
+    verifier: NativeVerifier,
+) -> Result<Option<PathBuf>, String> {
+    if exists(prepared)? {
+        preflight_tree(prepared)?;
+        return Ok(None);
+    }
+    for candidate in candidates {
+        if exists(candidate)? {
+            stage_tree(candidate, prepared, verifier).map_err(|error| {
+                format!("Cannot recover Liquid from {}: {error}. The prepared package was not replaced.", candidate.display())
+            })?;
+            return Ok(Some(candidate.clone()));
+        }
+    }
+    preflight_tree(prepared)?;
+    Ok(None)
 }
 pub(super) fn prepare(source: &Path) -> Result<(), String> {
     prepare_tree(source, &repository_root().join(SOURCE), verify_native)
@@ -83,9 +128,6 @@ pub(super) fn prepare(source: &Path) -> Result<(), String> {
 pub(super) fn stage() -> Result<(), String> {
     let root = repository_root();
     stage_tree(&root.join(SOURCE), &root.join(DESTINATION), verify_native)
-}
-pub(super) fn verify(resources: &Path) -> Result<(), String> {
-    verify_tree(&resources.join("liquid"), verify_native)
 }
 
 fn raw_manifest(source: &Path, verifier: NativeVerifier) -> Result<manifest::Manifest, String> {
@@ -118,7 +160,7 @@ fn raw_manifest(source: &Path, verifier: NativeVerifier) -> Result<manifest::Man
     validate_notices(source, &value)?;
     Ok(value)
 }
-fn prepare_tree(source: &Path, destination: &Path, verifier: NativeVerifier) -> Result<(), String> {
+fn separate_trees(source: &Path, destination: &Path) -> Result<(), String> {
     let canonical_source = fs::canonicalize(source).map_err(|error| error.to_string())?;
     let canonical_destination =
         fs::canonicalize(destination)
@@ -138,10 +180,12 @@ fn prepare_tree(source: &Path, destination: &Path, verifier: NativeVerifier) -> 
     if canonical_source.starts_with(&canonical_destination)
         || canonical_destination.starts_with(&canonical_source)
     {
-        return Err(
-            "Raw Liquid inputs and the generated package destination must not overlap".into(),
-        );
+        return Err("Liquid source and destination must not overlap".into());
     }
+    Ok(())
+}
+fn prepare_tree(source: &Path, destination: &Path, verifier: NativeVerifier) -> Result<(), String> {
+    separate_trees(source, destination)?;
     let mut manifest = raw_manifest(source, verifier)?;
     let parent = destination
         .parent()
@@ -206,6 +250,7 @@ fn compress_file(source: &Path, archive: &Path, asset: &mut manifest::Asset) -> 
     Ok(())
 }
 fn stage_tree(source: &Path, destination: &Path, verifier: NativeVerifier) -> Result<(), String> {
+    separate_trees(source, destination)?;
     let manifest = check_package_layout(source)?;
     let temporary = payloads::temporary_tree(
         destination
@@ -805,6 +850,197 @@ mod tests {
         assert!(prepare_tree(&raw, &raw.join("generated"), fixture_verifier).is_err());
         assert_eq!(files_in(&raw), original);
     }
+    #[test]
+    fn recovers_compressed_universal_package_and_keeps_existing_prepared_assets_authoritative() {
+        let root = tempfile::tempdir().unwrap();
+        let raw = root.path().join("raw");
+        raw_fixture(&raw);
+        let staged = root.path().join("staged");
+        prepare_tree(&raw, &staged, fixture_verifier).unwrap();
+        let original = files_in(&staged);
+        let prepared = root.path().join("prepared");
+        let missing = root.path().join("absent");
+        let invalid_installed = root.path().join("old installed app");
+        fs::create_dir(&invalid_installed).unwrap();
+        let candidates = [missing, staged.clone(), invalid_installed.clone()];
+        assert_eq!(
+            ensure_prepared_tree(&prepared, &candidates, fixture_verifier).unwrap(),
+            Some(staged.clone())
+        );
+        assert_eq!(files_in(&prepared), original);
+        assert_eq!(files_in(&staged), original);
+        verify_tree(&prepared, fixture_verifier).unwrap();
+        // A later invalid candidate must never replace, or even be inspected
+        // instead of, an already prepared package.
+        assert_eq!(
+            ensure_prepared_tree(&prepared, &[invalid_installed], |_, _| {
+                panic!("existing prepared assets should not be copied or re-exported")
+            })
+            .unwrap(),
+            None
+        );
+        assert_eq!(files_in(&prepared), original);
+    }
+
+    #[test]
+    fn installed_package_can_restore_missing_developer_assets_without_raw_inputs() {
+        let root = tempfile::tempdir().unwrap();
+        let raw = root.path().join("raw");
+        raw_fixture(&raw);
+        let installed = root
+            .path()
+            .join("Applications with spaces/app/Contents/Resources/liquid");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        prepare_tree(&raw, &installed, fixture_verifier).unwrap();
+        fs::remove_dir_all(raw).unwrap();
+        let original = files_in(&installed);
+        let prepared = root.path().join("prepared");
+        assert_eq!(
+            ensure_prepared_tree(
+                &prepared,
+                &[root.path().join("absent-staging"), installed.clone()],
+                fixture_verifier,
+            )
+            .unwrap(),
+            Some(installed.clone())
+        );
+        assert_eq!(files_in(&prepared), original);
+        assert_eq!(files_in(&installed), original);
+    }
+
+    #[test]
+    fn missing_recovery_inputs_report_actionable_error_without_creating_partial_assets() {
+        let root = tempfile::tempdir().unwrap();
+        let prepared = root.path().join("prepared");
+        let error = ensure_prepared_tree(
+            &prepared,
+            &[root.path().join("missing-installed")],
+            fixture_verifier,
+        )
+        .unwrap_err();
+        assert!(error.contains("ensure-liquid --source"));
+        assert!(error.contains("prepare-liquid --source"));
+        assert!(!prepared.exists());
+    }
+
+    #[test]
+    fn invalid_existing_source_and_selected_recovery_candidate_are_not_silently_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let raw = root.path().join("raw");
+        raw_fixture(&raw);
+        let good = root.path().join("installed");
+        prepare_tree(&raw, &good, fixture_verifier).unwrap();
+        let invalid = root.path().join("invalid");
+        fs::create_dir(&invalid).unwrap();
+        fs::write(invalid.join("incomplete"), b"preserve this input").unwrap();
+        let original = files_in(&invalid);
+        assert!(
+            ensure_prepared_tree(&invalid, std::slice::from_ref(&good), fixture_verifier).is_err()
+        );
+        assert_eq!(files_in(&invalid), original);
+        let prepared = root.path().join("prepared");
+        let error = ensure_prepared_tree(&prepared, &[invalid.clone(), good], fixture_verifier)
+            .unwrap_err();
+        assert!(error.contains("Cannot recover Liquid"));
+        assert!(!prepared.exists());
+        assert_eq!(files_in(&invalid), original);
+    }
+
+    #[test]
+    fn recovery_checks_compressed_expanded_and_native_files_before_publication() {
+        for alteration in [
+            "compressed",
+            "expanded",
+            "missing-intel",
+            "old-format",
+            "native",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let raw = root.path().join("raw");
+            raw_fixture(&raw);
+            let candidate = root.path().join("installed");
+            prepare_tree(&raw, &candidate, fixture_verifier).unwrap();
+            let manifest_path = candidate.join(manifest::MANIFEST_NAME);
+            match alteration {
+                "compressed" => {
+                    let path = candidate.join("liquid.onnx.zst");
+                    let mut bytes = fs::read(&path).unwrap();
+                    bytes[3] ^= 0xff;
+                    fs::write(path, bytes).unwrap();
+                }
+                "expanded" => {
+                    let mut value = check_package_layout(&candidate).unwrap();
+                    value
+                        .files
+                        .iter_mut()
+                        .find(|file| file.name == manifest::TOKENIZER_NAME)
+                        .unwrap()
+                        .sha256 = "a".repeat(64);
+                    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+                    let proof_path = candidate.join("PROVENANCE.json");
+                    let mut proof: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&proof_path).unwrap()).unwrap();
+                    proof["tokenizer_sha256"] = serde_json::json!("a".repeat(64));
+                    proof["parity"]["tokenizer_sha256"] = serde_json::json!("a".repeat(64));
+                    fs::write(proof_path, serde_json::to_vec(&proof).unwrap()).unwrap();
+                    check_package_layout(&candidate).unwrap();
+                }
+                "missing-intel" => {
+                    fs::remove_file(candidate.join("runtime/x86_64-apple-darwin/liquid-onnx.zst"))
+                        .unwrap()
+                }
+                "old-format" => {
+                    let mut value: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+                    value["format"] = serde_json::json!(2);
+                    fs::write(&manifest_path, serde_json::to_vec(&value).unwrap()).unwrap();
+                }
+                "native" => {}
+                _ => unreachable!(),
+            }
+            let original = files_in(&candidate);
+            let prepared = root.path().join("prepared");
+            let verifier = if alteration == "native" {
+                (|_: &Path, _: &str| Err("invalid native runtime".into())) as NativeVerifier
+            } else {
+                fixture_verifier
+            };
+            let error = ensure_prepared_tree(&prepared, std::slice::from_ref(&candidate), verifier)
+                .unwrap_err();
+            assert!(
+                error.contains("Cannot recover Liquid"),
+                "{alteration}: {error}"
+            );
+            assert!(!prepared.exists(), "{alteration}");
+            assert_eq!(files_in(&candidate), original, "{alteration}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_rejects_linked_inputs_and_overlapping_trees() {
+        let root = tempfile::tempdir().unwrap();
+        let raw = root.path().join("raw");
+        raw_fixture(&raw);
+        let candidate = root.path().join("installed");
+        prepare_tree(&raw, &candidate, fixture_verifier).unwrap();
+        let original = files_in(&candidate);
+        assert!(stage_tree(&candidate, &candidate, fixture_verifier).is_err());
+        assert!(stage_tree(&candidate, &candidate.join("child"), fixture_verifier).is_err());
+        assert_eq!(files_in(&candidate), original);
+        let linked = root.path().join("linked");
+        std::os::unix::fs::symlink(&candidate, &linked).unwrap();
+        let prepared = root.path().join("prepared");
+        assert!(ensure_prepared_tree(&prepared, &[linked], fixture_verifier).is_err());
+        assert!(!prepared.exists());
+        let archive = candidate.join("liquid.onnx.zst");
+        let outside = root.path().join("outside.zst");
+        fs::rename(&archive, &outside).unwrap();
+        std::os::unix::fs::symlink(outside, archive).unwrap();
+        assert!(ensure_prepared_tree(&prepared, &[candidate], fixture_verifier).is_err());
+        assert!(!prepared.exists());
+    }
+
     #[test]
     fn corruption_or_unproven_inputs_cannot_replace_the_previous_complete_package() {
         let temporary = tempfile::tempdir().unwrap();

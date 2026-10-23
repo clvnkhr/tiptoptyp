@@ -740,8 +740,15 @@ fn command_docs(kind: crate::toolchain::ToolKind) -> &'static str {
         TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#command-line-options",
     }
 }
+// Native eframe links are disabled. Queue the owner action so the existing
+// browser worker opens these links without blocking this Settings viewport.
 pub(super) fn documentation_link(ui: &mut egui::Ui, title: &str, url: &str) {
-    if ui.link(title).on_hover_text(url).clicked() {
+    let link = ui.link(title);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    if ui.clip_rect().contains_rect(link.rect) {
+        crate::desktop_test::observe(&format!("settings.documentation.{title}"), &link);
+    }
+    if link.clicked() {
         let id = egui::Id::new(("settings-documentation", ui.ctx().viewport_id()));
         ui.ctx()
             .data_mut(|data| data.insert_temp(id, url.to_owned()));
@@ -1269,7 +1276,12 @@ mod command_editor_tests {
                     .query_by_label("Arguments contain an unmatched quote")
                     .is_some()
             );
-            let edited = format!("{} --optional 'two words'", kind.default_arguments());
+            let optional = if kind == crate::toolchain::ToolKind::Tectonic {
+                "--hide 'two words'"
+            } else {
+                "--optional 'two words'"
+            };
+            let edited = format!("{} {optional}", kind.default_arguments());
             harness
                 .get(
                     by().role(egui::accesskit::Role::MultilineTextInput)

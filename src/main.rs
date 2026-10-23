@@ -50,6 +50,7 @@ mod liquid_runtime;
 mod liquid_text;
 mod lsp;
 mod ltex;
+mod ltex_resources;
 mod math_conversion;
 #[allow(unsafe_code)]
 mod native_menu;
@@ -73,6 +74,7 @@ mod process;
 mod project_index;
 mod rainbow;
 mod resource_lock;
+mod resource_repair;
 mod save_io;
 mod screenshot;
 mod search;

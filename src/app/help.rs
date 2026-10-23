@@ -1,4 +1,5 @@
 //! Help stays in the Settings viewport and reflects effective shortcut bindings.
+use super::settings_controls::documentation_link;
 use crate::{
     settings::AppSettings,
     shortcuts::{ShortcutAction as A, ShortcutBindings},
@@ -31,20 +32,21 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.label(RichText::new("Typst formatter (Typstyle through Tinymist)").strong());
         ui.monospace("// @typstyle off\n#let carefully_aligned = (a: 1, b: 2)");
         ui.label("Protects the next syntax node, such as a definition. It is not an off/on region toggle.");
-        ui.hyperlink_to("Typstyle escape hatch", "https://typstyle-rs.github.io/typstyle/escape-hatch.html");
+        documentation_link(ui, "Typstyle escape hatch", "https://typstyle-rs.github.io/typstyle/escape-hatch.html");
         ui.label(RichText::new("Badness: formatting only").strong());
         ui.monospace("% badness-format off\n% your hand-aligned code\n% badness-format on");
         ui.label("Use % badness-format skip before one construct, or skip-file for the entire file. Without -format, % badness off/on disables formatting and linting together.");
-        ui.hyperlink_to("Badness formatting directives", "https://badness.dev/guide/formatting.html");
+        documentation_link(ui, "Badness formatting directives", "https://badness.dev/guide/formatting.html");
         ui.label(RichText::new("Badness: suppress one lint").strong());
         ui.monospace("% badness-lint skip redundant-script-braces\n$x^{2}$");
         ui.label("For document-wide preferences use Badness ignored diagnostic codes in Settings. TexLab has its own list; suppressing a provider's code does not affect other providers.");
-        ui.hyperlink_to("Badness lint rules and suppressions", "https://badness.dev/reference/linter-rules.html");
+        documentation_link(ui, "Badness lint rules and suppressions", "https://badness.dev/reference/linter-rules.html");
         ui.label(RichText::new("tex-fmt").strong());
         ui.monospace("% tex-fmt: off\n% your hand-aligned code\n% tex-fmt: on\nOne preserved line % tex-fmt: skip");
-        ui.hyperlink_to("tex-fmt directives", "https://github.com/WGUNDERWOOD/tex-fmt#disabling-the-formatter");
-        ui.label("Harper and TexLab do not share these region directives. Harper already excludes math and technical arguments; turn writing checks off in Settings when needed. Tool-specific capabilities depend on your installed version.");
-        ui.label("Writing checks wait briefly after typing, then reuse unchanged paragraphs. They still parse the whole source to track code and math boundaries, so sentences can continue across display equations. Old diagnostics remain visible until a fresh result arrives. Apostrophes stay part of possessives; name evidence from author lists and mathematical attributions applies throughout the document without turning off grammar checks.");
+        documentation_link(ui, "tex-fmt directives", "https://github.com/WGUNDERWOOD/tex-fmt#disabling-the-formatter");
+        ui.label("Harper and TexLab do not share these region directives. Harper already excludes math and technical arguments; turn Harper off in Settings → Grammar & spelling when needed. Tool-specific capabilities depend on your installed version.");
+        ui.label("Harper checks wait briefly after typing, then reuse unchanged paragraphs. They still parse the whole source to track code and math boundaries, so sentences can continue across display equations. Old diagnostics remain visible until a fresh result arrives. Apostrophes stay part of possessives; name evidence from author lists and mathematical attributions applies throughout the document without turning off grammar checks.");
+        ui.label("Grammar & spelling → Harper configuration → Harper rule configuration shows the editable academic defaults. Style, sentence-length, comma-convention and abbreviation-expansion advice stays off; spelling, repeated words, a/an and agreement checks stay on. Apply validates each rule name and value; Reset restores the defaults without changing the document.");
         ui.heading("Snippets");
         ui.label("Type a prefix such as frac inside an equation, choose the document-symbol suggestion, and press Enter. Suggestions appear with other completions; they never replace text automatically.");
         shortcut_table(ui, "help-snippet-shortcuts", &bindings, &[A::Complete]);
@@ -58,21 +60,22 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.monospace("\\begin{{{1:equation}}}\n  {{2:x = y}}\n\\end{{{1}}}\n{{0}}");
         ui.label("Multiline insertion keeps your line's indentation. Recognized TeX dependencies are imported automatically; Undo removes insertion and imports together. Keep fields flat: use separate numbered fields rather than nesting them. Custom templates do not execute Lua, regex triggers, transformations or choice menus.");
         ui.horizontal_wrapped(|ui| {
-            ui.hyperlink_to("TeX LuaSnip examples", "https://github.com/iurimateus/luasnip-latex-snippets.nvim");
-            ui.hyperlink_to("Typst LuaSnip examples", "https://github.com/pseudofractal/typst-notes.nvim/blob/main/snippets/typst.lua");
+            documentation_link(ui, "TeX LuaSnip examples", "https://github.com/iurimateus/luasnip-latex-snippets.nvim");
+            documentation_link(ui, "Typst LuaSnip examples", "https://github.com/pseudofractal/typst-notes.nvim/blob/main/snippets/typst.lua");
         });
         ui.heading("Liquid selection grammar");
         ui.label("Select prose in a Typst or TeX document, then right-click → Check selection with Liquid. It runs locally on demand and shows the whole selection before and after, with changes highlighted in your Git diff style. Apply changes the selected prose in one undo step; commands, math and the rest of the document are protected. Editing the document invalidates the review, so check the selection again.");
-        ui.label("Liquid runs locally through native ONNX Runtime, without Python. It supports Intel Macs on macOS 12 or later and Apple Silicon Macs on macOS 14 or later. The first check automatically prepares its bundled model; choose an optional model folder and CPU thread count under Writing. Nothing loads at app startup, and checking text after setup is offline. Long selections are split automatically at sentence boundaries where possible, or into the largest chunks that fit the model. Suggestions appear while later chunks are checked; Apply becomes available only after the complete selection is validated. Selections can contain up to 1 MiB of text.");
-        ui.label("Writing → Liquid selection grammar controls what reaches the model. Protected math, code and links can use a placeholder (x by default), or split the surrounding prose into separate checks. Recognized formatting bodies can be included or skipped. Commands themselves never reach the model. Expand Liquid input in the review to inspect the exact fragments, including before the optional model is prepared.");
+        ui.label("Liquid runs locally through native ONNX Runtime, without Python. It supports Intel Macs on macOS 12 or later and Apple Silicon Macs on macOS 14 or later. The first check downloads its optional model and the runtime for this Mac; choose an optional model folder and CPU thread count under Grammar & spelling. Nothing loads at app startup, and checking text after setup is offline. Long selections are split automatically at sentence boundaries where possible, or into the largest chunks that fit the model. Suggestions appear while later chunks are checked; Apply becomes available only after the complete selection is validated. Selections can contain up to 1 MiB of text.");
+        ui.label("Grammar & spelling → Liquid selection grammar controls what reaches the model. Protected math, code and links can use a placeholder (x by default), or split the surrounding prose into separate checks. Recognized formatting bodies can be included or skipped. Commands themselves never reach the model. Expand Liquid input in the review to inspect the exact fragments, including before the optional model is prepared.");
         ui.monospace(r"Typst: The #emph[result] $a=b$ hold. → The result x hold.
 TeX:   The \emph{result} \(a=b\) hold. → The result x hold.");
         ui.label("TeX prose inside supported math-text commands such as \\text{...} is also checked. Typst equations are protected as a whole. Skipped formatting becomes protected content too. Placeholder changes and corrections across protected boundaries are rejected; splitting may remove useful sentence context.");
-        ui.hyperlink_to("Liquid model and licence", "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker");
+        documentation_link(ui, "Liquid model and licence", "https://huggingface.co/LiquidAI/LFM2.5-Encoder-350M-Spellchecker");
         ui.heading("LTeX+ spelling and grammar");
-        ui.label("Writing → LTeX+ enables the optional local LanguageTool checker for TeX and Typst. Download and extract the matching LTeX+ distribution (Mac builds include Java), set its bin/ltex-ls-plus launcher in setup, then enable it. Harper stays independent. No server or document upload is used by default.");
+        ui.label("Grammar & spelling → LTeX+ enables the bundled local LanguageTool checker for TeX and Typst. Its matching Java runtime is included. Setup also offers a custom launcher and Redownload LTeX+; Liquid has Download Liquid to download or repair its optional files. These recovery tasks run in the background and can be cancelled. Harper stays independent. Grammar checking stays on your Mac by default.");
         ui.label("The editor schedules live checks after a short typing pause. Keep checkFrequency set to manual: the editor owns scheduling to prevent stale results. Change language, dictionary, disabledRules and latex commands/environments in LTeX+ configuration, then Apply. Activity reports startup failures; Restart LTeX+ retries. Right-click a Problems result to apply a suggestion. After an edit, old results remain visible but cannot change source until refreshed.");
-        ui.hyperlink_to("LTeX+ configuration reference", "https://ltex-plus.github.io/ltex-plus/settings.html");
+        ui.label("LTeX+ starts with editable mathematical vocabulary and source-format/style exclusions in its configuration JSON. Follow document language uses the document language policy; turn it off to use the JSON language explicitly. UK English is the fallback. Both checkers remain optional, and enabling both can produce overlapping suggestions.");
+        documentation_link(ui, "LTeX+ configuration reference", "https://ltex-plus.github.io/ltex-plus/settings.html");
         ui.heading("Try these");
         for tip in [
             "Right-click code and choose Reveal in Preview; right-click the preview and choose Reveal in Source. Typst uses Tinymist; TeX needs its compiled SyncTeX map.",

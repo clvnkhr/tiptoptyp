@@ -12,12 +12,12 @@ pub(crate) mod payload_codec;
 mod process;
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{
     io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
     time::Instant,
 };
-static RESOURCES: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 mod settings {
     pub(crate) struct AppSettings {
@@ -35,19 +35,6 @@ mod settings {
 }
 mod bundled_payload {
     pub(crate) use super::payload_codec as codec;
-    pub(crate) fn resource_roots(executable: &std::path::Path) -> Vec<std::path::PathBuf> {
-        if let Some(directory) = super::RESOURCES.get() {
-            return vec![directory.clone()];
-        }
-        let Some(directory) = executable.parent() else {
-            return Vec::new();
-        };
-        vec![
-            directory.join("../Resources"),
-            directory.into(),
-            directory.join("../lib/tiptoptyp"),
-        ]
-    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,19 +43,26 @@ struct Request {
     text: String,
 }
 fn main() -> Result<(), String> {
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments == ["--metadata"] {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema_version": 1,
+                "target": if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" },
+                "catalog_sha256": format!("{:x}", Sha256::digest(include_bytes!("../../../resources/liquid/manifest.json"))),
+                "notices_catalog_sha256": format!("{:x}", Sha256::digest(include_bytes!("../../../resources/liquid/notices.json"))),
+            })
+        );
+        return Ok(());
+    }
     let mut directory = None;
     let mut threads = 4;
-    let mut args = std::env::args().skip(1);
+    let mut args = arguments.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--cache-dir" => {
                 directory = Some(PathBuf::from(args.next().ok_or("Missing cache directory")?))
-            }
-            "--resources" => {
-                let root = PathBuf::from(args.next().ok_or("Missing resource directory")?);
-                RESOURCES
-                    .set(root)
-                    .map_err(|_| "Duplicate resource directory")?;
             }
             "--threads" => {
                 threads = args
@@ -78,7 +72,7 @@ fn main() -> Result<(), String> {
                     .map_err(|_| "Invalid thread count")?
             }
             _ => {
-                return Err("Use --cache-dir PATH [--threads 1..8] [--resources DIR]".into());
+                return Err("Use --metadata, or --cache-dir PATH [--threads 1..8]".into());
             }
         }
     }

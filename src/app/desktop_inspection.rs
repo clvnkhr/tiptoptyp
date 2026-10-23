@@ -51,6 +51,7 @@ impl EditorApp {
             )
         };
         let snippets = self.settings.snippets.iter().map(|s| serde_json::json!({"prefix": s.prefix, "language": s.language, "scope": s.scope, "line_start": s.line_start, "enabled": s.enabled, "placeholder_open": s.placeholder_open, "placeholder_close": s.placeholder_close, "description": crate::desktop_test::fingerprint(&s.description), "body": crate::desktop_test::fingerprint(&s.body)})).collect::<Vec<_>>();
+        let resource_repair = crate::resource_repair::status();
         let mut observation = serde_json::json!({
             "viewport": format!("{:?}", context.viewport_id()),
             "native_size": eframe::window_host::window(context, context.viewport_id()).map(|w| { let s = w.inner_size().to_logical::<f64>(w.scale_factor()); [s.width, s.height] }),
@@ -295,10 +296,12 @@ impl EditorApp {
             "texlab_ready": self.tex_service.texlab_ready,
             "badness_ready": self.tex_service.badness_ready,
             "tex_diagnostic_counts": self.tex_diagnostics.iter().map(|diagnostics| diagnostics.len()).collect::<Vec<_>>(),
+            "badness_visible_codes": self.preview.editor_diagnostics.iter().filter(|diagnostic| diagnostic.provider.as_deref() == Some("Badness")).filter_map(diagnostic_code).collect::<Vec<_>>(),
             "tex_diagnostics_current": self.activity.diagnostics[1..].iter().map(|key| *key == Some(self.document().key())).collect::<Vec<_>>(),
             "completion_pending": self.activity.completion.is_some(),
+            "resource_repair": {"busy": resource_repair.busy, "status": resource_repair.message},
             "ltex": {
-                "enabled": self.settings.ltex.enabled,
+                "enabled": self.settings.ltex.enabled, "mode": format!("{:?}", self.settings.ltex.mode),
                 "current": self.ltex.current(self.document().key()),
                 "state": self.ltex.activity().label(),
                 "count": self.ltex.diagnostics.len(),
@@ -331,6 +334,18 @@ impl EditorApp {
         interaction["liquid"] = self.liquid_inspection();
         interaction["harper_dictionary_fingerprint"] = serde_json::json!(
             crate::desktop_test::fingerprint(&self.settings.harper_dictionary)
+        );
+        interaction["harper_rule_overrides"] =
+            serde_json::json!(&self.settings.harper_rule_overrides);
+        interaction["writing_rules"] = serde_json::json!(
+            self.writing
+                .diagnostics
+                .iter()
+                .filter_map(|diagnostic| diagnostic
+                    .correction
+                    .as_ref()
+                    .and_then(|correction| correction.rule.as_ref()))
+                .collect::<Vec<_>>()
         );
         interaction["harper_ignore_capitalized_names"] =
             serde_json::json!(self.settings.harper_ignore_capitalized_names);

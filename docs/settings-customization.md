@@ -1,7 +1,7 @@
 # Settings customization
 
-Settings uses compact categories: Appearance, Editor, Writing, Preview, Tools,
-Shortcuts, Snippets and Templates. Wide windows show the categories beside the
+Settings uses compact categories: Appearance, Editor, Grammar & spelling, Writing,
+Preview, Tools, Shortcuts, Snippets and Templates. Wide windows show the categories beside the
 form; narrow windows use a selector next to search. Search spans every category.
 Choose a result to switch to its category and briefly highlight its control.
 Switching categories retains the query, scroll positions and unfinished drafts. The Snippets category gives its saved library the available height, with per-row enable, Edit and Delete controls; Edit opens that entry in the separate source editor.
@@ -42,7 +42,7 @@ has been removed.
 |---|---|
 | Typst | `watch --diagnostic-format short` |
 | Tinymist | `lsp` |
-| Tectonic | `-X compile --untrusted --keep-logs --keep-intermediates` |
+| Tectonic | `-X --chatter minimal --color never compile --untrusted --keep-logs --keep-intermediates` |
 | TexLab | Empty |
 | Badness | `lsp` |
 | tex-fmt | `--stdin --quiet` |
@@ -63,12 +63,21 @@ has been removed.
 
 Under **TeX tools**, expand **TexLab configuration (JSON)** or **Badness
 configuration (JSON)** to see and override the actual configuration sent to the
-server. Each has Apply and Reset. TexLab defaults leave compilation to Tectonic
+server. Each has Apply and Reset. Reset also restores that provider's ignored diagnostic codes without changing other tools. TexLab defaults leave compilation to Tectonic
 and formatting/linting to Badness, with a 300 ms diagnostic delay and fuzzy
 case-insensitive completion. Badness shows its existing fallback defaults,
 `{"lineWidth":80,"indentWidth":2}`. These affect formatting unless a discovered
 configuration file supplies the project style. Tool commands and server
-configuration are separate settings.
+configuration are separate settings. TexLab defaults also hide exactly `Unused label`
+and `Unused entry` hints through anchored `diagnostics.ignoredPatterns`; unresolved
+and duplicate references/citations remain enabled. Its ignored-code list remains empty.
+
+Tectonic progress output defaults to minimal, with plain text logs. The root options
+`--chatter minimal --color never` must precede `compile`. **Show underfull box warnings**
+defaults off; those messages remain in raw build output. Overfull boxes and compiler
+failures remain visible. External latexmk defaults to `-quiet -bibtex-cond` and
+BibTeX to `-terse`; final TeX and bibliography logs still supply Problems diagnostics.
+Biber arguments stay empty. These external tools are discovered from the TeX installation.
 
 Under Tinymist, **Tinymist configuration (JSON)** exposes formatter choice,
 width, indentation, prose wrapping, input variables, lint policy and export policy.
@@ -81,19 +90,43 @@ per bundled tool, copyable examples, defaults, tradeoffs and official references
 belong in `badness.toml`; `--config` and `--no-config` do not affect this mode.
 
 **Ignored diagnostic codes** accepts comma-separated codes, for example
-`redundant-script-braces`. No codes are ignored by default. The Problems label
+`redundant-script-braces`. Badness defaults hide twelve advisory rules: abbreviation spacing, display-math delimiter preference, ellipses, hard-coded references, ties before references, obsolete environments, primitives, redundant script braces, heading-level jumps, spacing before commands, straight quotes and unused labels. Remove a code to restore that report. The app filter affects Badness only and does not change project formatting or lint computation. The Problems label
 `Badness · Code: "redundant-script-braces"` describes the diagnostic; it is not
 an argument to pass to the binary. Search Settings for “ignored codes” to find it.
 
-## English proofreading
+## Grammar & spelling
 
-Choose **Auto**, **English (UK)**, or **English (US)**. Auto reads literal,
+Settings → **Grammar & spelling** keeps **Harper spelling and grammar**,
+**LTeX+ spelling and grammar**, **Liquid selection grammar**, and **TeX prose rules**
+together. TeX prose rules apply to Harper and Liquid; LTeX+ uses its own LaTeX
+configuration. Harper and LTeX+ remain independent background checkers, with
+separate provider names in Problems. Liquid checks selected text only and opens a
+correction review. Writing retains handwriting, punctuation, Unicode and math
+formatting preferences.
+
+Expand **Harper configuration** for **Harper language**, **Harper dictionary**,
+**Harper rule configuration**, and **Harper: ignore capitalized names**. Harper rules
+show the editable academic defaults, with syntax highlighting, validation, Apply and
+Reset. Sentence-length, hedging, filler, discourse-marker, source-spacing, comma-style,
+dash, ellipsis and abbreviation-expansion advice defaults off; spelling, repeated words,
+a/an, agreement and apostrophe checks remain enabled. Unknown rule names and non-boolean
+values cannot be saved. The Harper dictionary and name filter
+affect Harper only. Choose **Auto**, **English (UK)**, or **English (US)**. Auto reads literal,
 unconditional top-level Typst `#set text(lang: "en", region: "us")` settings;
 `region: "gb"` selects UK. No language/region setting and TeX documents fall back
 to UK. Explicit UK/US overrides document settings. An explicitly non-English
 Typst language disables English checking in Auto. `lang: "uk"` means Ukrainian,
 not UK English. Computed values, imports and locally scoped language changes are
 not evaluated by this offline detector.
+
+LTeX+ defaults disable source-whitespace, sentence/paragraph-length, repeated-opening,
+plain-English rewriting, redundancy-style and dash-style advice. Its JSON explicitly
+shows the language-specific disabled-rule lists, accepted mathematical vocabulary,
+enabled rules and ignored findings. Picky rules remain off. **Follow document language**
+uses the same document language policy as Harper; disable it to use the JSON `language`
+value explicitly. UK English is the fallback. Accepted words affect spelling only.
+Both background grammar providers remain off in factory defaults; existing user
+preferences are not replaced. Liquid remains an explicit selected-text review.
 
 ## Diagnostic lifetime contract
 
@@ -209,7 +242,7 @@ See the [official manual](https://mirrors.ctan.org/support/latexdiff/doc/latexdi
 
 ## Optional Liquid grammar
 
-Writing → Liquid selection grammar configures a manual right-click action,
+Grammar & spelling → Liquid selection grammar configures a manual right-click action,
 independently of Harper. Liquid runs in a separate native ONNX Runtime helper, without
 Python, on Intel Macs with macOS 12 or newer and Apple Silicon Macs with macOS 14
 or newer. `liquid_cache_directory` defaults to the persistent app-data folder
@@ -217,12 +250,16 @@ when empty, and `liquid_threads` defaults to 4 (valid range 1–8). A custom cac
 folder must be absolute. Model loading and inference run outside the UI thread;
 no model or inference library is loaded at app startup.
 
-Select prose and choose **Check selection with Liquid**. On first use the bundled
-model and current Mac runtime are prepared automatically, without downloads or
-an installation button. The complete selection is shown before and after, with changes
-highlighted using the Git diff style chosen in Settings. Apply is one undoable
-operation.
-Checking is offline after setup. See Settings Help for the workflow and supported
+Select prose and choose **Check selection with Liquid**. On first use the optional
+model and current Mac runtime are downloaded from the published
+[`liquid-onnxruntime-v1` resource release](https://github.com/clvnkhr/tiptoptyp/releases/tag/liquid-onnxruntime-v1),
+verified and prepared automatically. The default app bundle contains neither the
+model nor its native runtime. Grammar & spelling
+also offers **Download Liquid** to download or repair the local installation, with
+Cancel while the task is active. The complete selection is shown before and after,
+with changes highlighted using the Git diff style chosen in Settings. Apply is
+one undoable operation. Checking is offline after setup; no selected text is sent
+to the download server. Existing caches from bundled-model builds need a one-time download of about 362 KB of licence/provenance files; their verified model is reused. See Settings Help for the workflow and supported
 runtime, or the [comparison and integration notes](grammar-comparison.md).
 
 `liquid_input` controls projection before inference:

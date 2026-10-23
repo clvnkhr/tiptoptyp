@@ -37,6 +37,7 @@ impl EditorApp {
                 },
                 only_cached: self.settings.tex.only_cached,
                 synctex: self.settings.tex.synctex,
+                show_underfull_box_warnings: self.settings.tex.show_underfull_box_warnings,
                 system: self.tex_tools.build_options(&self.settings.tex),
             }),
         }

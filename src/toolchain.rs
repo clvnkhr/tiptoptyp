@@ -44,7 +44,9 @@ impl ToolKind {
         match self {
             Self::Typst => "watch --diagnostic-format short",
             Self::Tinymist | Self::Badness => "lsp",
-            Self::Tectonic => "-X compile --untrusted --keep-logs --keep-intermediates",
+            Self::Tectonic => {
+                "-X --chatter minimal --color never compile --untrusted --keep-logs --keep-intermediates"
+            }
             Self::Texlab => "",
             Self::TexFmt => "--stdin --quiet",
         }
@@ -212,6 +214,8 @@ pub(crate) fn validate_bundled() -> Result<(), String> {
             ));
         }
     }
+    #[cfg(target_os = "macos")]
+    crate::ltex::validate_bundled()?;
     Ok(())
 }
 

@@ -95,7 +95,7 @@ fn show_tool(ui: &mut egui::Ui, settings: &AppSettings, tool: &ToolHelp) {
     }
     ui.horizontal_wrapped(|ui| {
         for &(label, url) in tool.links {
-            ui.hyperlink_to(label, url);
+            super::super::settings_controls::documentation_link(ui, label, url);
         }
     });
 }
@@ -279,6 +279,7 @@ const TOOLS: [ToolHelp; 6] = [
         ],
         notes: &[
             "The app supplies the input and private --outdir. SyncTeX and offline-resource flags follow their dedicated Settings toggles.",
+            "Default root options --chatter minimal --color never precede compile. They reduce progress output while retaining warning/error logs. Underfull box warnings stay in raw output; enable Show underfull box warnings to also list them in Problems.",
             "Tectonic.toml belongs to the separate project build command, not this standalone compilation. -Z deterministic-mode breaks SyncTeX. Search-path unstable flags are ineffective in untrusted mode.",
         ],
         links: &[
@@ -321,8 +322,8 @@ const TOOLS: [ToolHelp; 6] = [
                 purpose: "Explicit upstream default in milliseconds; lower values add work.",
             },
             ToolOption {
-                example: "\"diagnostics\": {\"ignoredPatterns\": [\"^Overfull\"]}",
-                purpose: "Hide matching messages; default empty. Can conceal useful warnings.",
+                example: "\"diagnostics\": {\"ignoredPatterns\": [\"^Unused label$\", \"^Unused entry$\"]}",
+                purpose: "Defaults hide unused labels and unused bibliography entries. Keep undefined references and citations visible.",
             },
             ToolOption {
                 example: "\"experimental\": {\"mathEnvironments\": [\"myalign\"]}",
@@ -379,7 +380,7 @@ const TOOLS: [ToolHelp; 6] = [
             },
             ToolOption {
                 example: "TOML [lint]: ignore = [\"redundant-script-braces\"]",
-                purpose: "Suppress selected rules; default empty. Other checks remain.",
+                purpose: "Project lint selection. The app separately hides twelve advisory rules by default; edit Badness Ignored diagnostic codes to restore them.",
             },
             ToolOption {
                 example: "Configuration JSON: \"texmf\": {\"roots\": [\"/Users/me/texmf\"]}",
@@ -569,9 +570,20 @@ mod tests {
         harness.get_by_label("lsp --font-path /Users/me/fonts");
         harness.get_by_label("Configuration schema").click();
         harness.step();
-        assert!(harness.output().platform_output.commands.iter().any(|command| {
-            matches!(command, egui::OutputCommand::OpenUrl(url) if url.url == "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.2/crates/tinymist/src/config.rs")
-        }));
+        let id = egui::Id::new(("settings-documentation", harness.ctx.viewport_id()));
+        assert_eq!(
+            harness
+                .ctx
+                .data_mut(|data| data.remove_temp::<String>(id))
+                .as_deref(),
+            Some(
+                "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.2/crates/tinymist/src/config.rs"
+            )
+        );
+        assert!(
+            harness.output().platform_output.commands.is_empty(),
+            "Help links must use the app's background launcher, not eframe's disabled native links"
+        );
         assert_eq!(harness.state(), &settings);
     }
 }

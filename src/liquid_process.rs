@@ -5,11 +5,11 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const MAX_FRAME_BYTES: usize = 64 * 1024;
@@ -120,17 +120,37 @@ impl JsonLineProcess {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn receive(&mut self, timeout: Duration) -> Result<Vec<u8>, String> {
+        self.receive_cancellable(timeout, &AtomicBool::new(false))
+    }
+
+    pub(crate) fn receive_cancellable(
+        &mut self,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<u8>, String> {
         if self.child.is_none() {
             return Err(CLOSED_ERROR.into());
         }
-        let reply = self
-            .replies
-            .recv_timeout(timeout)
-            .map_err(|error| match error {
-                mpsc::RecvTimeoutError::Timeout => "The grammar worker timed out.",
-                mpsc::RecvTimeoutError::Disconnected => CLOSED_ERROR,
-            });
+        let deadline = Instant::now() + timeout;
+        let reply = loop {
+            if cancel.load(Ordering::Acquire) {
+                break Err("Liquid check cancelled.");
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break Err("The grammar worker timed out.");
+            }
+            match self
+                .replies
+                .recv_timeout(remaining.min(Duration::from_millis(25)))
+            {
+                Ok(reply) => break Ok(reply),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break Err(CLOSED_ERROR),
+            }
+        };
         self.pending = false;
         let result = match reply {
             Ok(Ok(frame)) if self.state.load(Ordering::Acquire) != INVALID => Ok(frame),
@@ -320,6 +340,34 @@ mod tests {
         process.send(&vec![b'x'; MAX_FRAME_BYTES - 2]).unwrap();
         assert!(process.receive(Duration::from_millis(30)).is_err());
         assert!(process.child.is_none() && process.reader.is_none() && process.writer.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_reaps_a_loading_or_busy_worker_and_its_pipe_threads() {
+        for send in [false, true] {
+            let mut process = shell("/bin/sleep 30");
+            if send {
+                process.send(b"1 2 3").unwrap();
+            }
+            let cancel = Arc::new(AtomicBool::new(false));
+            let token = Arc::clone(&cancel);
+            let trigger = thread::spawn(move || {
+                thread::sleep(Duration::from_millis(30));
+                token.store(true, Ordering::Release);
+            });
+            assert!(
+                process
+                    .receive_cancellable(Duration::from_secs(30), &cancel)
+                    .unwrap_err()
+                    .contains("cancelled")
+            );
+            trigger.join().unwrap();
+            assert!(
+                process.child.is_none() && process.reader.is_none() && process.writer.is_none()
+            );
+            assert!(process.send(b"request").is_err());
+        }
     }
 
     #[test]

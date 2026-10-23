@@ -668,6 +668,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) harper_ignore_capitalized_names: bool,
     #[serde(default)]
+    pub(crate) harper_rule_overrides: crate::writing::RuleOverrides,
+    #[serde(default)]
     pub(crate) tex_prose_rules: crate::writing::prose_rules::TexProseRules,
     #[serde(default)]
     pub(crate) ltex: crate::ltex::LtexSettings,
@@ -793,6 +795,7 @@ impl Default for AppSettings {
             writing_language: WritingLanguage::Auto,
             harper_dictionary: String::new(),
             harper_ignore_capitalized_names: false,
+            harper_rule_overrides: Default::default(),
             tex_prose_rules: Default::default(),
             ltex: Default::default(),
             liquid_cache_directory: String::new(),
@@ -893,6 +896,7 @@ impl AppSettings {
             writing_language,
             harper_dictionary,
             harper_ignore_capitalized_names,
+            harper_rule_overrides,
             tex_prose_rules,
             ltex,
             liquid_cache_directory,
@@ -1402,6 +1406,7 @@ mod tests {
             writing_language: WritingLanguage::Auto,
             harper_dictionary: String::new(),
             harper_ignore_capitalized_names: false,
+            harper_rule_overrides: Default::default(),
             tex_prose_rules: Default::default(),
             ltex: Default::default(),
             liquid_cache_directory: String::new(),
@@ -1934,6 +1939,43 @@ mod tests {
         assert!(!loaded.editor_effects.enabled);
         invalid.save(&mut storage);
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), loaded);
+    }
+
+    #[test]
+    fn harper_rule_profile_roundtrips_rejects_invalid_json_and_merges_independently() {
+        let base = AppSettings::default();
+        assert!(!base.english_grammar);
+        assert!(!base.harper_ignore_capitalized_names);
+        let mut edited = base.clone();
+        let mut rules = serde_json::to_value(&edited.harper_rule_overrides).unwrap();
+        rules["NoFrenchSpaces"] = serde_json::json!(true);
+        edited.harper_rule_overrides = serde_json::from_value(rules).unwrap();
+        let saved = serde_json::to_string(&edited).unwrap();
+        assert_eq!(crate::settings_json::parse(&saved).unwrap(), edited);
+        let mut current = base.clone();
+        current.harper_dictionary = "Romito".into();
+        current.writing_language = WritingLanguage::American;
+        current.apply_edits(&base, edited.clone());
+        assert_eq!(current.harper_rule_overrides, edited.harper_rule_overrides);
+        assert_eq!(current.harper_dictionary, "Romito");
+        assert_eq!(current.writing_language, WritingLanguage::American);
+        let mut other_edit = base.clone();
+        other_edit.harper_ignore_capitalized_names = true;
+        current.apply_edits(&base, other_edit);
+        assert_eq!(
+            current.harper_rule_overrides, edited.harper_rule_overrides,
+            "a stale window that did not edit rules must retain newer overrides"
+        );
+        let mut value = serde_json::to_value(&base).unwrap();
+        value["harper_rule_overrides"] = serde_json::json!({"SpellChek": false});
+        let error = crate::settings_json::parse(&value.to_string()).unwrap_err();
+        assert!(error.contains("harper_rule_overrides") && error.contains("SpellChek"));
+        value["harper_rule_overrides"] = serde_json::json!({"SpellCheck": "false"});
+        assert!(
+            crate::settings_json::parse(&value.to_string())
+                .unwrap_err()
+                .contains("harper_rule_overrides")
+        );
     }
 
     #[test]

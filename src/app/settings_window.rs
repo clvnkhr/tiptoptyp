@@ -908,6 +908,9 @@ mod tests {
                 fallback_reason: None,
             },
             status: SettingsStatus {
+                resource_repair_component: None,
+                resource_repair_busy: false,
+                resource_repair_status: None,
                 backend_label: "Interactive",
                 preview_failure: None,
                 requested_backend: PreviewPreference::Interactive,

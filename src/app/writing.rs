@@ -17,6 +17,7 @@ pub(super) struct WritingState {
     dictionary: Arc<str>,
     tex_prose_rules: Arc<crate::writing::prose_rules::TexProseRules>,
     ignore_capitalized_names: bool,
+    rule_overrides: Arc<crate::writing::RuleOverrides>,
     configuration_revision: u64,
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) markers: Vec<usize>,
@@ -30,16 +31,19 @@ impl WritingState {
         dictionary: &str,
         ignore_capitalized_names: bool,
         rules: &crate::writing::prose_rules::TexProseRules,
+        rule_overrides: &crate::writing::RuleOverrides,
     ) {
         if self.dictionary.as_ref() != dictionary
             || self.ignore_capitalized_names != ignore_capitalized_names
             || self.tex_prose_rules.as_ref() != rules
+            || self.rule_overrides.as_ref() != rule_overrides
         {
             if self.dictionary.as_ref() != dictionary {
                 self.dictionary = Arc::from(dictionary);
             }
             self.ignore_capitalized_names = ignore_capitalized_names;
             self.tex_prose_rules = Arc::new(rules.clone());
+            self.rule_overrides = Arc::new(rule_overrides.clone());
             self.configuration_revision = self.configuration_revision.wrapping_add(1);
         }
     }
@@ -101,6 +105,7 @@ impl EditorApp {
                 &self.settings.harper_dictionary,
                 self.settings.harper_ignore_capitalized_names,
                 &self.settings.tex_prose_rules,
+                &self.settings.harper_rule_overrides,
             );
         }
         let key = self.document().key();
@@ -197,6 +202,7 @@ impl EditorApp {
         let dictionary = Arc::clone(&self.writing.dictionary);
         let rules = Arc::clone(&self.writing.tex_prose_rules);
         let ignore_capitalized_names = self.writing.ignore_capitalized_names;
+        let rule_overrides = Arc::clone(&self.writing.rule_overrides);
         if let Err(error) =
             self.writing
                 .job
@@ -220,6 +226,7 @@ impl EditorApp {
                                 dictionary: &dictionary,
                                 ignore_capitalized_names,
                                 tex_prose_rules: Some(&rules),
+                                rule_overrides: Some(&rule_overrides),
                             },
                         ),
                     ))
@@ -317,6 +324,60 @@ mod tests {
             app.writing.deadline.is_some(),
             "removal schedules an authoritative replacement"
         );
+    }
+
+    #[test]
+    fn rule_settings_supersede_old_worker_results_without_discarding_published_lints() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.settings.english_grammar = true;
+        app.document_mut().replace_unprojected_untitled(
+            "This is a short sentence.  This is another short sentence.",
+        );
+        app.update_writing_checks(&context);
+        let old = app.writing.observed.unwrap();
+        let published = Diagnostic {
+            correction: None,
+            provider: Some("Harper".into()),
+            severity: DiagnosticSeverity::Help,
+            source: DiagnosticSource::Main,
+            location: Some(crate::diagnostics::DiagnosticLocation { line: 1, column: 1 }),
+            message: "published result".into(),
+            details: Vec::new(),
+        };
+        app.writing.diagnostics = vec![published.clone()];
+        app.writing.completed = Some(old);
+        let mut settings = app.settings_snapshot();
+        let mut rules = serde_json::to_value(&settings.harper_rule_overrides).unwrap();
+        rules["NoFrenchSpaces"] = serde_json::json!(true);
+        settings.harper_rule_overrides = serde_json::from_value(rules).unwrap();
+        app.apply_shared_settings(settings, &context);
+        app.update_writing_checks(&context);
+        let changed = app.writing.observed.unwrap();
+        assert_ne!(
+            old, changed,
+            "rule-only edits must supersede outstanding jobs"
+        );
+        assert!(!app.writing.current(old.0, old.1, old.2, old.3));
+        assert_eq!(
+            app.writing.diagnostics.as_slice(),
+            std::slice::from_ref(&published)
+        );
+        app.writing.deadline = None;
+        app.writing
+            .job
+            .start_and_repaint("old-rule-test", &context, move || Ok((old, Vec::new())))
+            .unwrap();
+        let timeout = Instant::now() + Duration::from_secs(30);
+        while app.writing.job.is_running() && Instant::now() < timeout {
+            app.update_writing_checks(&context);
+            std::thread::yield_now();
+        }
+        assert!(!app.writing.job.is_running());
+        assert_eq!(app.writing.diagnostics, [published]);
+        assert_eq!(app.writing.completed, Some(old));
+        assert_eq!(app.writing.observed, Some(changed));
     }
 
     #[test]

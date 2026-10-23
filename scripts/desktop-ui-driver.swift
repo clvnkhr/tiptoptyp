@@ -234,41 +234,148 @@ if command == "ax-set-text" {
     guard nativeWindows().contains(where: { setFirst($0) }) else { fail("no text field was available") }
     emit(["set": "text"]); exit(0)
 }
-if command == "ax-press-title" {
-    guard args.count == 3 else { fail("ax-press-title requires title") }
-    let application = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(application, 4)
-    func press(_ element: AXUIElement) -> Bool {
-        // These are native Open/Save buttons. Walking an embedded preview's
-        // SVG accessibility tree can spend seconds on unrelated ink before
-        // reaching the file dialog, and can pick a same-named web element.
-        let role = attribute(element, kAXRoleAttribute) as? String
-        if role == "AXWebArea" { return false }
-        if role == kAXButtonRole && (attribute(element, kAXTitleAttribute) as? String) == args[2] {
-            return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
-        }
-        var children: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
-              let values = children as? [AXUIElement] else { return false }
-        return values.contains { press($0) }
-    }
-    guard nativeWindows().contains(where: { press($0) }) else { fail("button title was unavailable") }
-    emit(["pressed": args[2]]); exit(0)
+// File dialogs can be attached sheets absent from AXWindows. Never search
+// the editor/preview tree: only native dialog roots and their controls qualify.
+struct DialogMatch {
+    var elements: [AXUIElement] = []
+    var complete = true
+    var visited = 0
 }
-if command == "ax-press-description" {
-    guard args.count == 3 else { fail("ax-press-description requires description") }
+func dialogMatches(_ expected: String, description: Bool = false) -> DialogMatch {
     let application = AXUIElementCreateApplication(pid)
-    AXUIElementSetMessagingTimeout(application, 4)
-    func press(_ element: AXUIElement) -> Bool {
-        if (attribute(element, kAXDescriptionAttribute) as? String) == args[2] {
-            return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
-        }
-        var children: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
-              let values = children as? [AXUIElement] else { return false }
-        return values.contains { press($0) }
+    AXUIElementSetMessagingTimeout(application, 0.15)
+    let deadline = Date().addingTimeInterval(1)
+    var result = DialogMatch()
+    func read(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        guard Date() < deadline else { result.complete = false; return nil }
+        return attribute(element, name)
     }
-    guard nativeWindows().contains(where: { press($0) }) else { fail("element description was unavailable") }
+    func uniqueAppend(_ element: AXUIElement, to elements: inout [AXUIElement]) {
+        if !elements.contains(where: { CFEqual($0, element) }) { elements.append(element) }
+    }
+    var windows = read(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+    if let focused = read(application, kAXFocusedWindowAttribute),
+       CFGetTypeID(focused) == AXUIElementGetTypeID() {
+        uniqueAppend(focused as! AXUIElement, to: &windows)
+    }
+    var pending: [(AXUIElement, Int)] = []
+    for window in windows.prefix(32) {
+        let sheets = read(window, "AXSheets") as? [AXUIElement] ?? []
+        pending.append(contentsOf: sheets.map { ($0, 0) })
+        let role = read(window, kAXRoleAttribute) as? String
+        let subrole = read(window, kAXSubroleAttribute) as? String
+        if role == "AXSheet" || role == "AXDialog" || subrole == "AXDialog" || subrole == "AXSystemDialog" {
+            pending.append((window, 0))
+        }
+    }
+    var roots: [AXUIElement] = []
+    var seen: [AXUIElement] = []
+    while !pending.isEmpty && result.complete {
+        let (element, depth) = pending.removeFirst()
+        if seen.contains(where: { CFEqual($0, element) }) { continue }
+        uniqueAppend(element, to: &seen)
+        guard seen.count <= 128 && depth <= 8 else { result.complete = false; break }
+        let sheets = read(element, "AXSheets") as? [AXUIElement] ?? []
+        if sheets.isEmpty { uniqueAppend(element, to: &roots) }
+        else { pending.append(contentsOf: sheets.map { ($0, depth + 1) }) }
+    }
+    // An exact native default button is authoritative, and avoids scanning the
+    // file browser. Multiple dialog defaults are ambiguous and never pressed.
+    if !description {
+        for root in roots {
+            if let value = read(root, kAXDefaultButtonAttribute),
+               CFGetTypeID(value) == AXUIElementGetTypeID() {
+                let button = value as! AXUIElement
+                if read(button, kAXRoleAttribute) as? String == kAXButtonRole
+                    && read(button, kAXTitleAttribute) as? String == expected {
+                    uniqueAppend(button, to: &result.elements)
+                }
+            }
+        }
+        if !result.elements.isEmpty { return result }
+    }
+    pending = roots.map { ($0, 0) }
+    seen.removeAll(keepingCapacity: true)
+    while !pending.isEmpty && result.complete {
+        let (element, depth) = pending.removeFirst()
+        if seen.contains(where: { CFEqual($0, element) }) { continue }
+        uniqueAppend(element, to: &seen)
+        result.visited += 1
+        guard result.visited <= 128 && depth <= 8 else { result.complete = false; break }
+        let role = read(element, kAXRoleAttribute) as? String
+        if ["AXWebArea", "AXOutline", "AXTable", "AXBrowser", "AXScrollArea"].contains(role ?? "") { continue }
+        let name = description ? kAXDescriptionAttribute : kAXTitleAttribute
+        if (description || role == kAXButtonRole) && read(element, name) as? String == expected {
+            uniqueAppend(element, to: &result.elements)
+        }
+        let children = read(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
+        pending.append(contentsOf: children.map { ($0, depth + 1) })
+    }
+    return result
+}
+if command == "ax-dialog-state" {
+    // Read-only phase evidence. Never emit the focused field's value: it may
+    // contain source text or a human-entered path in a different application.
+    let application = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(application, 0.15)
+    let deadline = Date().addingTimeInterval(1)
+    var complete = true
+    func read(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        guard Date() < deadline else { complete = false; return nil }
+        return attribute(element, name)
+    }
+    func row(_ element: AXUIElement) -> [String: Any] {
+        var result: [String: Any] = [:]
+        for (key, attributeName) in [("role", kAXRoleAttribute), ("subrole", kAXSubroleAttribute),
+                                     ("identifier", "AXIdentifier"), ("description", kAXDescriptionAttribute),
+                                     ("title", kAXTitleAttribute)] {
+            result[key] = read(element, attributeName) as? String ?? ""
+        }
+        result["enabled"] = read(element, kAXEnabledAttribute) as? Bool ?? false
+        result["focused"] = read(element, kAXFocusedAttribute) as? Bool ?? false
+        return result
+    }
+    var ancestry: [[String: Any]] = []
+    var current = read(application, kAXFocusedUIElementAttribute)
+    var seen: [AXUIElement] = []
+    while let value = current, CFGetTypeID(value) == AXUIElementGetTypeID(), complete {
+        let element = value as! AXUIElement
+        if seen.contains(where: { CFEqual($0, element) }) { break }
+        guard seen.count < 12 else { complete = false; break }
+        seen.append(element)
+        ancestry.append(row(element))
+        if ancestry.last?["role"] as? String == kAXApplicationRole { break }
+        current = read(element, kAXParentAttribute)
+    }
+    var focusedWindow: [String: Any] = [:]
+    if let value = read(application, kAXFocusedWindowAttribute),
+       CFGetTypeID(value) == AXUIElementGetTypeID() {
+        focusedWindow = row(value as! AXUIElement)
+    }
+    emit(["complete": complete, "focused_ancestry": ancestry,
+          "focused_window": focusedWindow]); exit(0)
+}
+if command == "ax-button-title" || command == "ax-press-title" || command == "ax-press-description" {
+    guard args.count == 3 else { fail("native dialog lookup requires exact text") }
+    let result = dialogMatches(args[2], description: command == "ax-press-description")
+    let element = result.elements.count == 1 ? result.elements[0] : nil
+    let role = element.flatMap { attribute($0, kAXRoleAttribute) as? String } ?? ""
+    let title = element.flatMap { attribute($0, kAXTitleAttribute) as? String } ?? ""
+    let enabled = element.flatMap { attribute($0, kAXEnabledAttribute) as? Bool } ?? false
+    if command == "ax-button-title" {
+        emit(["requested_title": args[2], "count": result.elements.count,
+              "complete": result.complete, "role": role, "title": title,
+              "enabled": enabled, "visited": result.visited]); exit(0)
+    }
+    guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+        fail("refusing native dialog action: target app is not foreground")
+    }
+    guard result.complete, let element = element, enabled else {
+        fail("native dialog control is missing, disabled, ambiguous, or exceeded its lookup budget")
+    }
+    guard AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else {
+        fail("native dialog action failed")
+    }
     emit(["pressed": args[2]]); exit(0)
 }
 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("refusing input: target app is not foreground (actual: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown") pid \(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1), target \(pid))") }

@@ -273,12 +273,11 @@ static MAX_REVIEWED_COMPOUND_SCALARS: LazyLock<usize> = LazyLock::new(|| {
 /// longest reviewed compound. Code, markup, whitespace and source gaps cannot
 /// become a compound merely because their neighbouring words would match.
 pub(super) fn merge_reviewed_compounds(source: &[char], tokens: &mut Vec<Token>) {
-    merge_dictionary_compounds(
-        source,
-        tokens,
-        super::WRITING_DICTIONARY.as_ref(),
-        *MAX_REVIEWED_COMPOUND_SCALARS,
-    );
+    merge_compounds_with_lookup(source, tokens, *MAX_REVIEWED_COMPOUND_SCALARS, |word| {
+        // Prose projection also runs for the small Settings examples. Do not
+        // initialize Harper's dictionary until a real compound needs lookup.
+        super::WRITING_DICTIONARY.contains_word(word)
+    });
 }
 
 pub(super) fn merge_dictionary_compounds(
@@ -286,6 +285,17 @@ pub(super) fn merge_dictionary_compounds(
     tokens: &mut Vec<Token>,
     dictionary: &impl Dictionary,
     max_compound_scalars: usize,
+) {
+    merge_compounds_with_lookup(source, tokens, max_compound_scalars, |word| {
+        dictionary.contains_word(word)
+    });
+}
+
+fn merge_compounds_with_lookup(
+    source: &[char],
+    tokens: &mut Vec<Token>,
+    max_compound_scalars: usize,
+    mut contains_word: impl FnMut(&[char]) -> bool,
 ) {
     if max_compound_scalars == 0 {
         return;
@@ -308,7 +318,7 @@ pub(super) fn merge_dictionary_compounds(
         let span_end = tokens[end - 1].span.end;
         let known = end > read + 1
             && span_end - span_start <= max_compound_scalars
-            && dictionary.contains_word(&source[span_start..span_end]);
+            && contains_word(&source[span_start..span_end]);
         if known {
             tokens[write] = Token::new(
                 harper_core::Span::new(span_start, span_end),
@@ -555,6 +565,47 @@ mod tests {
         let original = tokens.clone();
         super::merge_apostrophes(&chars, &mut tokens);
         assert_eq!(tokens, original);
+    }
+
+    #[test]
+    fn compound_lookup_is_never_requested_without_a_valid_bounded_candidate() {
+        for text in [
+            "Before the result is x.",
+            "well -posedness",
+            "well- posedness",
+            "well--posedness",
+            "well–posedness",
+            "well—posedness",
+            "well-posedness-is-longer-than-the-bound",
+        ] {
+            let source: Vec<char> = text.chars().collect();
+            let mut tokens = PlainEnglish.parse(&source);
+            let original = tokens.clone();
+            super::merge_compounds_with_lookup(&source, &mut tokens, 16, |_| {
+                panic!("a dictionary must stay uninitialized for {text:?}")
+            });
+            assert_eq!(tokens, original, "{text}");
+        }
+    }
+
+    #[test]
+    fn compound_lookup_runs_once_per_candidate_and_keeps_unknown_spelling() {
+        let source: Vec<char> = "well-posedness and ill-posedniss".chars().collect();
+        let mut tokens = PlainEnglish.parse(&source);
+        let original = tokens.clone();
+        let allocation = tokens.as_ptr();
+        let mut looked_up = Vec::new();
+        super::merge_compounds_with_lookup(&source, &mut tokens, 16, |word| {
+            let word: String = word.iter().collect();
+            let known = word == "well-posedness";
+            looked_up.push(word);
+            known
+        });
+        assert_eq!(looked_up, ["well-posedness", "ill-posedniss"]);
+        assert_eq!(tokens.as_ptr(), allocation);
+        assert_eq!(tokens[0].get_str(&source), "well-posedness");
+        assert!(tokens[0].kind.is_word());
+        assert_eq!(&tokens[1..], &original[3..]);
     }
 
     #[test]

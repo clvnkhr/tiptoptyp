@@ -1481,3 +1481,180 @@ compact full-corpus parity summaries, first-use and packaging receipts, and the
 native interaction ledger. It references the maintained corpus by hash instead
 of duplicating its sentences. The earlier Tract and Python measurements above
 remain historical records rather than comparisons of unlike runs.
+
+
+## LTeX+ Temurin versus GraalVM (21 October 2026)
+
+Oracle GraalVM reduced warm long-document grammar-check latency by **13–28%**
+on this Mac, with no useful improvement on the short fixtures. It initialized
+more slowly and increased the compressed Java payload by about **25 MB**.
+The app continues to use Temurin; this experiment changes no runtime defaults.
+
+Both candidates ran the same LTeX+ 18.7.0 launcher and 171 JARs on an Apple M2 Max
+with 32 GiB RAM, macOS 14.6.1 ARM64 and Python 3.14.7. The baseline is bundled
+Eclipse Temurin 21.0.10+7 HotSpot. The candidate is Oracle GraalVM 21.0.10+8.1,
+trimmed with `jlink` to retain all 48 baseline modules plus four compiler
+dependencies. Its Graal native JIT compiler was verified active. Neither image
+contains a CDS archive; both use their default heap/GC settings. This tests
+[GraalVM's JVM compiler](https://www.graalvm.org/jdk21/docs/getting-started/),
+not an ahead-of-time native LTeX executable.
+
+These are **median grammar-response times**, excluding the subsequent correction
+request. Each warm row contains 16 measured checks across two independent JVMs
+per candidate, following four warmups. Long fixtures contain 384 paragraphs of
+synthetic mathematical prose, inline/display math and formatting. A local edit
+changes one paragraph; a bulk edit changes all 384. The corpus is controlled and
+repetitive, rather than a collection of real manuscripts.
+
+| Edited workload | Temurin | GraalVM | Graal latency change |
+| --- | ---: | ---: | ---: |
+| Short TeX, about 0.5 KB | 19.96 ms | 20.41 ms | +2.3% |
+| Long TeX, one paragraph changed | 314.45 ms | 227.37 ms | −27.7% |
+| Long TeX, all paragraphs changed | 1,490.16 ms | 1,290.90 ms | −13.4% |
+| Short Typst, about 0.5 KB | 26.43 ms | 27.09 ms | +2.5% |
+| Long Typst, one paragraph changed | 1,267.22 ms | 1,081.56 ms | −14.7% |
+| Long Typst, all paragraphs changed | 1,263.59 ms | 1,082.55 ms | −14.3% |
+
+Including the actual code-action request, median time through suggestions after
+one local edit is **623.41 → 451.51 ms** for TeX and **1,373.09 → 1,147.41 ms** for
+Typst. These totals are computed from each paired request, rather than by adding
+independently calculated medians. Default LTeX caches are retained. Unchanged
+checks are recorded separately in the receipt and are not presented as edit
+throughput. Upstream Typst extraction consumes blank paragraph separators; the
+cache slicer requires at least two consecutive newlines. This fixture therefore
+becomes a large cache slice, explaining why local and bulk edits invalidate much
+the same text. The receipt retains source and static bytecode evidence. Timing
+attribution still requires profiling; no cache optimization is implemented here.
+
+Startup means a fresh server/JVM with **warm filesystem caches**, not a cold Mac
+or a first download/extraction. Initialization is measured from process launch;
+the first-suggestion measurement includes initialization, the first grammar
+request and its corrections. Every first-result row has two samples per runtime.
+
+| Fresh-process measurement | Temurin | GraalVM |
+| --- | ---: | ---: |
+| Initialize, pooled across 12 processes per candidate | 5.71 s | 6.19 s |
+| First suggestions, short TeX | 7.92 s | 8.69 s |
+| First suggestions, long TeX bulk fixture | 10.45 s | 11.13 s |
+| First suggestions, short Typst | 8.37 s | 8.79 s |
+| First suggestions, long Typst bulk fixture | 10.01 s | 11.10 s |
+
+Size compares identically ordered deterministic tar archives, Zstandard level 19,
+8 MiB window, checksum enabled and one compression thread. Expanded size counts
+regular-file bytes, not filesystem allocation. The full development JDK is
+excluded from the primary comparison.
+
+| ARM64 Java payload | Temurin | Trimmed GraalVM |
+| --- | ---: | ---: |
+| Expanded regular files | 72.02 MB | 132.05 MB |
+| Compressed payload | 47.46 MB | 72.88 MB |
+
+The compressed difference is **25,423,053 bytes** (25.42 MB / 24.25 MiB). Production
+archive ordering differs, so this is a like-for-like payload measurement and an
+approximate total-app increase, not a rebuilt Graal app size. No matching Oracle
+21.0.10 Intel archive was available; a universal app would retain Temurin on Intel.
+Physical Intel speed remains unmeasured. All native files in the trimmed ARM
+runtime target macOS 11 or later, below the app's existing minimum. Source URLs,
+checksums, module closures, exact linking command and
+[redistribution terms](https://www.oracle.com/downloads/licenses/graal-free-license.html)
+are retained; shipping Oracle GraalVM would require a separate distribution decision.
+
+### Coverage failure discovered during the comparison
+
+The initial Typst fixture used `#emph[...]` followed by `$norm(...)$`. LTeX+
+18.7.0's [Typst parser](https://github.com/ltex-plus/ltex-ls-plus/blob/18.7.0/src/main/kotlin/org/bsplines/ltexls/parsing/typst/TypstAnnotatedTextBuilder.kt)
+consumes part of that combination as code, then treats later prose as math.
+Only one of 384 paragraph prefixes survived extraction. A late deliberately
+incorrect sentence produced no diagnostic. Those original Typst timings are
+**invalid for full-document throughput** and are retained only as failure evidence.
+
+Replacing the fixture's `#emph[uniform bound]` with `_uniform bound_` preserves all
+384 paragraphs. The corrected fixtures also require a diagnostic at the front,
+middle and end on **every request**. Both JVMs pass these gates and produce the
+same diagnostic bags, admitted corrections and replacement ordering. This is a
+benchmark workaround, not a fix to the app or upstream parser. The original
+minimal reproduction and independent parser/server probes are retained.
+
+The final comparison selects 300 valid TeX checks from the original run plus
+300 corrected Typst checks, for **600 checks in 24 fresh JVMs**. All 39 retained
+TeX variants match their original bytes and recorded hashes. Between runs, the
+harness gained only an optional diagnostic-line coverage gate and receipt fields;
+validation is outside the timed regions. Both exact harness versions are retained.
+
+### Reproduction and limits
+
+Generate the same six workloads, then supply the installed LTeX distribution and
+the prepared Graal runtime described in the receipt. The benchmark itself does
+not download tools or change the app:
+
+```sh
+python3 scripts/make-ltex-jvm-fixtures.py \
+  --output .tiptoptyp/benchmarks/ltex-jvm-repeat/fixtures --edits 12
+python3 scripts/benchmark-ltex-jvm.py \
+  --server "$LTEX_SERVER" \
+  --candidate "temurin=$LTEX_SERVER/jdk-21.0.10+7" \
+  --candidate "graal=$GRAAL_RUNTIME" \
+  --fixtures .tiptoptyp/benchmarks/ltex-jvm-repeat/fixtures/fixtures.json \
+  --warmups 4 --rounds 8 --repetitions 1 \
+  --output .tiptoptyp/benchmarks/ltex-jvm-repeat/results.json
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s scripts -p test_benchmark_ltex_jvm.py
+```
+
+Each fixture runs Temurin/Graal/Graal/Temurin sequentially. First-document,
+unchanged and edited checks are separate; edits never recycle source text.
+The script follows the app's manual LSP check/correction protocol, including
+configuration, and rejects missing diagnostics, missing real replacements or
+cross-runtime result differences. It sanitizes inherited Java flags, uses the
+same HOME and en-GB settings, bounds requests/cleanup, and records hashes rather
+than document text or diagnostic messages. The 17 deterministic harness tests
+cover framing, request ordering, quality gates, output parity and orphan cleanup.
+Required Rust formatting, lint, test and packaging-task checks also passed before
+timing; this task changes no app rendering or UI behavior.
+
+No builds, tests, downloads or compression ran concurrently with the measured
+workloads. Ordinary desktop activity was present: CPU snapshots are retained,
+including Storage at 35.9% before the Typst rerun and other background processes
+afterward. Two processes per candidate/fixture and samples clustered within them
+make these exploratory local measurements, not tight confidence intervals or a
+cross-platform guarantee. The timings exclude app debounce/polling, source mapping,
+job scheduling and UI painting. Matching results do not establish grammatical
+correctness or correct editor-source projection.
+
+The [complete measurement receipt](performance-results/ltex-jvm-2026-10-21.json)
+contains both raw runs, explicitly rejected Typst results, selected summaries,
+host/runtime/JAR/input hashes, run contexts, compressed-size provenance, original
+harness/generator source and parser coverage evidence. Temporary local runtimes
+and expanded fixtures live under `.tiptoptyp/benchmarks/ltex-jvm-2026-10-21/`.
+
+
+## Optional Liquid distribution (2026-10-21)
+
+Liquid no longer ships in the default universal app. The model and current-CPU
+ONNX helper/runtime download on the first selected-text check or through
+**Download Liquid** in Settings. Verified caches work offline. Temurin and LTeX+
+remain bundled. The [resource release](https://github.com/clvnkhr/tiptoptyp/releases/tag/liquid-onnxruntime-v1)
+is marked as a prerelease so it does not replace an app release in GitHub's
+latest-release selection. All 11 public assets were downloaded anonymously and
+checked against their pinned sizes and SHA256 hashes.
+
+The same local production universal bundle measured **1,292,978,551 bytes before**
+and **621,158,383 bytes after**, counting regular-file bytes. Removing Liquid's
+671,148,053-byte payload accounts for almost all of this reduction. Both ARM64
+and Intel slices passed package verification. Initial downloads transfer
+664,856,083 bytes on ARM64 or 661,631,695 bytes on Intel; other-architecture
+assets are not installed.
+
+A fresh production-runtime probe downloaded the published ARM64 assets and
+corrected an agreement error without Python in its executable path. A separate
+process repeated that correction with downloads blocked by an invalid HTTPS
+proxy, proving verified offline reuse. The native app's `liquid_selection`
+journey passed TeX and Typst checks in both diff layouts, first-use setup,
+Apply/Cancel/Undo, protected source preservation, streamed partial suggestions,
+and Settings round trips. These are functional checks rather than inference
+latency measurements; no GUI screenshot was required or claimed.
+
+The [verification receipt](performance-results/liquid-optional-download-2026-10-21.json)
+retains asset hashes, bundle measurements, exact package commands, source hashes,
+required-check results and native journey phases. The app in `/Applications` was
+not replaced. Physical Intel inference remains unmeasured.
