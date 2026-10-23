@@ -2862,3 +2862,156 @@ gallery frame were inspected too. Other refreshed main scenes bring the older
 gallery layout up to the current application; this feature does not change
 Explorer defaults or divider policy. Save-worker timing and exact final check
 counts are in [the version-history receipt](performance-results/local-file-versions-2026-10-20.json).
+
+
+## Codebase audit — 2026-10-23
+
+The main checkout audit started at `d7eae04` on `master`. Parallel source review
+covered editor folding/completions, full/partial Tinymist and PDFium preview
+state, TeX/grammar service ownership, formatting, table editing, terminal Find,
+startup/resource caches, saving/version history and the native-test/CI registry.
+This was a broad source and test audit, not a claim that every platform or every
+possible interaction has been exhaustively exercised. No pre-existing failing
+test was removed or weakened, and no unrelated user document or setting was changed.
+
+Confirmed fixes and evidence:
+
+- Folding reveal performed a nested scan each editor frame. The 256-region
+  regression observed 65,536 checks before the fix; it now checks each region
+  at most once and leaves cached layout intact when nothing is revealed.
+- Snippet completions repeatedly converted the same source coordinates for
+  every candidate. Lazy shared positions reduce 256 coordinate queries to two
+  for 128 matching snippets, with separate coverage for slash-owning TeX bodies
+  and entirely ineligible candidates.
+- Whitespace/comments in valid `\mintinline` and `\lstinline` headers could
+  disable later snippets. One shared reader now distinguishes complete literal
+  payloads from incomplete prefixes; the duplicate snippet-only parser was
+  removed. Existing math-guide, indentation, highlight, prose and table-sampling
+  callers retain their byte-offset skipping semantics.
+- PDFium search included its query in raster identity, causing page rasterization,
+  text-geometry extraction, palette conversion and texture replacement for Find
+  edits. Separate latest-wins search/raster requests use the same worker. Search
+  yields between pages when pixels are requested and resumes without rescanning;
+  old queries/documents are rejected. Query changes retain ready resident textures.
+- PDFium pinch applied one scale factor to the entire stacked document, scaling
+  fixed page gaps and ignoring centered paper margins. Page-local anchoring now
+  uses the exact old/new painted layouts. A 10,000-page fractional-height test
+  prevents accumulated float-rounding drift; the initially proposed algebraic
+  shortcut was rejected after an actual-helper reproduction showed 158 pt of
+  error on page 9,999. Tinymist zoom/cache behavior was not changed.
+- An unversioned TeX diagnostic already queued before a source update could be
+  labeled as current, including an empty clear. The bounded mailbox is drained
+  with its original provenance before changing source identity. Real framed
+  subprocess tests cover warnings/clears and a full mailbox. Review caught a
+  queued-initialization/tab-switch case before handoff: session readiness moves
+  to the successfully opened new document while source-bound events stay old.
+- TeX worker Drop joined background cleanup on the UI thread. Closing a window
+  now signals cleanup and retains its existing worker handle. Final app exit
+  signals all remaining windows and joins both current and previously retired
+  workers. Latched tests with real child processes verify nonblocking close and
+  final child reaping; no extra reaper threads were introduced.
+- tex-fmt reporting options could emit help/version/configuration into a source
+  replacement. Proven report-only modes, including short flag clusters, are
+  rejected at settings validation and again at job admission. A successful empty
+  output cannot erase authored text. The pinned 0.5.7 executable was checked
+  directly; `--check` with stdin still produces formatted source and remains
+  allowed.
+- ASCII terminal Find built a character-origin table even though byte/character
+  columns coincide. It now uses an ASCII path while preserving Unicode expansion
+  mapping, mixed rows, case folding, match caps and selection coordinates.
+- The desktop CI dropdown omitted four registered journeys. The existing exact
+  registry contract failed before adding those choices; it is preserved.
+
+Ten initial regressions were each executed against the old implementation and
+failed before their fixes; all ten then passed against the preserved fixed test
+binary. The additional queued-initialization case likewise failed before its
+Ready-only correction. Detailed red/green receipts and required-check logs live
+under `.tiptoptyp/code-audit/2026-10-23/`. Matched component measurements and
+reproduction metadata are in the folding and search receipts linked from
+[performance notes](performance.md#editor-and-search-audit-2026-10-23).
+
+Native interaction coverage has been extended: PDFium Find must retain raster
+counters after actual query typing/replacement/clear; PDFium resize also performs
+positioned native Command-wheel zoom on a later page and compares the
+unchanged PDF point under the cursor against fresh painted-page geometry. The
+driver does not modify macOS Accessibility Zoom preferences. Its safety checks
+still require a foreground fixture process. Pure negative detector tests reject
+stale frames, wrong pages, invalid geometry and substituted raster work.
+
+Remaining limits: a genuinely late unversioned server publication cannot prove
+which source revision it describes. Final Quit may wait for sidecar startup or
+cleanup, whereas ordinary window closure does not. Tinymist's unused log-message
+queues (`stderr_loop`, `handle_server_notification`, `emit` in `src/tinymist.rs`)
+remain an unmeasured follow-up, not a demonstrated zoom defect. No physical Intel
+or other-platform performance run was available.
+
+The first added PDF cursor-zoom run (`run-ptgr46s4`) completed every divider
+drag but timed out without a scale change. Source inspection proved the driver
+used Control where pinned egui expects the macOS Command modifier; correcting
+that while retaining application-specific Quartz delivery still delivered no
+zoom (`run-xh_naiqd`). Ordinary foreground HID Command-wheel then reached the
+viewer and exposed a real application failure (`run-gtwjxxjc`): page three moved
+out from under the pointer while the actual scroll offset remained unchanged.
+All failures are retained separately rather than counted as passes.
+
+The cause was a scroll-state ID mismatch: this pinned ScrollArea hashes its
+`IdSalt` wrapper, whereas PDFium and images loaded/stored state using the raw
+string. Their computed offsets were therefore written to an unused state.
+Problems and Explorer already used the correct typed salt and were left alone.
+Both affected viewers now address the actual widget's state. Image anchoring
+also preserves its own fixed page margins, gaps, centering and inherited content
+margins. A real-egui image reproduction failed before fixing it.
+
+New deterministic coverage checks the actual ScrollAreaOutput ID and persisted
+offset, then measures source points against painted PDF meshes and image page
+rectangles through repeated zooms. It covers later PDF pages, pinch/toolbar image
+zoom, centered-to-overflow layouts and inherited zero/three-point content margins.
+The old generic `preview::zoom_anchored_offset` had no remaining production
+caller; its misleading algebra-only test was removed with it. The two actual
+viewer tests retain the meaningful cursor-preservation coverage.
+
+The actual-widget image test initially expected finer positioning than egui can
+paint and failed with a 0.3-point difference. Review of pinned egui 0.36.2
+showed that ScrollArea rounds its content origin to physical pixels and then
+to the UI grid before applying content margins. Assertions now derive their
+bound from those two quantization steps, with a small floating-point allowance.
+They measure total drift from the first painted point through long zoom bursts;
+per-event rounding is not repeatedly added to that anchor. An exact continuation
+record is invalidated by scrolling, cursor movement, changed viewport/display
+scale, explicit zoom changes or a replacement document/catalog. This adds no
+timer, worker or idle repaint. Zero/nonzero inherited margins and fractional
+display scales exercise the snap-before-margin ordering.
+
+The distant-page burst regression additionally exposed accumulated error from
+rebuilding page-local points from global f32 scroll offsets. PDFium now captures
+one page-local f64 anchor per uninterrupted gesture and projects it against the
+actual current page tops. Tests separately bound the logical offset by the one
+final f32-store rounding, and bound painted pixels by display/UI quantization.
+A real border-clamp/reversal case ensures a constrained zoom starts a fresh
+anchor instead of retaining a point that has moved away from the cursor.
+
+Final validation passed: formatting; strict all-target Clippy in default,
+profiling and desktop-test configurations; 2,770 default tests; 2,778 profiling
+tests; 55 packaging-task tests; and the explicit pinned real-TeX integration.
+The default/profiling suites each retain 79 opt-in tests and packaging retains
+one; these are not claimed as all executed. All 309 script registry/detector
+contracts passed after correcting the workflow, alongside the recorded grammar,
+Harper, Liquid and preview-script checks.
+
+Seven native journeys passed on the preserved first build: preview Find, large
+folding, terminal Find, snippets, TeX intelligence, focus and window closing.
+The final PDF/image reruns passed on build
+`d7eae04730ff-dirty.1792760053` (SHA-256 starts `1e4f2dce7ea4`):
+`run-xlziqvk5` exercised four divider drags and positioned zoom in/out on page
+three; `run-rx64ssrc` covered image colors, toggles, page modes and popout restore.
+The earlier three PDF failures remain recorded independently.
+
+Fresh held-divider and settled-page PDF framebuffers were inspected: the raster
+stays within the preview pane, the divider remains visible, and page three is
+sharp after zoom and fit restoration. The fresh image framebuffer shows the
+complete image, border, shadow and controls. The initial Tinymist framebuffer
+has no composited native preview, as expected; it is not evidence of composed
+Tinymist geometry. These root frames do not establish whole-desktop child-view
+composition. The [final audit receipt](performance-results/code-audit-2026-10-23.json)
+records source hashes, exact checks, native build identities, retained failures,
+inspected frame hashes and remaining limitations.

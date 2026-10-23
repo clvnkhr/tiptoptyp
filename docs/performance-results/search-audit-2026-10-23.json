@@ -1,0 +1,885 @@
+{
+  "date": "2026-10-23",
+  "scope": "Actual terminal matching and one retained native PDFium worker; not GUI presentation timing.",
+  "environment": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "optimized_profile": "Cargo dev/test opt-level1, debuginfo2; same manifest, compiler, fixture, query order and warmups in both builds."
+  },
+  "builds": {
+    "before": {
+      "base_revision": "d7eae04730ff71879e84e5732b19db065ac877e7",
+      "binary": "/private/tmp/ttt-audit-before-tests",
+      "sha256": "a6c4b0ea98f7a4d8b8d42f57314e5d0ddd5999c77f747ebc9a199386fcbbac22",
+      "profile": {
+        "opt_level": "1",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "build_command": "cargo test --bin tiptoptyp --no-run --message-format=json",
+      "notes": "Source contains new audit regressions and probes plus the already measured folding fix; other candidate implementations remain unchanged."
+    },
+    "after": {
+      "artifact": {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///Users/calvinkhor/Documents/GitHub/mytypst#tiptoptyp@0.1.0",
+        "manifest_path": "/Users/calvinkhor/Documents/GitHub/mytypst/Cargo.toml",
+        "target": {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "tiptoptyp",
+          "src_path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/main.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        "profile": {
+          "opt_level": "1",
+          "debuginfo": 2,
+          "debug_assertions": true,
+          "overflow_checks": true,
+          "test": true
+        },
+        "features": [],
+        "filenames": [
+          "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/tiptoptyp-d214b93eac2d9f97",
+          "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/tiptoptyp-d214b93eac2d9f97.dSYM"
+        ],
+        "executable": "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/tiptoptyp-d214b93eac2d9f97",
+        "fresh": false
+      },
+      "preserved_executable": "/private/tmp/ttt-audit-after-tests",
+      "sha256": "7bab4febf6312383836ded1804060b1cc68c495eb7080b1b310ee3aad58412c4",
+      "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "command": [
+        "cargo",
+        "test",
+        "--bin",
+        "tiptoptyp",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "base": "d7eae04730ff71879e84e5732b19db065ac877e7",
+      "note": "Production implementations frozen during compile; a later test-only initialization regression was appended while this artifact compiled."
+    }
+  },
+  "runs": {
+    "before": [
+      {
+        "test": "terminal_find_cost_probe",
+        "command": [
+          "/private/tmp/ttt-audit-before-tests",
+          "terminal_find_cost_probe",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "started_unix": 1792753952.617516,
+        "ended_unix": 1792753954.175095,
+        "isolation": "No concurrent builds or other benchmarks; ordinary desktop processes remain."
+      },
+      {
+        "test": "pdfium::tests::native_find_work_probe",
+        "command": [
+          "/private/tmp/ttt-audit-before-tests",
+          "pdfium::tests::native_find_work_probe",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "started_unix": 1792753954.1751401,
+        "ended_unix": 1792753954.836679,
+        "isolation": "No concurrent builds or other benchmarks; ordinary desktop processes remain."
+      }
+    ],
+    "after": [
+      {
+        "test": "terminal_find_cost_probe",
+        "command": [
+          "/private/tmp/ttt-audit-after-tests",
+          "terminal_find_cost_probe",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "started_unix": 1792754624.749738,
+        "ended_unix": 1792754626.723076,
+        "isolation": "No concurrent builds or other benchmarks; ordinary desktop processes remain."
+      },
+      {
+        "test": "pdfium::tests::native_find_work_probe",
+        "command": [
+          "/private/tmp/ttt-audit-after-tests",
+          "pdfium::tests::native_find_work_probe",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "started_unix": 1792754626.723207,
+        "ended_unix": 1792754627.088186,
+        "isolation": "No concurrent builds or other benchmarks; ordinary desktop processes remain."
+      }
+    ]
+  },
+  "terminal": {
+    "before": [
+      {
+        "bytes": 520192,
+        "first_call_ns": 4168500,
+        "first_query_allocated_bytes": 8846248,
+        "fixture": "ascii_512k",
+        "mean_ns_per_query_samples": [
+          3940334,
+          3923493,
+          3912597,
+          3913092,
+          3884494,
+          3879178,
+          3928595
+        ],
+        "quality_verified": true,
+        "queries_per_sample": 32,
+        "rows": 4096,
+        "samples": 7,
+        "scope": "matching only; no PTY, GUI, rendering or worker transport",
+        "sha256": "653593dcd3ff1309023db1548d81c357020c3a360b2697a1cd253eeb01487f36",
+        "warmup_query_sets": 5
+      },
+      {
+        "bytes": 260096,
+        "first_call_ns": 2427583,
+        "first_query_allocated_bytes": 12478376,
+        "fixture": "unicode_256k",
+        "mean_ns_per_query_samples": [
+          2387867,
+          2366505,
+          2363886,
+          2355897,
+          2327410,
+          2317027,
+          2293627
+        ],
+        "quality_verified": true,
+        "queries_per_sample": 32,
+        "rows": 2048,
+        "samples": 7,
+        "scope": "matching only; no PTY, GUI, rendering or worker transport",
+        "sha256": "07f86b7d1a5185e8775e36b93d04864599181b3a938e45bd4af1aabe6248d5aa",
+        "warmup_query_sets": 5
+      }
+    ],
+    "after": [
+      {
+        "bytes": 520192,
+        "first_call_ns": 513166,
+        "first_query_allocated_bytes": 523176,
+        "fixture": "ascii_512k",
+        "mean_ns_per_query_samples": [
+          578492,
+          502899,
+          500539,
+          505826,
+          499997,
+          493920,
+          489492
+        ],
+        "quality_verified": true,
+        "queries_per_sample": 32,
+        "rows": 4096,
+        "samples": 7,
+        "scope": "matching only; no PTY, GUI, rendering or worker transport",
+        "sha256": "653593dcd3ff1309023db1548d81c357020c3a360b2697a1cd253eeb01487f36",
+        "warmup_query_sets": 5
+      },
+      {
+        "bytes": 260096,
+        "first_call_ns": 2500042,
+        "first_query_allocated_bytes": 12478376,
+        "fixture": "unicode_256k",
+        "mean_ns_per_query_samples": [
+          2373014,
+          2348106,
+          2378518,
+          2390800,
+          2408130,
+          2418406,
+          2377022
+        ],
+        "quality_verified": true,
+        "queries_per_sample": 32,
+        "rows": 2048,
+        "samples": 7,
+        "scope": "matching only; no PTY, GUI, rendering or worker transport",
+        "sha256": "07f86b7d1a5185e8775e36b93d04864599181b3a938e45bd4af1aabe6248d5aa",
+        "warmup_query_sets": 5
+      }
+    ],
+    "summary": [
+      {
+        "fixture": "ascii_512k",
+        "median_ns_before": 3913092,
+        "median_ns_after": 500539,
+        "ratio_before_over_after": 7.817756458537696,
+        "allocated_bytes_before": 8846248,
+        "allocated_bytes_after": 523176
+      },
+      {
+        "fixture": "unicode_256k",
+        "median_ns_before": 2355897,
+        "median_ns_after": 2378518,
+        "ratio_before_over_after": 0.990489456039433,
+        "allocated_bytes_before": 12478376,
+        "allocated_bytes_after": 12478376
+      }
+    ]
+  },
+  "pdfium": {
+    "before": {
+      "cold_initial_render_ms": 179.878959,
+      "fixture_bytes": 69650,
+      "fixture_pages": 12,
+      "fixture_sha256": "adfe625c39e32cf66c25d1b8258c63b35a31934127a67d929a64661edeb50dfa",
+      "mode": "raster-coupled-find",
+      "pdfium": "chromium/7881",
+      "profile": "dev-opt1",
+      "samples": [
+        {
+          "complete_ms": 22.643,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 9.124,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.080917,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 9.433834000000001,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.977458,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 9.328041,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 9.96725,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 9.787958,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.904833,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 9.766,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.654417,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 9.62825,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.765583,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 9.757874999999999,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 9.379375000000001,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 9.276792,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.516917,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 9.317584,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.502875,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 9.431208,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.607917,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 9.034500000000001,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 9.248125,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 9.15125,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.099666,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 8.795875,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 23.027791999999998,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 9.76175,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 23.714292,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 9.794959,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 9.543916,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 9.464749999999999,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.087708000000003,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 9.628124999999999,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 22.956542,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 9.594292000000001,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 23.172709,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 9.782041999999999,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        },
+        {
+          "complete_ms": 9.586625,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 9.487625,
+          "rendered_pages": 1,
+          "rendered_pixels": 1920000
+        }
+      ],
+      "scale": 2.0,
+      "scope": "one retained native PDFium worker, serial changed Find queries and clear; excludes UI/GPU/presentation",
+      "visible_page": 6,
+      "warmup_queries": 4
+    },
+    "after": {
+      "cold_initial_render_ms": 104.827542,
+      "fixture_bytes": 69650,
+      "fixture_pages": 12,
+      "fixture_sha256": "adfe625c39e32cf66c25d1b8258c63b35a31934127a67d929a64661edeb50dfa",
+      "mode": "independent-find",
+      "pdfium": "chromium/7881",
+      "profile": "dev-opt1",
+      "samples": [
+        {
+          "complete_ms": 13.136916,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.219042,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 12.976209,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 0.162542,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.33475,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.453125,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.165,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 0.1555,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.596334,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.013792,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.04575,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 0.15695800000000001,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.139833,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 13.065917,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 12.971,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 0.15687500000000001,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 12.94825,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "equation",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 12.945917,
+          "match_pages": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "query": "norm",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 12.943083,
+          "match_pages": [],
+          "query": "absent-query",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        },
+        {
+          "complete_ms": 0.156542,
+          "match_pages": [],
+          "query": "",
+          "render_ms": 0.0,
+          "rendered_pages": 0,
+          "rendered_pixels": 0
+        }
+      ],
+      "scale": 2.0,
+      "scope": "one retained native PDFium worker, serial changed Find queries and clear; excludes UI/GPU/presentation",
+      "visible_page": 6,
+      "warmup_queries": 4
+    },
+    "summary": {
+      "nonempty_query": {
+        "median_complete_ms_before": 22.654417,
+        "median_complete_ms_after": 13.065917,
+        "rendered_pixels_per_query_before": 1920000,
+        "rendered_pixels_per_query_after": 0,
+        "samples_each": 15
+      },
+      "clear": {
+        "median_complete_ms_before": 9.543916,
+        "median_complete_ms_after": 0.15687500000000001,
+        "rendered_pixels_per_query_before": 1920000,
+        "rendered_pixels_per_query_after": 0,
+        "samples_each": 5
+      }
+    }
+  },
+  "quality": "Fixture hashes and every expected match count/page matched. ASCII/Unicode offsets also have unit coverage. PDF Find tests retain the same texture and pixel readiness.",
+  "limitations": [
+    "Local Apple Silicon result; no physical Intel or cross-platform timing measured.",
+    "Each operation has warmed samples; separate first-call/initial-render values retained but not used for speedup claims. Initial PDF render is affected by OS/file cache and run order.",
+    "Terminal Unicode path unchanged; small timing variation is not claimed as an improvement.",
+    "No concurrent builds or benchmark workloads during timed probes; ordinary desktop activity remains.",
+    "PDF worker timing excludes UI polling, GPU upload and final presentation; deterministic state tests establish texture reuse."
+  ]
+}

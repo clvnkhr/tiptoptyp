@@ -1658,3 +1658,38 @@ The [verification receipt](performance-results/liquid-optional-download-2026-10-
 retains asset hashes, bundle measurements, exact package commands, source hashes,
 required-check results and native journey phases. The app in `/Applications` was
 not replaced. Physical Intel inference remains unmeasured.
+
+
+## Editor and search audit (2026-10-23)
+
+Folding reveal no longer scans every region for every collapsed heading on
+each editor frame. Its production-code harness measured a median **8.64 ms →
+3.76 µs** for 4,000 sibling regions; the nested fixture measured **804 µs →
+1.39 µs**. Empty collapsed sets return immediately and unchanged reveals retain
+the layout cache. The [folding receipt](performance-results/folding-reveal-2026-10-23.json)
+includes the harness, matched optimized flags, fixtures and raw samples.
+
+Terminal Find now avoids per-character coordinate tables for ASCII rows while
+retaining Unicode expansion/column mapping. On the same 512 KB scrollback fixture,
+the warmed median fell from **3.91 ms to 0.50 ms per query**; measured allocations
+for the first query fell from **8,846,248 to 523,176 bytes**. The unchanged Unicode
+path remains about 2.4 ms on its separate 256 KB fixture. Snippet completion also
+reuses the trigger's LSP positions: 128 candidates need two coordinate queries
+instead of 256 (three for mixed TeX slash ownership), with no work for ineligible
+candidates.
+
+PDFium Find now has independent document/query identity on the existing worker.
+Viewport rendering takes priority, and a long search yields between pages and
+resumes without rescanning completed pages. Changing/clearing Find preserves
+resident textures instead of rasterizing and uploading the visible page again.
+Across the retained 12-page native-worker fixture, nonempty queries measured
+**22.65 ms → 13.07 ms** and clearing measured **9.54 ms → 0.157 ms**. Every query
+previously rasterized 1,920,000 pixels; the new path rasterizes zero. Matching-page
+results are identical. The [search receipt](performance-results/search-audit-2026-10-23.json)
+retains build identity, fixture hashes, raw runs, quality checks and limitations.
+
+These are local Apple Silicon component measurements with matched optimized
+profiles and warmups. They do not establish whole-app frame rate, input latency
+or physical Intel performance. Initial-render values are retained separately
+and are not compared as warmed-operation speedups. No new timers, workers, idle
+repaints, per-frame logging or unbounded caches were introduced.

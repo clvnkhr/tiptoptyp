@@ -1,0 +1,1194 @@
+{
+  "date": "2026-10-23",
+  "checkout": "/Users/calvinkhor/Documents/GitHub/mytypst",
+  "audit_base": "d7eae04730ff71879e84e5732b19db065ac877e7",
+  "scope": "Broad source and test audit with parallel reviewers; not exhaustive all-platform coverage.",
+  "changed_source_sha256": {
+    ".github/workflows/desktop-ui.yml": "ef4a10e452b5033078a5b0813518432c439672805aee24e4cb80fd570442b6cd",
+    "scripts/desktop-ui-driver.swift": "6270333bcb2ea0c4f3ee040340b1aa83aaa2b7b80190a8f64597207215308269",
+    "scripts/desktop_ui_journeys.py": "88cff623c3a8b7c5a31b7a706957dde37e3cf3a0ab5a429374bb3c7af5480470",
+    "scripts/desktop_ui_newest_journeys.py": "955b52c5f35704845bb4e922aafb95c05a1a10e187ca47d09289af263df9611b",
+    "scripts/test-desktop-ui.py": "33d1e64198691f9cef4ff8ec22a1c2dd0d6b0edfa75d58eb6334e9c254c136ce",
+    "scripts/test_desktop_ui_contract.py": "f3a92859dc9b2133bc6dc767fe201899447f1e57f3b0691024db700be24be6e4",
+    "src/app.rs": "c07a295dbcbe80142eadedcc0a1723844ceb4e4425b1947b9065c434cf2bbc2b",
+    "src/app/image_view.rs": "238c1bcff634073800b91f05c917cdaf814811384735573492ddb48af79fee6a",
+    "src/app/pdfium_resize_tests.rs": "ecd6f20f594fb97d62df74fe738ed379af8f0bc701c035384bda6ffe008ea93f",
+    "src/app/pdfium_view.rs": "4229df68d1bc23590fbd47b35254e4dbf910ac711e7fd4117344b400bb9b5b1e",
+    "src/app/pdfium_view_perf.rs": "693c3185e8d4f2a18a2c40cd7553760fe0d3d97135a0646e362042b247459650",
+    "src/app/table_samples.rs": "cafed839202a5012906423020ef3a5a4f7bd04ad4fdb508275b5486d928fd8f7",
+    "src/app/tex.rs": "0b7a735a663fc6274eec17ac5b60af0fbc84439bc63370642628b9a31d85e61c",
+    "src/auto_pairs/indentation.rs": "08df24fbb4677bdd649d1c227c11a0506fd113e0df079c99bd724a5b41eda594",
+    "src/editor_decoration/local_uses.rs": "33b938e5cfef06f0cdfad329f451f5d0eb9c97d6b547519e215fb3e650968cd9",
+    "src/editor_math_guides.rs": "d2139d33e371b01e1342d4bc48eaab7abcd6bbff125b065ca135627397cabfcf",
+    "src/folding.rs": "eb60ac92e97a41d758dea5bb6776d176dd4094f2640e8ceb25680eb9c5552586",
+    "src/pdfium.rs": "0b5f16e2f5b08ab9f226b002bac786166117d3bae39d0049391fe2319ece3219",
+    "src/preview.rs": "475601049b111ed5c6527a903e2159ac5837c0a46180ff74d467a52405a25ab8",
+    "src/snippets.rs": "04671d9370c1d771b1ac721b16946eaee8a21949ddc790e36f69390fb06c5c8b",
+    "src/terminal/find.rs": "55345aaac5b1b9f4ae3d7aeb3b742bbf7d2a8a142aa60b4f38425bf7a50741cf",
+    "src/tex.rs": "d1d196e18a75091c91a0b757559e89ecd96259d332d9e835762a05ce826cd1e9",
+    "src/tex/formatter.rs": "99ed40ec5f6514b15631ed932ee5fbb831cb5c0b6b1a394b447b16ca16f82796",
+    "src/tex/session.rs": "686090ba938ccbff18cf05d12f8b4c5a25d77c4bc3d0770ffaddbd62a4d381db",
+    "src/tool_command.rs": "463360ff3757a969e1cb1ed534c6c7d5135138f831a5a485ce1e10c92360f1c0",
+    "src/windowing.rs": "57afc9d12ce00406d777677e934dd4970445dd15dcfa02a58632b274021d877a",
+    "src/writing/tex_prose.rs": "09bc0ee14ec44d3f832bdd3380b1ce36bb40f78853b5dfa7995d336711b7604a"
+  },
+  "red_regressions": [
+    {
+      "test": "find_edits_and_clear_keep_ready_pixels_and_the_same_texture",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "pinch_keeps_the_page_point_at_the_cursor_across_fixed_gaps_and_centering",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "queued_unversioned_publication_keeps_its_original_snapshot_after_sync",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "worker_drop_returns_before_busy_cleanup_and_the_worker_still_reaps_its_child",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "tex_fmt_reporting_modes_never_validate_as_source_formatting",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "reporting_arguments_are_rejected_at_formatter_start_even_without_settings_validation",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "empty_successful_formatter_output_cannot_erase_nonempty_source",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "tex_literal_headers_with_trivia_preserve_following_snippet_context",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "snippet_candidates_reuse_lazy_lsp_positions_across_matching_bodies",
+      "exit_code": 101,
+      "failed_as_expected": true
+    },
+    {
+      "test": "ascii_find_does_not_allocate_a_character_origin_table",
+      "exit_code": 101,
+      "failed_as_expected": true
+    }
+  ],
+  "initial_targeted_green": [
+    {
+      "test": "find_edits_and_clear_keep_ready_pixels_and_the_same_texture",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "pinch_keeps_the_page_point_at_the_cursor_across_fixed_gaps_and_centering",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "queued_unversioned_publication_keeps_its_original_snapshot_after_sync",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "worker_drop_returns_before_busy_cleanup_and_the_worker_still_reaps_its_child",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "tex_fmt_reporting_modes_never_validate_as_source_formatting",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "reporting_arguments_are_rejected_at_formatter_start_even_without_settings_validation",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "empty_successful_formatter_output_cannot_erase_nonempty_source",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "tex_literal_headers_with_trivia_preserve_following_snippet_context",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "snippet_candidates_reuse_lazy_lsp_positions_across_matching_bodies",
+      "exit_code": 0,
+      "one_test_passed": true
+    },
+    {
+      "test": "ascii_find_does_not_allocate_a_character_origin_table",
+      "exit_code": 0,
+      "one_test_passed": true
+    }
+  ],
+  "additional_red_evidence": [
+    {
+      "finding": "folding reveal nested scan",
+      "test": "folding::tests::revealing_a_visible_cursor_inspects_each_region_at_most_once",
+      "before_region_checks": 65536,
+      "expected_max": 256,
+      "receipt": "folding-reveal-2026-10-23.json"
+    },
+    {
+      "finding": "initialization and tab switch before queued Ready delivery",
+      "log": ".tiptoptyp/code-audit/2026-10-23/initialization-red.log"
+    },
+    {
+      "finding": "image scroll ID differs from actual ScrollArea state",
+      "log": "/private/tmp/ttt-image-scroll-id-red.log"
+    },
+    {
+      "finding": "algebraic PDF page-top reconstruction accumulated f32 rounding",
+      "before_helper": "/private/tmp/ttt-pdfium-anchor-precision-red.rs",
+      "after_helper": "/private/tmp/ttt-pdfium-anchor-precision-green.rs",
+      "page9999_error_points": 158
+    },
+    {
+      "finding": "reconstructing PDF page anchors from global f32 offsets accumulated drift during long gestures",
+      "log": ".tiptoptyp/code-audit/2026-10-23/pdf-distant-page-burst-drift-red.log"
+    },
+    {
+      "finding": "new image assertion omitted native pixel rounding; corrected against pinned implementation and added burst drift coverage",
+      "log": ".tiptoptyp/code-audit/2026-10-23/image-widget-pixel-origin-failed.log"
+    }
+  ],
+  "focused_zoom_checks": [
+    {
+      "test": "zoom_origin",
+      "command": [
+        "cargo",
+        "test",
+        "--bin",
+        "tiptoptyp",
+        "zoom_origin",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 148.786,
+      "log": ".tiptoptyp/code-audit/2026-10-23/focused-zoom_origin.log"
+    },
+    {
+      "test": "real_image_scroll_widget",
+      "command": [
+        "cargo",
+        "test",
+        "--bin",
+        "tiptoptyp",
+        "real_image_scroll_widget",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 151.447,
+      "log": ".tiptoptyp/code-audit/2026-10-23/focused-real_image_scroll_widget.log"
+    },
+    {
+      "test": "real_pdfium_widget",
+      "command": [
+        "cargo",
+        "test",
+        "--bin",
+        "tiptoptyp",
+        "real_pdfium_widget",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 151.84,
+      "log": ".tiptoptyp/code-audit/2026-10-23/focused-real_pdfium_widget.log"
+    }
+  ],
+  "script_checks_initial": [
+    {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_*contract.py"
+      ],
+      "exit": 1,
+      "seconds": 0.414,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fast-check-0.log"
+    },
+    {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_grammar*.py"
+      ],
+      "exit": 0,
+      "seconds": 0.301,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fast-check-1.log"
+    },
+    {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_harper*.py"
+      ],
+      "exit": 0,
+      "seconds": 0.09,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fast-check-2.log"
+    },
+    {
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_liquid*.py"
+      ],
+      "exit": 0,
+      "seconds": 0.48,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fast-check-3.log"
+    },
+    {
+      "command": [
+        "node",
+        "--test",
+        "scripts/test-preview-navigation.mjs",
+        "scripts/test-preview-snapshot-buffer.mjs",
+        "scripts/test-preview-zoom-snapshot.mjs",
+        "scripts/test-desktop-preview-probe.mjs",
+        "scripts/test-preview-native-probe.mjs"
+      ],
+      "exit": 0,
+      "seconds": 2.283,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fast-check-4.log"
+    },
+    {
+      "command": [
+        "node",
+        "scripts/test-preview-e2e.cjs",
+        "--large",
+        "--self-test"
+      ],
+      "exit": 0,
+      "seconds": 0.079,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fast-check-5.log"
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/test-preview-partial-native.py",
+        "--self-test"
+      ],
+      "exit": 0,
+      "seconds": 0.137,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fast-check-6.log"
+    }
+  ],
+  "script_contract_final": {
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "scripts",
+      "-p",
+      "test_*contract.py"
+    ],
+    "exit_code": 0,
+    "passed": 309,
+    "log": ".tiptoptyp/code-audit/2026-10-23/contracts-final.log",
+    "log_sha256": "aa708333ecfb6e57fff646938b98d1cedf33ca5fb4c1c27ecdd9355d3105cb1b"
+  },
+  "required_checks": [
+    {
+      "label": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 2.899,
+      "log": ".tiptoptyp/code-audit/2026-10-23/fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_target_results": [],
+      "summed_counts": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "label": "xtask-fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "xtask/Cargo.toml",
+        "--",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.146,
+      "log": ".tiptoptyp/code-audit/2026-10-23/xtask-fmt.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_target_results": [],
+      "summed_counts": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "label": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 17.153,
+      "log": ".tiptoptyp/code-audit/2026-10-23/clippy.log",
+      "log_sha256": "2dcb43f0a67c82a86354ffea2338244900471aeda6e894a2cf1dda3aa0edbce0",
+      "test_target_results": [],
+      "summed_counts": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "label": "tests",
+      "command": [
+        "cargo",
+        "test",
+        "--no-fail-fast"
+      ],
+      "exit_code": 0,
+      "seconds": 134.626,
+      "log": ".tiptoptyp/code-audit/2026-10-23/tests.log",
+      "log_sha256": "20008b56e6833d9c52cc7374ae08fba6219400d8db621b03aa21877e89dd4872",
+      "test_target_results": [
+        {
+          "passed": 63,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "passed": 2583,
+          "failed": 0,
+          "ignored": 77
+        },
+        {
+          "passed": 25,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 38,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "summed_counts": {
+        "passed": 2770,
+        "failed": 0,
+        "ignored": 79
+      }
+    },
+    {
+      "label": "xtask",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "xtask/Cargo.toml"
+      ],
+      "exit_code": 0,
+      "seconds": 2.479,
+      "log": ".tiptoptyp/code-audit/2026-10-23/xtask.log",
+      "log_sha256": "ff3984519d843efc1bd6e85bf5ce164024e448bb2efce1070c8d9862eedbd6f7",
+      "test_target_results": [
+        {
+          "passed": 55,
+          "failed": 0,
+          "ignored": 1
+        }
+      ],
+      "summed_counts": {
+        "passed": 55,
+        "failed": 0,
+        "ignored": 1
+      }
+    },
+    {
+      "label": "real-tex",
+      "command": [
+        "cargo",
+        "test",
+        "--bin",
+        "tiptoptyp",
+        "real_tex_services_format_complete_hover_and_lint",
+        "--",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "seconds": 1.433,
+      "log": ".tiptoptyp/code-audit/2026-10-23/real-tex.log",
+      "log_sha256": "08ef4fa8187335ad01aabf9f4f22c66abdf0b59ac87b7f3b379eb1374c4e3fd4",
+      "test_target_results": [
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "summed_counts": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "label": "profiling-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--features",
+        "profiling",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 16.728,
+      "log": ".tiptoptyp/code-audit/2026-10-23/profiling-clippy.log",
+      "log_sha256": "1c9b1473b4adb9693bd02793139eef7c169aa6f81baedbd424dcdd613123bd38",
+      "test_target_results": [],
+      "summed_counts": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "label": "profiling-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--features",
+        "profiling",
+        "--no-fail-fast"
+      ],
+      "exit_code": 0,
+      "seconds": 211.699,
+      "log": ".tiptoptyp/code-audit/2026-10-23/profiling-tests.log",
+      "log_sha256": "95c40e241f479f25e4e0404fa3620c8b4e2677bfec7ace10cd4a319bd557b3de",
+      "test_target_results": [
+        {
+          "passed": 63,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "passed": 2591,
+          "failed": 0,
+          "ignored": 77
+        },
+        {
+          "passed": 25,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 38,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "summed_counts": {
+        "passed": 2778,
+        "failed": 0,
+        "ignored": 79
+      }
+    },
+    {
+      "label": "desktop-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--all-targets",
+        "--features",
+        "desktop-ui-tests",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "seconds": 17.253,
+      "log": ".tiptoptyp/code-audit/2026-10-23/desktop-clippy.log",
+      "log_sha256": "bf6372155357ea8b7be504f8dec60f7a3fc825fb7a85a9d54f903e3efec5051e",
+      "test_target_results": [],
+      "summed_counts": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "label": "desktop-build",
+      "command": [
+        "cargo",
+        "build",
+        "--features",
+        "desktop-ui-tests",
+        "--bin",
+        "tiptoptyp",
+        "--message-format=json"
+      ],
+      "exit_code": 0,
+      "seconds": 99.833,
+      "log": ".tiptoptyp/code-audit/2026-10-23/desktop-build.log",
+      "log_sha256": "a9afac0cdaa66331a6d5205d23e8c0ade3c9c995a4e2751c3ad7bb417453d033",
+      "test_target_results": [],
+      "summed_counts": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      }
+    }
+  ],
+  "native_first_build": [
+    {
+      "journey": "pdfium_resize",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "pdfium_resize",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop",
+        "--capture-review"
+      ],
+      "exit_code": 1,
+      "seconds": 37.888,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-ptgr46s4/result.json",
+          "sha256": "1b46a1c6c18d5d011166d9e40e23e7666dab29f8a67db51b1879b059b3d25f2d",
+          "passed": false,
+          "journeys": [],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "preview_find",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "preview_find",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop"
+      ],
+      "exit_code": 0,
+      "seconds": 18.495,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-qgw5r_cj/result.json",
+          "sha256": "e5dd05b703270bd5f7bef1494459face9db38d9d0116db453cc3b80583fae081",
+          "passed": true,
+          "journeys": [
+            "preview_find"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "folding",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "folding",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop"
+      ],
+      "exit_code": 0,
+      "seconds": 14.482,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-31n8vjh_/result.json",
+          "sha256": "16acfb16976f085c536ddb43d44a71098a65492cb8a799bfe282287bf97a95ff",
+          "passed": true,
+          "journeys": [
+            "folding"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "terminal_find",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "terminal_find",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop"
+      ],
+      "exit_code": 0,
+      "seconds": 17.314,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-9yac6fvf/result.json",
+          "sha256": "c3eacd47f624193d527831a42bb4fd4853676a1380147f5e5d1f664591afb6a0",
+          "passed": true,
+          "journeys": [
+            "terminal_find"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "snippets",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "snippets",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop"
+      ],
+      "exit_code": 0,
+      "seconds": 105.679,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-jdqwx73h/result.json",
+          "sha256": "d8b0298b5e5a0fcc04f57460a19f54a9e244b233890ced188c793e63baca6771",
+          "passed": true,
+          "journeys": [
+            "snippets"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "tex_intelligence",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "tex_intelligence",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop"
+      ],
+      "exit_code": 0,
+      "seconds": 18.256,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-v6bki7jq/result.json",
+          "sha256": "148dbfcdd5577335daf164e54b392ba9dc391c60d7e4040131993539bbe71550",
+          "passed": true,
+          "journeys": [
+            "tex_intelligence"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "focus",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "focus",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop"
+      ],
+      "exit_code": 0,
+      "seconds": 6.801,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-ycope8_s/result.json",
+          "sha256": "5243480b821a1ee2e7fc20ded42e95df6aba7cfcc1239401b9895dd929522dee",
+          "passed": true,
+          "journeys": [
+            "focus"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "closing",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "closing",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop"
+      ],
+      "exit_code": 0,
+      "seconds": 5.605,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-gwcvu79m/result.json",
+          "sha256": "644da1e48e3194e23fe05cc6350b5377b86c3f2687b197dd2aded21b788b2a7a",
+          "passed": true,
+          "journeys": [
+            "closing"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    }
+  ],
+  "preserved_initial_native_binary": {
+    "path": "/private/tmp/ttt-audit-desktop-before-scroll-owner",
+    "sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125"
+  },
+  "native_intermediate_failures": [
+    {
+      "journey": "pdfium_resize",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "pdfium_resize",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop",
+        "--capture-review"
+      ],
+      "exit_code": 1,
+      "seconds": 36.061,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-xh_naiqd/result.json",
+          "sha256": "a09a73eb4a3b71c377014e6f9c8b2e0cf0ec896308bc0fb650406e0731767177",
+          "passed": false,
+          "journeys": [],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "pdfium_resize",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "pdfium_resize",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop",
+        "--capture-review"
+      ],
+      "exit_code": 1,
+      "seconds": 16.377,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-gtwjxxjc/result.json",
+          "sha256": "d5de80ff583819585720c634ce03975da15fd81f62b9225276330471da102932",
+          "passed": false,
+          "journeys": [],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792755546)",
+          "binary_sha256": "1f98b8c833222ea145682bc56ae86adfe96be79b0920a4475099da00a8b1f125",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    }
+  ],
+  "native_final_build": [
+    {
+      "journey": "pdfium_resize",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "pdfium_resize",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop",
+        "--capture-review"
+      ],
+      "exit_code": 0,
+      "seconds": 22.021,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-xlziqvk5/result.json",
+          "sha256": "1c6a4a2cd5d0b3d75cc8af13049dc8ca12a6a34811bf15fe9106f949f8cbd04c",
+          "passed": true,
+          "journeys": [
+            "pdfium_resize"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792760053)",
+          "binary_sha256": "1e4f2dce7ea405053094c04844b243a2ee6189dd2930ef33523b3135612db6ab",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    },
+    {
+      "journey": "images",
+      "command": [
+        "python3",
+        "scripts/test-desktop-ui.py",
+        "--journey",
+        "images",
+        "--executable",
+        "/private/tmp/ttt-audit-desktop",
+        "--capture-review"
+      ],
+      "exit_code": 0,
+      "seconds": 26.292,
+      "receipts": [
+        {
+          "path": ".tiptoptyp/desktop-ui-tests/run-rx64ssrc/result.json",
+          "sha256": "be7d6cd9feff8d97da9b51b2439012db8a49b6aeb4653ba64814cca823eb1f42",
+          "passed": true,
+          "journeys": [
+            "images"
+          ],
+          "version": "tiptoptyp Dev 0.1.0 (d7eae04730ff-dirty.1792760053)",
+          "binary_sha256": "1e4f2dce7ea405053094c04844b243a2ee6189dd2930ef33523b3135612db6ab",
+          "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+          "preflight": "{\"accessibility\":true,\"desktop\":true,\"input\":true,\"locked\":false,\"screens\":[{\"height\":982,\"scale\":2,\"width\":1512}],\"system_scroll_zoom\":true}",
+          "evidence": "native input and read-only state; no visual composition verification"
+        }
+      ]
+    }
+  ],
+  "preserved_final_binary": {
+    "path": "/private/tmp/ttt-audit-desktop",
+    "sha256": "1e4f2dce7ea405053094c04844b243a2ee6189dd2930ef33523b3135612db6ab",
+    "artifact": {
+      "reason": "compiler-artifact",
+      "package_id": "path+file:///Users/calvinkhor/Documents/GitHub/mytypst#tiptoptyp@0.1.0",
+      "manifest_path": "/Users/calvinkhor/Documents/GitHub/mytypst/Cargo.toml",
+      "target": {
+        "kind": [
+          "bin"
+        ],
+        "crate_types": [
+          "bin"
+        ],
+        "name": "tiptoptyp",
+        "src_path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/main.rs",
+        "edition": "2024",
+        "doc": true,
+        "doctest": false,
+        "test": true
+      },
+      "profile": {
+        "opt_level": "1",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": false
+      },
+      "features": [
+        "desktop-ui-tests"
+      ],
+      "filenames": [
+        "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/tiptoptyp",
+        "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/tiptoptyp.dSYM"
+      ],
+      "executable": "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/tiptoptyp",
+      "fresh": false
+    }
+  },
+  "matched_performance_receipts": [
+    "folding-reveal-2026-10-23.json",
+    "search-audit-2026-10-23.json"
+  ],
+  "obsolete_code_removed": [
+    {
+      "code": "snippets::inline_group_end plus duplicate literal-command reader",
+      "proof": "All snippet context readers now use editor_math_guides::tex_inline_literal; existing five consumers retain .end skipping semantics and new complete/incomplete payload coverage."
+    },
+    {
+      "code": "preview::zoom_anchored_offset plus its formula-only unit test",
+      "proof": "Image was its final production caller. Both viewers now use actual page geometry, typed widget state and real-widget painted-point regressions; no remaining call sites."
+    }
+  ],
+  "visual_observations": [
+    {
+      "path": ".tiptoptyp/desktop-ui-tests/run-xlziqvk5/1792760173286-0002-main.png",
+      "sha256": "5342aafb298443747ce944ec7ed30aae9899dbaaa4ba7ddcb92f41fc2e7181ef",
+      "fresh_capture": true,
+      "inspected": true,
+      "observation": "Held divider: PDF raster remains clipped inside its pane and the drag handle stays visible; the top of the page is scrolled beyond the viewport.",
+      "scope": "Root viewport framebuffer, originally captured under the fixture .tiptoptyp/screenshots and copied before cleanup; not a composed desktop/native-child image."
+    },
+    {
+      "path": ".tiptoptyp/desktop-ui-tests/run-xlziqvk5/1792760181831-0003-main.png",
+      "sha256": "8287f45cc86136d20021d4a91bdb88b08fa7f8b8fdac2faabc91a4cbdbd4b3dc",
+      "fresh_capture": true,
+      "inspected": true,
+      "observation": "Settled after repeated drags and native zoom: Resize page 3 is sharp, fits the pane, and the focus outline and divider are visible.",
+      "scope": "Root viewport framebuffer, originally captured under the fixture .tiptoptyp/screenshots and copied before cleanup; not a composed desktop/native-child image."
+    },
+    {
+      "path": ".tiptoptyp/desktop-ui-tests/run-rx64ssrc/1792760201644-0004-main.png",
+      "sha256": "52855b1213dd67110b911980758d565106b1d111bd4835380b7d431681603556",
+      "fresh_capture": true,
+      "inspected": true,
+      "observation": "Image pane shows the complete test image with original colors, page boundary, shadow and compact controls.",
+      "scope": "Root viewport framebuffer, originally captured under the fixture .tiptoptyp/screenshots and copied before cleanup; not a composed desktop/native-child image."
+    }
+  ],
+  "limits": [
+    "Native source/editor/search/TeX journeys passed on the earlier preserved build; final affected PDF and image journeys are separately identified after the scroll-owner and rounding corrections.",
+    "Performance measurements are local matched component workloads, not whole-app FPS, cold startup or a physical Intel guarantee.",
+    "Late unversioned TeX diagnostics cannot reliably identify the source revision. Already-admitted mailbox events preserve their old provenance.",
+    "PDF cancellation yields between pages; a native page extraction cannot be interrupted mid-call.",
+    "Final Quit may wait for TeX startup or cleanup, while ordinary document closure no longer joins that work.",
+    "Tinymist log queues remain an unmeasured follow-up; Tinymist zoom and screenshot paths were not changed.",
+    "Ignored model/network/platform/benchmark tests are not all claimed as executed; explicit pinned real-TeX and native PDF probes are identified separately.",
+    "The initial Tinymist root framebuffer is blank in the preview because native children are captured separately. It is not claimed as proof of composed Tinymist rendering."
+  ]
+}
