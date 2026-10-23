@@ -681,6 +681,8 @@ pub(super) fn tool_preference_editor(
                 } else { resolution.detail() };
                 settings_hover_text(response, hint);
             }
+            super::tool_reference::controls(ui, crate::tool_reference::ReferenceId::from_kind(resolution.kind),
+                preference.mode == ToolMode::Bundled && resolution.origin == crate::toolchain::ToolOrigin::Bundled, settings);
         });
         if preference.mode == ToolMode::Custom {
             ui.horizontal_wrapped(|ui| {
@@ -702,7 +704,7 @@ pub(super) fn tool_preference_editor(
             let id = ui.id().with("command-draft");
             let mut draft = ui.ctx().data_mut(|data| {
                 let cached = data.get_temp::<(crate::tool_command::CommandCustomization, crate::tool_command::CommandCustomization)>(id);
-                cached.filter(|(original,_)| original == &preference.command).map(|(_,draft)| draft).unwrap_or_else(|| preference.command.clone())
+                cached.map(|(base, draft)| super::tool_drafts::rebase_command(&base, &preference.command, draft)).unwrap_or_else(|| preference.command.clone())
             });
             command_help(ui.label("Arguments (quoted values supported; no shell expansion)"), resolution.kind, "Arguments");
             ui.add(egui::TextEdit::multiline(&mut draft.arguments).desired_rows(2).desired_width(f32::INFINITY));
@@ -1209,7 +1211,92 @@ mod layout_tests {
 mod command_editor_tests {
     use super::*;
     use crate::{settings::AppSettings, tool_command::CommandCustomization, toolchain::ToolKind};
-    use egui_kittest::{Harness, kittest::Queryable as _};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT as _, Queryable as _},
+    };
+
+    #[test]
+    fn command_preset_preserves_unfinished_environment_in_the_real_editor() {
+        use egui_kittest::kittest::by;
+        let settings = AppSettings::default();
+        let resolution = crate::toolchain::resolve_tool(ToolKind::Tinymist, &settings.tinymist);
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(850.0, 900.0))
+            .build_ui_state(
+                move |ui, settings: &mut AppSettings| {
+                    let mut edited = settings.clone();
+                    tool_preference_editor(
+                        ui,
+                        "Tinymist",
+                        &mut edited.tinymist,
+                        &resolution,
+                        true,
+                        settings,
+                    );
+                    super::super::tool_reference::apply_requested(ui.ctx(), &mut edited);
+                    *settings = edited;
+                },
+                settings,
+            );
+        theme::configure_test_fonts(&harness.ctx);
+        harness.run();
+        harness.get_by_label("Command customization").click();
+        harness.run();
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("{}"),
+            )
+            .focus();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.run();
+        let unfinished = "{\"RUST_LOG\":\"debug";
+        harness
+            .get(
+                by().role(egui::accesskit::Role::MultilineTextInput)
+                    .value("{}"),
+            )
+            .type_text(unfinished);
+        harness.run();
+        assert_eq!(harness.state().tinymist.command.environment, "{}");
+        assert!(
+            harness
+                .get_by_label("Apply command")
+                .accesskit_node()
+                .is_disabled()
+        );
+        harness.get_by_label("Tinymist Verbose preset").click();
+        harness.run();
+        assert_eq!(
+            harness.state().tinymist.command.arguments,
+            ToolKind::Tinymist.default_arguments()
+        );
+        assert_eq!(
+            harness.state().tinymist_configuration["lint"]["enabled"],
+            true
+        );
+        assert_eq!(
+            harness.state().tinymist_configuration["lint"]["when"],
+            "onType"
+        );
+        assert_eq!(harness.state().tinymist.command.environment, "{}");
+        harness.get(
+            by().role(egui::accesskit::Role::MultilineTextInput)
+                .value(unfinished),
+        );
+        harness.get(
+            by().role(egui::accesskit::Role::MultilineTextInput)
+                .value(ToolKind::Tinymist.default_arguments()),
+        );
+        assert!(
+            harness
+                .get_by_label("Apply command")
+                .accesskit_node()
+                .is_disabled()
+        );
+    }
 
     #[test]
     fn command_editor_shows_literal_defaults_and_reset_is_specific_to_each_tool() {

@@ -95,6 +95,29 @@ impl EditorApp {
             "settings_query_fingerprint": settings_query_fingerprint,
             "settings_text_input_focused": settings_text_input_focused,
         });
+        observation["harper_enabled"] = serde_json::json!(self.settings.english_grammar);
+        observation["diagnostic_detail"] = crate::tool_profiles::selected_all(&self.settings)
+            .map(crate::tool_profiles::ToolProfile::label)
+            .into();
+        observation["tool_profiles"] = serde_json::Value::Object(
+            crate::tool_reference::ReferenceId::ALL
+                .into_iter()
+                .map(|id| {
+                    (
+                        id.key().to_owned(),
+                        crate::tool_profiles::selected(id, &self.settings)
+                            .map(crate::tool_profiles::ToolProfile::label)
+                            .into(),
+                    )
+                })
+                .collect(),
+        );
+        observation["tool_reference"] = super::tool_reference::opened(
+            context,
+            scoped_child_viewport_id(context, "tiptoptyp-settings"),
+        )
+        .map(|id| id.key())
+        .into();
         observation["synctex_available"] = self
             .preview
             .content

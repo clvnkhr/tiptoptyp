@@ -18,6 +18,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
     let section = egui::CollapsingHeader::new("Tool options")
         .id_salt("help-tool-options")
         .show(ui, |ui| {
+            ui.label("Reference opens a local summary with its reviewed version. A warning marks a bundled version bump that still needs review. Online sources remain optional. Normal keeps the current diagnostic filters; Verbose shows more warnings and pedantic advice in Problems. The Problems filter controls can switch all providers together; individual tools can also be set separately. Presets change the visible diagnostic settings and preserve command arguments, executables, environment, dictionaries and language. Manual diagnostic changes are kept until you choose a preset.");
             ui.label("Ten useful choices for each bundled tool. These are project preferences, not ten options everyone should enable. Arguments shows real defaults: append optional flags there; the app supplies document paths and runtime options separately.");
             ui.label("Arguments uses shell-style quoting, without shell execution or variable expansion. Environment is a JSON object of strings. Working Directory is blank or an existing absolute directory. Server configuration JSON and project TOML are separate from process arguments.");
             for tool in &TOOLS {

@@ -97,6 +97,8 @@ mod theme;
 mod tinymist;
 mod tinymist_sync;
 mod tool_command;
+mod tool_profiles;
+mod tool_reference;
 mod toolchain;
 mod unicode_fonts;
 mod version_render;

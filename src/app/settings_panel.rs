@@ -241,6 +241,11 @@ impl SettingsPanel<'_> {
     }
 
     pub(super) fn show(&mut self, ui: &mut egui::Ui) {
+        self.show_contents(ui);
+        super::tool_reference::show(ui, self.settings);
+    }
+
+    fn show_contents(&mut self, ui: &mut egui::Ui) {
         let documentation_id = egui::Id::new(("settings-documentation", ui.ctx().viewport_id()));
         if let Some(url) = ui
             .ctx()
@@ -401,6 +406,7 @@ impl SettingsPanel<'_> {
         }
 
         self.state.scroll_target = settings_scroll_target;
+        super::tool_reference::apply_requested(ui.ctx(), &mut edited);
 
         if !deterministic_settings && &edited != original {
             self.actions.push(SettingsAction::Update(Box::new(edited)));
@@ -1052,10 +1058,21 @@ impl SettingsPanel<'_> {
                     SettingsTarget::EnglishGrammar,
                     &mut settings_scroll_target,
                 );
-                let harper = ui.checkbox(
-                    &mut edited.english_grammar,
-                    SettingsTarget::EnglishGrammar.label(),
-                );
+                let harper = ui
+                    .horizontal_wrapped(|ui| {
+                        let response = ui.checkbox(
+                            &mut edited.english_grammar,
+                            SettingsTarget::EnglishGrammar.label(),
+                        );
+                        super::tool_reference::controls(
+                            ui,
+                            crate::tool_reference::ReferenceId::Harper,
+                            true,
+                            self.settings,
+                        );
+                        response
+                    })
+                    .inner;
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("settings.harper.enabled", &harper);
                 #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
@@ -1173,6 +1190,11 @@ impl SettingsPanel<'_> {
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(SettingsTarget::LiquidGrammar.label()).strong());
+                    super::tool_reference::button(
+                        ui,
+                        crate::tool_reference::ReferenceId::Liquid,
+                        true,
+                    );
                     let download = ui.add_enabled(
                         !self.status.resource_repair_busy,
                         egui::Button::new("Download Liquid"),
@@ -1215,7 +1237,14 @@ impl SettingsPanel<'_> {
                     );
                 });
                 settings_control_row(ui, "CPU threads", |ui| {
-                    ui.add(egui::DragValue::new(&mut edited.liquid_threads).range(1..=8));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(&mut edited.liquid_threads).range(1..=8));
+                        super::tool_reference::profile_buttons(
+                            ui,
+                            crate::tool_reference::ReferenceId::Liquid,
+                            self.settings,
+                        );
+                    });
                 });
                 liquid_input_controls(ui, &mut edited.liquid_input);
                 if let Err(error) = crate::liquid_runtime::validate_settings(
@@ -1481,7 +1510,21 @@ impl SettingsPanel<'_> {
                             fallback_notice(ui, kind.label(), reason);
                         }
                     }
-                    ui.strong("LaTeXdiff");
+                    ui.horizontal_wrapped(|ui| {
+                        super::tool_reference::controls(
+                            ui,
+                            crate::tool_reference::ReferenceId::Latexdiff,
+                            false,
+                            self.settings,
+                        );
+                        ui.strong("LaTeXdiff");
+                        super::tool_reference::button_named(
+                            ui,
+                            crate::tool_reference::ReferenceId::Texdoc,
+                            false,
+                            "TeXdoc reference",
+                        );
+                    });
                     super::latexdiff::preferences(ui, &mut edited.latexdiff);
                     configuration_editor(
                         ui,
@@ -2199,6 +2242,12 @@ fn show_tex_preferences(
         for engine in BuildEngine::ALL {
             ui.selectable_value(&mut settings.build_engine, engine, engine.label());
         }
+        super::tool_reference::controls(
+            ui,
+            crate::tool_reference::ReferenceId::TexEngine,
+            false,
+            _app_settings,
+        );
     });
     let system = settings.build_engine != BuildEngine::Tectonic;
     ui.horizontal_wrapped(|ui| {
@@ -2246,7 +2295,12 @@ fn show_tex_preferences(
                 ui.label("Working directory");
                 ui.add(egui::TextEdit::singleline(&mut settings.system_command.directory).desired_width(f32::INFINITY)); ui.end_row();
                 for (name, tool) in [("latexmk", &mut settings.latexmk), ("BibTeX", &mut settings.bibtex), ("Biber", &mut settings.biber)] {
-                    ui.label(format!("{name} executable"));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{name} executable"));
+                        let id = match name { "latexmk" => crate::tool_reference::ReferenceId::Latexmk,
+                            "BibTeX" => crate::tool_reference::ReferenceId::Bibtex, _ => crate::tool_reference::ReferenceId::Biber };
+                        super::tool_reference::controls(ui, id, false, _app_settings);
+                    });
                     ui.add(egui::TextEdit::singleline(&mut tool.executable).hint_text("Automatic discovery").desired_width(f32::INFINITY)); ui.end_row();
                     ui.label(format!("{name} arguments"));
                     ui.add(egui::TextEdit::singleline(&mut tool.arguments).desired_width(f32::INFINITY)); ui.end_row();
@@ -2369,8 +2423,7 @@ fn configuration_editor(
         let mut text = ui
             .ctx()
             .data_mut(|data| data.get_temp::<(serde_json::Value, String)>(id))
-            .filter(|(original, _)| original == value)
-            .map(|(_, draft)| draft)
+            .map(|(base, text)| super::tool_drafts::rebase_json(&base, value, text))
             .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap());
         super::code_editor::editor(ui, "configuration-code", &mut text, "json", app_settings, 6);
         let parsed = if text.len() > 2_000_000 {

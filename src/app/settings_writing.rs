@@ -44,7 +44,18 @@ pub(super) fn ltex(
     repair_status: Option<&str>,
 ) {
     ui.separator();
-    let enabled = ui.checkbox(&mut edited.ltex.enabled, "LTeX+ spelling and grammar");
+    let enabled = ui
+        .horizontal_wrapped(|ui| {
+            let response = ui.checkbox(&mut edited.ltex.enabled, "LTeX+ spelling and grammar");
+            super::tool_reference::controls(
+                ui,
+                crate::tool_reference::ReferenceId::Ltex,
+                edited.ltex.mode == crate::settings::ToolMode::Bundled,
+                settings,
+            );
+            response
+        })
+        .inner;
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     crate::desktop_test::observe("settings.ltex.enabled", &enabled);
     #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
@@ -88,8 +99,7 @@ pub(super) fn ltex(
             .data_mut(|data| {
                 data.get_temp::<(crate::ltex::LtexSettings, crate::ltex::LtexSettings)>(id)
             })
-            .filter(|(base, _)| base == &edited.ltex)
-            .map(|(_, draft)| draft)
+            .map(|(base, draft)| super::tool_drafts::rebase_ltex(&base, &edited.ltex, draft))
             .unwrap_or_else(|| edited.ltex.clone());
         let follow = ui.checkbox(
             &mut draft.follow_document_language,
@@ -154,8 +164,7 @@ pub(super) fn ltex(
         let mut json = ui
             .ctx()
             .data_mut(|data| data.get_temp::<(serde_json::Value, String)>(configuration_id))
-            .filter(|(base, _)| base == &draft.configuration)
-            .map(|(_, draft)| draft)
+            .map(|(base, text)| super::tool_drafts::rebase_json(&base, &draft.configuration, text))
             .unwrap_or_else(|| serde_json::to_string_pretty(&draft.configuration).unwrap());
         egui::ScrollArea::vertical()
             .id_salt("ltex-configuration-scroll")
@@ -245,8 +254,7 @@ fn json_setting<T>(
     let mut text = ui
         .ctx()
         .data_mut(|data| data.get_temp::<(T, String)>(id))
-        .filter(|(base, _)| base == value)
-        .map(|(_, draft)| draft)
+        .map(|(base, text)| super::tool_drafts::rebase_json(&base, value, text))
         .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap());
     let field = super::code_editor::editor(ui, salt, &mut text, "json", settings, 12);
     ui.ctx()

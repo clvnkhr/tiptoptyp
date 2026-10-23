@@ -267,6 +267,96 @@ mod tests {
         assert!(close, "Cmd+W should close the Settings panel");
     }
 
+    fn open_reference(harness: &mut Harness<'_, SettingsWindow>) {
+        harness.state_mut().ui.category = SettingsSection::Grammar;
+        harness.run();
+        harness.get_by_label("Harper offline reference").click();
+        harness.run();
+        assert!(super::super::tool_reference::is_open(&harness.ctx));
+    }
+
+    #[test]
+    fn settings_native_menu_close_dismisses_reference_before_the_settings_window() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        open_reference(&mut harness);
+        harness.state_mut().request_close();
+        assert!(!harness.state().close_requested);
+        harness.run();
+        assert!(!super::super::tool_reference::is_open(&harness.ctx));
+        assert!(!harness.state().close_requested);
+        let (_, close) = harness
+            .state_mut()
+            .take_actions(&mut AppSettings::default());
+        assert!(
+            !close,
+            "closing the reference must retain its Settings window"
+        );
+        harness.state_mut().request_close();
+        harness.run();
+        let (_, close) = harness
+            .state_mut()
+            .take_actions(&mut AppSettings::default());
+        assert!(close, "the next native Close targets Settings itself");
+    }
+
+    #[test]
+    fn settings_native_menu_find_cannot_focus_the_form_behind_a_reference() {
+        let mut harness = settings_harness(SettingsWindow::default());
+        open_reference(&mut harness);
+        assert!(!harness.state().ui.focus_search);
+        harness.state_mut().request_search_focus();
+        assert!(!harness.state().ui.focus_search);
+        harness.run();
+        assert!(super::super::tool_reference::is_open(&harness.ctx));
+        assert!(!harness.state().ui.focus_search);
+        assert!(!harness.get_by_label("Search settings").is_focused());
+        assert!(!harness.state().close_requested);
+        harness.get_by_label("Close reference").click();
+        harness.run();
+        harness.state_mut().request_search_focus();
+        harness.run();
+        assert!(harness.get_by_label("Search settings").is_focused());
+    }
+
+    #[test]
+    fn reference_keeps_minimize_and_fullscreen_shortcuts_with_its_settings_window() {
+        for action in [ShortcutAction::Minimize, ShortcutAction::ToggleFullscreen] {
+            let mut harness = settings_harness(SettingsWindow::default());
+            open_reference(&mut harness);
+            let shortcut = harness
+                .state()
+                .input
+                .as_ref()
+                .unwrap()
+                .settings
+                .effective_shortcuts()
+                .egui(action)
+                .unwrap();
+            harness.input_mut().events.push(egui::Event::Key {
+                key: shortcut.logical_key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: shortcut.modifiers,
+            });
+            harness.step();
+            assert!(super::super::tool_reference::is_open(&harness.ctx));
+            assert!(!harness.state().close_requested);
+            assert!(
+                harness.output().viewport_output[&harness.ctx.viewport_id()]
+                    .commands
+                    .iter()
+                    .any(|command| match action {
+                        ShortcutAction::Minimize =>
+                            matches!(command, egui::ViewportCommand::Minimized(true)),
+                        ShortcutAction::ToggleFullscreen =>
+                            matches!(command, egui::ViewportCommand::Fullscreen(true)),
+                        _ => unreachable!(),
+                    })
+            );
+        }
+    }
+
     #[test]
     fn settings_uses_the_binding_that_captured_a_child_shortcut() {
         let context = egui::Context::default();
@@ -1146,9 +1236,14 @@ impl SettingsWindow {
     }
 
     pub(super) fn request_close(&mut self) {
-        self.close_requested = true;
+        // Native menu commands arrive on the parent viewport. Resolve their
+        // local modal owner when the Settings viewport prepares its next frame.
+        self.menu_commands.push(AppCommand::CloseTab);
     }
     pub(super) fn request_search_focus(&mut self) {
+        self.menu_commands.push(AppCommand::Find);
+    }
+    fn focus_search(&mut self) {
         self.ui.help_mode = false;
         self.ui.focus_search = true;
     }
@@ -1306,6 +1401,10 @@ impl SettingsWindow {
                 let gained_focus = input.focused == Some(true) && !state.focused;
                 state.focused = input.focused == Some(true);
                 state.prepare_keyboard(ui.ctx());
+                if state.close_requested {
+                    ui.ctx().request_repaint_of(parent);
+                    return;
+                }
                 let actions = state.paint(ui, &child_captures, &mut close);
                 state.text_input_focused = ui.ctx().text_edit_focused();
                 let shortcut = state.consume_shortcuts(ui.ctx(), &child_captures);
@@ -1350,6 +1449,9 @@ impl SettingsWindow {
             .expect("visible Settings input")
             .settings
             .effective_shortcuts();
+        if super::tool_reference::consume_shortcuts(context, &shortcuts) {
+            return true;
+        }
         let mut owner_changed = false;
         let mut focus_search = false;
         let mut minimize = false;
@@ -1396,7 +1498,7 @@ impl SettingsWindow {
             });
         });
         if focus_search {
-            self.request_search_focus();
+            self.focus_search();
             context.request_repaint();
         }
         if minimize {
@@ -1487,6 +1589,23 @@ impl SettingsWindow {
         }
         let mut events = Vec::new();
         for command in std::mem::take(&mut self.menu_commands) {
+            match command {
+                AppCommand::CloseTab => {
+                    if super::tool_reference::is_open(context) {
+                        super::tool_reference::close(context);
+                    } else {
+                        self.close_requested = true;
+                    }
+                    continue;
+                }
+                AppCommand::Find | AppCommand::FindReplace => {
+                    if !super::tool_reference::is_open(context) {
+                        self.focus_search();
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             if command == AppCommand::Paste {
                 self.paste_deadline = Some(context.input(|input| input.time) + 1.0);
                 context.send_viewport_cmd(egui::ViewportCommand::RequestPaste);

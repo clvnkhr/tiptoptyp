@@ -24,6 +24,8 @@ mod diagnostic_corrections;
 mod navigation;
 mod palette_actions;
 mod settings_controls;
+mod tool_drafts;
+mod tool_reference;
 use navigation::EditorSelection;
 mod explorer_view;
 use explorer_view::git_command_opens_explorer;

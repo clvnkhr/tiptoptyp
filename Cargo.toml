@@ -71,6 +71,9 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 # existing delegate instead of replacing winit's lifecycle integration.
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 
+[build-dependencies]
+toml = "1.1.6"
+
 [dev-dependencies]
 # Parse architecture-test inputs instead of guessing where test-only code starts.
 syn = { version = "2", features = ["full", "visit"] }

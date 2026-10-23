@@ -689,3 +689,36 @@ fn ltex_configuration_reference_uses_the_background_browser_action() {
         "idle frames cannot reopen documentation"
     );
 }
+
+#[test]
+fn harper_profiles_apply_through_the_settings_owner_and_keep_personal_choices() {
+    let mut harness = harness();
+    harness.state_mut().settings.harper_dictionary = "qzorthal\n".into();
+    harness.state_mut().settings.writing_language = crate::settings::WritingLanguage::American;
+    harness.run();
+    let before = harness.state().settings.clone();
+    let title = crate::tool_reference::reference(crate::tool_reference::ReferenceId::Harper).title;
+    harness
+        .get_by_label(&format!("{title} Verbose preset"))
+        .click();
+    harness.run();
+    assert_eq!(
+        serde_json::to_value(&harness.state().settings.harper_rule_overrides).unwrap(),
+        serde_json::json!({})
+    );
+    assert!(!harness.state().settings.english_grammar);
+    assert_eq!(
+        harness.state().settings.harper_dictionary,
+        before.harper_dictionary
+    );
+    assert_eq!(
+        harness.state().settings.writing_language,
+        before.writing_language
+    );
+    harness
+        .get_by_label(&format!("{title} Normal preset"))
+        .click();
+    harness.run();
+    assert_eq!(harness.state().settings, before);
+    assert!(harness.state().actions.is_empty());
+}

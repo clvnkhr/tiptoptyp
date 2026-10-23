@@ -23,7 +23,7 @@ mod notices;
 mod resources;
 
 #[path = "../build_support/liquid_manifest.rs"]
-mod manifest;
+pub(crate) mod manifest;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Config {

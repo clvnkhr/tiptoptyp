@@ -22,6 +22,7 @@ from desktop_ui_version_journeys import VersionJourneys
 from desktop_ui_liquid_journeys import LiquidJourneys
 from desktop_ui_ltex_journeys import LtexJourneys
 from desktop_ui_settings_links_journeys import SettingsLinksJourneys
+from desktop_ui_tool_defaults_journeys import ToolDefaultsJourneys
 from desktop_ui_latexdiff_journeys import LatexdiffJourneys
 from desktop_ui_texdoc_journeys import TexdocJourneys
 from desktop_ui_citation_journeys import CitationJourneys
@@ -481,7 +482,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(SettingsLinksJourneys, LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
+class EditorJourneys(ToolDefaultsJourneys, SettingsLinksJourneys, LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
     def set_math_conversion_formatting(self, enabled):
         if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
             return

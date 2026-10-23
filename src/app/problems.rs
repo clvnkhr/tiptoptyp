@@ -5,6 +5,7 @@ mod scroll_tests;
 #[cfg(test)]
 mod tests;
 use super::*;
+use crate::tool_profiles::{self, ToolProfile};
 use filter::{Filter, Model};
 use std::collections::HashSet;
 
@@ -103,7 +104,12 @@ pub(super) fn search_id(context: &egui::Context) -> egui::Id {
 fn group_target(provider: &str, severity: DiagnosticSeverity) -> String {
     format!("problems.group.{provider}.{severity:?}")
 }
-fn controls_contents(ui: &mut egui::Ui, state: &mut State) -> bool {
+fn controls_contents(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    profile: Option<ToolProfile>,
+    requested_profile: &mut Option<ToolProfile>,
+) -> bool {
     let State {
         filter,
         model,
@@ -115,7 +121,7 @@ fn controls_contents(ui: &mut egui::Ui, state: &mut State) -> bool {
     *filters_popup_open = false;
     let category_visible = !model.categories().is_empty() || filter.category.is_some();
     let field_width =
-        (ui.available_width() - if category_visible { 460.0 } else { 336.0 }).max(110.0);
+        (ui.available_width() - if category_visible { 536.0 } else { 412.0 }).max(110.0);
     let changed = ui
         .horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -262,6 +268,40 @@ fn controls_contents(ui: &mut egui::Ui, state: &mut State) -> bool {
                     egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Category")
                 });
             }
+            let detail_popup = egui::ComboBox::from_id_salt("problems-diagnostic-detail")
+                .selected_text(match profile {
+                    Some(ToolProfile::Normal) => "Normal",
+                    Some(ToolProfile::Verbose) => "Verbose",
+                    None => "Custom",
+                })
+                .width(72.0)
+                .show_ui(ui, |ui| {
+                    for choice in ToolProfile::ALL {
+                        let option = ui.selectable_label(profile == Some(choice), choice.label());
+                        option.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::SelectableLabel,
+                                true,
+                                format!("{} diagnostics", choice.label()),
+                            )
+                        });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe(
+                            &format!("problems.diagnostic_detail.{}", choice.label()),
+                            &option,
+                        );
+                        if option.clicked() {
+                            *requested_profile = Some(choice);
+                            refocus = true;
+                        }
+                    }
+                });
+            *filters_popup_open |= detail_popup.inner.is_some();
+            detail_popup.response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Diagnostic detail")
+            });
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe("problems.diagnostic_detail", &detail_popup.response);
             let grouping =
                 icons::quiet_square_icon_button(ui, UiIcon::Menu, "Group problems", 20.0, *grouped);
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -300,7 +340,12 @@ fn controls_contents(ui: &mut egui::Ui, state: &mut State) -> bool {
     changed
 }
 
-fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
+fn controls(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    profile: Option<ToolProfile>,
+    requested_profile: &mut Option<ToolProfile>,
+) -> bool {
     let start = ui.cursor().top();
     let width = ui.available_width();
     let rect = Rect::from_min_size(ui.cursor().min, Vec2::new(width, ui.available_height()));
@@ -312,7 +357,7 @@ fn controls(ui: &mut egui::Ui, state: &mut State) -> bool {
         rect.x_range(),
         ui.clip_rect().y_range(),
     )));
-    let changed = controls_contents(&mut child, state);
+    let changed = controls_contents(&mut child, state, profile, requested_profile);
     let (rect, _) =
         ui.allocate_exact_size(Vec2::new(width, child.min_rect().height()), Sense::hover());
     state.controls_rect = rect;
@@ -353,10 +398,13 @@ impl EditorApp {
             sticky,
             height,
         );
+        let profile =
+            tool_profiles::selected_all(self.pending_settings.as_ref().unwrap_or(&self.settings));
+        let mut requested_profile = None;
         let mut filtered = false;
         self.problems.sticky_filters = sticky;
         if sticky {
-            filtered = controls(ui, &mut self.problems);
+            filtered = controls(ui, &mut self.problems, profile, &mut requested_profile);
         }
         let mut groups_changed = false;
         let mut copied = false;
@@ -386,7 +434,7 @@ impl EditorApp {
             ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 2.0;
             if !sticky {
-                filtered = controls(ui, &mut self.problems);
+                filtered = controls(ui, &mut self.problems, profile, &mut requested_profile);
                 // A short/empty list must still allow scrolling up into
                 // the controls, while its initial first row remains flush.
                 ui.set_min_height(body_height + self.problems.controls_height);
@@ -744,6 +792,14 @@ impl EditorApp {
         );
         if refreshed || filtered || groups_changed {
             self.dismiss_hover_on_scroll(ui.ctx());
+        }
+        if let Some(profile) = requested_profile {
+            let mut edited = self.settings_snapshot();
+            match tool_profiles::apply_all(profile, &mut edited) {
+                Ok(true) => self.queue_settings(edited, ui.ctx()),
+                Ok(false) => {}
+                Err(error) => self.show_file_error(error),
+            }
         }
         if copied {
             self.focus_problems_search(ui.ctx());

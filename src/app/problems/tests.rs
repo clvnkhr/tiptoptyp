@@ -183,6 +183,76 @@ fn assert_search_owns_keyboard(harness: &Harness<'_, EditorApp>) {
 }
 
 #[test]
+fn global_diagnostic_detail_presets_keep_filters_and_provider_enablement() {
+    let mut app = app_with_problems();
+    app.settings.english_grammar = true;
+    app.settings.ltex.enabled = false;
+    app.settings.tex.lint = false;
+    app.settings.tex.texlab_enabled = true;
+    app.problems.filter = Filter {
+        provider: Some("Harper".into()),
+        severity: Some(DiagnosticSeverity::Warning),
+        category: None,
+        query: "Repeated".into(),
+    };
+    let filter = app.problems.filter.clone();
+    let original = app.settings.clone();
+    let mut harness = workspace_harness(app);
+    for profile in [ToolProfile::Verbose, ToolProfile::Normal] {
+        harness.get_by_label("Diagnostic detail").click();
+        harness.run();
+        harness
+            .get_by_label(&format!("{} diagnostics", profile.label()))
+            .click();
+        harness.run();
+        let settings = harness.state().settings_snapshot();
+        assert_eq!(tool_profiles::selected_all(&settings), Some(profile));
+        assert_eq!(harness.state().problems.filter, filter);
+        assert_eq!(settings.english_grammar, original.english_grammar);
+        assert_eq!(settings.ltex.enabled, original.ltex.enabled);
+        assert_eq!(settings.tex.lint, original.tex.lint);
+        assert_eq!(settings.tex.texlab_enabled, original.tex.texlab_enabled);
+        assert_eq!(settings.tinymist.command, original.tinymist.command);
+        harness.get_by_label("Repeated word");
+        assert_search_owns_keyboard(&harness);
+    }
+    assert_eq!(harness.state().settings_snapshot(), original);
+}
+
+#[test]
+fn diagnostic_detail_stays_compact_on_one_standard_compiler_toolbar_row() {
+    let mut app = app_with_problems();
+    app.preview.editor_diagnostics.clear();
+    app.mark_diagnostics_changed();
+    let mut harness = harness_with_size(app, Vec2::new(900.0, 600.0));
+    reveal_filters(&mut harness);
+    let search = harness.get_by_label("Search problems").rect();
+    let detail = harness.get_by_label("Diagnostic detail").rect();
+    assert!(
+        detail.width() <= 90.0,
+        "diagnostic detail wastes toolbar width: {detail:?}"
+    );
+    assert!(
+        search.width() >= 400.0,
+        "diagnostic detail crowded the search field: {search:?}"
+    );
+    for label in [
+        "Source",
+        "Type",
+        "Diagnostic detail",
+        "Group problems",
+        "Reset problem filters",
+        "3/3",
+    ] {
+        let rect = harness.get_by_label(label).rect();
+        assert!(
+            (rect.center().y - search.center().y).abs() <= 1.0,
+            "{label} added a second toolbar row: {rect:?} / {search:?}"
+        );
+    }
+}
+
+#[test]
 fn default_problems_rows_are_flat_and_start_at_the_top() {
     let harness = harness();
     let first = harness.get_by_label("Unknown variable").rect();

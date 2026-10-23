@@ -1,8 +1,14 @@
+#[path = "build_support/locked_versions.rs"]
+mod locked_versions;
 #[path = "build_support/tool_versions.rs"]
 mod tool_versions;
 
 fn main() {
     emit_build_identity();
+    let lock = std::fs::read_to_string("Cargo.lock").expect("read dependency lockfile");
+    let harper = locked_versions::package_version(&lock, "harper-core")
+        .expect("one resolved Harper version");
+    println!("cargo:rustc-env=TIPTOPTYP_HARPER_VERSION={harper}");
     println!("cargo:rerun-if-changed=toolchain/manifest.tsv");
     println!("cargo:rerun-if-changed=build_support/tool_versions.rs");
     println!("cargo:rerun-if-changed=build.rs");

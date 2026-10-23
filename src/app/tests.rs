@@ -1699,14 +1699,28 @@ fn focused_viewport_and_standard_text_edit_commands_are_explicit() {
 fn native_menu_commands_cannot_reach_the_document_behind_settings() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
+    context.set_embed_viewports(false);
     let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
     app.settings_visible = true;
+    let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
+    let registration = context.run_ui(egui::RawInput::default(), |ui| {
+        app.show_settings_window(ui.ctx(), None);
+    });
+    let callback = registration.viewport_output[&child]
+        .viewport_ui_cb
+        .clone()
+        .unwrap();
+    registration.drop_without_applying_deltas();
+    let repaint_requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = repaint_requests.clone();
+    context.set_request_repaint_callback(move |request| {
+        recorded.lock().unwrap().push(request.viewport_id);
+    });
     let tabs = app.tabs.len();
     let panel = app.bottom_panel.selected();
     for command in [AppCommand::New, AppCommand::Panel, AppCommand::Format] {
         app.queued_native_menu_commands.push(command);
     }
-    let child = scoped_child_viewport_id(&context, "tiptoptyp-settings");
     let mut input = egui::RawInput::default();
     input
         .viewports
@@ -1721,6 +1735,43 @@ fn native_menu_commands_cannot_reach_the_document_behind_settings() {
     assert_eq!(app.bottom_panel.selected(), panel);
     assert!(app.queued_native_menu_commands.pop().is_none());
 
+    // Run the independently scheduled child to idle before proving that a
+    // new native command wakes it, rather than inheriting its creation repaint.
+    for frame in 0..10 {
+        let mut raw = egui::RawInput {
+            viewport_id: child,
+            time: Some(f64::from(frame) / 60.0),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 500.0))),
+            ..Default::default()
+        };
+        raw.viewports.insert(
+            child,
+            egui::ViewportInfo {
+                parent: Some(egui::ViewportId::ROOT),
+                focused: Some(true),
+                ..Default::default()
+            },
+        );
+        context
+            .run_ui(raw, |ui| callback(ui))
+            .drop_without_applying_deltas();
+    }
+    assert!(
+        !context.has_requested_repaint_for(&child),
+        "Settings fixture must be idle"
+    );
+    // Gaining child focus scheduled its parent too. Drain egui's two-pass
+    // repaint request before treating callback history as a fresh wake signal.
+    for _ in 0..2 {
+        context
+            .run_ui(egui::RawInput::default(), |_| {})
+            .drop_without_applying_deltas();
+    }
+    assert!(
+        !context.has_requested_repaint_for(&egui::ViewportId::ROOT),
+        "the document owner must start idle too"
+    );
+    repaint_requests.lock().unwrap().clear();
     app.queued_native_menu_commands.push(AppCommand::CloseTab);
     let mut input = egui::RawInput::default();
     input
@@ -1732,8 +1783,53 @@ fn native_menu_commands_cannot_reach_the_document_behind_settings() {
     context
         .run_ui(input, |ui| app.process_native_menu_commands(ui.ctx(), None))
         .drop_without_applying_deltas();
+    assert!(
+        !app.settings_window.lock().unwrap().has_actions(),
+        "native menu ownership is resolved on the child frame"
+    );
+    assert!(
+        repaint_requests.lock().unwrap().contains(&child),
+        "native menu input must wake the Settings viewport"
+    );
+    let owner_already_scheduled = context.has_requested_repaint_for(&egui::ViewportId::ROOT);
+    repaint_requests.lock().unwrap().clear();
+    let mut child_input = egui::RawInput {
+        viewport_id: child,
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 500.0))),
+        ..Default::default()
+    };
+    child_input.viewports.insert(
+        child,
+        egui::ViewportInfo {
+            parent: Some(egui::ViewportId::ROOT),
+            focused: Some(true),
+            ..Default::default()
+        },
+    );
+    context
+        .run_ui(child_input, |ui| callback(ui))
+        .drop_without_applying_deltas();
     assert!(app.settings_window.lock().unwrap().has_actions());
+    assert!(
+        context.has_requested_repaint_for(&egui::ViewportId::ROOT),
+        "a queued native close must leave its document owner scheduled"
+    );
+    assert!(
+        owner_already_scheduled
+            || repaint_requests
+                .lock()
+                .unwrap()
+                .contains(&egui::ViewportId::ROOT),
+        "an idle document owner must receive a fresh close notification"
+    );
+    context
+        .run_ui(egui::RawInput::default(), |ui| {
+            app.consume_settings_actions(ui.ctx(), None);
+        })
+        .drop_without_applying_deltas();
+    assert!(!app.settings_visible);
     assert_eq!(app.tabs.len(), tabs);
+    assert_eq!(app.bottom_panel.selected(), panel);
 }
 
 #[test]
