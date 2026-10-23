@@ -10,7 +10,7 @@ On macOS, `build_as_child` previously called `NSApplication.activate` (or
 `activateIgnoringOtherApps` on older systems) unconditionally. `with_focused`
 is explicitly unsupported on macOS and cannot suppress this activation.
 
-The sole behavior patch skips activation for child views. The existing parent
+The activation patch skips activation for child views. The existing parent
 window continues to own activation and keyboard focus. Standalone webviews keep
 the upstream activation behavior. No scheduling policy, timers, WebKit drawing,
 navigation, event handling, or other platform behavior changes.
@@ -22,4 +22,13 @@ document window is inactive and checks that the current window/app keeps focus.
 
 Only library/build sources, manifest, provenance, and licenses are retained.
 Example targets are removed from the local manifest because examples are omitted.
-All dependency versions/features and build logic are otherwise unchanged.
+All dependency versions and features remain unchanged.
+
+The macOS warning fixes register the build script's existing
+`macos_12_unavailable` configuration, use the current `NSEventModifierFlags`
+constant names, and remove unsafe blocks from APIs that are now safe in objc2.
+File drops read NSURL pasteboard objects instead of the deprecated filenames
+property list, retaining every file URL and its filesystem bytes while rejecting
+web URLs and malformed items. Isolated-pasteboard unit tests cover multiple
+files, spaces, Unicode, literal URL characters, and non-file input; they never
+read or write the general clipboard.

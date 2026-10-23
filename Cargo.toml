@@ -97,6 +97,11 @@ members = ["core"]
 default-members = [".", "core"]
 exclude = ["xtask"]
 
+# Basic optimization keeps development code and its unwind metadata bounded.
+# Keep full debug info, overflow checks, debug assertions, and panic recovery.
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
