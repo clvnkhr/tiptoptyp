@@ -33,6 +33,7 @@ from desktop_ui_liquid_journeys import LIQUID_JOURNEYS, liquid_model_directory
 from desktop_ui_ltex_journeys import LTEX_JOURNEYS, ltex_program, ltex_environment
 from desktop_ui_settings_links_journeys import SETTINGS_LINK_JOURNEYS
 from desktop_ui_tool_defaults_journeys import TOOL_DEFAULTS_JOURNEYS
+from desktop_ui_indentation_journeys import INDENTATION_JOURNEYS
 from desktop_ui_latexdiff_journeys import LATEXDIFF_JOURNEYS
 from desktop_ui_texdoc_journeys import TEXDOC_JOURNEYS, texdoc_program
 from desktop_ui_citation_journeys import CITATION_JOURNEYS, CITATION_METADATA, CITATION_EXISTING, CITATION_SOURCE
@@ -42,7 +43,7 @@ from desktop_ui_inactive_preview_journeys import INACTIVE_PREVIEW_JOURNEYS
 ROOT = Path(__file__).resolve().parent.parent
 
 JOURNEY_NAMES = (
-    "all", *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
+    "all", *INDENTATION_JOURNEYS, *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
     *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find",
     "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview",
     "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
@@ -57,7 +58,7 @@ JOURNEY_NAMES = (
 def selected_journeys(name):
     # Optional local ML must never become a hidden prerequisite of "all".
     if name == 'all':
-        return [*NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS]
+        return [*INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS]
     return list(TEX_JOURNEYS) if name == 'tex' else [name]
 
 
@@ -201,7 +202,7 @@ class Journey(EditorJourneys):
     def key(self, code, flags="cmd"):
         self.native("key", code, flags)
 
-    def click(self, name):
+    def click(self, name, *, require_hover=False):
         def target_in(state, require_fresh=True):
             target = state["targets"].get(name)
             if not target or not target["enabled"] or (require_fresh and target["age_ms"] > 500):
@@ -221,13 +222,16 @@ class Journey(EditorJourneys):
             # Wait for scroll/layout to settle before posting a click. No action
             # has been attempted yet; this never retries a failed click.
             observed = target_in(self.snapshot())
-            if abs(observed["x"] - target["x"]) <= 0.5 and abs(observed["y"] - target["y"]) <= 0.5:
+            if (abs(observed["x"] - target["x"]) <= 0.5
+                    and abs(observed["y"] - target["y"]) <= 0.5
+                    and (not require_hover or observed.get("hovered") is True)):
                 break
             if time.monotonic() >= deadline:
                 raise AssertionError(f"target did not settle before click: {name}")
             target = observed
-        # AppKit/WKWebView can suppress passive root hover. Fresh, stable hit
-        # geometry and the asserted action outcome are the click contract.
+        # AppKit/WKWebView can suppress passive root hover. A standalone
+        # Settings window can require hover acknowledgement before its first
+        # click; root/native-child controls keep the geometry-only contract.
         self.record("target", name=name, target=observed)
         self.native("click", observed["x"], observed["y"])
 

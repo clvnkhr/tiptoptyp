@@ -1,5 +1,7 @@
 //! Adapt native TextEdit operations, keeping event ordering, selections, IME,
 //! and undo in their existing owners. Only explicit typing enables pairing.
+mod indentation;
+
 use std::ops::Range;
 
 use eframe::egui::{
@@ -75,13 +77,14 @@ impl PairSyntax {
                 })
     }
 
-    pub(crate) fn newline(&mut self, source: &str, byte: usize) -> Option<(String, usize)> {
-        let line_ending = if source.contains("\r\n") {
-            "\r\n"
-        } else {
-            "\n"
-        };
+    pub(crate) fn newline(
+        &mut self,
+        source: &str,
+        byte: usize,
+        spaces: u8,
+    ) -> Option<(String, usize)> {
         let line_start = source[..byte].rfind('\n').map_or(0, |at| at + 1);
+        let line_ending = indentation::line_ending(source, byte, line_start);
         let prefix = &source[line_start..byte];
         let indent_len = prefix
             .bytes()
@@ -91,7 +94,12 @@ impl PairSyntax {
         if source[..byte].ends_with('$') && source[byte..].starts_with('$') {
             self.prepare(source);
             if self.empty_at(source, byte) {
-                let body = format!("{line_ending}{indent}  ");
+                let unit = if spaces == 0 {
+                    "\t".into()
+                } else {
+                    " ".repeat(usize::from(spaces.min(16)))
+                };
+                let body = format!("{line_ending}{indent}{unit}");
                 let advance = body.chars().count();
                 return Some((format!("{body}{line_ending}{indent}"), advance));
             }
@@ -249,6 +257,8 @@ pub(crate) struct PairingBuffer<'a> {
     enabled: bool,
     indent_spaces: Option<u8>,
     typed_tab: bool,
+    typed_enter: bool,
+    document_kind: crate::document::DocumentKind,
     surround: bool,
     deleted_selection: Option<String>,
 }
@@ -270,6 +280,8 @@ impl<'a> PairingBuffer<'a> {
             syntax,
             enabled: enabled && !verbatim,
             indent_spaces: None,
+            typed_enter: !verbatim && events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.matches_logically(egui::Modifiers::NONE))),
+            document_kind: crate::document::DocumentKind::Typst,
             surround: enabled && !verbatim && has_surround_typing(events),
             deleted_selection: None,
             typed_tab: events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::Tab, pressed: true, modifiers, .. } if !modifiers.shift)) && !verbatim,
@@ -289,6 +301,11 @@ impl PairingBuffer<'_> {
 
     pub(crate) fn with_indentation(mut self, spaces: u8) -> Self {
         self.indent_spaces = Some(spaces.min(16));
+        self
+    }
+
+    pub(crate) fn with_document_kind(mut self, kind: crate::document::DocumentKind) -> Self {
+        self.document_kind = kind;
         self
     }
 }
@@ -334,13 +351,43 @@ impl TextBuffer for PairingBuffer<'_> {
                 .insert_text_at(cursor, &" ".repeat(spaces as usize), limit);
             return;
         }
-        if self.enabled && text == "\n" {
+        if self.enabled && self.typed_enter && self.document_kind.is_typst() && text == "\n" {
             let byte = self.source.byte_index_from_char_index(cursor.index).0;
-            if let Some((inserted, advance)) = self.syntax.newline(self.source, byte)
+            if let Some((inserted, advance)) =
+                self.syntax
+                    .newline(self.source, byte, self.indent_spaces.unwrap_or(2))
                 && limit.saturating_sub(self.source.chars().count()) >= inserted.chars().count()
             {
                 self.source.insert_text(&inserted, cursor.index);
                 cursor.index += advance;
+                return;
+            }
+        }
+        if self.typed_enter
+            && text == "\n"
+            && matches!(
+                self.document_kind,
+                crate::document::DocumentKind::Typst | crate::document::DocumentKind::Tex
+            )
+            && let Some(spaces) = self.indent_spaces
+        {
+            let byte = self.source.byte_index_from_char_index(cursor.index).0;
+            let edit = indentation::newline(self.source, byte, self.document_kind, spaces);
+            let fits = limit == usize::MAX
+                || self
+                    .source
+                    .chars()
+                    .count()
+                    .saturating_sub(edit.trim_after)
+                    .saturating_add(edit.text.chars().count())
+                    <= limit;
+            if fits {
+                if edit.trim_after > 0 {
+                    self.source
+                        .delete_char_range(cursor.index..cursor.index + edit.trim_after);
+                }
+                self.source.insert_text(&edit.text, cursor.index);
+                cursor.index += edit.advance;
                 return;
             }
         }
@@ -454,7 +501,12 @@ mod tests {
         let mut source = source.to_owned();
         let mut syntax = PairSyntax::default();
         let mut cursor = CCursor::new(caret);
-        PairingBuffer::new(&mut source, &mut syntax, true, &[]).insert_text_at(
+        let events = if text == "\n" {
+            vec![key(egui::Key::Enter)]
+        } else {
+            vec![]
+        };
+        PairingBuffer::new(&mut source, &mut syntax, true, &events).insert_text_at(
             &mut cursor,
             text,
             usize::MAX,
@@ -640,15 +692,41 @@ mod tests {
     }
 
     #[test]
+    fn newline_prediction_obeys_limits_and_math_body_uses_the_configured_unit() {
+        for (spaces, expected, caret) in [(0, "$\n\t\n$", 3), (4, "$\n    \n$", 6)] {
+            let mut source = "$$".to_owned();
+            let mut syntax = PairSyntax::default();
+            let mut cursor = CCursor::new(1);
+            PairingBuffer::new(&mut source, &mut syntax, true, &[key(egui::Key::Enter)])
+                .with_indentation(spaces)
+                .insert_text_at(&mut cursor, "\n", usize::MAX);
+            assert_eq!(source, expected);
+            assert_eq!(cursor.index.0, caret);
+        }
+        let mut source = "#let f() = {  }".to_owned();
+        let before = source.clone();
+        let limit = source.chars().count() + 1;
+        let mut syntax = PairSyntax::default();
+        let mut cursor = CCursor::new(before.find('{').unwrap() + 1);
+        PairingBuffer::new(&mut source, &mut syntax, false, &[key(egui::Key::Enter)])
+            .with_indentation(2)
+            .insert_text_at(&mut cursor, "\n", limit);
+        let mut expected = before;
+        expected.insert(expected.find('{').unwrap() + 1, '\n');
+        assert_eq!(
+            source, expected,
+            "failed prediction must not trim original whitespace"
+        );
+    }
+
+    #[test]
     fn ordinary_enter_does_not_parse() {
         let mut source = "ordinary text".to_owned();
         let mut syntax = PairSyntax::default();
         let mut cursor = CCursor::new(source.chars().count());
-        PairingBuffer::new(&mut source, &mut syntax, true, &[]).insert_text_at(
-            &mut cursor,
-            "\n",
-            usize::MAX,
-        );
+        PairingBuffer::new(&mut source, &mut syntax, true, &[key(egui::Key::Enter)])
+            .with_indentation(2)
+            .insert_text_at(&mut cursor, "\n", usize::MAX);
         assert_eq!(source, "ordinary text\n");
         assert!(syntax.0.text().is_empty());
     }
@@ -753,9 +831,12 @@ mod tests {
             events: events.clone(),
             ..Default::default()
         };
+        let kind = document.kind();
         ctx.run_ui(input, |ui| {
             document.edit(selection, |source| {
-                let mut buffer = PairingBuffer::new(source, syntax, enabled, &events);
+                let mut buffer = PairingBuffer::new(source, syntax, enabled, &events)
+                    .with_indentation(2)
+                    .with_document_kind(kind);
                 let output = egui::TextEdit::multiline(&mut buffer)
                     .code_editor()
                     .id(id)
@@ -773,6 +854,149 @@ mod tests {
             pressed: true,
             repeat: false,
             modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn native_enter_preserves_existing_indentation_even_without_delimiter_pairing() {
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            for source in ["  first", "\t  first", "  \t", "\t", "  alpha😀"] {
+                let ctx = egui::Context::default();
+                let mut syntax = PairSyntax::default();
+                let mut doc = DocumentSession::new(WindowSessionId::new(1), source, kind);
+                let before_cursor = CCursorRange::one(CCursor::new(source.chars().count()));
+                let cursor = frame(
+                    &ctx,
+                    &mut doc,
+                    &mut syntax,
+                    vec![key(egui::Key::Enter)],
+                    false,
+                    before_cursor,
+                );
+                let indent: String = source
+                    .chars()
+                    .take_while(|ch| matches!(ch, ' ' | '\t'))
+                    .collect();
+                let expected = format!("{source}\n{indent}");
+                assert_eq!(doc.source(), &expected, "{kind:?}: {source:?}");
+                assert_eq!(cursor.primary.index.0, expected.chars().count());
+                let undo = doc.history_step(false, cursor).unwrap();
+                assert_eq!(doc.source(), source);
+                assert_eq!(undo.cursor, before_cursor);
+                doc.history_step(true, undo.cursor).unwrap();
+                assert_eq!(doc.source(), &expected);
+            }
+        }
+    }
+
+    #[test]
+    fn native_enter_handles_structural_closers_and_same_frame_typeahead() {
+        for (kind, before, expected) in [
+            (DocumentKind::Typst, "#let f() = {}", "#let f() = {\n  x\n}"),
+            (
+                DocumentKind::Tex,
+                "\\newcommand{\\f}{}",
+                "\\newcommand{\\f}{\n  x\n}",
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let mut syntax = PairSyntax::default();
+            let mut doc = DocumentSession::new(WindowSessionId::new(1), before, kind);
+            let before_cursor = CCursorRange::one(CCursor::new(before.chars().count() - 1));
+            let cursor = frame(
+                &ctx,
+                &mut doc,
+                &mut syntax,
+                vec![key(egui::Key::Enter), egui::Event::Text("x".into())],
+                false,
+                before_cursor,
+            );
+            assert_eq!(doc.source(), expected);
+            assert_eq!(cursor.primary.index.0, expected.find("x\n").unwrap() + 1);
+            let undo = doc.history_step(false, cursor).unwrap();
+            assert_eq!(doc.source(), before);
+            doc.history_step(true, undo.cursor).unwrap();
+            assert_eq!(doc.source(), expected);
+        }
+    }
+
+    #[test]
+    fn native_enter_between_document_environment_keeps_a_zero_indent_body_line() {
+        let ctx = egui::Context::default();
+        let mut syntax = PairSyntax::default();
+        let before = "\\begin{document}\\end{document}";
+        let mut doc = DocumentSession::new(WindowSessionId::new(1), before, DocumentKind::Tex);
+        let cursor = frame(
+            &ctx,
+            &mut doc,
+            &mut syntax,
+            vec![key(egui::Key::Enter)],
+            false,
+            CCursorRange::one(CCursor::new("\\begin{document}".len())),
+        );
+        assert_eq!(doc.source(), "\\begin{document}\n\n\\end{document}");
+        assert_eq!(cursor.primary.index.0, "\\begin{document}\n".len());
+    }
+
+    #[test]
+    fn native_enter_replaces_selected_text_with_an_atomic_indented_block() {
+        let ctx = egui::Context::default();
+        let mut syntax = PairSyntax::default();
+        let before = "#let xs = (old)";
+        let mut doc = DocumentSession::new(WindowSessionId::new(1), before, DocumentKind::Typst);
+        let start = before.find("old").unwrap();
+        let selected = CCursorRange::two(CCursor::new(start), CCursor::new(start + 3));
+        let cursor = frame(
+            &ctx,
+            &mut doc,
+            &mut syntax,
+            vec![key(egui::Key::Enter)],
+            false,
+            selected,
+        );
+        assert_eq!(doc.source(), "#let xs = (\n  \n)");
+        assert_eq!(cursor.primary.index.0, "#let xs = (\n  ".len());
+        let undo = doc.history_step(false, cursor).unwrap();
+        assert_eq!(doc.source(), before);
+        assert_eq!(undo.cursor, selected);
+    }
+
+    #[test]
+    fn plain_text_enter_and_pasted_or_programmatic_newlines_remain_literal() {
+        let ctx = egui::Context::default();
+        let mut syntax = PairSyntax::default();
+        let mut doc = DocumentSession::new(WindowSessionId::new(1), "  text", DocumentKind::Text);
+        frame(
+            &ctx,
+            &mut doc,
+            &mut syntax,
+            vec![key(egui::Key::Enter)],
+            false,
+            CCursorRange::one(CCursor::new(6)),
+        );
+        assert_eq!(doc.source(), "  text\n");
+        for events in [
+            vec![],
+            vec![egui::Event::Paste("\n".into())],
+            vec![egui::Event::Paste("\n  x\n".into())],
+        ] {
+            let mut source = "  #let f() = {}".to_owned();
+            let mut cursor = CCursor::new(source.chars().count() - 1);
+            let text = events
+                .first()
+                .and_then(|event| {
+                    if let egui::Event::Paste(text) = event {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or("\n");
+            let expected = format!("  #let f() = {{{text}}}");
+            PairingBuffer::new(&mut source, &mut syntax, true, &events)
+                .with_indentation(2)
+                .insert_text_at(&mut cursor, text, usize::MAX);
+            assert_eq!(source, expected);
         }
     }
 

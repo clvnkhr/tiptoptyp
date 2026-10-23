@@ -590,6 +590,7 @@ impl EditorApp {
                         )
                         .with_surround(surround_enabled, &input.events)
                         .with_indentation(indent_spaces)
+                        .with_document_kind(document_kind)
                     });
                     &mut pairing
                 };

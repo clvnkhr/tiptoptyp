@@ -4,7 +4,7 @@ import unittest
 
 from desktop_ui_settings_links_journeys import (
     BROWSER_BUNDLES, LTEX_REFERENCE, SOURCE_FIELDS, assert_document_preserved,
-    assert_preferences_preserved, documentation_click_completed,
+    assert_preferences_preserved, documentation_browser_activated, documentation_click_completed,
 )
 
 
@@ -25,6 +25,18 @@ class SettingsDocumentationContract(unittest.TestCase):
                        'Could not open ' + LTEX_REFERENCE):
             document['completion_notice'] = notice
             self.assertFalse(documentation_click_completed(document, dict(pid=200, bundle='com.brave.Browser'), 100))
+
+    def test_browser_activation_is_observable_without_an_occluded_app_frame(self):
+        browser = dict(pid=200, bundle='com.brave.Browser')
+        self.assertTrue(documentation_browser_activated(browser, 100))
+        self.assertFalse(documentation_browser_activated(dict(pid=100, bundle='dev.tiptoptyp.journey'), 100))
+        document = self.document()
+        document['completion_notice'] = None
+        self.assertFalse(documentation_click_completed(document, browser, 100),
+                         'Browser activation alone cannot prove a completed launch')
+        for foreground in ({}, dict(pid=200, bundle='com.apple.finder')):
+            with self.subTest(foreground=foreground), self.assertRaises(AssertionError):
+                documentation_browser_activated(foreground, 100)
 
     def test_unrelated_foreground_apps_and_missing_native_evidence_cannot_pass(self):
         for foreground in (dict(pid=200, bundle='com.apple.finder'),

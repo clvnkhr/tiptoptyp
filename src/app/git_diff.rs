@@ -130,6 +130,7 @@ impl EditorApp {
                     )
                     .with_surround(settings.auto_pair_delimiters, &input.events)
                     .with_indentation(settings.indent_spaces)
+                    .with_document_kind(kind)
                 });
                 full_view::show(
                     ui,

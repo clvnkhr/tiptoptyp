@@ -25,8 +25,8 @@ def assert_document_preserved(document, before):
         raise AssertionError('Opening documentation changed the document or its preview owner')
 
 
-def documentation_click_completed(document, foreground, app_pid):
-    """A launch receipt alone cannot prove the external browser actually opened."""
+def documentation_browser_activated(foreground, app_pid):
+    """Observe native activation without requiring a frame from an occluded app."""
     pid, bundle = foreground.get('pid'), foreground.get('bundle')
     if type(pid) is not int or pid <= 0 or not isinstance(bundle, str) or not bundle:
         raise AssertionError('Native foreground application evidence is unavailable')
@@ -35,6 +35,13 @@ def documentation_click_completed(document, foreground, app_pid):
     if bundle not in BROWSER_BUNDLES:
         raise AssertionError('Documentation click switched to an unrecognized browser or another app: '
                              + bundle)
+    return True
+
+
+def documentation_click_completed(document, foreground, app_pid):
+    """Both the observed browser activation and fresh launcher receipt are required."""
+    if not documentation_browser_activated(foreground, app_pid):
+        return False
     if 'completion_notice' not in document:
         raise AssertionError('Documentation launcher completion evidence is unavailable')
     return document['completion_notice'] == 'Opened ' + LTEX_REFERENCE + ' in the system browser'
@@ -49,7 +56,7 @@ def assert_preferences_preserved(before, after):
 class SettingsLinksJourneys:
     def documentation_settings_fingerprint(self):
         if not self.snapshot()['document']['settings_json']['visible']:
-            self.click('settings.json.mode')
+            self.click('settings.json.mode', require_hover=True)
         self.wait('Complete Settings JSON is available for comparison', lambda d:
                   d['settings_json']['visible'] and d['settings_json']['valid'])
         # Reload from the live settings rather than compare a parked draft.
@@ -58,7 +65,7 @@ class SettingsLinksJourneys:
                              d['settings_json']['visible'] and d['settings_json']['valid'])['document']
         result = document['settings_json']['fingerprint']
         assert_preferences_preserved(result, result)
-        self.click('settings.json.mode')
+        self.click('settings.json.mode', require_hover=True)
         self.wait('Settings form returns after comparison', lambda d:
                   not d['settings_json']['visible'])
         return result
@@ -86,25 +93,30 @@ class SettingsLinksJourneys:
         self.click(target)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            # These are observations only. Do not use key/click input here: the
-            # ordinary input guard would reactivate the app and hide a failure.
+            # Observe native activation before returning to the app. macOS may
+            # suspend drawing a completely occluded window, so do not request a
+            # fresh framebuffer while the browser covers it. No input is posted
+            # before this independent browser observation has succeeded.
             foreground = self.native('foreground')
-            state = self.snapshot()
-            assert_document_preserved(state['document'], before)
-            if documentation_click_completed(state['document'], foreground, self.process.pid):
-                self.record('settings.documentation.browser_opened', target=target,
-                            url=LTEX_REFERENCE, foreground=foreground, launcher_completed=True)
+            if documentation_browser_activated(foreground, self.process.pid):
+                self.record('settings.documentation.browser_activated', target=target,
+                            url=LTEX_REFERENCE, foreground=foreground)
                 break
             time.sleep(.05)
         else:
             raise AssertionError('The Settings documentation click did not complete and activate the browser')
         # The browser transition above is intentional; explicitly restore the
         # exact Settings window before posting any further native input.
-        self.native('activate')
         self.native('raise', title)
+        self.native('activate')
         self.native_wait('Settings regains focus after its documentation opens', lambda windows:
                          any(window['AXTitle'] == title and window.get('AXFocused') for window in windows))
-        self.wait('Settings stays open after its documentation link', lambda d: d['settings_visible'])
+        state = self.wait('Settings publishes the completed documentation launch', lambda d:
+                          d['settings_visible'] and documentation_click_completed(
+                              d, foreground, self.process.pid))
+        assert_document_preserved(state['document'], before)
+        self.record('settings.documentation.browser_opened', target=target,
+                    url=LTEX_REFERENCE, foreground=foreground, launcher_completed=True)
         assert_preferences_preserved(preferences, self.documentation_settings_fingerprint())
         self.close_settings()
         after = self.snapshot()['document']

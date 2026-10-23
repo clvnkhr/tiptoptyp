@@ -19,6 +19,7 @@ python3 scripts/test-desktop-ui.py
 python3 scripts/test-desktop-ui.py --journey panels
 python3 scripts/test-desktop-ui.py --journey settings_links
 python3 scripts/test-desktop-ui.py --journey tool_defaults --capture-review
+python3 scripts/test-desktop-ui.py --journey indentation
 python3 scripts/test-desktop-ui.py --journey problems_focus
 python3 scripts/test-desktop-ui.py --journey preview_find
 python3 scripts/test-desktop-ui.py --journey tables
@@ -159,6 +160,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
 | controls | Both engines: stable outline popup size, app-switch hide/restore, outline/history/pages/zoom/fit/search, minimize/reopen, detach/return |
 | settings_links | Opens Settings, navigates to Grammar & spelling through native search, expands LTeX+ setup and clicks its Configuration reference. Requires both the exact background-launcher success notice and an observed foreground browser, then returns to the same Settings window and compares reloaded complete preferences and unchanged source/preview ownership. Runs separately from `all` because it deliberately opens the system browser; needs no model download. Unknown browser bundle identifiers are reported as unavailable evidence rather than accepted as a pass. |
+| indentation | Opens real named `.typ` and `.tex` fixtures and posts Return: structural blocks/environments, paired brackets, closing-block level, root document environment, literal mixed tabs/spaces and CRLF. Exact source/caret and whole-action Undo/Redo are checked with automatic pairing off/on and spaces/tabs. Multiline paste remains verbatim. Restores complete preferences and the original source/preview owner; included in `all`, no model dependency. |
 | tool_defaults | Opens the local LTeX+ reference in Settings without activating a browser or changing preferences; Cmd+F stays in the modal and Cmd+W closes only the reference. LTeX+ and Harper Normal → Verbose → Normal clicks preserve provider activation, language, dictionaries, source/preview ownership and every restored setting, including executable selections. Requires no model download; included in `all`. Optional fresh Settings framebuffers for separate inspection. |
 | settings_search | Settings category switches retain the query and form edits; global search routes across Appearance, Editor, Writing, Grammar & spelling, Preview and Tools without resizing the native window; JSON drafts survive form navigation, invalid/reload/save and JSON Find stay local; Cmd+N/Cmd+5 cannot change the document, repeated Cmd+F owns search, and Cmd+W closes only Settings |
 | partial_preview | A standalone fresh profile first proves buffered Typst is the actual default renderer; a real 48-page A4 document with fractional point sizes then exercises partial preview; native End, Outline and wheel navigation refill visible ink, repeated zoom buttons and keyboard events grow/shrink actual paper geometry, and fit preserves coverage, and full → partial switching preserves both choices and restores the original session |

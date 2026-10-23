@@ -932,6 +932,28 @@ class ClickReadinessContract(unittest.TestCase):
         journey.click("button")
         self.assertEqual(actions, [("move", 20, 10), ("move", 20, 11), ("click", 20, 11)])
 
+    def test_settings_can_require_acknowledged_hover_before_its_single_click(self):
+        journey = object.__new__(runner.Journey)
+        samples = iter([False, False, True])
+        journey.snapshot = lambda: {"document": {}, "targets": {"button": {
+            "x": 20, "y": 10, "enabled": True, "age_ms": 0, "hovered": next(samples)}}}
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        journey.record = lambda *args, **kwargs: None
+        journey.click("button", require_hover=True)
+        self.assertEqual(actions, [("move", 20, 10), ("move", 20, 10), ("click", 20, 10)])
+
+    def test_unacknowledged_hover_never_posts_a_click(self):
+        journey = object.__new__(runner.Journey)
+        journey.snapshot = lambda: {"document": {}, "targets": {"button": {
+            "x": 20, "y": 10, "enabled": True, "age_ms": 0, "hovered": False}}}
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        with patch.object(runner.time, "monotonic", side_effect=[0, 4]):
+            with self.assertRaisesRegex(AssertionError, "did not settle"):
+                journey.click("button", require_hover=True)
+        self.assertEqual(actions, [("move", 20, 10)])
+
     def test_unsettled_target_times_out_without_clicking(self):
         journey = object.__new__(runner.Journey)
         samples = iter([10, 11])

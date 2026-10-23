@@ -8813,7 +8813,11 @@ impl EditorApp {
                 .char_indices()
                 .nth(range.primary.index.0)
                 .map_or(source.len(), |(byte, _)| byte);
-            if self.auto_pair_syntax.newline(source, byte).is_some() {
+            if self
+                .auto_pair_syntax
+                .newline(source, byte, self.settings.indent_spaces)
+                .is_some()
+            {
                 self.editor_completion = None;
                 return;
             }

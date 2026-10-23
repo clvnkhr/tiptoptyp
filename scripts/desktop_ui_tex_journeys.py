@@ -148,7 +148,7 @@ class TexJourneys:
         """Edit the complete settings schema through its real JSON editor."""
         self.settings()
         if not self.snapshot()["document"]["settings_json"]["visible"]:
-            self.click("settings.json.mode")
+            self.click("settings.json.mode", require_hover=True)
         self.wait("JSON settings ready", lambda d: d["settings_json"]["visible"])
         for old, new in replacements:
             self.key(3)
