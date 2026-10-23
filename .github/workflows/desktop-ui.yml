@@ -8,6 +8,10 @@ on:
         type: choice
         options: [
           "all",
+          "indentation",
+          "tool_defaults",
+          "settings_links",
+          "ltex",
           "liquid_selection",
           "liquid_streaming",
           "latexdiff_wizard",
