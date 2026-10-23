@@ -12,7 +12,6 @@ fn key(scale: u32) -> RequestKey {
         revision: 1,
         pages: vec![0],
         scale,
-        query: String::new(),
         palette: LIGHT,
     }
 }
@@ -322,4 +321,91 @@ fn publishing_replacement_page_text_retires_its_search_matches() {
             .is_empty()
     );
     assert_eq!(resident.search_matches.rebuilds, 1);
+}
+
+#[test]
+fn find_edits_and_clear_keep_ready_pixels_and_the_same_texture() {
+    let (context, mut view, initial) = seeded();
+    let texture = view.residents[&0].texture.id();
+    for (step, query) in ["p", "preview", ""].into_iter().enumerate() {
+        view.controls_action(super::super::preview_controls::Action::Find(
+            query.to_owned(),
+        ));
+        let desired = initial.clone();
+        assert_eq!(
+            frame(
+                &context,
+                &mut view,
+                &desired,
+                1000.0,
+                false,
+                1.0 + step as f64
+            ),
+            0
+        );
+        assert_eq!(
+            view.requested.as_ref(),
+            Some(&initial),
+            "Find edits must not dispatch a replacement raster"
+        );
+        assert_eq!(view.residents[&0].texture.id(), texture);
+        assert!(view.ready(), "Find must not change pixel readiness");
+    }
+}
+
+#[test]
+fn search_results_survive_viewport_changes_but_never_old_queries_or_documents() {
+    let (context, mut view, initial) = seeded();
+    view.controls_action(super::super::preview_controls::Action::Find(
+        "norm".to_owned(),
+    ));
+    frame(&context, &mut view, &initial, 1000.0, false, 1.0);
+    let search = view.search_requested.clone().unwrap();
+    for stale in [
+        SearchKey {
+            query: "old".into(),
+            ..search.clone()
+        },
+        SearchKey {
+            revision: search.revision + 1,
+            ..search.clone()
+        },
+    ] {
+        view.accept_search(stale, vec![0]);
+        assert!(view.search_pending);
+        assert!(view.search_pages.is_empty());
+        assert!(view.goto.is_none());
+    }
+    let desired = RequestKey {
+        pages: vec![1],
+        ..initial
+    };
+    frame(&context, &mut view, &desired, 1000.0, false, 2.0);
+    assert_eq!(view.search_requested.as_ref(), Some(&search));
+    view.accept_search(search.clone(), vec![1]);
+    assert!(!view.search_pending);
+    assert_eq!(view.search_pages, [1]);
+    assert_eq!(view.goto, Some(1));
+    view.goto = None;
+    view.controls_action(super::super::preview_controls::Action::Find(String::new()));
+    view.accept_search(search, vec![0]);
+    assert!(view.search_pages.is_empty());
+    assert!(!view.search_pending);
+    assert!(view.goto.is_none());
+}
+
+#[test]
+fn a_find_edit_does_not_reject_an_already_completed_pixel_replacement() {
+    let (context, mut view, _) = seeded();
+    let desired = key(200);
+    view.requested = Some(desired.clone());
+    view.pending_reply = Some(reply(&desired));
+    assert_eq!(frame(&context, &mut view, &desired, 1100.0, true, 0.01), 0);
+    view.controls_action(super::super::preview_controls::Action::Find(
+        "norm".to_owned(),
+    ));
+    assert_eq!(frame(&context, &mut view, &desired, 1100.0, false, 0.02), 1);
+    assert!(view.ready());
+    assert!(view.search_pending);
+    assert_eq!(view.active_scale, desired.scale);
 }

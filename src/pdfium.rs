@@ -162,8 +162,53 @@ pub(crate) struct RequestKey {
     pub revision: u64,
     pub pages: Vec<usize>,
     pub scale: u32, // physical pixels per PDF point, hundredths
-    pub query: String,
     pub palette: (egui::Color32, egui::Color32),
+}
+
+/// Search identity is independent of viewport pixels. A changing query must
+/// not cancel a render, and scrolling must not restart a document search.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SearchKey {
+    pub revision: u64,
+    pub query: Arc<str>,
+}
+
+struct SearchRequest {
+    id: u64,
+    key: SearchKey,
+    next_page: usize,
+    hits: Vec<usize>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SearchProgress {
+    Complete,
+    Paused,
+    Cancelled,
+}
+
+impl SearchRequest {
+    fn advance(
+        &mut self,
+        pages: usize,
+        mut current: impl FnMut() -> bool,
+        mut raster_pending: impl FnMut() -> bool,
+        mut matches: impl FnMut(usize) -> bool,
+    ) -> SearchProgress {
+        while self.next_page < pages {
+            if !current() {
+                return SearchProgress::Cancelled;
+            }
+            if raster_pending() {
+                return SearchProgress::Paused;
+            }
+            if matches(self.next_page) {
+                self.hits.push(self.next_page);
+            }
+            self.next_page += 1;
+        }
+        SearchProgress::Complete
+    }
 }
 
 pub(crate) struct Request {
@@ -242,13 +287,16 @@ pub(crate) struct Reply {
 struct Mailbox {
     request: Option<(u64, Request)>,
     reply: Option<Reply>,
-    search: Option<(RequestKey, Vec<usize>)>,
+    search_request: Option<SearchRequest>,
+    search: Option<(SearchKey, Vec<usize>)>,
     stop: bool,
 }
 
 pub(crate) struct Worker {
     mailbox: Arc<(Mutex<Mailbox>, Condvar)>,
     serial: Arc<AtomicU64>,
+    search_serial: Arc<AtomicU64>,
+    document_revision: Arc<AtomicU64>,
 }
 
 impl Worker {
@@ -257,30 +305,118 @@ impl Worker {
         Self {
             mailbox: Arc::new((Mutex::new(Mailbox::default()), Condvar::new())),
             serial: Arc::new(AtomicU64::new(0)),
+            search_serial: Arc::new(AtomicU64::new(0)),
+            document_revision: Arc::new(AtomicU64::new(0)),
         }
     }
 
     pub fn start(repaint: crate::worker::RepaintTarget) -> Self {
         let mailbox = Arc::new((Mutex::new(Mailbox::default()), Condvar::new()));
         let serial = Arc::new(AtomicU64::new(0));
+        let search_serial = Arc::new(AtomicU64::new(0));
+        let document_revision = Arc::new(AtomicU64::new(0));
         let worker = Self {
             mailbox: mailbox.clone(),
             serial: serial.clone(),
+            search_serial: search_serial.clone(),
+            document_revision: document_revision.clone(),
         };
         std::thread::spawn(move || {
             let mut retained: Option<(Arc<[u8]>, PdfDocument<'static>, Arc<Catalog>)> = None;
-            let mut search_cache: Option<(u64, String, Vec<usize>)> = None;
+            let mut retained_revision = 0;
+            let mut search_cache: Option<(SearchKey, Vec<usize>)> = None;
             loop {
-                let (id, request) = {
+                enum Work {
+                    Render(u64, Request),
+                    Search(SearchRequest, u64),
+                }
+                let work = {
                     let (lock, wake) = &*mailbox;
                     let mut state = lock.lock().unwrap();
-                    while state.request.is_none() && !state.stop {
+                    while state.request.is_none() && state.search_request.is_none() && !state.stop {
                         state = wake.wait(state).unwrap();
                     }
                     if state.stop {
                         break;
                     }
-                    state.request.take().unwrap()
+                    // Pixels always publish before a potentially long document
+                    // search; each queue retains only its latest request.
+                    if let Some((id, request)) = state.request.take() {
+                        Work::Render(id, request)
+                    } else {
+                        Work::Search(
+                            state.search_request.take().unwrap(),
+                            serial.load(Ordering::Acquire),
+                        )
+                    }
+                };
+                let (id, request) = match work {
+                    Work::Render(id, request) => (id, request),
+                    Work::Search(mut request, raster_serial) => {
+                        let current = || {
+                            search_serial.load(Ordering::Acquire) == request.id
+                                && document_revision.load(Ordering::Acquire) == request.key.revision
+                        };
+                        if !current() {
+                            continue;
+                        }
+                        let hits = if request.key.query.is_empty() {
+                            Vec::new()
+                        } else if let Some((cached, hits)) = &search_cache
+                            && *cached == request.key
+                        {
+                            hits.clone()
+                        } else if retained_revision == request.key.revision
+                            && let Some((_, doc, catalog)) = &retained
+                        {
+                            let query = request.key.query.to_lowercase();
+                            let id = request.id;
+                            let revision = request.key.revision;
+                            match request.advance(
+                                catalog.sizes.len(),
+                                || {
+                                    search_serial.load(Ordering::Acquire) == id
+                                        && document_revision.load(Ordering::Acquire) == revision
+                                },
+                                || serial.load(Ordering::Acquire) != raster_serial,
+                                |index| {
+                                    doc.pages().get(index as i32).is_ok_and(|page| {
+                                        page.text().is_ok_and(|text| {
+                                            text.all().to_lowercase().contains(&query)
+                                        })
+                                    })
+                                },
+                            ) {
+                                SearchProgress::Cancelled => continue,
+                                SearchProgress::Paused => {
+                                    // Retain progress in the same bounded slot;
+                                    // a newer query always owns that slot first.
+                                    let mut state = mailbox.0.lock().unwrap();
+                                    if state.search_request.is_none()
+                                        && !state.stop
+                                        && search_serial.load(Ordering::Acquire) == id
+                                        && document_revision.load(Ordering::Acquire) == revision
+                                    {
+                                        state.search_request = Some(request);
+                                    }
+                                    continue;
+                                }
+                                SearchProgress::Complete => request.hits,
+                            }
+                        } else {
+                            // A failed document render owns its visible error;
+                            // never search the previous document on its behalf.
+                            continue;
+                        };
+                        if search_serial.load(Ordering::Acquire) == request.id
+                            && document_revision.load(Ordering::Acquire) == request.key.revision
+                        {
+                            search_cache = Some((request.key.clone(), hits.clone()));
+                            mailbox.0.lock().unwrap().search = Some((request.key, hits));
+                            repaint.request_repaint();
+                        }
+                        continue;
+                    }
                 };
                 let current = || serial.load(Ordering::Acquire) == id;
                 let result = (|| {
@@ -334,6 +470,10 @@ impl Worker {
                         ));
                     }
                     retained.as_mut().unwrap().0 = request.bytes.clone();
+                    retained_revision = request.key.revision;
+                    if changed {
+                        search_cache = None;
+                    }
                     let (_, doc, catalog) = retained.as_ref().unwrap();
                     let mut pages = Vec::new();
                     let mut pixels = 0;
@@ -434,7 +574,6 @@ impl Worker {
                         parsed_new_document: changed,
                     })
                 })();
-                let succeeded = result.is_ok();
                 if current() {
                     mailbox.0.lock().unwrap().reply = Some(Reply {
                         key: request.key.clone(),
@@ -442,59 +581,35 @@ impl Worker {
                     });
                     repaint.request_repaint();
                 }
-                // Search is deliberately after publication, never a visible-render gate.
-                if succeeded
-                    && !request.key.query.is_empty()
-                    && let Some((_, doc, catalog)) = &retained
-                {
-                    if let Some((revision, query, hits)) = &search_cache
-                        && *revision == request.key.revision
-                        && *query == request.key.query
-                    {
-                        if current() {
-                            mailbox.0.lock().unwrap().search = Some((request.key, hits.clone()));
-                            repaint.request_repaint();
-                        }
-                        continue;
-                    }
-                    let query = request.key.query.to_lowercase();
-                    let mut hits = Vec::new();
-                    for index in 0..catalog.sizes.len() {
-                        if !current() {
-                            break;
-                        }
-                        if let Ok(page) = doc.pages().get(index as i32)
-                            && let Ok(text) = page.text()
-                            && text.all().to_lowercase().contains(&query)
-                        {
-                            hits.push(index);
-                        }
-                    }
-                    if current() {
-                        search_cache = Some((
-                            request.key.revision,
-                            request.key.query.clone(),
-                            hits.clone(),
-                        ));
-                        mailbox.0.lock().unwrap().search = Some((request.key, hits));
-                        repaint.request_repaint();
-                    }
-                }
             }
         });
         worker
     }
 
     pub fn request(&self, request: Request) {
-        let id = self.serial.fetch_add(1, Ordering::AcqRel) + 1;
         let mut state = self.mailbox.0.lock().unwrap();
+        let id = self.serial.fetch_add(1, Ordering::AcqRel) + 1;
+        self.document_revision
+            .store(request.key.revision, Ordering::Release);
         state.request = Some((id, request));
         state.reply = None;
+        self.mailbox.1.notify_one();
+    }
+
+    pub fn search(&self, key: SearchKey) {
+        let mut state = self.mailbox.0.lock().unwrap();
+        let id = self.search_serial.fetch_add(1, Ordering::AcqRel) + 1;
+        state.search_request = Some(SearchRequest {
+            id,
+            key,
+            next_page: 0,
+            hits: Vec::new(),
+        });
         state.search = None;
         self.mailbox.1.notify_one();
     }
 
-    pub fn poll(&self) -> (Option<Reply>, Option<(RequestKey, Vec<usize>)>) {
+    pub fn poll(&self) -> (Option<Reply>, Option<(SearchKey, Vec<usize>)>) {
         let mut state = self.mailbox.0.lock().unwrap();
         (state.reply.take(), state.search.take())
     }
@@ -503,9 +618,11 @@ impl Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.serial.fetch_add(1, Ordering::AcqRel);
+        self.search_serial.fetch_add(1, Ordering::AcqRel);
         let mut state = self.mailbox.0.lock().unwrap();
         state.stop = true;
         state.request = None;
+        state.search_request = None;
         self.mailbox.1.notify_one();
         // Never join a native render on the UI thread. The worker drops its document.
     }
@@ -634,7 +751,6 @@ mod tests {
             revision: 1,
             pages: vec![0],
             scale: 100,
-            query: String::new(),
             palette: (egui::Color32::WHITE, egui::Color32::BLACK),
         };
         assert_ne!(
@@ -760,7 +876,6 @@ mod tests {
                         revision: iteration + 1,
                         pages: vec![page_index],
                         scale: 429,
-                        query: String::new(),
                         palette: (egui::Color32::WHITE, egui::Color32::BLACK),
                     },
                     bytes,
@@ -793,6 +908,236 @@ mod tests {
         }
     }
 
+    #[test]
+    fn document_search_yields_to_pixels_and_resumes_without_rescanning_pages() {
+        let mut request = SearchRequest {
+            id: 1,
+            key: SearchKey {
+                revision: 1,
+                query: "the".into(),
+            },
+            next_page: 0,
+            hits: vec![],
+        };
+        let visited = std::cell::RefCell::new(Vec::new());
+        assert_eq!(
+            request.advance(
+                6,
+                || true,
+                || visited.borrow().len() == 2,
+                |index| {
+                    visited.borrow_mut().push(index);
+                    index % 2 == 0
+                }
+            ),
+            SearchProgress::Paused
+        );
+        assert_eq!(request.next_page, 2);
+        assert_eq!(request.hits, [0]);
+        assert_eq!(
+            request.advance(
+                6,
+                || true,
+                || false,
+                |index| {
+                    visited.borrow_mut().push(index);
+                    index % 2 == 0
+                }
+            ),
+            SearchProgress::Complete
+        );
+        assert_eq!(*visited.borrow(), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(request.hits, [0, 2, 4]);
+        assert_eq!(
+            request.advance(
+                7,
+                || false,
+                || false,
+                |_| panic!("stale queries must not scan another page")
+            ),
+            SearchProgress::Cancelled
+        );
+    }
+
+    #[test]
+    fn search_and_raster_requests_have_independent_latest_wins_slots() {
+        let worker = Worker::idle_for_tests();
+        let key = RequestKey {
+            revision: 1,
+            pages: vec![0],
+            scale: 100,
+            palette: (egui::Color32::WHITE, egui::Color32::BLACK),
+        };
+        worker.request(Request {
+            key: key.clone(),
+            bytes: Arc::from(&b"PDF placeholder"[..]),
+        });
+        worker.mailbox.0.lock().unwrap().reply = Some(Reply {
+            key: key.clone(),
+            result: Err("completed render marker".into()),
+        });
+        for query in ["the", "norm", ""] {
+            worker.search(SearchKey {
+                revision: 1,
+                query: query.into(),
+            });
+            assert_eq!(
+                worker.serial.load(Ordering::Acquire),
+                1,
+                "query edits must not cancel native rendering"
+            );
+            let state = worker.mailbox.0.lock().unwrap();
+            assert_eq!(state.request.as_ref().unwrap().1.key, key);
+            assert_eq!(state.reply.as_ref().unwrap().key, key);
+            assert_eq!(
+                state.search_request.as_ref().unwrap().key.query.as_ref(),
+                query
+            );
+        }
+        let search = SearchKey {
+            revision: 1,
+            query: "norm".into(),
+        };
+        worker.mailbox.0.lock().unwrap().search = Some((search.clone(), vec![0]));
+        let search_serial = worker.search_serial.load(Ordering::Acquire);
+        worker.request(Request {
+            key: RequestKey {
+                pages: vec![1],
+                scale: 200,
+                ..key.clone()
+            },
+            bytes: Arc::from(&b"PDF placeholder"[..]),
+        });
+        assert_eq!(worker.search_serial.load(Ordering::Acquire), search_serial);
+        assert_eq!(
+            worker.document_revision.load(Ordering::Acquire),
+            search.revision
+        );
+        assert_eq!(
+            worker.poll().1,
+            Some((search, vec![0])),
+            "new viewport pixels must not discard completed search hits"
+        );
+        worker.request(Request {
+            key: RequestKey { revision: 2, ..key },
+            bytes: Arc::from(&b"new PDF placeholder"[..]),
+        });
+        assert_eq!(
+            worker.document_revision.load(Ordering::Acquire),
+            2,
+            "a new document must cancel searches for its predecessor"
+        );
+    }
+
+    fn find_fixture_pdf() -> Vec<u8> {
+        const PAGES: usize = 12;
+        let kids = (0..PAGES)
+            .map(|page| format!("{} 0 R", 4 + 2 * page))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            format!("<< /Type /Pages /Count {PAGES} /Kids [{kids}] >>"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_owned(),
+        ];
+        for page in 0..PAGES {
+            let mut content = "BT /F1 9 Tf 24 770 Td 12 TL\n".to_owned();
+            for line in 0..60 {
+                content.push_str(&format!("(Mathematical preview equation and norm: the estimate remains valid. Page {page} line {line}.) Tj T*\n"));
+            }
+            content.push_str("ET\n");
+            objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>", 5 + 2 * page));
+            objects.push(format!(
+                "<< /Length {} >>\nstream\n{content}endstream",
+                content.len()
+            ));
+        }
+        let mut pdf = "%PDF-1.4\n".to_owned();
+        let mut offsets = vec![0];
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.push_str(&format!("{} 0 obj\n{object}\nendobj\n", index + 1));
+        }
+        let xref = pdf.len();
+        pdf.push_str(&format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len()));
+        for offset in &offsets[1..] {
+            pdf.push_str(&format!("{offset:010} 00000 n \n"));
+        }
+        pdf.push_str(&format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF",
+            offsets.len()
+        ));
+        pdf.into_bytes()
+    }
+
+    #[test]
+    #[ignore = "matched native PDF Find worker measurement; requires packaged PDFium"]
+    fn native_find_work_probe() {
+        use sha2::{Digest, Sha256};
+        const WARMUPS: usize = 4;
+        const SAMPLES: usize = 20;
+        let bytes: Arc<[u8]> = find_fixture_pdf().into();
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let worker = Worker::start(crate::worker::RepaintTarget::test());
+        let initial = RequestKey {
+            revision: 1,
+            pages: vec![6],
+            scale: 200,
+            palette: (egui::Color32::WHITE, egui::Color32::BLACK),
+        };
+        let cold = std::time::Instant::now();
+        worker.request(Request {
+            key: initial.clone(),
+            bytes: bytes.clone(),
+        });
+        let first = receive(&worker).result.unwrap();
+        assert_eq!(first.catalog.sizes.len(), 12);
+        assert_eq!(first.pages.len(), 1);
+        let cold_ms = cold.elapsed().as_secs_f64() * 1000.0;
+        let mut samples = Vec::new();
+        for iteration in 0..WARMUPS + SAMPLES {
+            let query = ["equation", "norm", "absent-query", ""][iteration % 4];
+            let key = SearchKey {
+                revision: initial.revision,
+                query: query.into(),
+            };
+            let start = std::time::Instant::now();
+            worker.search(key.clone());
+            let mut matches = None;
+            while matches.is_none() {
+                let (reply, search) = worker.poll();
+                assert!(reply.is_none(), "Find must not produce replacement pixels");
+                if let Some((search_key, hits)) = search {
+                    assert_eq!(search_key, key);
+                    matches = Some(hits);
+                }
+                assert!(start.elapsed().as_secs() < 30, "PDF Find worker timed out");
+                if matches.is_none() {
+                    std::thread::sleep(std::time::Duration::from_micros(100));
+                }
+            }
+            let expected: Vec<_> = if query == "equation" || query == "norm" {
+                (0..12).collect()
+            } else {
+                vec![]
+            };
+            assert_eq!(matches.as_ref().unwrap(), &expected);
+            if iteration >= WARMUPS {
+                samples.push(serde_json::json!({ "query": query, "rendered_pages": 0, "rendered_pixels": 0, "render_ms": 0.0, "complete_ms": start.elapsed().as_secs_f64() * 1000.0, "match_pages": matches.unwrap() }));
+            }
+        }
+        println!(
+            "PDFIUM_FIND_PROBE {}",
+            serde_json::json!({
+                "mode": "independent-find", "fixture_sha256": hash, "fixture_bytes": bytes.len(),
+                "fixture_pages": 12, "visible_page": 6, "scale": 2.0, "pdfium": "chromium/7881",
+                "profile": if cfg!(debug_assertions) { "dev-opt1" } else { "release" },
+                "cold_initial_render_ms": cold_ms, "warmup_queries": WARMUPS, "samples": samples,
+                "scope": "one retained native PDFium worker, serial changed Find queries and clear; excludes UI/GPU/presentation"
+            })
+        );
+    }
+
     fn receive(worker: &Worker) -> Reply {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
@@ -816,7 +1161,6 @@ mod tests {
             revision: 1,
             pages: vec![0],
             scale: 100,
-            query: String::new(),
             palette: (egui::Color32::WHITE, egui::Color32::BLACK),
         };
         worker.request(Request {

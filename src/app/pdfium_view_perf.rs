@@ -43,7 +43,6 @@ fn pdfium_publication_probe() {
                     revision: 1,
                     pages: vec![0],
                     scale: 100 + iteration as u32,
-                    query: String::new(),
                     palette,
                 };
                 let mut elapsed = 0.0;

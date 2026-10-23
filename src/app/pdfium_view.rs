@@ -1,7 +1,9 @@
 //! Persistent egui PDFium viewer. New visible regions commit as a single batch.
 use super::pdfium_render_settle::{Geometry, SettleState};
 use super::*;
-use crate::pdfium::{Batch, Catalog, Character, LinkTarget, Reply, Request, RequestKey, Worker};
+use crate::pdfium::{
+    Batch, Catalog, Character, LinkTarget, Reply, Request, RequestKey, SearchKey, Worker,
+};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -170,6 +172,7 @@ pub(super) struct PdfiumView {
     anchor: (usize, f32),
     restore_anchor: bool,
     query: Arc<str>,
+    search_requested: Option<SearchKey>,
     search_pages: Vec<usize>,
     search_pending: bool,
     find_when_ready: bool,
@@ -221,6 +224,7 @@ impl Default for PdfiumView {
             anchor: (0, 0.0),
             restore_anchor: false,
             query: Arc::from(""),
+            search_requested: None,
             search_pages: Vec::new(),
             search_pending: false,
             find_when_ready: false,
@@ -621,15 +625,8 @@ impl PdfiumView {
             self.restore_anchor = true;
         }
         self.apply_pending_position();
-        if let Some((key, pages)) = search
-            && key.revision == self.revision
-            && key.query == self.query.as_ref()
-        {
-            self.search_pages = pages;
-            self.search_pending = false;
-            if std::mem::take(&mut self.find_when_ready) {
-                self.find_next();
-            }
+        if let Some((key, pages)) = search {
+            self.accept_search(key, pages);
         }
         // Stale pixels may remain visible while a replacement PDF is being
         // rendered. Their coordinates must never be queried against its map.
@@ -946,7 +943,6 @@ impl PdfiumView {
             scale: (self.zoom * ui.ctx().pixels_per_point() * 100.0)
                 .round()
                 .max(1.0) as u32,
-            query: self.query.to_string(),
             palette,
         };
         self.finish_frame(
@@ -1003,13 +999,31 @@ impl PdfiumView {
                 bytes: self.bytes.as_ref().unwrap().clone(),
             });
             self.requested = Some(key.clone());
-            self.search_pending = !self.query.is_empty();
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             {
                 self.render_requests += 1;
             }
         }
         self.desired = Some(key);
+        let search = SearchKey {
+            revision: self.revision,
+            query: self.query.clone(),
+        };
+        if self.search_requested.as_ref() != Some(&search) {
+            self.worker.as_ref().unwrap().search(search.clone());
+            self.search_requested = Some(search);
+            self.search_pending = !self.query.is_empty();
+        }
+    }
+
+    fn accept_search(&mut self, key: SearchKey, pages: Vec<usize>) {
+        if key.revision == self.revision && key.query == self.query {
+            self.search_pages = pages;
+            self.search_pending = false;
+            if std::mem::take(&mut self.find_when_ready) {
+                self.find_next();
+            }
+        }
     }
 
     fn find_next(&mut self) {
