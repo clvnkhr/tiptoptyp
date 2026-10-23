@@ -68,6 +68,8 @@ pub(crate) struct Folding {
     collapsed: BTreeSet<usize>,
     marker_width: f32,
     cached: Option<(Arc<Galley>, Arc<Galley>)>,
+    #[cfg(test)]
+    reveal_region_checks: usize,
 }
 
 impl Folding {
@@ -192,13 +194,24 @@ impl Folding {
     /// Search, keyboard navigation and explicit jumps reveal their destination.
     pub(crate) fn reveal(&mut self, cursor: usize) -> bool {
         let before = self.collapsed.len();
-        self.collapsed.retain(|line| {
-            !self.regions.iter().any(|r| {
-                r.line == *line
-                    && (r.hidden_chars.contains(&cursor)
-                        || (cursor == self.char_count && r.hidden_chars.end == cursor))
-            })
-        });
+        #[cfg(test)]
+        {
+            self.reveal_region_checks = 0;
+        }
+        if self.collapsed.is_empty() {
+            return false;
+        }
+        for region in &self.regions {
+            #[cfg(test)]
+            {
+                self.reveal_region_checks += 1;
+            }
+            if region.hidden_chars.contains(&cursor)
+                || (cursor == self.char_count && region.hidden_chars.end == cursor)
+            {
+                self.collapsed.remove(&region.line);
+            }
+        }
         if before != self.collapsed.len() {
             self.cached = None;
             true
@@ -374,6 +387,25 @@ mod tests {
         assert!(folding.reveal(cursor));
         assert!(!folding.is_collapsed(1) && !folding.is_collapsed(2));
         assert!(!folding.reveal(cursor));
+    }
+
+    #[test]
+    fn revealing_a_visible_cursor_inspects_each_region_at_most_once() {
+        let source = (0..256)
+            .map(|i| format!("= Heading {i}\nBody {i}\n"))
+            .collect::<String>();
+        let mut folding = Folding::default();
+        prepare(&mut folding, &source, 0);
+        folding.collapse_all();
+        let regions = folding.regions.len();
+        assert!(regions >= 256);
+        assert!(!folding.reveal(0));
+        assert_eq!(folding.collapsed.len(), regions);
+        assert!(
+            folding.reveal_region_checks <= regions,
+            "{} checks for {regions} regions",
+            folding.reveal_region_checks
+        );
     }
 
     #[test]

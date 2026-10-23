@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-23",
+  "platform": "macOS aarch64-apple-darwin",
+  "rustc": "1.98.1 (48a229cea 2026-09-01), Homebrew",
+  "profile": "standalone optimized rustc -O -C codegen-units=1; cfg(test)=false",
+  "base_commit": "d7eae04",
+  "harness": "folding-reveal-2026-10-23.rs",
+  "harness_sha256": "647621023eae16fa5319136ce549758e6e47ef0b490bcd93cb37bae9686d7936",
+  "dependency_note": "Real existing eframe and tiptoptyp_core rlibs from target/debug/deps; those dependencies are not inside the measured reveal loop.",
+  "implementation_note": "Includes the real src/folding.rs unchanged by path; ContextRegion/StickyContextRow/StickyContextKind are exact production data declarations. Fixtures enter actual Folding::prepare, collapse_all and reveal. No replacement folding implementation.",
+  "build_command": "rustc --edition=2024 -O -C codegen-units=1 docs/performance-results/folding-reveal-2026-10-23.rs --extern eframe=target/debug/deps/libeframe-2c16b6ab1c23130a.rlib --extern tiptoptyp_core=target/debug/deps/libtiptoptyp_core-af43ea9ad1b1c854.rlib -L dependency=target/debug/deps -o /private/tmp/ttt-folding-audit",
+  "workload": {
+    "cursor": 0,
+    "fold_state": "all collapsed; cursor visible; no fold should change",
+    "warmup_calls": 2,
+    "samples": 7,
+    "iterations_per_sample": 10,
+    "setup": "fixture construction, region preparation and collapse excluded from timing",
+    "viewport_theme": "pure state operation; no GUI/viewport/theme",
+    "build_and_timing_isolation": "No competing Cargo/build/benchmark job during before or after timing."
+  },
+  "fixtures": [
+    {
+      "name": "siblings",
+      "regions": 4000,
+      "bytes": 90903,
+      "fnv1a": "2f5445fdfca5f8c7",
+      "before_ns": {
+        "min": 8620141,
+        "median": 8640804,
+        "max": 9430587
+      },
+      "after_ns": {
+        "min": 3741,
+        "median": 3758,
+        "max": 3795
+      }
+    },
+    {
+      "name": "nested",
+      "regions": 1500,
+      "bytes": 21411,
+      "fnv1a": "a5bc59fbd7fde6d0",
+      "before_ns": {
+        "min": 792304,
+        "median": 803562,
+        "max": 812241
+      },
+      "after_ns": {
+        "min": 1383,
+        "median": 1387,
+        "max": 1391
+      }
+    }
+  ],
+  "deterministic_red": {
+    "test": "folding::tests::revealing_a_visible_cursor_inspects_each_region_at_most_once",
+    "regions": 256,
+    "before_comparisons": 65536,
+    "expected_max_comparisons": 256,
+    "exit_code": 101,
+    "receipt": "/private/tmp/ttt-folding-audit-red.log"
+  },
+  "change": "One pass over regions removes collapsed keys containing the destination; an empty collapsed set returns immediately. Cached layout invalidates only when folds actually change.",
+  "scope": "Local active no-op reveal microbenchmark, not whole-editor FPS, cold startup, idle repaint cost, or a cross-platform guarantee. Each editor frame currently invokes reveal, so repeated large collapsed sets benefit. Nested, EOF and Unicode semantic behavior remains covered by focused tests."
+}
