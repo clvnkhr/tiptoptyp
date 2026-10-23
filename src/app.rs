@@ -200,7 +200,7 @@ use crate::{
         PAGE_GAP, PAGE_MARGIN, PDF_POINTS_PER_PREVIEW_PIXEL, PreviewController, PreviewEffect,
         PreviewStatus, PreviewStatusSnapshot, PreviewTexture, PreviewTransition,
         PreviewTransitionEvent, ResidentPreviewTexture, ServiceState, dark_preview_rgba,
-        page_stack_geometry, stack_height, visible_page, zoom_anchored_offset,
+        page_stack_geometry, stack_height, visible_page,
     },
     project_index::ProjectIndex,
     screenshot::{CaptureController, CaptureThemeProfile, UiCaptureStep, UiSnapshotScene},

@@ -736,20 +736,6 @@ pub fn visible_page(pages: &[PageGeometry], scroll_y: f32, viewport_height: f32)
         .map_or(0, |page| page.index)
 }
 
-/// Keeps the content point under the pointer fixed while the scale changes.
-pub fn zoom_anchored_offset(
-    old_offset: Vec2,
-    pointer_in_viewport: Vec2,
-    old_zoom: f32,
-    new_zoom: f32,
-) -> Vec2 {
-    if old_zoom <= 0.0 || !old_zoom.is_finite() || !new_zoom.is_finite() {
-        return old_offset;
-    }
-    let ratio = new_zoom / old_zoom;
-    ((old_offset + pointer_in_viewport) * ratio - pointer_in_viewport).max(Vec2::ZERO)
-}
-
 /// A preview-only dark transform. The original pixels and exported PDF remain
 /// untouched, so switching mode is lossless.
 pub fn dark_preview_rgba(rgba: &[u8]) -> Vec<u8> {
@@ -1284,16 +1270,6 @@ mod tests {
         assert_eq!(visible_page(&pages, 0.0, 60.0), 0);
         assert_eq!(visible_page(&pages, pages[1].top, 60.0), 1);
         assert_eq!(visible_page(&pages, pages[2].top, 60.0), 2);
-    }
-
-    #[test]
-    fn anchored_zoom_preserves_pointer_content_point() {
-        let pointer = Vec2::new(75.0, 120.0);
-        let old_offset = Vec2::new(30.0, 500.0);
-        let new_offset = zoom_anchored_offset(old_offset, pointer, 1.0, 2.0);
-        let before = (old_offset + pointer) / 1.0;
-        let after = (new_offset + pointer) / 2.0;
-        assert!((before - after).length() < 0.001);
     }
 
     #[test]

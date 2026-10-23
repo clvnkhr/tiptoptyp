@@ -74,7 +74,7 @@ pub(super) fn show_pages(ui: &mut egui::Ui, preview: &mut PreviewController) {
             .clamp(MIN_PREVIEW_ZOOM, MAX_PREVIEW_ZOOM);
     }
 
-    let scroll_id = ui.make_persistent_id("image-preview-scroll");
+    let scroll_id = ui.make_persistent_id(egui::IdSalt::new("image-preview-scroll"));
     let pointer = ui.ctx().input(|input| input.pointer.latest_pos());
     let pinch = ui.ctx().input(|input| input.zoom_delta());
     let pinch_active = pointer.is_some_and(|pointer| viewport_rect.contains(pointer))
@@ -86,21 +86,10 @@ pub(super) fn show_pages(ui: &mut egui::Ui, preview: &mut PreviewController) {
     } else {
         preview.requested_zoom.take().unwrap_or(preview.zoom)
     };
-    if (new_zoom - old_zoom).abs() > f32::EPSILON {
-        let anchor = pointer
-            .filter(|pointer| viewport_rect.contains(*pointer))
-            .unwrap_or_else(|| viewport_rect.center());
-        let mut state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
-        state.offset =
-            zoom_anchored_offset(state.offset, anchor - viewport_rect.min, old_zoom, new_zoom);
-        state.store(ui.ctx(), scroll_id);
-        preview.zoom = new_zoom;
-        preview.fit_width = false;
-    }
-
+    let zoom_changed = (new_zoom - old_zoom).abs() > f32::EPSILON;
     let geometries = page_stack_geometry(
         preview.content.pages().iter().map(|page| page.size),
-        preview.zoom,
+        if zoom_changed { new_zoom } else { old_zoom },
     );
     let content_width = page_canvas_width(
         viewport_rect.width(),
@@ -109,6 +98,49 @@ pub(super) fn show_pages(ui: &mut egui::Ui, preview: &mut PreviewController) {
             .map(|page| page.size.x)
             .fold(0.0, f32::max),
     );
+    if zoom_changed {
+        let old_pages = page_stack_geometry(
+            preview.content.pages().iter().map(|page| page.size),
+            old_zoom,
+        );
+        let old_width = page_canvas_width(viewport_rect.width(), widest_page * old_zoom);
+        let anchor = pointer
+            .filter(|pointer| viewport_rect.contains(*pointer))
+            .unwrap_or_else(|| viewport_rect.center());
+        let margin = ui.spacing().scroll.content_margin;
+        let content_origin = viewport_rect.min + egui::vec2(margin.leftf(), margin.topf());
+        let mut state = egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
+        let origin_id = scroll_id.with("image-zoom-origin");
+        let mut origin = ui.ctx().data_mut(|data| {
+            data.get_temp::<crate::preview::ZoomOrigin<Option<ArtifactKey>>>(origin_id)
+                .unwrap_or_default()
+        });
+        let input = crate::preview::ZoomOriginState {
+            document: preview.content.raster_key(),
+            viewport: viewport_rect,
+            pointer: anchor - content_origin,
+            pixels_per_point: ui.pixels_per_point(),
+            zoom: old_zoom,
+            offset: state.offset,
+        };
+        state.offset = image_zoom_anchored_offset(
+            [&old_pages, &geometries],
+            [old_width, content_width],
+            origin.basis(&input),
+            input.pointer,
+        );
+        origin.record(crate::preview::ZoomOriginState {
+            zoom: new_zoom,
+            offset: state.offset,
+            ..input
+        });
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(origin_id, origin));
+        state.store(ui.ctx(), scroll_id);
+        preview.zoom = new_zoom;
+        preview.fit_width = false;
+    }
+
     let content_height = stack_height(&geometries);
     let requested_page = preview.requested_page.take();
 
@@ -179,6 +211,36 @@ pub(super) fn show_pages(ui: &mut egui::Ui, preview: &mut PreviewController) {
     );
 }
 
+/// Anchor image coordinates, keeping canvas margins and page gaps unscaled.
+fn image_zoom_anchored_offset(
+    pages: [&[crate::preview::PageGeometry]; 2],
+    widths: [f32; 2],
+    old_offset: Vec2,
+    pointer: Vec2,
+) -> Vec2 {
+    let [old, new] = pages;
+    if old.is_empty() || old.len() != new.len() {
+        return old_offset;
+    }
+    let point = old_offset + pointer;
+    let index = old
+        .partition_point(|page| page.top <= point.y)
+        .saturating_sub(1);
+    let (old, new) = (old[index], new[index]);
+    let local_y = point.y - old.top;
+    let y = if point.y < pages[0][0].top {
+        point.y
+    } else if local_y <= old.size.y {
+        new.top + local_y * (new.size.y / old.size.y)
+    } else {
+        new.bottom() + (local_y - old.size.y)
+    };
+    let left = |width: f32, page_width: f32| ((width - page_width) * 0.5).max(PAGE_MARGIN);
+    let x = left(widths[1], new.size.x)
+        + (point.x - left(widths[0], old.size.x)) * (new.size.x / old.size.x);
+    (egui::vec2(x, y) - pointer).max(Vec2::ZERO)
+}
+
 const PAGE_LOADING_INDICATOR_WIDTH: f32 = 128.0;
 const PAGE_LOADING_INDICATOR_HEIGHT: f32 = 48.0;
 
@@ -218,6 +280,174 @@ fn page_canvas_width(viewport_width: f32, widest_page: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn image_frame(
+        context: &egui::Context,
+        preview: &mut PreviewController,
+        events: Vec<egui::Event>,
+        offset: Option<Vec2>,
+        margin: i8,
+        pixels_per_point: f32,
+    ) -> (Rect, Rect, Vec2) {
+        let mut viewport = Rect::NOTHING;
+        let mut actual_offset = Vec2::ZERO;
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(700.0, 500.0))),
+            events,
+            ..Default::default()
+        };
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .native_pixels_per_point = Some(pixels_per_point);
+        let output = context.run_ui(input, |ui| {
+            ui.style_mut().animation_time = 0.0;
+            ui.spacing_mut().scroll.content_margin = egui::Margin::same(margin);
+            viewport = ui.available_rect_before_wrap();
+            let id = ui.make_persistent_id(egui::IdSalt::new("image-preview-scroll"));
+            if let Some(offset) = offset {
+                let mut state = egui::scroll_area::State::load(context, id).unwrap_or_default();
+                state.offset = offset;
+                state.store(context, id);
+            }
+            show_pages(ui, preview);
+            actual_offset = egui::scroll_area::State::load(context, id).unwrap().offset;
+        });
+        let size = page_stack_geometry(
+            preview.content.pages().iter().map(|page| page.size),
+            preview.zoom,
+        )[0]
+        .size;
+        fn page_rect(shape: &egui::Shape, size: Vec2) -> Option<Rect> {
+            match shape {
+                egui::Shape::Rect(rect) if (rect.rect.size() - size).length() < 0.001 => {
+                    Some(rect.rect)
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| page_rect(shape, size)),
+                _ => None,
+            }
+        }
+        let page = output
+            .shapes
+            .iter()
+            .find_map(|shape| page_rect(&shape.shape, size))
+            .expect("the real image widget painted its page");
+        output.drop_without_applying_deltas();
+        (page, viewport, actual_offset)
+    }
+
+    #[test]
+    fn real_image_scroll_widget_keeps_the_cursor_point_for_pinch_and_toolbar_zoom() {
+        for pixels_per_point in [1.0, 1.5, 2.0] {
+            for margin in [0, 3] {
+                for initial_zoom in [0.4, 1.0] {
+                    for pinch in [false, true] {
+                        let context = egui::Context::default();
+                        let mut preview =
+                            PreviewController::new(false, PreviewPreference::default());
+                        preview.replace_asset(
+                            ArtifactKey::unversioned(0),
+                            None,
+                            vec![crate::preview::PreviewTexture {
+                                size: [4800, 4800],
+                                resident: None,
+                            }],
+                        );
+                        preview.fit_width = false;
+                        preview.zoom = initial_zoom;
+                        image_frame(
+                            &context,
+                            &mut preview,
+                            vec![],
+                            Some(egui::vec2(150.3, 100.4)),
+                            margin,
+                            pixels_per_point,
+                        );
+                        let (mut before, viewport, mut old_offset) = image_frame(
+                            &context,
+                            &mut preview,
+                            vec![],
+                            None,
+                            margin,
+                            pixels_per_point,
+                        );
+                        let mut pointer = viewport.center();
+                        // Each phase establishes a new painted source point. The second
+                        // genuinely scrolls, and the third moves the cursor without scrolling.
+                        for phase in 0..3 {
+                            if phase == 1 {
+                                (before, _, old_offset) = image_frame(
+                                    &context,
+                                    &mut preview,
+                                    vec![],
+                                    Some(old_offset + egui::vec2(11.3, 29.7)),
+                                    margin,
+                                    pixels_per_point,
+                                );
+                            } else if phase == 2 {
+                                pointer += egui::vec2(27.0, -19.0);
+                            }
+                            let relative = (pointer - before.min) / before.size();
+                            assert!(relative.x > 0.0 && relative.x < 1.0);
+                            assert!(relative.y > 0.0 && relative.y < 1.0);
+                            for step in 0..100 {
+                                let factor = if phase == 1 { 1.0 / 1.003 } else { 1.003 };
+                                let mut events = vec![egui::Event::PointerMoved(pointer)];
+                                if pinch {
+                                    events.push(egui::Event::Zoom(factor));
+                                } else {
+                                    preview.requested_zoom = Some(preview.zoom * factor);
+                                }
+                                let (after, _, offset) = image_frame(
+                                    &context,
+                                    &mut preview,
+                                    events,
+                                    None,
+                                    margin,
+                                    pixels_per_point,
+                                );
+                                let error = (after.min + relative * after.size() - pointer).abs();
+                                // ScrollArea rounds the painted content origin to a physical
+                                // pixel (egui 0.36.2 scroll_area.rs), leaving saved offsets
+                                // fractional. Only that final rounding is allowed; errors
+                                // must not accumulate across these 100 small zoom events.
+                                // At fractional monitor scales, round_ui additionally
+                                // quantizes to the pinned 1/32-point GUI grid.
+                                let gui_rounding = if pixels_per_point == 1.5 {
+                                    1.0 / 64.0
+                                } else {
+                                    0.0
+                                };
+                                assert!(
+                                    error.max_elem()
+                                        <= 0.5 / pixels_per_point + gui_rounding + 0.003,
+                                    "ppp={pixels_per_point} margin={margin} initial_zoom={initial_zoom} pinch={pinch} phase={phase} step={step}: error={error:?}; scroll {old_offset:?} -> {offset:?}"
+                                );
+                                before = after;
+                                old_offset = offset;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn image_zoom_preserves_fixed_page_gaps_and_each_pages_center() {
+        let old = page_stack_geometry([[1200, 1600], [600, 800]], 1.0);
+        let new = page_stack_geometry([[1200, 1600], [600, 800]], 1.5);
+        let pointer = egui::vec2(350.0, 200.0);
+        let old_offset = egui::vec2(100.0, old[1].bottom() + 6.0 - pointer.y);
+        let offset =
+            image_zoom_anchored_offset([&old, &new], [1000.0, 1400.0], old_offset, pointer);
+        assert!((new[1].bottom() + 6.0 - offset.y - pointer.y).abs() < 0.001);
+        assert_eq!(
+            image_zoom_anchored_offset([&[], &[]], [1000.0, 1400.0], old_offset, pointer),
+            old_offset
+        );
+    }
 
     #[test]
     fn failed_retained_image_without_pixels_reports_unavailable_instead_of_loading() {
