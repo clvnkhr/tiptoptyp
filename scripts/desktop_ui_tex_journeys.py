@@ -51,6 +51,55 @@ def harper_fresh(document, source, path, locations):
         and document["writing_paths"] == [str(path)] * len(locations)
 
 
+def diagnostic_suppression_fixture(suffix):
+    """Keep line positions fixed while switching one real exclusion on and off."""
+    if suffix not in ("typ", "tex"):
+        raise ValueError("Suppression fixture requires a Typst or TeX document")
+    marker = "//" if suffix == "typ" else "%"
+    header = "" if suffix == "typ" else "\\documentclass{article}\n\\begin{document}\n"
+    footer = "" if suffix == "typ" else "\\end{document}\n"
+    source = header + (marker + " ttt: off\n").join([HARPER_TYPOS] * 3) + footer
+    active = source.replace("ttt: off", "ttt: on", 1)
+    offset = header.count("\n")
+    locations = [[line + offset, column] for line, column in
+                 ((1, 26), (2, 9), (4, 26), (5, 9), (7, 26), (8, 9))]
+    return source, active, locations
+
+
+def harper_suppression_result(document, source, path, locations, visible_locations):
+    """Prove actual raw findings survive while exact Problems rows are excluded."""
+    from desktop_ui_problems_journeys import problems_state
+    if not harper_fresh(document, source, path, locations) or document.get("panel") != "Problems":
+        return False
+    count, rows = document.get("raw_diagnostic_count"), document.get("diagnostic_rows")
+    if type(count) is not int or count < 0 or not isinstance(rows, list) or len(rows) != count:
+        raise AssertionError("Suppression diagnostic row inspection is unavailable")
+    for index, row in enumerate(rows):
+        if (not isinstance(row, dict) or type(row.get("index")) is not int or row["index"] != index
+                or "provider" not in row or row["provider"] is not None and not isinstance(row["provider"], str)
+                or type(row.get("suppressed")) is not bool
+                or any(key not in row or row[key] is not None
+                       and (type(row[key]) is not int or row[key] <= 0) for key in ("line", "column"))):
+            raise AssertionError("Suppression diagnostic source identity is incomplete")
+    layout = problems_state(document)
+    if (layout["query"] or any(layout[key] is not None for key in ("source", "type", "category"))
+            or layout["grouped"]):
+        return False
+    harper_rows = [row for row in rows if row["provider"] == "Harper"]
+    if [[row["line"], row["column"]] for row in harper_rows] != locations:
+        return False
+    unsuppressed = [row["index"] for row in rows if not row["suppressed"]]
+    visible = layout["visible_indices"]
+    actual = [[rows[index]["line"], rows[index]["column"]] for index in visible
+              if rows[index]["provider"] == "Harper"]
+    return (actual == visible_locations and visible == unsuppressed
+            and type(document.get("diagnostic_count")) is int
+            and document["diagnostic_count"] == len(unsuppressed) == layout["total_count"]
+            and layout["visible_count"] == layout["displayed_count"] == len(unsuppressed)
+            and all(row["suppressed"] is ([row["line"], row["column"]] not in visible_locations)
+                    for row in harper_rows))
+
+
 def harper_settings_applied(document, dictionary, ignore_names):
     """Observe applied preferences without exposing personal dictionary contents."""
     from desktop_ui_journeys import fingerprint
@@ -208,6 +257,50 @@ class TexJourneys:
         self.click("editor.source")
         self.wait("Harper fixture owns keyboard", lambda d: d["editor_keyboard_focused"])
 
+    def harper_suppression(self, suffix, path, original):
+        """Switch exclusions in real editable source without deleting provider results."""
+        source, active, locations = diagnostic_suppression_fixture(suffix)
+        panel = self.snapshot()["document"]["panel"]
+        if panel is None:
+            self.key(23)
+        self.click("panel.problems")
+        self.key(3)
+        self.wait_target("problems.search", focused=True)
+        layout = self.snapshot()["document"]["problems"]
+        if layout["query"] or any(layout[key] is not None for key in ("source", "type", "category")):
+            self.click("problems.reset")
+        if layout["grouped"]:
+            self.click("problems.grouping")
+        for phase, text, visible in (("all", source, locations),
+                                     ("excluded", active, locations[:2] + locations[4:]),
+                                     ("restored", source, locations)):
+            self.click("editor.source")
+            self.key(0)
+            self.paste_source(text)
+            predicate = lambda d: harper_suppression_result(d, text, path, locations, visible)
+            state = self.wait("Real " + suffix + " diagnostics " + phase + " around ttt markers",
+                              predicate, timeout=30)["document"]
+            self.stable_state(predicate)
+            self.record("harper.suppression", language=suffix, phase=phase,
+                        source_fingerprint=state["source_fingerprint"],
+                        raw_locations=state["writing_locations"], visible_locations=visible,
+                        raw_diagnostic_count=state["raw_diagnostic_count"],
+                        diagnostic_count=state["diagnostic_count"])
+            if path.read_text() != original:
+                raise AssertionError("Diagnostic exclusions changed the saved source document")
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(original)
+        self.wait("Original " + suffix + " grammar fixture restores after exclusion checks",
+                  lambda d: harper_fresh(d, original, path, []), timeout=30)
+        if panel is None:
+            self.key(23)
+            self.wait("Exclusion checks restore the closed bottom panel", lambda d: d["panel"] is None)
+        elif panel != "Problems":
+            self.click("panel." + panel.lower())
+            self.wait("Exclusion checks restore the original bottom tab", lambda d: d["panel"] == panel)
+        self.click("editor.source")
+
     def harper_math_prose(self):
         from pathlib import Path
         count = self.snapshot()["document"]["tabs"]
@@ -266,6 +359,7 @@ class TexJourneys:
             self.stable_state(lambda d: harper_fresh(d, source, path, []))
             if path.read_text() != source:
                 raise AssertionError("Harper journey wrote edits to disk despite disabled autosave")
+            self.harper_suppression(suffix, path, source)
             self.close_scratch(count)
         self.tex_settings([('"english_grammar": true', '"english_grammar": false'),
                            ('"auto_save": false', '"auto_save": true'),

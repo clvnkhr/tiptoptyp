@@ -21,7 +21,7 @@ def inspected_problems():
 def scrolled_problems(offset=0, *, sticky=False, controls=True):
     layout = inspected_problems()
     layout.update(grouped=False, controls_visible=controls, sticky_filters=sticky)
-    return {"document": {"frame": 40, "problems": layout}, "scrolls": {"problems": {
+    return {"document": {"frame": 40, "problems": layout, "raw_diagnostic_count": 3}, "scrolls": {"problems": {
         "x": 150, "y": 400, "frame": 40, "offset": offset, "sticky_search": sticky,
         "content_height": 1000, "viewport_height": 200}}}
 
@@ -35,22 +35,22 @@ def selected_query(query="misspelld", selection=None):
 class ProblemsContracts(unittest.TestCase):
     def test_group_collapse_preserves_filtered_count_and_original_row_identity(self):
         state = inspected_problems()
-        self.assertIs(problems_state({"problems": state}), state)
+        self.assertIs(problems_state({"problems": state, "raw_diagnostic_count": 3}), state)
         state.update(query="misspelld", source="Harper", type="Help", visible_count=1,
                      displayed_count=0, visible_indices=[2], groups=[state["groups"][1]])
         state["groups"][0].update(count=1, open=False)
-        self.assertIs(problems_state({"problems": state}), state)
+        self.assertIs(problems_state({"problems": state, "raw_diagnostic_count": 3}), state)
         state.update(visible_count=0, displayed_count=0, visible_indices=[], groups=[])
-        self.assertEqual(problems_state({"problems": state})["total_count"], 3)
+        self.assertEqual(problems_state({"problems": state, "raw_diagnostic_count": 3})["total_count"], 3)
 
     def test_flat_view_displays_rows_without_provider_and_type_headers(self):
         state = inspected_problems()
         state["grouped"] = False
         state["groups"][1]["open"] = False
-        self.assertEqual(problems_state({"problems": state})["displayed_count"], 3)
+        self.assertEqual(problems_state({"problems": state, "raw_diagnostic_count": 3})["displayed_count"], 3)
         state["grouped"] = True
         with self.assertRaisesRegex(AssertionError, "group membership"):
-            problems_state({"problems": state})
+            problems_state({"problems": state, "raw_diagnostic_count": 3})
 
     def test_layout_observation_requires_explicit_booleans_and_visible_active_filters(self):
         for flag in ("grouped", "controls_visible", "sticky_filters"):
@@ -58,11 +58,11 @@ class ProblemsContracts(unittest.TestCase):
                 state = inspected_problems()
                 state[flag] = value
                 with self.subTest(flag=flag, value=value), self.assertRaisesRegex(AssertionError, "layout"):
-                    problems_state({"problems": state})
+                    problems_state({"problems": state, "raw_diagnostic_count": 3})
         state = inspected_problems()
         state.update(sticky_filters=True, controls_visible=False)
         with self.assertRaisesRegex(AssertionError, "remain visible"):
-            problems_state({"problems": state})
+            problems_state({"problems": state, "raw_diagnostic_count": 3})
 
     def test_native_scroll_requires_fresh_complete_geometry_and_actual_overflow(self):
         state = scrolled_problems()
@@ -169,7 +169,26 @@ class ProblemsContracts(unittest.TestCase):
             state = inspected_problems()
             state[field] = value
             with self.subTest(field=field, value=value), self.assertRaises(AssertionError):
-                problems_state({"problems": state})
+                problems_state({"problems": state, "raw_diagnostic_count": 3})
+
+    def test_suppression_keeps_original_indices_instead_of_bounding_them_by_projected_count(self):
+        state = inspected_problems()
+        state.update(visible_count=2, displayed_count=2, total_count=2,
+                     visible_indices=[0, 4])
+        state["groups"][1]["count"] = 1
+        self.assertIs(problems_state({"problems": state, "raw_diagnostic_count": 5}), state)
+        for invalid in (5, -1, True):
+            broken = deepcopy(state)
+            broken["visible_indices"][1] = invalid
+            with self.subTest(index=invalid), self.assertRaisesRegex(AssertionError, "row identities"):
+                problems_state({"problems": broken, "raw_diagnostic_count": 5})
+
+    def test_raw_count_is_required_and_cannot_be_smaller_than_projected_count(self):
+        for value in (None, True, -1, 2, 3.0):
+            with self.subTest(value=value), self.assertRaisesRegex(AssertionError, "raw diagnostic count"):
+                problems_state({"problems": inspected_problems(), "raw_diagnostic_count": value})
+        with self.assertRaisesRegex(AssertionError, "raw diagnostic count"):
+            problems_state({"problems": inspected_problems()})
 
     def test_group_membership_and_expansion_must_agree_with_displayed_rows(self):
         for field, value in [("count", 1), ("open", False), ("open", 1), ("provider", ""),
@@ -177,21 +196,21 @@ class ProblemsContracts(unittest.TestCase):
             state = inspected_problems()
             state["groups"][1][field] = value
             with self.subTest(field=field, value=value), self.assertRaises(AssertionError):
-                problems_state({"problems": state})
+                problems_state({"problems": state, "raw_diagnostic_count": 3})
 
     def test_selected_provider_and_type_must_restrict_every_group(self):
         for field, value in [("source", "Harper"), ("type", "Help")]:
             state = inspected_problems()
             state[field] = value
             with self.subTest(field=field), self.assertRaisesRegex(AssertionError, "selected filters"):
-                problems_state({"problems": state})
+                problems_state({"problems": state, "raw_diagnostic_count": 3})
         state = inspected_problems()
         state["groups"][1]["target"] = state["groups"][0]["target"]
         with self.assertRaisesRegex(AssertionError, "selected filters"):
-            problems_state({"problems": state})
+            problems_state({"problems": state, "raw_diagnostic_count": 3})
         del state["source"]
         with self.assertRaisesRegex(AssertionError, "unavailable"):
-            problems_state({"problems": state})
+            problems_state({"problems": state, "raw_diagnostic_count": 3})
 
     def test_select_all_requires_current_focused_problems_field_and_complete_selection(self):
         state = selected_query()

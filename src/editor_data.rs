@@ -629,6 +629,7 @@ impl EditorDerivedData {
         current_is_preview: bool,
         compiler: &[Diagnostic],
         language_server: &[Diagnostic],
+        suppressed: &[bool],
     ) {
         if self.diagnostics_key.as_ref().is_some_and(|key| {
             key.matches(
@@ -656,7 +657,10 @@ impl EditorDerivedData {
         let mut file_identity = None;
         let mut file_matches = HashMap::new();
         let mut by_line: BTreeMap<usize, Vec<&Diagnostic>> = BTreeMap::new();
-        for diagnostic in compiler.iter().chain(language_server) {
+        for (index, diagnostic) in compiler.iter().chain(language_server).enumerate() {
+            if suppressed.get(index).copied().unwrap_or(false) {
+                continue;
+            }
             let Some(line) = diagnostic.line() else {
                 continue;
             };
@@ -1133,6 +1137,7 @@ mod tests {
                     true,
                     &diagnostics,
                     &[],
+                    &[],
                 );
                 assert_eq!(black_box(data.line_diagnostics()).len(), count);
             };
@@ -1528,15 +1533,152 @@ mod tests {
         let mut data = EditorDerivedData::default();
         data.prepare_source(&DocumentSnapshot::fixture(revision(1), "= Main"));
 
-        data.prepare_diagnostics(revision(1), 8, Some(&path), &path, true, &diagnostics, &[]);
-        data.prepare_diagnostics(revision(1), 8, Some(&path), &path, true, &diagnostics, &[]);
+        data.prepare_diagnostics(
+            revision(1),
+            8,
+            Some(&path),
+            &path,
+            true,
+            &diagnostics,
+            &[],
+            &[],
+        );
+        data.prepare_diagnostics(
+            revision(1),
+            8,
+            Some(&path),
+            &path,
+            true,
+            &diagnostics,
+            &[],
+            &[],
+        );
         assert_eq!(data.line_diagnostics().len(), 1);
         assert_eq!(data.longest_diagnostic_chars(), 6);
         assert_eq!(data.rebuild_counts(), (1, 1));
 
-        data.prepare_diagnostics(revision(1), 9, Some(&path), &path, true, &[], &[]);
+        data.prepare_diagnostics(revision(1), 9, Some(&path), &path, true, &[], &[], &[]);
         assert!(data.line_diagnostics().is_empty());
         assert_eq!(data.rebuild_counts(), (1, 2));
+    }
+
+    #[test]
+    fn suppressed_compiler_and_editor_rows_do_not_leak_into_line_diagnostics() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("main.typ");
+        let hidden_path = project.path().join("hidden.typ");
+        std::fs::write(&path, "= Main").unwrap();
+        let mut hidden = diagnostic(&hidden_path, 1, "compiler hidden");
+        hidden.details = vec!["Only hidden hover detail".into()];
+        let compiler = [hidden, diagnostic(&path, 2, "compiler shown")];
+        let editor = [
+            diagnostic(&path, 2, "editor hidden"),
+            diagnostic(&path, 3, "editor shown"),
+        ];
+        let original = (compiler.clone(), editor.clone());
+        let mut data = EditorDerivedData::default();
+        data.prepare_diagnostics(
+            revision(1),
+            1,
+            Some(&path),
+            &path,
+            true,
+            &compiler,
+            &editor,
+            &[true, false, true, false],
+        );
+        let lines = data.line_diagnostics();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            (lines[0].line, lines[0].summary.as_str()),
+            (2, "compiler shown")
+        );
+        assert_eq!(
+            (lines[1].line, lines[1].summary.as_str()),
+            (3, "editor shown")
+        );
+        assert!(lines.iter().all(|line| !line.detail.contains("hidden")));
+        assert_eq!(
+            data.diagnostic_file_checks, 1,
+            "suppressed files must not perform filesystem identity checks"
+        );
+        assert_eq!(
+            data.longest_diagnostic_chars(),
+            "compiler shown".chars().count()
+        );
+        assert_eq!((compiler, editor), original);
+    }
+
+    #[test]
+    fn suppression_generation_restores_current_provider_payloads_and_reuses_idle_cache() {
+        let project = tempfile::tempdir().unwrap();
+        let path = project.path().join("main.typ");
+        std::fs::write(&path, "= Main").unwrap();
+        let mut compiler = diagnostic(&path, 1, "compiler");
+        compiler.details = vec!["Original compiler hint".into()];
+        let compiler = [compiler];
+        let editor = [diagnostic(&path, 2, "editor")];
+        let original = (compiler.clone(), editor.clone());
+        let mut data = EditorDerivedData::default();
+        data.prepare_diagnostics(
+            revision(1),
+            1,
+            Some(&path),
+            &path,
+            true,
+            &compiler,
+            &editor,
+            &[true, true],
+        );
+        assert!(data.line_diagnostics().is_empty());
+        assert_eq!(data.longest_diagnostic_chars(), 0);
+        assert_eq!(data.diagnostic_file_checks, 0);
+
+        // Missing entries are visible, even when they belong to the editor
+        // list after the compiler list's explicit mask.
+        data.prepare_diagnostics(
+            revision(1),
+            2,
+            Some(&path),
+            &path,
+            true,
+            &compiler,
+            &editor,
+            &[true],
+        );
+        assert_eq!(data.line_diagnostics()[0].summary, "editor");
+        for _ in 0..20 {
+            data.prepare_diagnostics(
+                revision(1),
+                2,
+                Some(&path),
+                &path,
+                true,
+                &compiler,
+                &editor,
+                &[true],
+            );
+        }
+        assert_eq!(data.rebuild_counts(), (0, 2));
+        assert_eq!(data.diagnostic_file_checks, 1);
+
+        // Directives changed but source ownership and provider payloads did not.
+        data.prepare_diagnostics(
+            revision(1),
+            3,
+            Some(&path),
+            &path,
+            true,
+            &compiler,
+            &editor,
+            &[],
+        );
+        let lines = data.line_diagnostics();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].detail, compiler[0].full_message());
+        assert_eq!(lines[1].detail, editor[0].full_message());
+        assert_eq!(data.rebuild_counts(), (0, 3));
+        assert_eq!((compiler, editor), original);
     }
 
     #[test]
@@ -1564,6 +1706,7 @@ mod tests {
                 true,
                 &diagnostics,
                 &diagnostics,
+                &[],
             );
             assert_eq!(data.line_diagnostics().len(), 1_000);
             assert_eq!(data.diagnostic_file_checks, 2);
@@ -1576,11 +1719,21 @@ mod tests {
             true,
             &diagnostics,
             &diagnostics,
+            &[],
         );
         assert_eq!(data.diagnostic_file_checks, 4);
         let mut unlocated = diagnostic(&path, 1, "no location");
         unlocated.location = None;
-        data.prepare_diagnostics(revision(3), 1, Some(&path), &path, true, &[unlocated], &[]);
+        data.prepare_diagnostics(
+            revision(3),
+            1,
+            Some(&path),
+            &path,
+            true,
+            &[unlocated],
+            &[],
+            &[],
+        );
         assert_eq!(data.diagnostic_file_checks, 4);
         assert!(data.line_diagnostics().is_empty());
     }
@@ -1597,11 +1750,29 @@ mod tests {
         std::os::unix::fs::symlink(&path, &alias).unwrap();
         let diagnostics = [diagnostic(&alias, 1, "shown")];
         let mut data = EditorDerivedData::default();
-        data.prepare_diagnostics(revision(1), 1, Some(&path), &path, true, &diagnostics, &[]);
+        data.prepare_diagnostics(
+            revision(1),
+            1,
+            Some(&path),
+            &path,
+            true,
+            &diagnostics,
+            &[],
+            &[],
+        );
         assert_eq!(data.line_diagnostics().len(), 1);
         std::fs::remove_file(&alias).unwrap();
         std::os::unix::fs::symlink(&other, &alias).unwrap();
-        data.prepare_diagnostics(revision(1), 2, Some(&path), &path, true, &diagnostics, &[]);
+        data.prepare_diagnostics(
+            revision(1),
+            2,
+            Some(&path),
+            &path,
+            true,
+            &diagnostics,
+            &[],
+            &[],
+        );
         assert!(data.line_diagnostics().is_empty());
     }
 
@@ -1624,6 +1795,7 @@ mod tests {
                     &path,
                     previewed,
                     &diagnostics,
+                    &[],
                     &[],
                 );
                 let lines = data.line_diagnostics();
@@ -1655,6 +1827,7 @@ mod tests {
             true,
             &diagnostics,
             &[],
+            &[],
         );
         assert_eq!(data.line_diagnostics().len(), 1);
 
@@ -1667,6 +1840,7 @@ mod tests {
             &second,
             true,
             &diagnostics,
+            &[],
             &[],
         );
         assert!(data.line_diagnostics().is_empty());

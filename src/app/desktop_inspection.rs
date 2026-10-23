@@ -250,11 +250,30 @@ impl EditorApp {
             "preview_zoom": controls.zoom,
             "preview_back": controls.back,
             "preview_forward": controls.forward,
-            "diagnostic_count": self.preview.diagnostics.len() + self.preview.editor_diagnostics.len(),
+            "diagnostic_count": self.diagnostic_regions.visible_count(),
             "completion_visible": self.editor_completion.as_ref().is_some_and(|completion| !completion.items.is_empty()),
             "completion_count": self.editor_completion.as_ref().map_or(0, |completion| completion.items.len()),
             "completion_selected": self.editor_completion.as_ref().map(|completion| completion.selected),
         });
+        interaction["raw_diagnostic_count"] =
+            (self.preview.diagnostics.len() + self.preview.editor_diagnostics.len()).into();
+        interaction["diagnostic_rows"] = self
+            .preview
+            .diagnostics
+            .iter()
+            .chain(&self.preview.editor_diagnostics)
+            .enumerate()
+            .map(|(index, diagnostic)| {
+                serde_json::json!({
+                    "index": index,
+                    "provider": diagnostic.provider,
+                    "line": diagnostic.location.map(|location| location.line),
+                    "column": diagnostic.location.map(|location| location.column),
+                    "suppressed": self.diagnostic_regions.is_suppressed(index),
+                })
+            })
+            .collect::<Vec<_>>()
+            .into();
         interaction["workspace_content"] = serde_json::json!(format!(
             "{:?}",
             workspace_view::content_view(
@@ -322,7 +341,7 @@ impl EditorApp {
             "texlab_ready": self.tex_service.texlab_ready,
             "badness_ready": self.tex_service.badness_ready,
             "tex_diagnostic_counts": self.tex_diagnostics.iter().map(|diagnostics| diagnostics.len()).collect::<Vec<_>>(),
-            "badness_visible_codes": self.preview.editor_diagnostics.iter().filter(|diagnostic| diagnostic.provider.as_deref() == Some("Badness")).filter_map(diagnostic_code).collect::<Vec<_>>(),
+            "badness_visible_codes": self.preview.editor_diagnostics.iter().enumerate().filter(|(index, diagnostic)| !self.diagnostic_regions.is_suppressed(self.preview.diagnostics.len() + index) && diagnostic.provider.as_deref() == Some("Badness")).filter_map(|(_,d)|diagnostic_code(d)).collect::<Vec<_>>(),
             "tex_diagnostics_current": self.activity.diagnostics[1..].iter().map(|key| *key == Some(self.document().key())).collect::<Vec<_>>(),
             "completion_pending": self.activity.completion.is_some(),
             "resource_repair": {"busy": resource_repair.busy, "status": resource_repair.message},
@@ -414,8 +433,11 @@ impl EditorApp {
         );
         interaction["table_samples"] = self.table_samples.inspect();
         interaction["compilation_paused"] = serde_json::json!(self.compilation_paused);
-        interaction["compiler_diagnostic_count"] =
-            serde_json::json!(self.preview.diagnostics.len());
+        interaction["compiler_diagnostic_count"] = serde_json::json!(
+            (0..self.preview.diagnostics.len())
+                .filter(|&index| !self.diagnostic_regions.is_suppressed(index))
+                .count()
+        );
         interaction["terminal_off"] = serde_json::json!(self.terminal.is_off());
         interaction["terminal_status"] = serde_json::json!(self.terminal.status_text());
         interaction["terminal_count"] = serde_json::json!(self.terminal.len());

@@ -347,12 +347,14 @@ impl EditorApp {
     pub(super) fn show_problems(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
         ui.spacing_mut().item_spacing.y = 2.0;
+        self.prepare_diagnostic_visibility(Some(ui.ctx()));
         let main_path = self.preview_document_path();
         self.problems.model.update(
-            self.preview.diagnostics_generation,
+            self.diagnostic_regions.generation,
             &self.preview.diagnostics,
             &self.preview.editor_diagnostics,
             Some(&main_path),
+            &self.diagnostic_regions.suppressed,
         );
         let refreshed = self.problems.model.refilter(&self.problems.filter);
         let search = search_id(ui.ctx());

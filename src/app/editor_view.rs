@@ -302,7 +302,8 @@ impl EditorApp {
         }
         self.prepare_editor_data();
         self.refresh_diagnostic_tooltip(ui.ctx());
-        let diagnostic_source = (self.document().key(), self.preview.diagnostics_generation);
+        let diagnostic_source = self.diagnostic_presentation();
+        let diagnostic_tab = self.tabs.active_id();
         let source_metrics = self.editor_data.source_metrics();
         let line_diagnostics = self.editor_data.line_diagnostics();
         let available_width = ui.available_width();
@@ -816,6 +817,12 @@ impl EditorApp {
                 painter.set(delimiter_fill_slot, egui::Shape::Vec(backgrounds));
             }
             for &index in self.writing.markers(document.key()) {
+                if self
+                    .diagnostic_regions
+                    .suppresses_char(diagnostic_tab, index)
+                {
+                    continue;
+                }
                 let rect = editor_char_range_rect(&output, &(index..index + 1));
                 if ui.is_rect_visible(rect) {
                     ui.painter().rect_stroke(

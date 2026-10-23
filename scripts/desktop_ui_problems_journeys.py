@@ -18,9 +18,12 @@ def problems_state(document):
     if any(type(state.get(key)) is not int or state[key] < 0 for key in counts) \
             or not state["displayed_count"] <= state["visible_count"] <= state["total_count"]:
         raise AssertionError("Problems result counts are inconsistent")
+    raw_count = document.get("raw_diagnostic_count")
+    if type(raw_count) is not int or raw_count < state["total_count"]:
+        raise AssertionError("Problems raw diagnostic count is missing or inconsistent")
     indices = state.get("visible_indices")
     if not isinstance(indices, list) or len(indices) != state["visible_count"] \
-            or any(type(index) is not int or not 0 <= index < state["total_count"] for index in indices) \
+            or any(type(index) is not int or not 0 <= index < raw_count for index in indices) \
             or len(set(indices)) != len(indices):
         raise AssertionError("Problems row identities are missing or inconsistent")
     groups = state.get("groups")

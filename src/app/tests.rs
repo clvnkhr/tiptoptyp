@@ -25,7 +25,7 @@ fn retained_diagnostic_tooltip_tracks_edits_and_resolved_diagnostics() {
         app.mark_diagnostics_changed();
         let origin = Rect::from_min_size(Pos2::ZERO, Vec2::splat(20.0));
         app.diagnostic_tooltip = Some(DiagnosticTooltipOverlay {
-            source: (app.document().key(), app.preview.diagnostics_generation),
+            source: app.diagnostic_presentation(),
             line: 1,
             origin,
             anchor: origin.left_bottom(),

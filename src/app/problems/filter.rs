@@ -44,6 +44,7 @@ pub(crate) struct Group {
 }
 
 struct Entry {
+    raw_index: usize,
     provider: String,
     provider_slot: usize,
     severity: DiagnosticSeverity,
@@ -71,7 +72,8 @@ pub(crate) struct Model {
 }
 
 impl Model {
-    /// Rebuild only after publication or a main-file rename. Call `refilter`
+    /// Rebuild after publication, suppression changes or a main-file rename.
+    /// The caller includes suppression/source changes in `generation`. Call `refilter`
     /// after editing controls, before reading the resulting groups.
     pub(crate) fn update(
         &mut self,
@@ -79,6 +81,7 @@ impl Model {
         compiler: &[Diagnostic],
         editor: &[Diagnostic],
         main_path: Option<&Path>,
+        suppressed: &[bool],
     ) {
         if self.generation == Some(generation) && self.main_path.as_deref() == main_path {
             return;
@@ -87,12 +90,13 @@ impl Model {
         self.main_path = main_path.map(Path::to_owned);
         self.entries = compiler
             .iter()
-            .map(|diagnostic| entry(diagnostic, "Compiler", main_path))
-            .chain(
-                editor
-                    .iter()
-                    .map(|diagnostic| entry(diagnostic, "Other", main_path)),
-            )
+            .map(|diagnostic| (diagnostic, "Compiler"))
+            .chain(editor.iter().map(|diagnostic| (diagnostic, "Other")))
+            .enumerate()
+            .filter(|(raw_index, _)| !suppressed.get(*raw_index).copied().unwrap_or(false))
+            .map(|(raw_index, (diagnostic, fallback))| {
+                entry(raw_index, diagnostic, fallback, main_path)
+            })
             .collect();
         let mut providers = BTreeMap::<String, usize>::new();
         let mut categories = BTreeMap::<String, usize>::new();
@@ -161,7 +165,7 @@ impl Model {
         let mut severity_counts = [0; 5];
         self.visible_count = 0;
         self.matched_indices.clear();
-        for (index, entry) in self.entries.iter().enumerate() {
+        for entry in &self.entries {
             let provider_matches = filter
                 .provider
                 .as_ref()
@@ -199,8 +203,8 @@ impl Model {
                     indices: Vec::new(),
                 })
                 .indices
-                .push(index);
-            self.matched_indices.push(index);
+                .push(entry.raw_index);
+            self.matched_indices.push(entry.raw_index);
             self.visible_count += 1;
         }
         for (facet, count) in self.providers.iter_mut().zip(provider_counts) {
@@ -287,7 +291,12 @@ fn string_facets(counts: BTreeMap<String, usize>) -> Vec<Facet<String>> {
     values
 }
 
-fn entry(diagnostic: &Diagnostic, fallback: &str, main_path: Option<&Path>) -> Entry {
+fn entry(
+    raw_index: usize,
+    diagnostic: &Diagnostic,
+    fallback: &str,
+    main_path: Option<&Path>,
+) -> Entry {
     let provider = diagnostic
         .provider
         .as_deref()
@@ -345,6 +354,7 @@ fn entry(diagnostic: &Diagnostic, fallback: &str, main_path: Option<&Path>) -> E
         );
     }
     Entry {
+        raw_index,
         provider,
         provider_slot: 0,
         severity: diagnostic.severity,
@@ -404,10 +414,99 @@ mod tests {
     }
 
     #[test]
+    fn suppressed_rows_keep_raw_indices_and_do_not_contribute_facets() {
+        let mut diagnostics = sample();
+        diagnostics[0].correction = Some(DiagnosticCorrection::new(
+            0..4,
+            "word".into(),
+            Some("OnlyHiddenRule".into()),
+            Some("OnlyHiddenCategory".into()),
+            vec!["replacement".into()],
+        ));
+        let original = diagnostics.clone();
+        let mut model = Model::default();
+        model.update(
+            1,
+            &diagnostics[..2],
+            &diagnostics[2..],
+            None,
+            &[true, false, true, false],
+        );
+        model.refilter(&Filter::default());
+        assert_eq!(model.indices(), [1, 3]);
+        assert_eq!(indices(&model), [1, 3]);
+        assert_eq!((model.total_count(), model.visible_count()), (2, 2));
+        assert_eq!(
+            model.providers(),
+            [
+                Facet {
+                    value: "Badness".into(),
+                    count: 1
+                },
+                Facet {
+                    value: "LTeX+".into(),
+                    count: 1
+                },
+            ],
+        );
+        assert_eq!(
+            model.severities(),
+            [Facet {
+                value: DiagnosticSeverity::Warning,
+                count: 2
+            }],
+        );
+        assert!(model.categories().is_empty());
+        model.refilter(&Filter {
+            query: "OnlyHiddenRule".into(),
+            ..Default::default()
+        });
+        assert!(model.indices().is_empty());
+        assert_eq!(
+            diagnostics, original,
+            "suppression must retain exact provider payloads"
+        );
+    }
+
+    #[test]
+    fn suppression_refresh_restores_rows_without_a_provider_republication() {
+        let diagnostics = sample();
+        let original = diagnostics.clone();
+        let mut model = Model::default();
+        let filter = Filter::default();
+        model.update(7, &diagnostics[..2], &diagnostics[2..], None, &[true; 4]);
+        model.refilter(&filter);
+        assert_eq!((model.total_count(), model.visible_count()), (0, 0));
+        assert!(model.indices().is_empty());
+        assert!(model.groups().is_empty());
+        assert!(model.providers().is_empty());
+        assert!(model.severities().is_empty());
+
+        // A short mask hides only its explicit entries. The caller's new view
+        // generation reflects an edited directive, without replacing providers.
+        model.update(8, &diagnostics[..2], &diagnostics[2..], None, &[true]);
+        model.refilter(&filter);
+        assert_eq!(model.indices(), [1, 2, 3]);
+        model.refilter(&Filter {
+            provider: Some("Harper".into()),
+            ..Default::default()
+        });
+        assert_eq!(model.indices(), [2]);
+
+        model.update(9, &diagnostics[..2], &diagnostics[2..], None, &[]);
+        model.refilter(&filter);
+        assert_eq!(model.indices(), [0, 1, 2, 3]);
+        assert_eq!((model.total_count(), model.visible_count()), (4, 4));
+        assert_eq!(diagnostics, original);
+        assert_eq!(model.rebuilds, 3);
+        assert_eq!(model.filter_runs, 4);
+    }
+
+    #[test]
     fn search_matches_the_visible_other_type_for_unknown_severity() {
         let unknown = diagnostic(Some("Compiler"), DiagnosticSeverity::Unknown, "Tool output");
         let mut model = Model::default();
-        model.update(1, &[unknown], &[], None);
+        model.update(1, &[unknown], &[], None, &[]);
         model.refilter(&Filter {
             query: "Other".into(),
             ..Default::default()
@@ -432,7 +531,7 @@ mod tests {
     fn source_type_and_search_are_combined_without_renumbering_diagnostics() {
         let mut model = Model::default();
         let diagnostics = sample();
-        model.update(1, &diagnostics[..1], &diagnostics[1..], None);
+        model.update(1, &diagnostics[..1], &diagnostics[1..], None, &[]);
         let filter = Filter {
             provider: Some("Harper".into()),
             severity: Some(DiagnosticSeverity::Help),
@@ -475,7 +574,7 @@ mod tests {
             Vec::new(),
         ));
         let mut model = Model::default();
-        model.update(0, &[diagnostic], &[], None);
+        model.update(0, &[diagnostic], &[], None, &[]);
         for term in [
             "über",
             "CONCEALED",
@@ -525,7 +624,7 @@ mod tests {
             Vec::new(),
         ));
         let mut model = Model::default();
-        model.update(0, &[], &diagnostics, None);
+        model.update(0, &[], &diagnostics, None, &[]);
         model.refilter(&Filter {
             provider: Some("Harper".into()),
             ..Default::default()
@@ -606,7 +705,7 @@ mod tests {
             Vec::new(),
         ));
         let mut model = Model::default();
-        model.update(0, &[], &diagnostics, None);
+        model.update(0, &[], &diagnostics, None, &[]);
         model.refilter(&Filter {
             category: Some("Spelling".into()),
             ..Default::default()
@@ -627,10 +726,10 @@ mod tests {
             provider: Some("Harper".into()),
             ..Default::default()
         };
-        model.update(0, &[], &diagnostics, None);
+        model.update(0, &[], &diagnostics, None, &[]);
         model.refilter(&filter);
         assert_eq!(model.visible_count(), 2);
-        model.update(1, &[], &diagnostics[1..2], None);
+        model.update(1, &[], &diagnostics[1..2], None, &[]);
         model.refilter(&filter);
         assert_eq!(filter.provider.as_deref(), Some("Harper"));
         assert_eq!(model.total_count(), 1);
@@ -648,7 +747,13 @@ mod tests {
         let mut model = Model::default();
         let filter = Filter::default();
         for _ in 0..40 {
-            model.update(7, &[], &diagnostics, Some(Path::new("/paper/main.tex")));
+            model.update(
+                7,
+                &[],
+                &diagnostics,
+                Some(Path::new("/paper/main.tex")),
+                &[],
+            );
             model.refilter(&filter);
         }
         assert_eq!((model.rebuilds, model.filter_runs), (1, 1));
@@ -657,7 +762,13 @@ mod tests {
             ..filter.clone()
         });
         assert_eq!((model.rebuilds, model.filter_runs), (1, 2));
-        model.update(8, &[], &diagnostics, Some(Path::new("/paper/main.tex")));
+        model.update(
+            8,
+            &[],
+            &diagnostics,
+            Some(Path::new("/paper/main.tex")),
+            &[],
+        );
         model.refilter(&filter);
         assert_eq!((model.rebuilds, model.filter_runs), (2, 3));
     }
@@ -670,10 +781,10 @@ mod tests {
             query: "new.tex".into(),
             ..Default::default()
         };
-        model.update(1, &diagnostics, &[], Some(Path::new("old.tex")));
+        model.update(1, &diagnostics, &[], Some(Path::new("old.tex")), &[]);
         model.refilter(&filter);
         assert_eq!(model.visible_count(), 0);
-        model.update(1, &diagnostics, &[], Some(Path::new("new.tex")));
+        model.update(1, &diagnostics, &[], Some(Path::new("new.tex")), &[]);
         model.refilter(&filter);
         assert_eq!(model.visible_count(), 4);
         assert_eq!(model.rebuilds, 2);
@@ -685,7 +796,7 @@ mod tests {
         compiler.source = DiagnosticSource::File(PathBuf::from("some-file.tex"));
         let editor = diagnostic(None, DiagnosticSeverity::Unknown, "Other issue");
         let mut model = Model::default();
-        model.update(0, &[compiler], &[editor], None);
+        model.update(0, &[compiler], &[editor], None, &[]);
         model.refilter(&Filter::default());
         assert_eq!(
             model
@@ -707,7 +818,7 @@ mod tests {
     fn flat_indices_preserve_original_order_across_filters_and_reuse_cached_view() {
         let diagnostics = sample();
         let mut model = Model::default();
-        model.update(7, &diagnostics[..2], &diagnostics[2..], None);
+        model.update(7, &diagnostics[..2], &diagnostics[2..], None, &[]);
         let all = Filter::default();
         assert!(model.refilter(&all));
         assert_eq!(model.indices(), [0, 1, 2, 3]);
@@ -715,7 +826,7 @@ mod tests {
 
         let pointer = model.indices().as_ptr();
         for _ in 0..20 {
-            model.update(7, &diagnostics[..2], &diagnostics[2..], None);
+            model.update(7, &diagnostics[..2], &diagnostics[2..], None, &[]);
             assert!(!model.refilter(&all));
             assert_eq!(model.indices().as_ptr(), pointer);
             assert_eq!(model.indices(), [0, 1, 2, 3]);
@@ -755,7 +866,7 @@ mod tests {
             diagnostic(Some("Alpha"), DiagnosticSeverity::Warning, "four"),
         ];
         let mut model = Model::default();
-        model.update(0, &diagnostics, &[], None);
+        model.update(0, &diagnostics, &[], None, &[]);
         model.refilter(&Filter::default());
         assert_eq!(indices(&model), [2, 1, 3, 0]);
         assert_eq!(model.groups()[0].label, "Alpha · Error");

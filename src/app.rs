@@ -81,6 +81,7 @@ mod version_history;
 use crate::editor_data::TableTarget;
 use table_editor::show_table_editor_ui;
 use table_workbench::TableEditorDialog;
+mod diagnostic_regions;
 mod extra_shortcuts;
 mod filter_bar;
 mod find_bar;
@@ -742,7 +743,7 @@ impl PendingWidgetPaste {
 
 #[derive(Debug, Clone)]
 struct DiagnosticTooltipOverlay {
-    source: (DocumentKey, u64),
+    source: (DocumentKey, u64, u64),
     line: usize,
     origin: Rect,
     anchor: Pos2,
@@ -1446,6 +1447,7 @@ pub struct EditorApp {
     activity: activity_panel::ActivityTracking,
     bottom_panel: BottomPanel,
     problems: problems::State,
+    diagnostic_regions: diagnostic_regions::State,
     terminal: TerminalTabs,
     settings_visible: bool,
     settings_open_requested: bool,
@@ -1783,6 +1785,7 @@ impl EditorApp {
             activity: Default::default(),
             bottom_panel: BottomPanel::default(),
             problems: Default::default(),
+            diagnostic_regions: Default::default(),
             terminal: TerminalTabs::default(),
             settings_visible: false,
             settings_open_requested: false,
@@ -2812,6 +2815,7 @@ impl EditorApp {
     }
 
     fn prepare_editor_data(&mut self) {
+        self.prepare_diagnostic_visibility(None);
         self.prepare_editor_source_data();
         let document = self.editor_revision();
         let current_path = self.document().path().clone();
@@ -2819,12 +2823,13 @@ impl EditorApp {
         let current_is_preview = self.current_is_preview_document();
         self.editor_data.prepare_diagnostics(
             document,
-            self.preview.diagnostics_generation,
+            self.diagnostic_regions.generation,
             current_path.as_deref(),
             &virtual_path,
             current_is_preview,
             &self.preview.diagnostics,
             &self.preview.editor_diagnostics,
+            &self.diagnostic_regions.suppressed,
         );
     }
 
@@ -5714,6 +5719,7 @@ impl EditorApp {
                     }
                 }
                 WorkspaceEvent::PathsChanged(paths) => {
+                    self.diagnostic_regions.invalidate_files();
                     if self
                         .document()
                         .path()
@@ -8163,10 +8169,14 @@ impl EditorApp {
     }
 
     fn refresh_diagnostic_tooltip(&mut self, context: &egui::Context) {
+        if self.diagnostic_tooltip.is_none() {
+            return;
+        }
+        self.prepare_diagnostic_visibility(None);
         let Some(tooltip) = self.diagnostic_tooltip.as_ref() else {
             return;
         };
-        let source = (self.document().key(), self.preview.diagnostics_generation);
+        let source = self.diagnostic_presentation();
         if tooltip.source == source {
             return;
         }
@@ -9734,6 +9744,7 @@ impl EditorApp {
         self.symbol_drawing.poll();
         self.update_writing_checks(&context);
         self.update_ltex_checks(&context);
+        self.prepare_diagnostic_visibility(Some(&context));
         self.update_liquid();
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);
@@ -10484,7 +10495,7 @@ fn paint_line_diagnostics(
     diagnostics: &[LineDiagnostic],
     line_rows: &[Range<usize>],
     slots: Vec<egui::layers::ShapeIdx>,
-    source: (DocumentKey, u64),
+    source: (DocumentKey, u64, u64),
 ) -> Option<DiagnosticTooltipOverlay> {
     let painter = ui.painter();
     let mut hovered_diagnostic = None;

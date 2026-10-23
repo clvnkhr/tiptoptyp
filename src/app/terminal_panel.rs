@@ -296,6 +296,7 @@ impl EditorApp {
     }
 
     pub(super) fn show_bottom_panel(&mut self, ui: &mut egui::Ui) {
+        self.prepare_diagnostic_visibility(Some(ui.ctx()));
         let before = self.bottom_panel;
         let search = match before.selected() {
             Some(PanelTab::Activity) => Some(activity_panel::search_id(ui.ctx())),
@@ -313,8 +314,7 @@ impl EditorApp {
         ui.horizontal(|ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 3.0;
-                let count =
-                    self.preview.diagnostics.len() + self.preview.editor_diagnostics.len();
+                let count = self.diagnostic_regions.visible_count();
                 let problems_label = if count == 0 {
                     "Problems".to_owned()
                 } else {
@@ -1420,6 +1420,7 @@ mod tests {
                 details: vec!["more context ".repeat(20)],
             })
             .collect();
+        harness.state_mut().mark_diagnostics_changed();
         for _ in 0..8 {
             harness.run();
             let height = harness.ctx.data_mut(|data| {
@@ -1430,6 +1431,7 @@ mod tests {
             });
             assert_eq!(height, initial_height);
         }
+        assert_eq!(harness.state().problems.model.total_count(), 80);
         // The nonzero count rides inside the tab label.
         assert!(harness.query_by_label("Problems (80)").is_some());
     }

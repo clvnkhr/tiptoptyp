@@ -19,6 +19,7 @@ mod completion_edit;
 mod delimiters;
 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
 mod desktop_test;
+mod diagnostic_suppression;
 mod diagnostics;
 mod document;
 mod document_templates;

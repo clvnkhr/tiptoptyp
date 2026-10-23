@@ -28,7 +28,10 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.label("Typst defaults to Tinymist partial (experimental), keeping nearby pages ready and filling distant pages as you navigate. Select Tinymist (Typst only) for the complete renderer. This choice changes only the live viewer, not saved PDFs.");
         ui.label("On macOS, Smooth Tinymist zoom keeps a higher-resolution viewport image over the preview while it redraws. Toggle it in Settings → Preview; it works with both Tinymist viewers.");
         ui.heading("Leave part of your code untouched");
-        ui.label("Directives apply to the named tool, not every service. Select your TeX formatter in Settings → Tools → TeX tools. Compiler errors cannot be disabled with formatter comments.");
+        ui.label(RichText::new("Hide all diagnostics in a region").strong());
+        ui.monospace("% ttt: on\nTeX with diagnostics hidden\n% ttt: off\n\n// ttt: on\nTypst with diagnostics hidden\n// ttt: off");
+        ui.label("Use standalone comment lines. ttt: on starts suppression; ttt: off restores diagnostics. An unmatched on continues to the end of the file. This hides located findings from every provider in Problems and the editor; it does not stop checks, formatting or compilation, or change build status and raw logs. Findings without a source location remain visible.");
+        ui.label("The tool-specific directives below apply only to the named tool. Select your TeX formatter in Settings → Tools → TeX tools. Compiler errors cannot be disabled with formatter comments.");
         ui.label(RichText::new("Typst formatter (Typstyle through Tinymist)").strong());
         ui.monospace("// @typstyle off\n#let carefully_aligned = (a: 1, b: 2)");
         ui.label("Protects the next syntax node, such as a definition. It is not an off/on region toggle.");
@@ -44,7 +47,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.label(RichText::new("tex-fmt").strong());
         ui.monospace("% tex-fmt: off\n% your hand-aligned code\n% tex-fmt: on\nOne preserved line % tex-fmt: skip");
         documentation_link(ui, "tex-fmt directives", "https://github.com/WGUNDERWOOD/tex-fmt#disabling-the-formatter");
-        ui.label("Harper and TexLab do not share these region directives. Harper already excludes math and technical arguments; turn Harper off in Settings → Grammar & spelling when needed. Tool-specific capabilities depend on your installed version.");
+        ui.label("The ttt: on/off regions above also hide Harper and TexLab findings. Harper excludes math and technical arguments; its document-wide switch is in Settings → Grammar & spelling. Tool-specific capabilities depend on your installed version.");
         ui.label("Harper checks wait briefly after typing, then reuse unchanged paragraphs. They still parse the whole source to track code and math boundaries, so sentences can continue across display equations. Old diagnostics remain visible until a fresh result arrives. Apostrophes stay part of possessives; name evidence from author lists and mathematical attributions applies throughout the document without turning off grammar checks.");
         ui.label("Grammar & spelling → Harper configuration → Harper rule configuration shows the editable academic defaults. Style, sentence-length, comma-convention and abbreviation-expansion advice stays off; spelling, repeated words, a/an and agreement checks stay on. Apply validates each rule name and value; Reset restores the defaults without changing the document.");
         ui.heading("Snippets");
