@@ -502,7 +502,7 @@ pub(crate) fn diagnostic_locations(
 mod tests {
     use super::*;
     use tiptoptyp_core::document::WindowSessionId;
-    fn snapshot(root: &std::path::Path, source: &str) -> Snapshot {
+    pub(super) fn snapshot(root: &std::path::Path, source: &str) -> Snapshot {
         let settings = TexSettings::default();
         Snapshot {
             generation: Generation(0),

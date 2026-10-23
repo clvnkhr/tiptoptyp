@@ -20,6 +20,12 @@ pub(super) struct Job {
 }
 impl Job {
     pub(super) fn start(snapshot: &Snapshot, request: Request) -> Result<Self, String> {
+        snapshot
+            .tools
+            .tex_fmt
+            .command
+            .validate_for_tool(crate::toolchain::ToolKind::TexFmt)
+            .map_err(|error| format!("Could not start tex-fmt: {error}"))?;
         let run = || -> std::io::Result<Self> {
             let directory = PrivateWorkspace::open(&snapshot.root)?.temp_dir("tex-format-")?;
             let input = directory.path().join("stdin.tex");
@@ -66,9 +72,13 @@ impl Job {
             }
             Ok(None) => Err("tex-fmt exceeded its time or output limit".to_owned()),
             Err(error) => Err(error.to_string()),
-            Ok(Some(status)) if status.success() => {
-                read(&self.output).map(|text| minimal_edits(&self.source, &text))
-            }
+            Ok(Some(status)) if status.success() => read(&self.output).and_then(|text| {
+                if text.trim().is_empty() && !self.source.trim().is_empty() {
+                    Err("tex-fmt returned empty output for nonempty source".to_owned())
+                } else {
+                    Ok(minimal_edits(&self.source, &text))
+                }
+            }),
             Ok(Some(status)) => Err(format!(
                 "tex-fmt exited with {status}: {}",
                 read(&self.error).unwrap_or_default()
@@ -133,6 +143,81 @@ pub(super) fn minimal_edits(source: &str, formatted: &str) -> Vec<LspTextEdit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn fake_formatter(root: &std::path::Path, source: &str) -> (Snapshot, Request) {
+        use std::os::unix::fs::PermissionsExt;
+        let program = root.join("formatter-stub");
+        fs::write(&program, "#!/bin/sh\n/bin/cat >/dev/null\n").unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut snapshot = crate::tex::tests::snapshot(root, source);
+        snapshot.tools.tex_fmt.program = program;
+        snapshot.tools.tex_fmt.origin = crate::toolchain::ToolOrigin::Custom;
+        let request = Request {
+            identity: snapshot.identity(),
+            kind: crate::tex::RequestKind::Format,
+        };
+        (snapshot, request)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reporting_arguments_are_rejected_at_formatter_start_even_without_settings_validation() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut snapshot, request) = fake_formatter(root.path(), "Original document.\n");
+        for report in [
+            "--help",
+            "--args",
+            "--completion bash",
+            "--man",
+            "-ch",
+            "-V",
+        ] {
+            snapshot.tools.tex_fmt.command.arguments = format!("--stdin --quiet {report}");
+            let result = Job::start(&snapshot, request.clone());
+            let rejected = result.is_err();
+            drop(result);
+            assert!(
+                rejected,
+                "{report}: cannot start a formatter that emits a report instead of source"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empty_successful_formatter_output_cannot_erase_nonempty_source() {
+        let root = tempfile::tempdir().unwrap();
+        for source in ["Original document.\n", " \n\t"] {
+            let (snapshot, request) = fake_formatter(root.path(), source);
+            let mut job = Job::start(&snapshot, request).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let event = loop {
+                if let Some(event) = job.poll() {
+                    break event;
+                }
+                assert!(Instant::now() < deadline, "fake formatter did not finish");
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            match event {
+                Event::RequestFailed { message, .. } if !source.trim().is_empty() => {
+                    assert!(message.contains("empty"), "{message}");
+                }
+                Event::Formatted { edits, .. } if source.trim().is_empty() => {
+                    let result = tiptoptyp_core::text::apply_text_edits(
+                        source,
+                        &edits.unwrap(),
+                        [ScalarOffset::new(0); 2],
+                    )
+                    .unwrap();
+                    assert_eq!(result.text, "");
+                }
+                _ => panic!(
+                    "empty output must be rejected for authored text and allowed for whitespace-only input"
+                ),
+            }
+        }
+    }
     #[test]
     fn full_output_preserves_unicode_and_cursors_outside_the_changed_span() {
         use tiptoptyp_core::text::apply_text_edits;

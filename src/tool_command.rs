@@ -79,9 +79,12 @@ impl CommandCustomization {
             }
             Tinymist | Badness => tokens.first().is_some_and(|token| token == "lsp"),
             Tectonic => return validate_tectonic_arguments(&tokens),
-            TexFmt => ["--stdin", "--quiet"]
-                .iter()
-                .all(|flag| flags.iter().any(|token| token == flag)),
+            TexFmt => {
+                validate_tex_fmt_output(flags)?;
+                ["--stdin", "--quiet"]
+                    .iter()
+                    .all(|flag| flags.iter().any(|token| token == flag))
+            }
             Texlab => true,
         };
         if valid {
@@ -149,6 +152,38 @@ impl CommandCustomization {
         Ok(())
     }
 }
+/// Reporting modes exit successfully with help/configuration in stdout rather
+/// than formatted source. Short flags may be clustered; -l/-t consume values.
+fn validate_tex_fmt_output(flags: &[String]) -> Result<(), String> {
+    let reporting = flags.iter().any(|token| {
+        let long = token
+            .split_once('=')
+            .map_or(token.as_str(), |(name, _)| name);
+        if matches!(
+            long,
+            "--help" | "--version" | "--args" | "--completion" | "--man"
+        ) {
+            return true;
+        }
+        if !token.starts_with('-') || token.starts_with("--") {
+            return false;
+        }
+        for flag in token[1..].chars() {
+            match flag {
+                'h' | 'V' => return true,
+                'l' | 't' => break,
+                _ => {}
+            }
+        }
+        false
+    });
+    if reporting {
+        Err("tex-fmt reporting options (help, version, args, completion, man) cannot be used for source formatting".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Tectonic's root options precede `compile`; operation paths and toggles are
 /// supplied by the compiler adapter. Validate the pinned CLI without spawning it.
 fn validate_tectonic_arguments(tokens: &[String]) -> Result<(), String> {
@@ -308,6 +343,50 @@ mod tests {
                     "{error}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn tex_fmt_reporting_modes_never_validate_as_source_formatting() {
+        for report in [
+            "--help",
+            "-h",
+            "--version",
+            "-V",
+            "--args",
+            "--completion bash",
+            "--completion=bash",
+            "--man",
+            "-ch",
+            "-cph",
+            "-pV",
+        ] {
+            let command = CommandCustomization {
+                arguments: format!("--stdin --quiet {report}"),
+                ..Default::default()
+            };
+            assert!(
+                command
+                    .validate_for_tool(crate::toolchain::ToolKind::TexFmt)
+                    .is_err(),
+                "reporting mode {report} must not become replacement source"
+            );
+        }
+        for optional in [
+            "--check",
+            "-c",
+            "--nowrap",
+            "--wraplen 100",
+            "--config /tmp/tex-fmt.toml",
+            "-l80",
+            "-t4",
+        ] {
+            CommandCustomization {
+                arguments: format!("--stdin --quiet {optional}"),
+                ..Default::default()
+            }
+            .validate_for_tool(crate::toolchain::ToolKind::TexFmt)
+            .unwrap();
         }
     }
 
