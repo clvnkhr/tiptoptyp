@@ -1,7 +1,9 @@
 //! User snippets use the same validated completion transaction as LSP snippets.
 use crate::{document::DocumentKind, tinymist::CompletionItem};
 use serde::{Deserialize, Serialize};
-use tiptoptyp_core::text::{LspRange, LspTextEdit, ScalarOffset, lsp_position_at_scalar};
+use tiptoptyp_core::text::{
+    LspPosition, LspRange, LspTextEdit, ScalarOffset, lsp_position_at_scalar,
+};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -489,6 +491,17 @@ pub(crate) fn items(
     items_from(&[], snippets, kind, source, cursor, context)
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static POSITION_QUERIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn snippet_position(source: &str, scalar: usize) -> LspPosition {
+    #[cfg(test)]
+    POSITION_QUERIES.with(|queries| queries.set(queries.get() + 1));
+    lsp_position_at_scalar(source, ScalarOffset::new(scalar))
+}
+
 pub(crate) fn items_from(
     presets: &[Snippet],
     custom: &[Snippet],
@@ -524,6 +537,11 @@ pub(crate) fn items_from(
         .filter(eligible)
         .map(|s| s.prefix.as_str())
         .collect();
+    // Surviving candidates share one trigger. Compute its coordinates lazily;
+    // TeX bodies may optionally own one preceding command slash.
+    let mut scalar_start = None;
+    let mut starts = [None, None];
+    let mut end = None;
     let items: Vec<_> = custom
         .iter()
         .filter(eligible)
@@ -534,22 +552,16 @@ pub(crate) fn items_from(
                 .filter(|s| !overrides.contains(s.prefix.as_str())),
         )
         .filter_map(|s| {
-            let mut start = source[..start_byte].chars().count();
-            // A TeX template owns one command slash when it supplies its own.
-            if kind == DocumentKind::Tex
+            let wire = s.source_to_lsp().ok()?;
+            let consume_slash = kind == DocumentKind::Tex
                 && s.body.starts_with('\\')
                 && source[..start_byte].ends_with('\\')
-            {
-                let slashes = source[..start_byte]
-                    .chars()
-                    .rev()
-                    .take_while(|c| *c == '\\')
-                    .count();
-                if slashes == 1 {
-                    start -= 1;
-                }
-            }
-            let wire = s.source_to_lsp().ok()?;
+                && !source[..start_byte - 1].ends_with('\\');
+            let slash = usize::from(consume_slash);
+            let scalar = *scalar_start.get_or_insert_with(|| source[..start_byte].chars().count());
+            let start =
+                *starts[slash].get_or_insert_with(|| snippet_position(source, scalar - slash));
+            let end = *end.get_or_insert_with(|| snippet_position(source, cursor));
             Some(CompletionItem {
                 origin: crate::lsp::protocol::CompletionOrigin::Snippet,
                 label: s.prefix.clone(),
@@ -560,10 +572,7 @@ pub(crate) fn items_from(
                 insert_text: wire.clone(),
                 insert_text_is_snippet: true,
                 text_edit: Some(LspTextEdit {
-                    range: LspRange {
-                        start: lsp_position_at_scalar(source, ScalarOffset::new(start)),
-                        end: lsp_position_at_scalar(source, ScalarOffset::new(cursor)),
-                    },
+                    range: LspRange { start, end },
                     new_text: wire,
                 }),
                 additional_text_edits: Vec::new(),
@@ -1325,6 +1334,77 @@ mod context_tests {
             let (source, cursor) = location(marked);
             let (start, _) = prefix(&source, cursor);
             assert_eq!(tex_context(&source, start), expected, "{marked}");
+        }
+    }
+
+    #[test]
+    fn snippet_candidates_reuse_lazy_lsp_positions_across_matching_bodies() {
+        let source = format!("{}ff", "alpha Ω\n".repeat(2_000));
+        let snippets = (0..128)
+            .map(|i| {
+                let mut snippet = sample(Scope::Text, false, Language::Typst);
+                snippet.prefix = format!("ff{i}");
+                snippet
+            })
+            .collect::<Vec<_>>();
+        POSITION_QUERIES.with(|queries| queries.set(0));
+        let items = items_from(
+            &[],
+            &snippets,
+            DocumentKind::Typst,
+            &source,
+            source.chars().count(),
+            Some(Scope::Text),
+        )
+        .unwrap();
+        assert_eq!(items.len(), snippets.len());
+        assert!(
+            items
+                .iter()
+                .all(|item| item.text_edit.as_ref().unwrap().range
+                    == items[0].text_edit.as_ref().unwrap().range)
+        );
+        assert_eq!(POSITION_QUERIES.with(std::cell::Cell::get), 2);
+
+        POSITION_QUERIES.with(|queries| queries.set(0));
+        assert!(
+            items_from(
+                &[],
+                &snippets,
+                DocumentKind::Tex,
+                &source,
+                source.chars().count(),
+                Some(Scope::Text),
+            )
+            .is_none()
+        );
+        assert_eq!(POSITION_QUERIES.with(std::cell::Cell::get), 0);
+
+        let snippets = (0..128)
+            .map(|i| {
+                let mut snippet = sample(Scope::Text, false, Language::Tex);
+                snippet.prefix = format!("ff{i}");
+                if i % 2 == 0 {
+                    snippet.body = "literal".into();
+                }
+                snippet
+            })
+            .collect::<Vec<_>>();
+        POSITION_QUERIES.with(|queries| queries.set(0));
+        let items = items_from(
+            &[],
+            &snippets,
+            DocumentKind::Tex,
+            "\\ff",
+            3,
+            Some(Scope::Text),
+        )
+        .unwrap();
+        assert_eq!(POSITION_QUERIES.with(std::cell::Cell::get), 3);
+        for (i, item) in items.iter().enumerate() {
+            let range = item.text_edit.as_ref().unwrap().range;
+            assert_eq!(range.start, LspPosition::new(0, u32::from(i % 2 == 0)));
+            assert_eq!(range.end, LspPosition::new(0, 3));
         }
     }
 
