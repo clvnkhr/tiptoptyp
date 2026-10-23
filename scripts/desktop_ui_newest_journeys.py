@@ -11,6 +11,49 @@ from desktop_ui_problems_journeys import ProblemsJourneys
 NEWEST_JOURNEYS = ("problems_focus", "preview_find", "tables", "arxiv_tables", "math_grids")
 
 
+def assert_pdfium_find_keeps_raster(document, baseline):
+    from desktop_ui_journeys import pdfium_render_state
+    current = pdfium_render_state(document)
+    if document.get("preview_pdfium_ready") is not True or current.get("search_pending") is not False:
+        raise AssertionError("PDFium Find has not completed against ready pixels")
+    for field in ("requests", "admissions", "active_scale", "resident_count"):
+        if current[field] != baseline[field]:
+            raise AssertionError("PDFium Find changed raster " + field)
+    return current
+
+
+def pdfium_page_point(snapshot, screen):
+    from desktop_ui_journeys import pdfium_render_state
+    document, targets = snapshot["document"], snapshot["targets"]
+    state = pdfium_render_state(document)
+    geometry = state.get("page_geometry")
+    target = targets.get("preview.page")
+    if (not isinstance(geometry, dict) or not isinstance(target, dict)
+            or type(document.get("frame")) is not int
+            or geometry.get("frame") != document.get("frame")
+            or target.get("frame") != document.get("frame")
+            or type(geometry.get("page")) is not int
+            or geometry["page"] != document.get("preview_page")):
+        raise AssertionError("missing or stale actual PDFium page geometry")
+    if (not isinstance(screen, (list, tuple)) or len(screen) != 2
+            or any(type(n) not in (int, float) or not math.isfinite(n) for n in screen)):
+        raise AssertionError("invalid PDFium native pointer coordinates")
+    rect, hit, zoom = geometry.get("rect"), geometry.get("interact"), geometry.get("zoom")
+    if (not isinstance(rect, list) or len(rect) != 4
+            or not isinstance(hit, list) or len(hit) != 4
+            or any(type(n) not in (int, float) or not math.isfinite(n) for n in (*rect, *hit, zoom))
+            or any(n <= 0 for n in (rect[2], rect[3], hit[2], hit[3], zoom))
+            or any(type(target.get(k)) not in (int, float) or not math.isfinite(target[k]) for k in ("x", "y", "width", "height"))
+            or target["width"] <= 0 or target["height"] <= 0):
+        raise AssertionError("invalid PDFium page geometry")
+    scale = target["width"] / hit[2]
+    if abs(target["height"] / hit[3] - scale) > 0.001:
+        raise AssertionError("PDFium page hit dimensions disagree with native target")
+    local = [hit[axis] + (screen[axis] - target[("x", "y")[axis]]
+             + target[("width", "height")[axis]] * 0.5) / scale for axis in (0, 1)]
+    return geometry["page"], [(local[axis] - rect[axis]) / zoom for axis in (0, 1)]
+
+
 def arxiv_table_cases():
     """Use the attributed excerpts unchanged; keep native edit expectations literal."""
     directory = Path(__file__).resolve().parents[1] / "tests/fixtures/arxiv-tables"
@@ -405,6 +448,7 @@ class NewestJourneys(ProblemsJourneys):
             self.click("preview.page")
             self.wait("preview owns keyboard for Find", lambda d: d["preview_keyboard_focused"])
             original = self.snapshot()["document"]
+            raster = dict(original["pdfium_render"]) if backend == "Pdfium" else None
             self.key(3)
             self.wait("Find opens preview controls", lambda d: d["preview_controls_open"]
                       and not d["find_visible"])
@@ -416,6 +460,11 @@ class NewestJourneys(ProblemsJourneys):
                       d["preview_query_fingerprint"] == fingerprint(query)
                       and d["source_fingerprint"] == original["source_fingerprint"]
                       and d["page_dark"] == original["page_dark"] and not d["find_visible"])
+            if raster is not None:
+                completed = self.wait("PDFium Find finishes without replacing visible pixels", lambda d:
+                                      d["pdfium_render"].get("search_pending") is False)["document"]
+                assert_pdfium_find_keeps_raster(completed, raster)
+                self.record("preview_find.no-raster", phase="typed", before=raster, after=completed["pdfium_render"])
             self.key(3)
             self.key(0)
             replacement = "second preview query " + backend
@@ -424,6 +473,19 @@ class NewestJourneys(ProblemsJourneys):
                       d["preview_query_fingerprint"] == fingerprint(replacement)
                       and d["source_fingerprint"] == original["source_fingerprint"]
                       and not d["find_visible"])
+            if raster is not None:
+                completed = self.wait("replacement PDFium Find query finishes without a raster", lambda d:
+                                      d["pdfium_render"].get("search_pending") is False)["document"]
+                assert_pdfium_find_keeps_raster(completed, raster)
+                self.key(0)
+                self.key(51, "none")
+                completed = self.wait("clearing PDFium Find keeps ready resident pixels", lambda d:
+                                      d["preview_query_fingerprint"] == fingerprint("")
+                                      and d["pdfium_render"].get("search_pending") is False)["document"]
+                assert_pdfium_find_keeps_raster(completed, raster)
+                self.stable_state(lambda d: d["pdfium_render"]["requests"] == raster["requests"]
+                                  and d["pdfium_render"]["admissions"] == raster["admissions"])
+                self.record("preview_find.no-raster", phase="replaced-and-cleared", before=raster, after=completed["pdfium_render"])
             self.stationary_preview_drag()
             if getattr(self, "capture_review", False) and backend == "Pdfium":
                 self.capture_viewport("preview-controls")

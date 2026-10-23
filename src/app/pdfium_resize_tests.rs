@@ -354,6 +354,42 @@ fn find_edits_and_clear_keep_ready_pixels_and_the_same_texture() {
 }
 
 #[test]
+fn pinch_keeps_the_page_point_at_the_cursor_across_fixed_gaps_and_centering() {
+    let sizes = vec![[600.0, 800.0]; 100];
+    let cursor = egui::vec2(550.0, 200.0);
+    for page in [0, 7, 99] {
+        let old_top = page_tops(&sizes, 1.0)[page];
+        let new_top = page_tops(&sizes, 2.0)[page];
+        // At zoom 1 this 600pt page is centered in a 1000pt viewport. The
+        // cursor is over PDF coordinate (350, 300), away from scroll clamps.
+        let old = egui::vec2(0.0, old_top + 300.0 - cursor.y);
+        let offset = PageZoomAnchor::capture(
+            &sizes,
+            ([&page_tops(&sizes, 1.0), &page_tops(&sizes, 2.0)])[0],
+            ([1000.0, 1200.0])[0],
+            old,
+            cursor,
+            1.0,
+        )
+        .and_then(|anchor| {
+            anchor.offset(
+                &sizes,
+                ([&page_tops(&sizes, 1.0), &page_tops(&sizes, 2.0)])[1],
+                ([1000.0, 1200.0])[1],
+                cursor,
+                2.0,
+            )
+        })
+        .unwrap_or(old);
+        let after = egui::vec2(350.0 * 2.0 - offset.x, new_top + 300.0 * 2.0 - offset.y);
+        assert!(
+            (after - cursor).length() < 0.001,
+            "page {page}: fixed gutters and centered paper must not move the PDF point under the cursor: {after:?}"
+        );
+    }
+}
+
+#[test]
 fn search_results_survive_viewport_changes_but_never_old_queries_or_documents() {
     let (context, mut view, initial) = seeded();
     view.controls_action(super::super::preview_controls::Action::Find(
@@ -408,4 +444,400 @@ fn a_find_edit_does_not_reject_an_already_completed_pixel_replacement() {
     assert!(view.ready());
     assert!(view.search_pending);
     assert_eq!(view.active_scale, desired.scale);
+}
+
+#[test]
+fn pinch_keeps_fixed_page_gutters_and_mixed_page_geometry() {
+    let sizes = [[600.0, 800.0], [300.0, 400.0], [500.0, 700.0]];
+    let old_tops = page_tops(&sizes, 1.0);
+    let new_tops = page_tops(&sizes, 1.5);
+    let cursor = egui::vec2(350.0, 200.0);
+    let old = egui::vec2(100.0, old_tops[1] + 400.0 + 6.0 - cursor.y);
+    let offset = PageZoomAnchor::capture(
+        &sizes,
+        ([&old_tops, &new_tops])[0],
+        ([600.0, 900.0])[0],
+        old,
+        cursor,
+        1.0,
+    )
+    .and_then(|anchor| {
+        anchor.offset(
+            &sizes,
+            ([&old_tops, &new_tops])[1],
+            ([600.0, 900.0])[1],
+            cursor,
+            1.5,
+        )
+    })
+    .unwrap_or(old);
+    assert!((new_tops[1] + 400.0 * 1.5 + 6.0 - offset.y - cursor.y).abs() < 0.001);
+    assert!((225.0 + 300.0 * 1.5 - offset.x - cursor.x).abs() < 0.001);
+    let before_top_margin = egui::vec2(100.0, 2.0);
+    let offset = PageZoomAnchor::capture(
+        &sizes,
+        ([&old_tops, &new_tops])[0],
+        ([600.0, 900.0])[0],
+        before_top_margin,
+        egui::vec2(350.0, 4.0),
+        1.0,
+    )
+    .and_then(|anchor| {
+        anchor.offset(
+            &sizes,
+            ([&old_tops, &new_tops])[1],
+            ([600.0, 900.0])[1],
+            egui::vec2(350.0, 4.0),
+            1.5,
+        )
+    })
+    .unwrap_or(before_top_margin);
+    assert_eq!(
+        offset.y, before_top_margin.y,
+        "top margin is fixed CSS space"
+    );
+    for (sizes, tops, zoom) in [
+        (&sizes[..0], &old_tops[..0], 1.0),
+        (&sizes[..], &old_tops[..0], 1.0),
+        (&sizes[..], &old_tops[..], 0.0),
+    ] {
+        assert_eq!(
+            PageZoomAnchor::capture(
+                sizes,
+                ([tops, &new_tops])[0],
+                ([600.0, 900.0])[0],
+                old,
+                cursor,
+                zoom
+            )
+            .and_then(|anchor| anchor.offset(
+                sizes,
+                ([tops, &new_tops])[1],
+                ([600.0, 900.0])[1],
+                cursor,
+                1.5
+            ))
+            .unwrap_or(old),
+            old
+        );
+    }
+}
+
+#[test]
+fn distant_fractional_page_zoom_uses_the_exact_new_layout_tops() {
+    let sizes = vec![[600.0, 841.8898]; 10_000];
+    let old_tops = page_tops(&sizes, 0.73);
+    let new_tops = page_tops(&sizes, 1.11);
+    let cursor = egui::vec2(250.0, 200.0);
+    for page in [7, 99, 999, 9999] {
+        let old = egui::vec2(0.0, old_tops[page] + 300.0 * 0.73 - cursor.y);
+        let offset = PageZoomAnchor::capture(
+            &sizes,
+            ([&old_tops, &new_tops])[0],
+            ([500.0, 666.0])[0],
+            old,
+            cursor,
+            0.73,
+        )
+        .and_then(|anchor| {
+            anchor.offset(
+                &sizes,
+                ([&old_tops, &new_tops])[1],
+                ([500.0, 666.0])[1],
+                cursor,
+                1.11,
+            )
+        })
+        .unwrap_or(old);
+        let actual_y = (new_tops[page] + 300.0 * 1.11) - offset.y;
+        assert!(
+            (actual_y - cursor.y).abs() <= 1.0,
+            "page {page}: actual rounded page geometry moved the cursor by {}pt",
+            actual_y - cursor.y
+        );
+    }
+}
+
+#[test]
+fn pinch_scroll_owner_matches_the_real_scroll_area_state() {
+    let context = egui::Context::default();
+    context.set_pixels_per_point(1.0);
+    for (frame, desired) in [500.0, 900.0].into_iter().enumerate() {
+        context
+            .run_ui(
+                egui::RawInput {
+                    screen_rect: Some(available(1000.0)),
+                    time: Some(frame as f64),
+                    ..Default::default()
+                },
+                |ui| {
+                    let owner = pdfium_scroll_id(ui);
+                    let mut scroll = egui::ScrollArea::both()
+                        .id_salt("pdfium-scroll")
+                        .auto_shrink([false, false]);
+                    if frame == 0 {
+                        scroll = scroll.vertical_scroll_offset(desired);
+                    } else {
+                        let mut state = egui::scroll_area::State::load(ui.ctx(), owner).expect(
+                            "the owning state must exist after the real scroll area painted",
+                        );
+                        assert_eq!(state.offset.y, 500.0);
+                        state.offset.y = desired;
+                        state.store(ui.ctx(), owner);
+                    }
+                    let output = scroll.show_viewport(ui, |ui, viewport| {
+                        ui.set_min_size(egui::vec2(1000.0, 4000.0));
+                        viewport
+                    });
+                    assert_eq!(
+                        output.id, owner,
+                        "pinch must update the same persisted state which ScrollArea uses"
+                    );
+                    assert_eq!(output.inner.top(), desired);
+                    assert_eq!(output.state.offset.y, desired);
+                },
+            )
+            .drop_without_applying_deltas();
+    }
+}
+
+fn painted_widget_frame(
+    context: &egui::Context,
+    view: &mut PdfiumView,
+    texture: egui::TextureId,
+    pointer: Pos2,
+    zoom: Option<f32>,
+    time: f64,
+    pixels_per_point: f32,
+) -> (Rect, Rect) {
+    let bytes = view.bytes.as_ref().unwrap().clone();
+    let mut events = vec![egui::Event::PointerMoved(pointer)];
+    if let Some(zoom) = zoom {
+        events.push(egui::Event::Zoom(zoom));
+    }
+    let mut input = egui::RawInput {
+        screen_rect: Some(available(1000.0)),
+        time: Some(time),
+        events,
+        ..Default::default()
+    };
+    input
+        .viewports
+        .get_mut(&egui::ViewportId::ROOT)
+        .unwrap()
+        .native_pixels_per_point = Some(pixels_per_point);
+    let mut viewport = Rect::NOTHING;
+    let output = context.run_ui(input, |ui| {
+        viewport = ui.available_rect_before_wrap();
+        view.show(
+            ui,
+            PathBuf::new(),
+            bytes.clone(),
+            LIGHT,
+            false,
+            crate::settings::RevealAnimation::default(),
+        );
+    });
+    let rect = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == texture => {
+                Some(mesh.calc_bounds())
+            }
+            _ => None,
+        })
+        .expect("the same resident page must remain painted at the pointer after pinch");
+    output.drop_without_applying_deltas();
+    (rect, viewport)
+}
+
+#[test]
+fn real_pdfium_widget_keeps_its_painted_page_point_under_pinch() {
+    for (pixels_per_point, margin) in [
+        (1.0, egui::Margin::ZERO),
+        (
+            1.5,
+            egui::Margin {
+                left: 7,
+                right: 11,
+                top: 9,
+                bottom: 13,
+            },
+        ),
+        (2.0, egui::Margin::ZERO),
+    ] {
+        for page in [7, 99] {
+            let (context, mut view, _) = seeded();
+            context.all_styles_mut(|style| style.spacing.scroll.content_margin = margin);
+            let mut initial = key(100);
+            initial.pages = vec![page];
+            let mut prepared = batch(&initial);
+            prepared.catalog = Arc::new(Catalog {
+                sizes: vec![[600.0, 800.0]; 100],
+                outline: vec![],
+            });
+            let mut prepared = Some(prepared);
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(available(1000.0)),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.accept(prepared.take().unwrap(), &initial, ui);
+                    },
+                )
+                .drop_without_applying_deltas();
+            view.zoom = 2.7;
+            view.fit = false;
+            view.goto = Some(page);
+            let texture = view.residents[&page].texture.id();
+            let mut pointer = egui::pos2(550.0, 200.0);
+            painted_widget_frame(
+                &context,
+                &mut view,
+                texture,
+                pointer,
+                None,
+                10.0,
+                pixels_per_point,
+            );
+            let owner = view.scroll_owner.unwrap();
+            let mut state = egui::scroll_area::State::load(&context, owner).unwrap();
+            state.offset = egui::vec2(203.7, view.tops[page] + 203.7);
+            state.store(&context, owner);
+            let mut time = 11.0;
+            for interruption in 0..4 {
+                if interruption == 1 {
+                    let mut state = egui::scroll_area::State::load(&context, owner).unwrap();
+                    state.offset += egui::vec2(25.3, 17.7);
+                    state.store(&context, owner);
+                } else if interruption == 2 {
+                    pointer += egui::vec2(-37.3, 13.7);
+                } else if interruption == 3 {
+                    // Force the horizontal document border, then reverse the
+                    // gesture. The next burst must use the clamped painted
+                    // point rather than the previous off-document request.
+                    let (_, viewport) = painted_widget_frame(
+                        &context,
+                        &mut view,
+                        texture,
+                        pointer,
+                        Some(0.4),
+                        time,
+                        pixels_per_point,
+                    );
+                    let offset = egui::scroll_area::State::load(&context, owner)
+                        .unwrap()
+                        .offset;
+                    assert_eq!(
+                        offset.x, 0.0,
+                        "the edge case must genuinely reach the document border"
+                    );
+                    assert!(
+                        !view
+                            .zoom_origin
+                            .continues(&crate::preview::ZoomOriginState {
+                                document: view.revision,
+                                viewport,
+                                pointer: pointer
+                                    - viewport.min
+                                    - egui::vec2(margin.leftf(), margin.topf()),
+                                pixels_per_point,
+                                zoom: view.zoom,
+                                offset,
+                            }),
+                        "a clamped request must re-anchor from the next painted point"
+                    );
+                    time += 1.0;
+                }
+                let (rect, _) = painted_widget_frame(
+                    &context,
+                    &mut view,
+                    texture,
+                    pointer,
+                    None,
+                    time,
+                    pixels_per_point,
+                );
+                let source_point = [
+                    (f64::from(pointer.x) - f64::from(rect.min.x)) / f64::from(view.zoom),
+                    (f64::from(pointer.y) - f64::from(rect.min.y)) / f64::from(view.zoom),
+                ];
+                for step in 0..200 {
+                    time += 1.0 / 60.0;
+                    let factor = if interruption == 3 && step == 0 {
+                        // Leave the zero-horizontal-range fit before asserting
+                        // a fixed anchor: its ordinary clamp can otherwise
+                        // legitimately move the point on every small zoom.
+                        3.0
+                    } else if step < 100 {
+                        1.003
+                    } else {
+                        1.0 / 1.003
+                    };
+                    let (rect, viewport) = painted_widget_frame(
+                        &context,
+                        &mut view,
+                        texture,
+                        pointer,
+                        Some(factor),
+                        time,
+                        pixels_per_point,
+                    );
+                    assert_eq!(view.page, page, "pinch must not reveal a different page");
+                    let offset = egui::scroll_area::State::load(&context, owner)
+                        .unwrap()
+                        .offset;
+                    let width = (600.0 * view.zoom).max(viewport.width());
+                    let left = (width - 600.0 * view.zoom) * 0.5;
+                    let origin = viewport.min + egui::vec2(margin.leftf(), margin.topf());
+                    let ideal = [
+                        f64::from(origin.x)
+                            + f64::from(left)
+                            + source_point[0] * f64::from(view.zoom)
+                            - f64::from(pointer.x),
+                        f64::from(origin.y)
+                            + f64::from(view.tops[page])
+                            + source_point[1] * f64::from(view.zoom)
+                            - f64::from(pointer.y),
+                    ];
+                    for (axis, ideal) in ideal.into_iter().enumerate() {
+                        let half_ulp = 0.5
+                            * f64::from(
+                                f32::from_bits(offset[axis].abs().to_bits() + 1)
+                                    - offset[axis].abs(),
+                            );
+                        // Page-local coordinates must survive the entire burst:
+                        // only the final f64 -> f32 scroll-state store may round.
+                        let logical_error = (f64::from(offset[axis]) - ideal).abs();
+                        assert!(
+                            logical_error <= half_ulp + 0.001,
+                            "page {page} ppp{pixels_per_point} interruption{interruption} step{step} axis{axis}: logical drift {logical_error}, half-ULP {half_ulp}"
+                        );
+                        // Pinned ScrollArea first rounds to a physical pixel,
+                        // then to emath's 1/32pt GUI grid. At distant pages the
+                        // one final f32 offset store also has a measurable ULP.
+                        let gui_rounding = if pixels_per_point == 1.5 {
+                            1.0 / 64.0
+                        } else {
+                            0.0
+                        };
+                        let limit =
+                            0.5 / f64::from(pixels_per_point) + gui_rounding + half_ulp + 0.003;
+                        let painted_error = (f64::from(rect.min[axis])
+                            + source_point[axis] * f64::from(view.zoom)
+                            - f64::from(pointer[axis]))
+                        .abs();
+                        assert!(
+                            painted_error <= limit,
+                            "page {page} ppp{pixels_per_point} interruption{interruption} step{step} axis{axis}: painted drift {painted_error}, bound {limit}"
+                        );
+                    }
+                }
+                time += 1.0;
+            }
+        }
+    }
 }

@@ -6,6 +6,8 @@ use crate::pdfium::{
 };
 use std::collections::BTreeMap;
 
+const PDF_PAGE_GAP: f32 = 12.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct PageContextLocation {
     revision: u64,
@@ -155,6 +157,8 @@ pub(super) struct PdfiumView {
     render_admissions: u64,
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     settling: bool,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    page_geometry: Option<(usize, Rect, Rect, f32, u64)>,
     catalog: Option<Arc<Catalog>>,
     residents: BTreeMap<usize, Resident>,
     active_scale: u32,
@@ -184,6 +188,8 @@ pub(super) struct PdfiumView {
     height: f32,
     page_focus: Option<egui::Id>,
     scroll_owner: Option<egui::Id>,
+    zoom_origin: crate::preview::ZoomOrigin<u64>,
+    pinch_anchor: Option<PageZoomAnchor>,
     controls_open: bool,
     back: Vec<(usize, f32)>,
     forward: Vec<(usize, f32)>,
@@ -207,6 +213,8 @@ impl Default for PdfiumView {
             render_admissions: 0,
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             settling: false,
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            page_geometry: None,
             catalog: None,
             residents: BTreeMap::new(),
             active_scale: 0,
@@ -236,6 +244,8 @@ impl Default for PdfiumView {
             height: 0.0,
             page_focus: None,
             scroll_owner: None,
+            zoom_origin: Default::default(),
+            pinch_anchor: None,
             controls_open: false,
             back: Vec::new(),
             forward: Vec::new(),
@@ -368,6 +378,12 @@ impl PdfiumView {
             "requests": self.render_requests,
             "admissions": self.render_admissions,
             "settling": self.settling,
+            "search_pending": self.search_pending,
+            "page_geometry": self.page_geometry.map(|(page, rect, interact, zoom, frame)| serde_json::json!({
+                "page": page, "rect": [rect.left(), rect.top(), rect.width(), rect.height()],
+                "interact": [interact.left(), interact.top(), interact.width(), interact.height()],
+                "zoom": zoom, "frame": frame,
+            })),
         })
     }
     #[cfg(test)]
@@ -468,6 +484,7 @@ impl PdfiumView {
     }
 
     pub(super) fn zoom(&mut self, action: PreviewZoomAction) {
+        self.zoom_origin = Default::default();
         match action {
             PreviewZoomAction::Reset => self.fit = true,
             PreviewZoomAction::In => {
@@ -583,6 +600,7 @@ impl PdfiumView {
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         {
             self.reveal_observation = None;
+            self.page_geometry = None;
         }
         self.update_reveal_options(&bytes, Instant::now(), animation);
         if self
@@ -622,6 +640,7 @@ impl PdfiumView {
         {
             self.catalog = Some(batch.catalog.clone());
             self.layout_zoom = 0.0;
+            self.zoom_origin = Default::default();
             self.restore_anchor = true;
         }
         self.apply_pending_position();
@@ -640,6 +659,7 @@ impl PdfiumView {
         if let Some(catalog) = self.catalog.clone() {
             let widest = catalog.sizes.iter().map(|s| s[0]).fold(1.0f32, f32::max);
             let old_zoom = self.zoom;
+            let mut zoomed_tops = None;
             if self.fit {
                 self.zoom = fit_width_zoom(available.width(), widest);
                 if self.zoom != old_zoom {
@@ -648,9 +668,10 @@ impl PdfiumView {
             }
             let pinch = ui.ctx().input(|i| i.zoom_delta());
             let pointer = ui.ctx().pointer_latest_pos();
-            let scroll_id = ui.make_persistent_id("pdfium-scroll");
+            let scroll_id = pdfium_scroll_id(ui);
             if self.scroll_owner != Some(scroll_id) {
                 self.scroll_owner = Some(scroll_id);
+                self.zoom_origin = Default::default();
                 self.restore_anchor = true;
             }
             if pointer.is_some_and(|p| available.contains(p)) && (pinch - 1.0).abs() > 0.001 {
@@ -658,22 +679,61 @@ impl PdfiumView {
                 self.zoom = (self.zoom * pinch).clamp(0.15, 8.0);
                 let mut state =
                     egui::scroll_area::State::load(ui.ctx(), scroll_id).unwrap_or_default();
-                state.offset = zoom_anchored_offset(
-                    state.offset,
-                    pointer.unwrap() - available.min,
-                    old_zoom,
-                    self.zoom,
-                );
+                if self.layout_zoom != self.zoom {
+                    zoomed_tops = Some(page_tops(&catalog.sizes, self.zoom));
+                }
+                // ScrollArea rounds the outer origin before its content Frame
+                // adds the inherited margin; page coordinates start after it.
+                let margin = ui.spacing().scroll.content_margin;
+                let content_origin = available.min + egui::vec2(margin.leftf(), margin.topf());
+                let origin = crate::preview::ZoomOriginState {
+                    document: self.revision,
+                    viewport: available,
+                    pointer: pointer.unwrap() - content_origin,
+                    pixels_per_point: ui.ctx().pixels_per_point(),
+                    zoom: old_zoom,
+                    offset: state.offset,
+                };
+                if !self.zoom_origin.continues(&origin) || self.pinch_anchor.is_none() {
+                    self.pinch_anchor = PageZoomAnchor::capture(
+                        &catalog.sizes,
+                        &self.tops,
+                        (widest * old_zoom).max(available.width()),
+                        self.zoom_origin.basis(&origin),
+                        origin.pointer,
+                        old_zoom,
+                    );
+                }
+                let mut requested_offset = state.offset;
+                if let Some(anchor) = self.pinch_anchor
+                    && let Some(offset) = anchor.offset(
+                        &catalog.sizes,
+                        zoomed_tops.as_deref().unwrap_or(&self.tops),
+                        (widest * self.zoom).max(available.width()),
+                        origin.pointer,
+                        self.zoom,
+                    )
+                {
+                    requested_offset = offset;
+                    state.offset = offset.max(Vec2::ZERO);
+                }
+                self.zoom_origin.record(crate::preview::ZoomOriginState {
+                    zoom: self.zoom,
+                    // Preserve the request so any document-edge clamp forces
+                    // the next event to re-anchor from what was actually painted.
+                    offset: requested_offset,
+                    ..origin
+                });
                 state.store(ui.ctx(), scroll_id);
                 // Pointer anchoring already supplies the new offset; a page
                 // anchor from a prior layout must not overwrite that gesture.
                 self.restore_anchor = false;
             }
             if self.layout_zoom != self.zoom {
-                self.tops = page_tops(&catalog.sizes, self.zoom);
+                self.tops = zoomed_tops.unwrap_or_else(|| page_tops(&catalog.sizes, self.zoom));
                 self.height = self.tops.last().copied().unwrap_or(0.0)
                     + catalog.sizes.last().unwrap()[1] * self.zoom
-                    + 12.0;
+                    + PDF_PAGE_GAP;
                 self.layout_zoom = self.zoom;
             }
             let width = (widest * self.zoom).max(available.width());
@@ -757,6 +817,7 @@ impl PdfiumView {
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                     if index == self.page {
                         crate::desktop_test::observe("preview.page", &response);
+                        self.page_geometry = Some((index, rect, response.interact_rect, self.zoom, ui.ctx().cumulative_frame_nr()));
                     }
                     if response.has_focus() || response.clicked() || response.drag_started() {
                         self.page_focus = Some(response.id);
@@ -1118,16 +1179,100 @@ fn push_history(history: &mut Vec<(usize, f32)>, position: (usize, f32)) {
     history.push(position);
 }
 
+fn pdfium_scroll_id(ui: &egui::Ui) -> egui::Id {
+    // ScrollArea wraps its id_salt once before Ui::make_persistent_id hashes it.
+    // Loading the raw string's ID would read and update an unused scroll state.
+    ui.make_persistent_id(egui::IdSalt::new("pdfium-scroll"))
+}
+
 fn page_tops(sizes: &[[f32; 2]], zoom: f32) -> Vec<f32> {
-    let mut top = 12.0;
+    let mut top = PDF_PAGE_GAP;
     sizes
         .iter()
         .map(|s| {
             let result = top;
-            top += s[1] * zoom + 12.0;
+            top += s[1] * zoom + PDF_PAGE_GAP;
             result
         })
         .collect()
+}
+
+/// A source point retained across one uninterrupted pinch. Reconstructing this
+/// from global f32 scroll offsets on each event loses precision on distant pages.
+#[derive(Clone, Copy)]
+struct PageZoomAnchor {
+    page: usize,
+    x: f64,
+    y: PageZoomY,
+}
+
+#[derive(Clone, Copy)]
+enum PageZoomY {
+    Above(f64),
+    Within(f64),
+    After(f64),
+}
+
+impl PageZoomAnchor {
+    fn capture(
+        sizes: &[[f32; 2]],
+        tops: &[f32],
+        content_width: f32,
+        offset: Vec2,
+        pointer: Vec2,
+        zoom: f32,
+    ) -> Option<Self> {
+        if sizes.is_empty() || sizes.len() != tops.len() || !zoom.is_finite() || zoom <= 0.0 {
+            return None;
+        }
+        let point_y = f64::from(offset.y) + f64::from(pointer.y);
+        let page = tops
+            .partition_point(|top| f64::from(*top) <= point_y)
+            .saturating_sub(1)
+            .min(sizes.len() - 1);
+        let local_y = point_y - f64::from(tops[page]);
+        let height = f64::from(sizes[page][1] * zoom);
+        let y = if point_y < f64::from(tops[0]) {
+            PageZoomY::Above(point_y)
+        } else if local_y <= height {
+            PageZoomY::Within(local_y / f64::from(zoom))
+        } else {
+            PageZoomY::After(local_y - height)
+        };
+        let left = f64::from((content_width - sizes[page][0] * zoom) * 0.5);
+        Some(Self {
+            page,
+            x: (f64::from(offset.x) + f64::from(pointer.x) - left) / f64::from(zoom),
+            y,
+        })
+    }
+
+    /// Preserve exact layout tops and fixed gutters, rounding only when the
+    /// final offset is stored in egui's f32 ScrollArea state.
+    fn offset(
+        self,
+        sizes: &[[f32; 2]],
+        tops: &[f32],
+        content_width: f32,
+        pointer: Vec2,
+        zoom: f32,
+    ) -> Option<Vec2> {
+        if sizes.len() != tops.len() || !zoom.is_finite() || zoom <= 0.0 {
+            return None;
+        }
+        let size = sizes.get(self.page)?;
+        let top = f64::from(tops[self.page]);
+        let y = match self.y {
+            PageZoomY::Above(point) => point,
+            PageZoomY::Within(point) => top + point * f64::from(zoom),
+            PageZoomY::After(distance) => top + f64::from(size[1] * zoom) + distance,
+        };
+        let left = f64::from((content_width - size[0] * zoom) * 0.5);
+        Some(egui::vec2(
+            (left + self.x * f64::from(zoom) - f64::from(pointer.x)) as f32,
+            (y - f64::from(pointer.y)) as f32,
+        ))
+    }
 }
 
 fn visible_pages(

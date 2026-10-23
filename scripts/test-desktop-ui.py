@@ -143,7 +143,7 @@ class Journey(EditorJourneys):
             self.log.flush()
 
     def native(self, command, *args):
-        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "key-burst", "move", "wheel", "text", "paste", "right-click", "fullscreen"}:
+        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "key-burst", "move", "wheel", "pdfium-zoom-wheel", "text", "paste", "right-click", "fullscreen"}:
             foreground = subprocess.run(
                 [str(self.driver), "foreground", str(self.process.pid)],
                 capture_output=True,

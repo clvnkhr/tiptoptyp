@@ -478,7 +478,7 @@ if command == "watch-copy" {
             Thread.sleep(forTimeInterval: interval / 2)
         }
     }
-} else if command == "wheel" || command == "zoom-wheel" || command == "horizontal-wheel" {
+} else if command == "wheel" || command == "zoom-wheel" || command == "pdfium-zoom-wheel" || command == "horizontal-wheel" {
     guard args.count == 5,
           let x = Double(args[2]), let y = Double(args[3]),
           let lines = Int32(args[4]), x.isFinite, y.isFinite, lines != 0 else {
@@ -493,6 +493,9 @@ if command == "watch-copy" {
     }
     event.location = CGPoint(x: x, y: y)
     if command == "zoom-wheel" { event.flags = .maskControl }
+    // PDFium consumes egui's platform Command-wheel zoom. Tinymist's native
+    // monitor consumes Control-wheel; that shortcut can belong to macOS Zoom.
+    if command == "pdfium-zoom-wheel" { event.flags = .maskCommand }
     event.post(tap: .cghidEventTap)
 } else if command == "click" || command == "double-click" || command == "move" {
     guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]), x.isFinite, y.isFinite else { fail("click requires finite screen coordinates") }

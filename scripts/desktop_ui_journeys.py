@@ -1627,6 +1627,55 @@ class EditorJourneys(IndentationJourneys, ToolDefaultsJourneys, SettingsLinksJou
                            capture_output=True, text=True, check=True).stdout == committed)
 
 
+    def pdfium_cursor_zoom(self):
+        """Positioned native wheel delivery verifies the actual PDFium cursor anchor."""
+        from desktop_ui_newest_journeys import pdfium_page_point
+        if not self.snapshot()["document"]["preview_controls_open"]:
+            self.click("preview.open")
+        for page in (1, 2):
+            self.click("preview.Next page")
+            self.wait("PDFium zoom reaches a later page", lambda d:
+                      d["preview_page"] == page and pdfium_resize_settled(d), timeout=20)
+        self.click("preview.Minimize controls")
+        self.click("preview.page")
+        for delta in (2, -2):
+            self.wait_target("preview.page")
+            before = self.snapshot()
+            target = before["targets"]["preview.page"]
+            screen = [target["x"] + target["width"] * 0.10,
+                      target["y"] - target["height"] * 0.10]
+            page, point = pdfium_page_point(before, screen)
+            self.native("move", *screen)
+            # PDFium uses egui's macOS Command-wheel modifier through ordinary
+            # native HID delivery. Accessibility Zoom reserves Control-wheel;
+            # no system preference changes are needed for this input.
+            self.native("pdfium-zoom-wheel", *screen, delta)
+            baseline = pdfium_render_state(before["document"])
+            after = self.wait("positioned PDFium native zoom publishes new pixels", lambda d:
+                              pdfium_resize_settled(d)
+                              and d["pdfium_render"]["active_scale"] != baseline["active_scale"], timeout=20)
+            actual_page, actual = pdfium_page_point(after, screen)
+            if after["document"]["interface_scale"] != before["document"]["interface_scale"]:
+                raise AssertionError("native wheel changed the app's interface scale instead of PDFium")
+            zoom_before = baseline["page_geometry"]["zoom"]
+            zoom_after = after["document"]["pdfium_render"]["page_geometry"]["zoom"]
+            if (zoom_after - zoom_before) * delta <= 0:
+                raise AssertionError("positioned native wheel did not zoom PDFium in the requested direction")
+            if actual_page != page:
+                raise AssertionError("PDFium zoom changed the page under the cursor")
+            scale = after["document"]["pdfium_render"]["page_geometry"]["zoom"]
+            error = [(a - b) * scale for a, b in zip(actual, point)]
+            if any(abs(value) > 1.1 for value in error):
+                raise AssertionError("PDFium zoom moved its page point away from the cursor: " + str(error))
+            self.record("pdfium_resize.cursor-zoom", delta=delta, page=page, screen=screen,
+                        page_point=point, error_points=error,
+                        before=baseline, after=after["document"]["pdfium_render"])
+        if not self.snapshot()["document"]["preview_controls_open"]:
+            self.click("preview.open")
+        self.click("preview.Fit page width")
+        self.click("preview.Minimize controls")
+        self.wait("PDFium cursor zoom returns to fit width", pdfium_resize_settled, timeout=20)
+
     def pdfium_resize(self):
         """Drag real dividers repeatedly while retaining the last sharp textures."""
         import time
@@ -1718,6 +1767,7 @@ class EditorJourneys(IndentationJourneys, ToolDefaultsJourneys, SettingsLinksJou
             self.record("pdfium_resize.drag", iteration=iteration, delta=delta,
                         before=baseline, after=rendered, snapshot_ms=snapshot_ms,
                         elapsed_ms=(time.monotonic() - started) * 1000)
+        self.pdfium_cursor_zoom()
         if self.capture_review:
             self.capture_viewport("main")
         self.restore_partial_fixture_tabs(before, [fixture_tab])

@@ -1081,6 +1081,72 @@ class PdfiumResizeContract(unittest.TestCase):
                 self.assertFalse(pdfium_resize_settled({**self.document(), field: wrong}))
 
 
+class PdfiumFindAndPointerContract(unittest.TestCase):
+    def snapshot(self):
+        document = PdfiumResizeContract().document()
+        document.update(frame=10, preview_page=7)
+        document["pdfium_render"].update(search_pending=False, page_geometry={
+            "page": 7, "rect": [10, -100, 600, 800], "interact": [10, 100, 600, 400],
+            "zoom": 1, "frame": 10})
+        return {"document": document, "targets": {"preview.page": {
+            "x": 410, "y": 500, "width": 600, "height": 400, "frame": 10}}}
+
+    def test_find_requires_completed_search_and_unchanged_actual_raster_work(self):
+        from desktop_ui_newest_journeys import assert_pdfium_find_keeps_raster
+        document = self.snapshot()["document"]
+        baseline = dict(document["pdfium_render"])
+        assert_pdfium_find_keeps_raster(document, baseline)
+        for field in ("requests", "admissions", "active_scale", "resident_count"):
+            changed = self.snapshot()["document"]
+            changed["pdfium_render"][field] += 1
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                assert_pdfium_find_keeps_raster(changed, baseline)
+        for pending in (True, None):
+            changed = self.snapshot()["document"]
+            changed["pdfium_render"]["search_pending"] = pending
+            with self.assertRaises(AssertionError):
+                assert_pdfium_find_keeps_raster(changed, baseline)
+
+    def test_native_pointer_projection_handles_clipping_and_repositioned_paper(self):
+        from desktop_ui_newest_journeys import pdfium_page_point
+        snapshot = self.snapshot()
+        self.assertEqual(pdfium_page_point(snapshot, [410, 500]), (7, [300, 400]))
+        snapshot["document"]["pdfium_render"]["page_geometry"].update(
+            rect=[-290, -500, 1200, 1600], zoom=2)
+        self.assertEqual(pdfium_page_point(snapshot, [410, 500]), (7, [300, 400]))
+        snapshot["targets"]["preview.page"].update(width=900, height=600)
+        self.assertEqual(pdfium_page_point(snapshot, [410, 500]), (7, [300, 400]))
+
+    def test_stale_or_invalid_page_geometry_never_proves_cursor_anchoring(self):
+        from desktop_ui_newest_journeys import pdfium_page_point
+        for field, value in (("frame", 9), ("page", 8), ("zoom", 0), ("zoom", None),
+                             ("rect", None), ("rect", [0, 0, math.nan, 4]),
+                             ("interact", [0, 0, 0, 4])):
+            snapshot = self.snapshot()
+            snapshot["document"]["pdfium_render"]["page_geometry"][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(AssertionError):
+                pdfium_page_point(snapshot, [410, 500])
+        snapshot = self.snapshot()
+        snapshot["targets"]["preview.page"]["frame"] = 9
+        with self.assertRaises(AssertionError):
+            pdfium_page_point(snapshot, [410, 500])
+
+    def test_pdfium_wheel_uses_runner_foreground_protection(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        journey = object.__new__(runner.Journey)
+        journey.driver = Path("/private/tmp/native-driver")
+        journey.process = SimpleNamespace(pid=42)
+        journey.record = lambda *args, **kwargs: None
+        results = [SimpleNamespace(returncode=0, stdout='{"pid":99}'),
+                   SimpleNamespace(returncode=0),
+                   SimpleNamespace(returncode=0, stdout='{}', stderr='')]
+        with patch.object(runner.subprocess, "run", side_effect=results) as run:
+            journey.native("pdfium-zoom-wheel", 410, 500, 2)
+        self.assertEqual([call.args[0][1] for call in run.call_args_list],
+                         ["foreground", "activate", "pdfium-zoom-wheel"])
+
+
 class BackgroundFadesContract(unittest.TestCase):
     def document(self):
         def background(identity):

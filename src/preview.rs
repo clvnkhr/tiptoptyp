@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eframe::egui::{TextureHandle, Vec2};
+use eframe::egui::{Rect, TextureHandle, Vec2, emath::GuiRounding as _};
 
 use crate::{
     compiler::ArtifactKey, diagnostics::Diagnostic, image_residency::ResidencyLease,
@@ -13,6 +13,53 @@ use crate::{
 pub const PDF_POINTS_PER_PREVIEW_PIXEL: f32 = 72.0 / PREVIEW_DPI;
 pub const PAGE_MARGIN: f32 = METRICS.preview.page_margin;
 pub const PAGE_GAP: f32 = METRICS.preview.page_gap;
+
+/// Metadata that distinguishes an uninterrupted zoom from scrolling or a new anchor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ZoomOriginState<K> {
+    pub(crate) document: K,
+    pub(crate) viewport: Rect,
+    pub(crate) pointer: Vec2,
+    pub(crate) pixels_per_point: f32,
+    pub(crate) zoom: f32,
+    pub(crate) offset: Vec2,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ZoomOrigin<K> {
+    previous: Option<ZoomOriginState<K>>,
+}
+
+impl<K> Default for ZoomOrigin<K> {
+    fn default() -> Self {
+        Self { previous: None }
+    }
+}
+
+impl<K: PartialEq> ZoomOrigin<K> {
+    pub(crate) fn continues(&self, input: &ZoomOriginState<K>) -> bool {
+        self.previous.as_ref() == Some(input)
+    }
+
+    pub(crate) fn basis(&self, input: &ZoomOriginState<K>) -> Vec2 {
+        if self.continues(input) {
+            // Retain subpixel precision through the burst instead of accumulating
+            // the ScrollArea's physical-pixel rounding on every zoom event.
+            input.offset
+        } else {
+            // egui 0.36 ScrollArea rounds its content origin, not its saved offset.
+            // Start from the point actually painted before this zoom.
+            let painted_origin = (input.viewport.min - input.offset)
+                .round_to_pixels(input.pixels_per_point)
+                .round_ui();
+            input.viewport.min - painted_origin
+        }
+    }
+
+    pub(crate) fn record(&mut self, state: ZoomOriginState<K>) {
+        self.previous = Some(state);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PreviewStatus {
@@ -724,6 +771,55 @@ pub fn dark_preview_rgba(rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zoom_origin_keeps_subpixels_only_for_its_unchanged_output() {
+        let input = ZoomOriginState {
+            document: 7_u64,
+            viewport: Rect::from_min_size(eframe::egui::pos2(3.0, 4.0), Vec2::splat(500.0)),
+            pointer: Vec2::new(150.0, 250.0),
+            pixels_per_point: 1.0,
+            zoom: 1.0,
+            offset: Vec2::new(100.3, 200.4),
+        };
+        let mut origin = ZoomOrigin::default();
+        assert!(!origin.continues(&input));
+        assert_eq!(origin.basis(&input), Vec2::new(100.0, 200.0));
+        origin.record(input);
+        assert!(origin.continues(&input));
+        assert_eq!(origin.basis(&input), input.offset);
+        for changed in [
+            ZoomOriginState {
+                document: 8,
+                ..input
+            },
+            ZoomOriginState {
+                viewport: input.viewport.translate(Vec2::X),
+                ..input
+            },
+            ZoomOriginState {
+                pointer: input.pointer + Vec2::X,
+                ..input
+            },
+            ZoomOriginState {
+                pixels_per_point: 2.0,
+                ..input
+            },
+            ZoomOriginState { zoom: 1.1, ..input },
+            ZoomOriginState {
+                offset: input.offset + Vec2::X,
+                ..input
+            },
+        ] {
+            assert!(!origin.continues(&changed), "{changed:?}");
+            let expected = changed.viewport.min
+                - (changed.viewport.min - changed.offset)
+                    .round_to_pixels(changed.pixels_per_point)
+                    .round_ui();
+            assert_eq!(origin.basis(&changed), expected, "{changed:?}");
+            assert_ne!(origin.basis(&changed), changed.offset, "{changed:?}");
+        }
+    }
 
     #[test]
     fn rejected_ready_notifications_never_reset_the_five_attempt_budget() {
