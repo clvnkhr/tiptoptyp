@@ -1,9 +1,18 @@
 //! Activity is observed, never driven, by this panel. Opening it starts no jobs.
 use super::*;
 use crate::activity::Activity;
+mod filter;
+#[cfg(test)]
+mod tests;
+mod view;
+use super::filter_bar::{ScrollLayout, initial_offset};
+use filter::{Filter, Group, Status};
+use std::collections::HashSet;
+use view::show_indicators;
 
 #[derive(Default)]
 pub(super) struct ActivityTracking {
+    pub(super) view: State,
     pub(super) completion: Option<u64>,
     pub(super) hover: Option<u64>,
     pub(super) intelligence_error: Option<String>,
@@ -47,7 +56,9 @@ fn preview_work(status: PreviewStatus) -> Activity {
         PreviewStatus::Error => Activity::Failed("Could not produce preview; see Problems".into()),
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Indicator {
+    group: Group,
     name: &'static str,
     role: &'static str,
     state: Activity,
@@ -58,9 +69,17 @@ impl EditorApp {
         let typst = self.document().kind() == DocumentKind::Typst;
         let tex = self.document().kind() == DocumentKind::Tex;
         let inactive = Activity::Inactive("Not in use");
-        let mut rows = Vec::with_capacity(28);
-        let mut add = |name, role, state| rows.push(Indicator { name, role, state });
+        let mut rows = Vec::with_capacity(32);
+        let mut add = |group, name, role, state| {
+            rows.push(Indicator {
+                group,
+                name,
+                role,
+                state,
+            })
+        };
         add(
+            Group::Code,
             "Handwriting",
             "Recognizes symbols drawn in Explorer using the offline model.",
             self.symbol_drawing.activity(),
@@ -79,6 +98,7 @@ impl EditorApp {
             "Save queued",
         );
         add(
+            Group::Files,
             "Save",
             "Writes documents to disk. Autosave waits for edits to settle.",
             if matches!(save, Activity::Idle) && !self.settings.auto_save {
@@ -95,6 +115,7 @@ impl EditorApp {
             "Build queued",
         );
         add(
+            Group::Preview,
             "Typst",
             "Builds a PDF from your Typst document.",
             if self.preview_document_kind() == DocumentKind::Typst {
@@ -104,6 +125,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Preview,
             self.settings.tex.build_engine.label(),
             "Builds a PDF from your TeX document.",
             if self.preview_document_kind() == DocumentKind::Tex && self.settings.tex.build_enabled
@@ -114,6 +136,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Preview,
             "SyncTeX",
             "Connects TeX source positions to matching places in the PDF and back.",
             if self.preview_document_kind() != DocumentKind::Tex {
@@ -133,6 +156,7 @@ impl EditorApp {
             inactive.clone()
         };
         add(
+            Group::Code,
             "Tinymist",
             "Provides Typst suggestions, hover help, and error checks.",
             if matches!(tinymist, Activity::Idle) {
@@ -148,6 +172,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Preview,
             "Live preview",
             "Updates the live document preview as you type.",
             if typst && self.preview.tinymist_preview_enabled {
@@ -161,6 +186,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Checks,
             "Typst diagnostics",
             "Checks your Typst document for errors and warnings.",
             if matches!(tinymist, Activity::Idle) {
@@ -191,6 +217,7 @@ impl EditorApp {
                 self.settings.tex.lint
             };
             add(
+                Group::Code,
                 name,
                 if index == 1 {
                     "Provides TeX suggestions, hover help, and error checks."
@@ -227,6 +254,7 @@ impl EditorApp {
             "Tinymist format"
         };
         add(
+            Group::Code,
             formatter,
             "Tidies source layout when you format or save.",
             if !typst && !tex
@@ -242,6 +270,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Checks,
             "Compiler diagnostics",
             "Collects errors and warnings from PDF builds.",
             if self
@@ -259,21 +288,25 @@ impl EditorApp {
             },
         );
         add(
+            Group::Preview,
             "Vector view",
             "Shows Tinymist's live preview inside the preview pane.",
             service(&self.preview.webview_state),
         );
         add(
+            Group::Preview,
             "PDFium preview",
             "Draws compiled PDF pages when the PDFium preview is selected.",
             self.pdfium_preview.activity(),
         );
         add(
+            Group::Preview,
             "Opened PDF",
             "Draws and searches a PDF file opened as a document.",
             self.pdfium_asset.activity(),
         );
         add(
+            Group::Files,
             "File loading",
             "Loads an opened PDF or image before it can be shown.",
             if self.document().kind().preview_only() {
@@ -283,26 +316,31 @@ impl EditorApp {
             },
         );
         add(
+            Group::Files,
             "Hover thumbnail",
             "Makes the small image or PDF preview shown on hover.",
             self.hover_activity(),
         );
         add(
+            Group::Git,
             "Git status",
             "Checks changed files and handles Git repository actions.",
             self.git.activity(),
         );
         add(
+            Group::Git,
             "Git hunks",
             "Marks changed lines beside your source code.",
             self.git_editor.activity(),
         );
         add(
+            Group::Git,
             "Git mutation",
             "Stages, unstages, or discards selected changes.",
             self.git_hunk_job.activity(),
         );
         add(
+            Group::Files,
             "Workspace",
             "Refreshes the workspace file list when files change.",
             if self.workspace_service.is_subscribed() {
@@ -312,6 +350,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Files,
             "File watcher",
             "Notices files changed outside the app.",
             if self.workspace_service.is_subscribed() {
@@ -321,6 +360,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Files,
             "Project index",
             "Finds headings, labels, and references across your project.",
             Activity::work(
@@ -330,11 +370,13 @@ impl EditorApp {
             ),
         );
         add(
+            Group::Checks,
             "LTeX+",
             "Checks spelling and grammar with the optional local LanguageTool server.",
             self.ltex.activity(),
         );
         add(
+            Group::Checks,
             "Harper",
             "English spelling and grammar checks.",
             if self.settings.english_grammar {
@@ -344,6 +386,7 @@ impl EditorApp {
             },
         );
         add(
+            Group::Checks,
             "Unicode",
             "Flags invisible or easily confused characters.",
             if self.settings.unicode_warnings {
@@ -353,11 +396,13 @@ impl EditorApp {
             },
         );
         add(
+            Group::Tools,
             "Fonts",
             "Finds fonts available in your workspace.",
             self.font_catalog_scan.activity(),
         );
         add(
+            Group::Tools,
             "Packages",
             "Loads the list of available Typst packages.",
             if self.package_catalog_job.is_running() {
@@ -373,11 +418,13 @@ impl EditorApp {
             },
         );
         add(
+            Group::Tools,
             "Package removal",
             "Removes installed packages.",
             self.package_uninstall.activity(),
         );
         add(
+            Group::Files,
             "File import",
             "Imports dropped files into the workspace.",
             queued(
@@ -387,6 +434,7 @@ impl EditorApp {
             ),
         );
         add(
+            Group::Tools,
             "Terminal",
             "Runs your shell. Green means connected; commands may still be running.",
             self.terminal.activity(),
@@ -399,7 +447,7 @@ impl EditorApp {
         } else {
             self.activity_indicators()
         };
-        show_indicators(ui, &rows);
+        show_indicators(ui, &mut self.activity.view, &rows);
     }
     fn hover_activity(&self) -> Activity {
         match self.asset_hover.as_ref().map(|h| &h.content) {
@@ -410,45 +458,13 @@ impl EditorApp {
         }
     }
 }
-fn show_indicators(ui: &mut egui::Ui, rows: &[Indicator]) {
-    egui::ScrollArea::vertical()
-        .id_salt("activity-scroll")
-        .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(5.0, 4.0);
-            ui.horizontal_wrapped(|ui| {
-                for row in rows {
-                    let palette = theme::palette(ui.ctx());
-                    let color = match row.state {
-                        Activity::Idle => palette.success,
-                        Activity::Running | Activity::Pending(_) => palette.warning,
-                        Activity::Failed(_) => palette.error,
-                        Activity::Inactive(_) => ui.visuals().weak_text_color(),
-                    };
-                    let response = ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("● {}", row.name))
-                                .color(color)
-                                .size(theme::TYPE.supporting),
-                        )
-                        .wrap_mode(egui::TextWrapMode::Extend),
-                    );
-                    let detail = match &row.state {
-                        Activity::Failed(error) => {
-                            format!("{}\n{}\n{error}", row.role, row.state.label())
-                        }
-                        _ => format!("{}\n{}", row.role, row.state.label()),
-                    };
-                    native_hover_text(response, detail);
-                }
-            });
-        });
-}
-
 fn fixture_indicators() -> Vec<Indicator> {
     [
         ("Save", Activity::Pending("Save queued")),
         ("Typst", Activity::Running),
         ("Tectonic", Activity::Inactive("Not in use")),
+        ("Handwriting", Activity::Inactive("Not in use")),
+        ("SyncTeX", Activity::Inactive("Not in use")),
         ("Tinymist", Activity::Idle),
         ("Live preview", Activity::Running),
         ("Typst diagnostics", Activity::Pending("Stale")),
@@ -470,6 +486,7 @@ fn fixture_indicators() -> Vec<Indicator> {
         ("Workspace", Activity::Idle),
         ("File watcher", Activity::Idle),
         ("Project index", Activity::Running),
+        ("LTeX+", Activity::Idle),
         ("Harper", Activity::Pending("Stale")),
         ("Unicode", Activity::Pending("Stale")),
         ("Fonts", Activity::Idle),
@@ -480,6 +497,7 @@ fn fixture_indicators() -> Vec<Indicator> {
     ]
     .into_iter()
     .map(|(name, state)| Indicator {
+        group: fixture_group(name),
         name,
         role: "Deterministic QA example",
         state,
@@ -487,124 +505,82 @@ fn fixture_indicators() -> Vec<Indicator> {
     .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use egui_kittest::{Harness, kittest::Queryable};
+fn fixture_group(name: &str) -> Group {
+    match name {
+        "Typst" | "Tectonic" | "SyncTeX" | "Live preview" | "Vector view" | "PDFium preview"
+        | "Opened PDF" => Group::Preview,
+        "Handwriting" | "Tinymist" | "TexLab" | "Badness" | "Tinymist format" => Group::Code,
+        "Typst diagnostics" | "Compiler diagnostics" | "LTeX+" | "Harper" | "Unicode" => {
+            Group::Checks
+        }
+        "Git status" | "Git hunks" | "Git mutation" => Group::Git,
+        "Fonts" | "Packages" | "Package removal" | "Terminal" => Group::Tools,
+        _ => Group::Files,
+    }
+}
 
-    #[test]
-    fn compact_chips_wrap_without_horizontal_overflow() {
-        for width in [320.0, 800.0, 1400.0] {
-            let mut harness = Harness::builder()
-                .with_size(Vec2::new(width, 250.0))
-                .build_ui(|ui| show_indicators(ui, &fixture_indicators()));
-            harness.run();
-            let save = harness.get_by_label("● Save").rect();
-            let typst = harness.get_by_label("● Typst").rect();
-            assert_eq!(save.min.y, typst.min.y, "indicators should share rows");
-            for row in fixture_indicators() {
-                let rect = harness.get_by_label(&format!("● {}", row.name)).rect();
-                assert!(
-                    rect.min.x >= 0.0 && rect.max.x <= width,
-                    "{rect:?} at width {width}"
-                );
-            }
-            if width >= 800.0 {
-                assert!(harness.get_by_label("● Terminal").rect().max.y < 160.0);
-            }
+pub(super) struct State {
+    filter: Filter,
+    grouped: bool,
+    collapsed: HashSet<Group>,
+    pub(super) focus_search: bool,
+    pub(super) popup_open: bool,
+    pub(super) controls_visible: bool,
+    pub(super) sticky_filters: bool,
+    pub(super) scroll_offset: f32,
+    pub(super) scroll_rect: Rect,
+    pub(super) controls_rect: Rect,
+    controls_height: f32,
+    scroll_layout: Option<ScrollLayout>,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    inventory: Vec<Indicator>,
+}
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            filter: Filter::default(),
+            grouped: true,
+            collapsed: HashSet::new(),
+            focus_search: false,
+            popup_open: false,
+            controls_visible: false,
+            sticky_filters: false,
+            scroll_offset: 0.0,
+            scroll_rect: Rect::NOTHING,
+            controls_rect: Rect::NOTHING,
+            controls_height: 0.0,
+            scroll_layout: None,
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            inventory: Vec::new(),
         }
     }
-    #[test]
-    fn activity_state_changes_cannot_move_any_label() {
-        let mut harness = Harness::builder()
-            .with_size(Vec2::new(800.0, 250.0))
-            .build_ui_state(|ui, rows| show_indicators(ui, rows), fixture_indicators());
-        harness.run();
-        let before: Vec<_> = harness
-            .state()
+}
+pub(super) fn search_id(context: &egui::Context) -> egui::Id {
+    viewport_scoped_id(context, "activity-search")
+}
+#[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+impl State {
+    pub(super) fn inspect(&self) -> serde_json::Value {
+        let indices = self.filter.filter_indices(&self.inventory);
+        let groups = Group::ALL.iter().filter_map(|group| {
+            let count = indices.iter().filter(|&&index| self.inventory[index].group == *group).count();
+            if count == 0 {return None;}
+            Some(serde_json::json!({"id":format!("{group:?}"),"label":group.label(),"count":count,
+                "open":!self.collapsed.contains(group),"target":format!("activity.group.{group:?}")}))
+        }).collect::<Vec<_>>();
+        let displayed_count = indices
             .iter()
-            .map(|row| harness.get_by_label(&format!("● {}", row.name)).rect())
-            .collect();
-        for state in [
-            Activity::Idle,
-            Activity::Running,
-            Activity::Pending("Queued"),
-            Activity::Failed("failure".into()),
-            Activity::Inactive("Disabled"),
-        ] {
-            for row in harness.state_mut().iter_mut() {
-                row.state = state.clone();
-            }
-            harness.run();
-            for (row, before) in harness.state().iter().zip(&before) {
-                assert_eq!(
-                    harness.get_by_label(&format!("● {}", row.name)).rect(),
-                    *before
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn freshness_requires_the_exact_document_revision_and_owner() {
-        let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 2, 3);
-        assert_eq!(freshness(Some(key), key), Activity::Idle);
-        for other in [
-            None,
-            Some(DocumentKey { revision: 2, ..key }),
-            Some(DocumentKey { epoch: 1, ..key }),
-            Some(DocumentKey {
-                owner: tiptoptyp_core::document::WindowSessionId::new(2),
-                ..key
-            }),
-        ] {
-            assert_eq!(freshness(other, key), Activity::Pending("Stale"));
-        }
-    }
-    #[test]
-    fn activity_diagnostics_ignore_old_replies_after_typing() {
-        let root = tempfile::tempdir().unwrap();
-        let context = egui::Context::default();
-        let mut app = EditorApp::dormant_window_for_tests(
-            &context,
-            root.path().into(),
-            egui::ViewportId::ROOT,
-        );
-        let uri = "file:///fixture.typ";
-        app.tinymist_sync.current_uri = Some(uri.into());
-        let old = revision_as_i32(app.document().revision());
-        app.receive_editor_diagnostics(uri, Some(old), vec![]);
-        assert_eq!(
-            freshness(app.activity.diagnostics[0], app.document().key()),
-            Activity::Idle
-        );
-        app.document_mut()
-            .edit(CCursorRange::one(CCursor::new(0)), |source| {
-                source.push_str("edited")
-            });
-        app.receive_editor_diagnostics(uri, Some(old), vec![]);
-        assert_eq!(
-            freshness(app.activity.diagnostics[0], app.document().key()),
-            Activity::Pending("Stale")
-        );
-        let current = revision_as_i32(app.document().revision());
-        app.receive_editor_diagnostics("file:///other.typ", Some(current), vec![]);
-        assert_eq!(
-            freshness(app.activity.diagnostics[0], app.document().key()),
-            Activity::Pending("Stale")
-        );
-        app.receive_editor_diagnostics(uri, Some(current), vec![]);
-        assert_eq!(
-            freshness(app.activity.diagnostics[0], app.document().key()),
-            Activity::Idle
-        );
-    }
-
-    #[test]
-    fn a_new_request_supersedes_failure_but_observing_idle_does_not() {
-        let failed = Activity::Failed("disk full".into());
-        assert_eq!(queued(failed.clone(), false, "Queued"), failed);
-        assert_eq!(queued(failed, true, "Queued"), Activity::Pending("Queued"));
-        assert_eq!(queued(Activity::Running, true, "Queued"), Activity::Running);
+            .filter(|&&index| {
+                !self.grouped || !self.collapsed.contains(&self.inventory[index].group)
+            })
+            .count();
+        serde_json::json!({"query":self.filter.query,"group":self.filter.group.map(|g|format!("{g:?}")),
+            "status":self.filter.status.map(|s|format!("{s:?}")),"grouped":self.grouped,
+            "visible_count":indices.len(),"total_count":self.inventory.len(),"displayed_count":displayed_count,
+            "visible_names":indices.iter().map(|&i|self.inventory[i].name).collect::<Vec<_>>(),"groups":groups,
+            "rows":self.inventory.iter().map(|row| serde_json::json!({"name":row.name,
+                "group":format!("{:?}",row.group),"state":format!("{:?}",Status::of(&row.state)),
+                "detail":match &row.state {Activity::Failed(error)=>format!("Failed {error}"), _=>row.state.label().into()}})).collect::<Vec<_>>(),
+            "controls_visible":self.controls_visible,"sticky_filters":self.sticky_filters})
     }
 }

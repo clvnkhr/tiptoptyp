@@ -4,6 +4,7 @@ mod filter;
 mod scroll_tests;
 #[cfg(test)]
 mod tests;
+use super::filter_bar::{ScrollLayout, initial_offset};
 use super::*;
 use crate::tool_profiles::{self, ToolProfile};
 use filter::{Filter, Model};
@@ -43,31 +44,6 @@ impl Default for State {
             scroll_layout: None,
             collapsed: HashSet::new(),
         }
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ScrollLayout {
-    sticky: bool,
-    height: f32,
-}
-
-/// Translate the content offset only when the toolbar moves in or out of the
-/// scroll area. Applying an offset on ordinary frames would fight the wheel.
-fn initial_offset(
-    previous: Option<ScrollLayout>,
-    offset: Option<f32>,
-    sticky: bool,
-    height: f32,
-) -> Option<f32> {
-    match (previous, offset) {
-        (_, None) | (None, _) => Some(if sticky { 0.0 } else { height }),
-        (Some(previous), Some(offset)) if previous.sticky != sticky => Some(if sticky {
-            (offset - previous.height).max(0.0)
-        } else {
-            offset + height
-        }),
-        _ => None,
     }
 }
 

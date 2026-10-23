@@ -21,6 +21,7 @@ python3 scripts/test-desktop-ui.py --journey settings_links
 python3 scripts/test-desktop-ui.py --journey tool_defaults --capture-review
 python3 scripts/test-desktop-ui.py --journey indentation
 python3 scripts/test-desktop-ui.py --journey problems_focus
+python3 scripts/test-desktop-ui.py --journey activity --capture-review
 python3 scripts/test-desktop-ui.py --journey preview_find
 python3 scripts/test-desktop-ui.py --journey tables
 python3 scripts/test-desktop-ui.py --journey arxiv_tables
@@ -152,6 +153,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | editing | Typing and Unicode replacement, undo/redo caret and saved-state indicator, acknowledged multiline paste, upward mouse/keyboard newline selection, direction-preserving comment round trips including a zero-column or blank active endpoint |
 | search | Query focus, next/previous, case/regex toggles, replace one/all, undo and Escape |
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
+| activity | Actual service inventory grouped into compact build/preview, code, checks, files, Git and tools rows; native wheel reveals/hides inactive filters without offset fighting, Cmd+F/Select All/typing stays in Activity, group/state/text filters combine with exact source identities and counts, collapse/expand and flat/grouped mode preserve filters, empty results remain honest, reset and Problems handoff preserve document contents/caret/tabs and the user’s panel height. Optional fresh main-viewport framebuffer for separate visual inspection. |
 | layout | Code/preview/split shortcuts and every compact Layout picker row with a live Tinymist child behind the native popup; Explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close and picker hide/reopen preserve manual height and selected tab; Appearance’s Compact layout controls toggle restores every separate toolbar action and retains panel state |
 | explorer_scroll | Native wheel input over long Files and Contents lists, then Files with Cmd+F's sticky search open; measured offsets advance and remain advanced across fresh frames |
 | git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; a thin right-edge overview includes the offscreen last hunk, stays inside the code pane and retains its global positions during real wheel scrolling without changing pane width; double-clicking the Git file row opens the docked whole-document diff without changing source or pane width; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor and an offscreen hunk receives its finite reveal pulse after scrolling into view, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, Escape preserves the pane width, independent/fixed-width divider settings are exercised by real drags, selected text survives right-click/Copy and direct math conversion in the docked editor, and a diff button tooltip opens in a native window with Tinymist active |

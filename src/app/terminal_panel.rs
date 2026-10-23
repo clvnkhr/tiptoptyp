@@ -2,8 +2,9 @@ use super::*;
 
 impl EditorApp {
     pub(super) fn toggle_panel_maximized(&mut self, context: &egui::Context) {
+        let previous = self.bottom_panel.selected();
         self.bottom_panel.toggle_maximized();
-        self.sync_bottom_panel_focus(context);
+        self.sync_bottom_panel_focus(context, previous);
         context.request_repaint();
     }
 
@@ -45,12 +46,9 @@ impl EditorApp {
         };
         let rendered = panel.show(ui, |ui| {
             self.show_bottom_panel(ui);
-            if self.bottom_panel.selected() == Some(PanelTab::Activity)
-                || !self.bottom_panel.is_visible()
-            {
-                // Activity can be short, and the header's close action removes
-                // the body during this pass. Retain the allocated height so
-                // egui cannot save a smaller size just before hiding the panel.
+            if !self.bottom_panel.is_visible() {
+                // Closing removes the body during this pass; retain its height
+                // so the saved panel size does not shrink before hiding.
                 ui.allocate_space(ui.available_size().max(Vec2::ZERO));
             }
         });
@@ -87,56 +85,83 @@ impl EditorApp {
     }
 
     pub(super) fn toggle_panel(&mut self, context: &egui::Context) {
+        let previous = self.bottom_panel.selected();
         self.bottom_panel.toggle_visibility();
-        self.sync_bottom_panel_focus(context);
+        self.sync_bottom_panel_focus(context, previous);
     }
 
     pub(super) fn toggle_bottom_panel(&mut self, tab: PanelTab, context: &egui::Context) {
+        let previous = self.bottom_panel.selected();
         self.bottom_panel.toggle(tab);
-        self.sync_bottom_panel_focus(context);
+        self.sync_bottom_panel_focus(context, previous);
     }
 
-    fn sync_bottom_panel_focus(&mut self, context: &egui::Context) {
-        // Resolving a viewport-scoped ID reads the context. Do it before
-        // entering either memory closure: reentering its write lock deadlocks.
-        let id = terminal_id(context);
-        let terminal_visible = self.bottom_panel.selected() == Some(PanelTab::Terminal);
-        if terminal_visible {
-            self.claim_bottom_panel_native_keyboard(context);
-            self.terminal.request_focus();
-        } else {
-            let find_id = crate::terminal::terminal_find_id(context);
-            context.memory_mut(|memory| {
-                memory.surrender_focus(id);
-                memory.surrender_focus(find_id);
-            });
-        }
-        self.terminal.set_visible(terminal_visible);
-        if self.bottom_panel.selected() == Some(PanelTab::Problems) {
-            if !self.problems_focused(context, context.viewport_id()) {
-                self.focus_problems(context);
-            }
-        } else {
-            let id = problems_id(context);
-            let focused = context.memory(|memory| memory.focused());
+    fn sync_bottom_panel_focus(&mut self, context: &egui::Context, previous: Option<PanelTab>) {
+        let selected = self.bottom_panel.selected();
+        // Release the old owner before focusing the new one. Panels share
+        // their body rectangle, so cleaning up afterward can surrender the
+        // new panel's keyboard instead.
+        if previous != selected
+            && let Some(previous) = previous
+        {
+            // Scoped IDs read the context; resolve outside memory closures.
+            let (owner, search, popup) = match previous {
+                PanelTab::Terminal => (
+                    terminal_id(context),
+                    crate::terminal::terminal_find_id(context),
+                    false,
+                ),
+                PanelTab::Problems => {
+                    let popup = self.problems.popup_open;
+                    self.problems.popup_open = false;
+                    self.problems.focus_search = false;
+                    (problems_id(context), problems::search_id(context), popup)
+                }
+                PanelTab::Activity => {
+                    let popup = self.activity.view.popup_open;
+                    self.activity.view.popup_open = false;
+                    self.activity.view.focus_search = false;
+                    (
+                        activity_id(context),
+                        activity_panel::search_id(context),
+                        popup,
+                    )
+                }
+            };
             let focused_inside = context
-                .read_response(id)
+                .read_response(owner)
                 .is_some_and(|response| theme::focus_is_inside(context, response.interact_rect));
+            if popup {
+                egui::Popup::close_all(context);
+            }
             context.memory_mut(|memory| {
-                memory.surrender_focus(id);
-                if focused_inside && let Some(focused) = focused {
+                if (focused_inside || popup)
+                    && let Some(focused) = memory.focused()
+                {
                     memory.surrender_focus(focused);
                 }
+                memory.surrender_focus(owner);
+                memory.surrender_focus(search);
             });
         }
-        let activity = activity_id(context);
-        if self.bottom_panel.selected() == Some(PanelTab::Activity) {
-            self.focus_activity(context);
-        } else {
-            context.memory_mut(|memory| memory.surrender_focus(activity));
-        }
-        if terminal_visible && self.terminal.is_off() {
-            context.memory_mut(|memory| memory.request_focus(id));
+        let terminal_visible = selected == Some(PanelTab::Terminal);
+        self.terminal.set_visible(terminal_visible);
+        match selected {
+            Some(PanelTab::Terminal) => {
+                self.claim_bottom_panel_native_keyboard(context);
+                self.terminal.request_focus();
+                if self.terminal.is_off() {
+                    let id = terminal_id(context);
+                    context.memory_mut(|memory| memory.request_focus(id));
+                }
+            }
+            Some(PanelTab::Problems) if !self.problems_focused(context, context.viewport_id()) => {
+                self.focus_problems(context);
+            }
+            Some(PanelTab::Activity) if !self.activity_focused(context, context.viewport_id()) => {
+                self.focus_activity(context);
+            }
+            _ => {}
         }
     }
 
@@ -174,6 +199,32 @@ impl EditorApp {
         self.claim_bottom_panel_native_keyboard(context);
         let id = activity_id(context);
         context.memory_mut(|memory| memory.request_focus(id));
+    }
+
+    pub(super) fn focus_activity_search(&mut self, context: &egui::Context) {
+        self.claim_bottom_panel_native_keyboard(context);
+        self.activity.view.focus_search = true;
+        let id = activity_panel::search_id(context);
+        context.memory_mut(|memory| memory.request_focus(id));
+        context.request_repaint();
+    }
+
+    pub(super) fn activity_focused(
+        &self,
+        context: &egui::Context,
+        viewport: egui::ViewportId,
+    ) -> bool {
+        self.bottom_panel.selected() == Some(PanelTab::Activity)
+            && viewport == context.viewport_id()
+            && context.input(|input| input.focused)
+            && {
+                let id = activity_id(context);
+                self.activity.view.popup_open
+                    || context.memory(|memory| memory.has_focus(id))
+                    || context.read_response(id).is_some_and(|response| {
+                        theme::focus_is_inside(context, response.interact_rect)
+                    })
+            }
     }
 
     pub(super) fn problems_focused(
@@ -231,6 +282,8 @@ impl EditorApp {
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Activity content")
         });
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("activity.input", &response);
         if claim_focus
             || (rect.is_positive()
                 && ui.rect_contains_pointer(rect)
@@ -244,6 +297,13 @@ impl EditorApp {
 
     pub(super) fn show_bottom_panel(&mut self, ui: &mut egui::Ui) {
         let before = self.bottom_panel;
+        let search = match before.selected() {
+            Some(PanelTab::Activity) => Some(activity_panel::search_id(ui.ctx())),
+            Some(PanelTab::Problems) => Some(problems::search_id(ui.ctx())),
+            _ => None,
+        };
+        let focused_child = search.filter(|&id| ui.memory(|memory| memory.has_focus(id)));
+        let mut preserve_child_focus = false;
         let mut problems_clicked = false;
         let mut terminal_clicked = false;
         let mut activity_clicked = false;
@@ -311,6 +371,7 @@ impl EditorApp {
                 let maximize = panel_icon_button(ui, icon, label);
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("panel.maximize", &maximize);
+                preserve_child_focus = maximize.is_pointer_button_down_on() || maximize.clicked();
                 if maximize.clicked() {
                     self.bottom_panel.toggle_maximized();
                     ui.ctx().request_repaint();
@@ -323,7 +384,7 @@ impl EditorApp {
             });
         });
         if before != self.bottom_panel || terminal_clicked {
-            self.sync_bottom_panel_focus(ui.ctx());
+            self.sync_bottom_panel_focus(ui.ctx(), before.selected());
         }
         ui.separator();
         match self.bottom_panel.selected() {
@@ -331,6 +392,12 @@ impl EditorApp {
             Some(PanelTab::Terminal) => self.show_terminal_panel(ui, terminal_clicked),
             Some(PanelTab::Activity) => self.show_activity_panel(ui, activity_clicked),
             None => {}
+        }
+        if preserve_child_focus && let Some(focused) = focused_child {
+            // egui surrenders a field when a pointer press is elsewhere.
+            // Restore after registering the body on both press and release,
+            // so resizing the panel does not interrupt its current input.
+            ui.memory_mut(|memory| memory.request_focus(focused));
         }
     }
 

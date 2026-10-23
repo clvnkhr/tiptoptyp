@@ -82,6 +82,7 @@ use crate::editor_data::TableTarget;
 use table_editor::show_table_editor_ui;
 use table_workbench::TableEditorDialog;
 mod extra_shortcuts;
+mod filter_bar;
 mod find_bar;
 mod git_actions;
 mod git_diff;
@@ -3325,6 +3326,7 @@ impl EditorApp {
                 && shortcut_viewport
                     == scoped_child_viewport_id(context, "tiptoptyp-table-editor"))
             || self.problems_focused(context, shortcut_viewport)
+            || self.activity_focused(context, shortcut_viewport)
             || (!source_focused && context.egui_wants_keyboard_input());
         let can_sync_preview = (self.document().kind().is_typst()
             && self.interactive_preview_active())
@@ -3645,6 +3647,14 @@ impl EditorApp {
             }
             return;
         }
+        if matches!(command, AppCommand::Find | AppCommand::FindReplace)
+            && self.activity_focused(context, focused_input_viewport(context))
+        {
+            if command == AppCommand::Find {
+                self.focus_activity_search(context);
+            }
+            return;
+        }
         if command == AppCommand::Find && self.open_preview_find(context) {
             return;
         }
@@ -3927,6 +3937,7 @@ impl EditorApp {
             && !texdoc_child
             && !citation_child
             && !self.problems_focused(context, viewport)
+            && !self.activity_focused(context, viewport)
             && (focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input())
         {
             return false;

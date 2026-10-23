@@ -28,6 +28,7 @@ on:
           "harper_settings",
           "images",
           "problems_focus",
+          "activity",
           "preview_find",
           "tables",
           "arxiv_tables",
