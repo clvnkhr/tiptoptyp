@@ -595,32 +595,6 @@ pub(crate) fn typst_context(parsed: &typst_syntax::Source, byte: usize) -> Optio
     })
 }
 
-fn inline_group_end(source: &str, start: usize, open: u8, close: u8) -> Option<usize> {
-    let bytes = source.as_bytes();
-    if bytes.get(start) != Some(&open) {
-        return None;
-    }
-    let mut depth = 1;
-    let mut i = start + 1;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == open {
-            depth += 1;
-        }
-        if bytes[i] == close {
-            depth -= 1;
-            if depth == 0 {
-                return Some(i + 1);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
 /// Structural TeX context only: no expansion, filesystem work or package IO.
 /// Groups restore their enclosing mode; comments and verbatim cannot open math.
 pub(crate) fn tex_context(source: &str, cursor_byte: usize) -> Option<Scope> {
@@ -688,34 +662,11 @@ pub(crate) fn tex_context_in(
                 let name = &source[start..end];
                 i = end;
                 if matches!(name, "verb" | "lstinline" | "mintinline") {
-                    if bytes.get(i) == Some(&b'*') {
-                        i += 1;
+                    let literal = crate::editor_math_guides::tex_inline_literal(source, start - 1)?;
+                    if !literal.closed && literal.end == limit {
+                        return None;
                     }
-                    if name != "verb" && bytes.get(i) == Some(&b'[') {
-                        i = inline_group_end(source, i, b'[', b']')?;
-                    }
-                    if name == "mintinline" {
-                        i = inline_group_end(source, i, b'{', b'}')?;
-                    }
-                    if name != "verb" && bytes.get(i) == Some(&b'{') {
-                        i = inline_group_end(source, i, b'{', b'}')?;
-                        continue;
-                    }
-                    if let Some(delimiter) = source[i..].chars().next()
-                        && !matches!(delimiter, '\n' | '\r')
-                    {
-                        i += delimiter.len_utf8();
-                        let end = source[i..]
-                            .find([delimiter, '\n', '\r'])
-                            .map_or(source.len(), |n| i + n);
-                        if limit <= end {
-                            return None;
-                        }
-                        i = end;
-                        if source[i..].starts_with(delimiter) {
-                            i += delimiter.len_utf8();
-                        }
-                    }
+                    i = literal.end;
                 } else if matches!(name, "begin" | "end") {
                     let at = i + source[i..].len() - source[i..].trim_start().len();
                     if source[at..].starts_with('{')
@@ -1355,6 +1306,28 @@ mod context_tests {
             assert_eq!(tex_context(&source, start), expected, "{marked}");
         }
     }
+    #[test]
+    fn tex_literal_headers_with_trivia_preserve_following_snippet_context() {
+        for (marked, expected) in [
+            (r"\mintinline {tex}{code} ff¦", Some(Scope::Text)),
+            (r"\mintinline {tex}{code}ff¦", Some(Scope::Text)),
+            (r"\verb|code|ff¦", Some(Scope::Text)),
+            (r"\verb|ff¦", None),
+            ("\\mintinline% header\n {tex} {code} ff¦", Some(Scope::Text)),
+            ("\\mintinline\n[breaklines]\n{tex} {ff¦}", None),
+            (r"\mintinline {tex}{ $ ignored } $ ff¦", Some(Scope::Math)),
+            (
+                r"\lstinline [language=TeX] | $ ignored | ff¦",
+                Some(Scope::Text),
+            ),
+            (r"\lstinline [language=TeX] |ff¦|", None),
+        ] {
+            let (source, cursor) = location(marked);
+            let (start, _) = prefix(&source, cursor);
+            assert_eq!(tex_context(&source, start), expected, "{marked}");
+        }
+    }
+
     #[test]
     fn tex_context_reads_only_source_before_the_trigger() {
         for prefix in [

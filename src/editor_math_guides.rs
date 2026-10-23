@@ -74,9 +74,15 @@ pub(crate) fn math_environment(name: &str) -> bool {
     )
 }
 
-/// End of a literal TeX code command, retaining its original byte offsets.
+/// Literal TeX code retains byte offsets and whether its payload was closed.
 /// Unterminated delimiter forms stop at the line break, never at a later match.
-pub(crate) fn tex_inline_literal_end(source: &str, start: usize) -> Option<usize> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TexInlineLiteral {
+    pub(crate) end: usize,
+    pub(crate) closed: bool,
+}
+
+pub(crate) fn tex_inline_literal(source: &str, start: usize) -> Option<TexInlineLiteral> {
     let bytes = source.as_bytes();
     if bytes.get(start) != Some(&b'\\') {
         return None;
@@ -140,25 +146,30 @@ pub(crate) fn tex_inline_literal_end(source: &str, start: usize) -> Option<usize
         if bytes.get(at) == Some(&b'[') {
             let (end, closed) = group_end(source, at, b'[', b']');
             if !closed {
-                return Some(end);
+                return Some(TexInlineLiteral { end, closed });
             }
             at = header_space(source, end, true);
         }
         if name == "mintinline" {
             if bytes.get(at) != Some(&b'{') {
-                return Some(at);
+                return Some(TexInlineLiteral {
+                    end: at,
+                    closed: false,
+                });
             }
             let (end, closed) = group_end(source, at, b'{', b'}');
             if !closed {
-                return Some(end);
+                return Some(TexInlineLiteral { end, closed });
             }
             // The payload reader has made percent a literal delimiter already.
             at = header_space(source, end, false);
         }
         if bytes.get(at) == Some(&b'{') {
-            return Some(group_end(source, at, b'{', b'}').0);
+            let (end, closed) = group_end(source, at, b'{', b'}');
+            return Some(TexInlineLiteral { end, closed });
         }
     }
+    let mut closed = false;
     if let Some(delimiter) = source[at..].chars().next()
         && !matches!(delimiter, '\n' | '\r')
     {
@@ -168,9 +179,10 @@ pub(crate) fn tex_inline_literal_end(source: &str, start: usize) -> Option<usize
             .unwrap_or(source.len() - at);
         if source[at..].starts_with(delimiter) {
             at += delimiter.len_utf8();
+            closed = true;
         }
     }
-    Some(at)
+    Some(TexInlineLiteral { end: at, closed })
 }
 
 // Tolerant structural reader: no macro expansion; comments, escaped symbols
@@ -217,8 +229,8 @@ fn tex_blocks(source: &str) -> Vec<MathBlock> {
             } else {
                 (1, None, None)
             }
-        } else if let Some(end) = tex_inline_literal_end(source, i) {
-            i = end;
+        } else if let Some(literal) = tex_inline_literal(source, i) {
+            i = literal.end;
             continue;
         } else if rest.starts_with("\\[") || rest.starts_with("\\(") {
             (2, Some(rest[..2].into()), None)
@@ -283,6 +295,32 @@ fn tex_blocks(source: &str) -> Vec<MathBlock> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_status_distinguishes_closed_payloads_from_prefix_limits() {
+        for (source, closed) in [
+            (r"\verb|code|", true),
+            (r"\verb|code", false),
+            (r"\lstinline [language=TeX] {code}", true),
+            (r"\lstinline [language=TeX] {code", false),
+            ("\\mintinline% header\n {tex} {code}", true),
+            ("\\mintinline% header\n {tex} {code", false),
+            (r"\mintinline {tex}", false),
+            ("\\verb😀text😀", true),
+            ("\\verb😀text", false),
+        ] {
+            let literal = tex_inline_literal(source, 0).unwrap();
+            assert_eq!(literal.end, source.len(), "{source}");
+            assert_eq!(literal.closed, closed, "{source}");
+            assert!(source.is_char_boundary(literal.end));
+        }
+        let source = "\\verb|unterminated\n$ math";
+        let literal = tex_inline_literal(source, 0).unwrap();
+        assert_eq!(literal.end, source.find('\n').unwrap());
+        assert!(!literal.closed);
+        assert!(tex_inline_literal(r"\text{not literal}", 0).is_none());
+    }
+
     #[test]
     fn typst_align_points_are_syntax_not_escaped_text_or_strings() {
         let source = "text \\&\n$ a & = b \\ c & = d $\n#let text = \"$ & $\"";

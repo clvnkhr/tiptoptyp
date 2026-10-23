@@ -242,8 +242,8 @@ fn tex_computed_markup_depth(cell: &str, depth: usize) -> bool {
                 i += 1;
             }
         } else if bytes[i] == b'\\' {
-            if let Some(end) = crate::editor_math_guides::tex_inline_literal_end(cell, i) {
-                i = end;
+            if let Some(literal) = crate::editor_math_guides::tex_inline_literal(cell, i) {
+                i = literal.end;
                 continue;
             }
             i += 1;

@@ -281,11 +281,11 @@ pub(super) fn newline(source: &str, byte: usize, kind: DocumentKind, spaces: u8)
                         at = end;
                         continue;
                     }
-                    if let Some(end) =
-                        crate::editor_math_guides::tex_inline_literal_end(&source[..byte], at)
+                    if let Some(literal) =
+                        crate::editor_math_guides::tex_inline_literal(&source[..byte], at)
                     {
-                        crossed_lines(source, at, end, &mut line_start, &mut last_hash);
-                        at = end;
+                        crossed_lines(source, at, literal.end, &mut line_start, &mut last_hash);
+                        at = literal.end;
                         last_close = None;
                         continue;
                     }

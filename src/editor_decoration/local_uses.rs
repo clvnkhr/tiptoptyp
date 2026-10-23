@@ -431,10 +431,10 @@ pub(super) fn tex(source: &str) -> Vec<Range<usize>> {
                 let name = &source[start + 1..end];
                 i = end;
                 if matches!(name, "verb" | "lstinline" | "mintinline")
-                    && let Some(end) =
-                        crate::editor_math_guides::tex_inline_literal_end(source, start)
+                    && let Some(literal) =
+                        crate::editor_math_guides::tex_inline_literal(source, start)
                 {
-                    i = end;
+                    i = literal.end;
                     continue;
                 }
                 if name == "ExplSyntaxOn" {

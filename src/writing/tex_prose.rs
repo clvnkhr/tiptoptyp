@@ -532,10 +532,10 @@ fn literal_ranges(
             skip_comment(source, &mut cursor);
         } else if source[cursor] == '\\' {
             let start = cursor;
-            if let Some(end) =
-                crate::editor_math_guides::tex_inline_literal_end(text, byte_offsets[start])
+            if let Some(literal) =
+                crate::editor_math_guides::tex_inline_literal(text, byte_offsets[start])
             {
-                cursor = byte_offsets.partition_point(|&byte| byte < end);
+                cursor = byte_offsets.partition_point(|&byte| byte < literal.end);
                 result.push(start..cursor);
                 continue;
             }
