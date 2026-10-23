@@ -48,22 +48,33 @@ fn find_matches_bounded(dump: &[String], query: &str) -> (Vec<FindMatch>, bool) 
     let folded: String = query.chars().flat_map(fold_character).collect();
     let mut matches = Vec::new();
     for (line, text) in dump.iter().enumerate() {
-        let mut haystack = String::with_capacity(text.len());
-        let mut origins = Vec::with_capacity(text.chars().count());
-        for (column, character) in text.chars().enumerate() {
-            for lower in fold_character(character) {
-                origins.push((haystack.len(), column));
-                haystack.push(lower);
+        // ASCII bytes already identify original character columns. Avoid a
+        // per-character origin table for the usual shell/build-output case.
+        let (haystack, origins) = if text.is_ascii() {
+            (text.to_ascii_lowercase(), None)
+        } else {
+            let mut haystack = String::with_capacity(text.len());
+            let mut origins = Vec::with_capacity(text.chars().count());
+            for (column, character) in text.chars().enumerate() {
+                for lower in fold_character(character) {
+                    origins.push((haystack.len(), column));
+                    haystack.push(lower);
+                }
             }
-        }
+            (haystack, Some(origins))
+        };
         let mut offset = 0;
         while let Some(at) = haystack[offset..].find(&folded) {
             let byte = offset + at;
             let end = byte + folded.len();
-            let start_origin = origins.partition_point(|(start, _)| *start < byte);
-            let end_origin = origins.partition_point(|(start, _)| *start < end);
-            let column = origins[start_origin].1;
-            let length = origins[end_origin - 1].1 + 1 - column;
+            let (column, length) = if let Some(origins) = &origins {
+                let start_origin = origins.partition_point(|(start, _)| *start < byte);
+                let end_origin = origins.partition_point(|(start, _)| *start < end);
+                let column = origins[start_origin].1;
+                (column, origins[end_origin - 1].1 + 1 - column)
+            } else {
+                (byte, folded.len())
+            };
             if matches.len() == MAX_FIND_MATCHES {
                 return (matches, true);
             }
@@ -463,6 +474,131 @@ mod tests {
                 length: 2
             }]
         );
+    }
+
+    #[test]
+    fn ascii_fast_path_preserves_mixed_rows_and_unicode_query_folding() {
+        let dump = vec!["KEY key".into(), "界 KEY".into()];
+        assert_eq!(
+            find_matches(&dump, "Key"),
+            vec![
+                FindMatch {
+                    line: 0,
+                    column: 0,
+                    length: 3
+                },
+                FindMatch {
+                    line: 0,
+                    column: 4,
+                    length: 3
+                },
+                FindMatch {
+                    line: 1,
+                    column: 2,
+                    length: 3
+                },
+            ]
+        );
+        assert!(find_matches(&dump, "İ").is_empty());
+    }
+
+    #[test]
+    fn ascii_find_does_not_allocate_a_character_origin_table() {
+        let dump = vec!["A".repeat(128); 4096];
+        let input_bytes = dump.iter().map(String::len).sum::<usize>();
+        let ((hits, truncated), allocated) =
+            crate::test_allocations::allocated(|| find_matches_bounded(&dump, "not present"));
+        assert!(hits.is_empty() && !truncated);
+        assert!(
+            allocated <= input_bytes * 2,
+            "ASCII row columns equal bytes; allocating {allocated} bytes for {input_bytes} bytes of input must not build per-character origins"
+        );
+    }
+
+    #[test]
+    #[ignore = "matched optimized terminal Find CPU/allocation probe, not a latency assertion"]
+    fn terminal_find_cost_probe() {
+        use sha2::{Digest, Sha256};
+        use std::{hint::black_box, time::Instant};
+        for unicode in [false, true] {
+            let rows = if unicode { 2048 } else { 4096 };
+            let dump: Vec<String> = (0..rows)
+                .map(|row| {
+                    let mut text = if unicode {
+                        format!("task row {row:04} ΑΛΦΑ İ Σς 界 ")
+                    } else if row % 64 == 0 {
+                        format!("task row {row:04} Needle ")
+                    } else {
+                        format!("task row {row:04} output ")
+                    };
+                    text.push_str(&"x".repeat(127 - text.len()));
+                    text
+                })
+                .collect();
+            let queries: [(&str, usize); 4] = if unicode {
+                [
+                    ("αλφα", rows),
+                    ("i\u{0307}", rows),
+                    ("σ", rows * 2),
+                    ("界", rows),
+                ]
+            } else {
+                [
+                    ("needle", rows / 64),
+                    ("NEEDLE", rows / 64),
+                    ("missing-term", 0),
+                    ("task", rows),
+                ]
+            };
+            let mut hash = Sha256::new();
+            for row in &dump {
+                hash.update(row.as_bytes());
+                hash.update(b"\n");
+            }
+            let first = Instant::now();
+            let first_result = find_matches_bounded(black_box(&dump), black_box(queries[0].0));
+            let first_ns = first.elapsed().as_nanos() as u64;
+            assert_eq!(first_result.0.len(), queries[0].1);
+            assert!(!first_result.1);
+            for _ in 0..5 {
+                for (query, expected) in queries {
+                    let (matches, truncated) =
+                        find_matches_bounded(black_box(&dump), black_box(query));
+                    assert_eq!(matches.len(), expected);
+                    assert!(!truncated);
+                    black_box(matches);
+                }
+            }
+            let mut samples = Vec::new();
+            for _ in 0..7 {
+                let started = Instant::now();
+                for _ in 0..8 {
+                    for (query, expected) in queries {
+                        let (matches, truncated) =
+                            find_matches_bounded(black_box(&dump), black_box(query));
+                        assert_eq!(matches.len(), expected);
+                        assert!(!truncated);
+                        black_box(matches);
+                    }
+                }
+                samples.push(started.elapsed().as_nanos() as u64 / 32);
+            }
+            let (_, allocated) = crate::test_allocations::allocated(|| {
+                black_box(find_matches_bounded(&dump, queries[0].0))
+            });
+            println!(
+                "{}",
+                serde_json::json!({
+                    "fixture": if unicode {"unicode_256k"} else {"ascii_512k"},
+                    "rows": rows, "bytes": dump.iter().map(String::len).sum::<usize>(),
+                    "sha256": format!("{:x}", hash.finalize()),
+                    "warmup_query_sets": 5, "samples": 7, "queries_per_sample": 32,
+                    "first_call_ns": first_ns, "mean_ns_per_query_samples": samples,
+                    "first_query_allocated_bytes": allocated,
+                    "quality_verified": true, "scope": "matching only; no PTY, GUI, rendering or worker transport"
+                })
+            );
+        }
     }
 
     #[test]

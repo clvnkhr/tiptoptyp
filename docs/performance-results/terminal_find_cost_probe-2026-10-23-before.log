@@ -1,0 +1,7 @@
+
+running 1 test
+test terminal::find::tests::terminal_find_cost_probe ... {"bytes":520192,"first_call_ns":4168500,"first_query_allocated_bytes":8846248,"fixture":"ascii_512k","mean_ns_per_query_samples":[3940334,3923493,3912597,3913092,3884494,3879178,3928595],"quality_verified":true,"queries_per_sample":32,"rows":4096,"samples":7,"scope":"matching only; no PTY, GUI, rendering or worker transport","sha256":"653593dcd3ff1309023db1548d81c357020c3a360b2697a1cd253eeb01487f36","warmup_query_sets":5}
+{"bytes":260096,"first_call_ns":2427583,"first_query_allocated_bytes":12478376,"fixture":"unicode_256k","mean_ns_per_query_samples":[2387867,2366505,2363886,2355897,2327410,2317027,2293627],"quality_verified":true,"queries_per_sample":32,"rows":2048,"samples":7,"scope":"matching only; no PTY, GUI, rendering or worker transport","sha256":"07f86b7d1a5185e8775e36b93d04864599181b3a938e45bd4af1aabe6248d5aa","warmup_query_sets":5}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2645 filtered out; finished in 1.54s
