@@ -4,9 +4,11 @@
 //! equates a local mirror write with acknowledgement from Overleaf.
 mod mirror;
 mod model;
+mod presence;
 
 pub(crate) use mirror::Mirror;
 pub(crate) use model::{Model, ModelChange};
+pub(crate) use presence::{Collaborator, PresenceSnapshot, RemoteCursor, SourceIndex};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -273,6 +275,13 @@ pub(crate) enum BrowserCommand {
         request: u64,
         epoch: u64,
     },
+    Cursor {
+        epoch: u64,
+        id: String,
+        source_fingerprint: String,
+        anchor: usize,
+        head: usize,
+    },
     Refresh {
         epoch: u64,
     },
@@ -320,6 +329,11 @@ pub(crate) enum BrowserEvent {
         epoch: u64,
         message: String,
     },
+    Presence {
+        epoch: u64,
+        #[serde(flatten)]
+        snapshot: PresenceSnapshot,
+    },
     Status {
         epoch: u64,
         state: String,
@@ -336,7 +350,8 @@ impl BrowserEvent {
             | Self::File { epoch, .. }
             | Self::Conflict { epoch, .. }
             | Self::Error { epoch, .. }
-            | Self::Status { epoch, .. } => *epoch,
+            | Self::Status { epoch, .. }
+            | Self::Presence { epoch, .. } => *epoch,
         }
     }
 }

@@ -1182,3 +1182,114 @@ fn exporting_the_last_conflicted_draft_releases_remote_state_before_reopening() 
         "Retain my local draft\n"
     );
 }
+
+fn presence_event(source: &str, epoch: u64) -> BrowserEvent {
+    serde_json::from_value(serde_json::json!({"event":"presence","epoch":epoch,"own_id":"own","self_user_id":"account",
+        "peers":[{"id":"remote","user_id":"another","name":"Collaborator","doc_id":"a","row":0,"column":1}],
+        "documents":[{"id":"a","source_fingerprint":SourceIndex::new(source).fingerprint,"source_utf16":source.encode_utf16().count(),"cursors":[{"id":"remote","anchor":1,"head":1}]}]})).unwrap()
+}
+#[test]
+fn presence_overlay_reuses_revision_cache_and_rejects_local_divergence() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.update_overleaf_event(presence_event("Main old\n", EPOCH), &context)
+        .unwrap();
+    let before = app.overleaf_presence_for_active();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].head, 1);
+    assert!(Arc::ptr_eq(&before, &app.overleaf_presence_for_active()));
+    app.document_mut().edit(CCursorRange::default(), |source| {
+        source.insert_str(0, "local ")
+    });
+    assert!(app.overleaf_presence_for_active().is_empty());
+    assert_ne!(
+        app.overleaf.presence_cache.as_ref().unwrap().key,
+        app.document().key()
+    );
+    assert_eq!(app.overleaf_collaborators().len(), 1);
+    assert!(!app.overleaf.io.is_running());
+    assert!(app.overleaf.queued.is_empty());
+}
+#[test]
+fn newer_presence_waits_for_matching_native_source_instead_of_painting_stale_ranges() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.update_overleaf_event(presence_event("A newer source\n", EPOCH), &context)
+        .unwrap();
+    assert!(app.overleaf_presence_for_active().is_empty());
+    assert_eq!(app.overleaf_collaborators().len(), 1);
+    app.document_mut().replace_loaded_unprojected(
+        "A newer source\n".into(),
+        root.join("main.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    assert_eq!(app.overleaf_presence_for_active().len(), 1);
+    app.overleaf.connection.as_mut().unwrap().online = false;
+    assert!(app.overleaf_presence_for_active().is_empty());
+    assert!(app.overleaf_collaborators().is_empty());
+}
+
+#[test]
+fn presence_uses_projected_editor_coordinates_not_hidden_mitex_imports() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    let canonical = "#import \"@preview/mitex:0.2.7\": mi\n文 #mi(`\\alpha+😀`) end\n";
+    let path = root.join("main.typ");
+    app.document_mut().replace_loaded_unprojected(
+        canonical.into(),
+        path,
+        DocumentKind::Typst,
+        None,
+    );
+    app.document_mut()
+        .enable(tiptoptyp::mitex_projection::Config::default())
+        .unwrap();
+    let offset = canonical[..canonical.find("end").unwrap()]
+        .encode_utf16()
+        .count();
+    let event=serde_json::from_value(serde_json::json!({"event":"presence","epoch":EPOCH,"own_id":"own","self_user_id":"account",
+        "peers":[{"id":"remote","user_id":"another","name":"Collaborator","doc_id":"a","row":1,"column":offset}],
+        "documents":[{"id":"a","source_fingerprint":SourceIndex::new(canonical).fingerprint,"source_utf16":canonical.encode_utf16().count(),"cursors":[{"id":"remote","anchor":offset,"head":offset}]}]})).unwrap();
+    let connection = app.overleaf.connection.as_mut().unwrap();
+    connection
+        .model
+        .apply(BrowserEvent::Project {
+            epoch: EPOCH,
+            project_id: PROJECT.into(),
+            name: "Paper".into(),
+            entries: vec![entry("a", "main.typ", EntryKind::Doc)],
+            root_doc: Some("a".into()),
+        })
+        .unwrap();
+    app.update_overleaf_event(event, &context).unwrap();
+    let cursors = app.overleaf_presence_for_active();
+    assert_eq!(cursors.len(), 1);
+    let displayed = app.document().source();
+    let expected = displayed[..displayed.find("end").unwrap()].chars().count();
+    assert_eq!(cursors[0].head, expected);
+    assert!(expected < offset);
+}
+
+#[test]
+fn working_alone_does_not_reindex_the_document_for_each_native_keystroke() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    assert!(app.overleaf_presence_for_active().is_empty());
+    let indexed = app.overleaf.presence_cache.as_ref().unwrap().key;
+    for _ in 0..3 {
+        app.document_mut()
+            .edit(CCursorRange::default(), |source| source.push('x'));
+        assert!(app.overleaf_presence_for_active().is_empty());
+        assert_eq!(app.overleaf.presence_cache.as_ref().unwrap().key, indexed);
+        assert_ne!(app.document().key(), indexed);
+    }
+}

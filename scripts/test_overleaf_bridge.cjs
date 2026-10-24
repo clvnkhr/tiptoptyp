@@ -11,13 +11,15 @@ function harness(options = {}) {
   const messages = [], events = new Map(), timers = new Map(), socketEvents = new Map();
   const watches = new Map(), requests = [], dispatches = [], nodes = new Map();
   let nextTimer = 0, inflight = 0, maxInflight = 0;
+  const emitted = [];
   const sources = new Map([[MAIN, 'Main source.'], [OTHER, 'Other source.'], [ASSET, new Uint8Array([0, 255, 64])]]);
   const values = new Map();
   const storageWrites = new Map();
   const socket = {
     on(event, handler) { if (!socketEvents.has(event)) socketEvents.set(event, new Set()); socketEvents.get(event).add(handler); },
     removeListener(event, handler) { socketEvents.get(event)?.delete(handler); },
-    emit(event, ...args) { if (options.emit) return options.emit(event, args); },
+    publicId: options.ownId || 'own-connection',
+    emit(event, ...args) { emitted.push({ event, args }); if (options.emit) return options.emit(event, args); },
     disconnect() { server('disconnect'); },
   };
   function server(event, ...args) { for (const handler of socketEvents.get(event) || []) handler(...args); }
@@ -28,6 +30,7 @@ function harness(options = {}) {
     setState(state) { this.state = state; },
     dispatch(value) {
       dispatches.push(value);
+      if (value.selection) { this.state = { ...this.state, selection: { main: value.selection } }; return; }
       const { from, to, insert } = value.changes;
       const text = this.state.doc.toString();
       this.state = { doc: { toString: () => text.slice(0, from) + insert + text.slice(to) } };
@@ -39,7 +42,7 @@ function harness(options = {}) {
     tiptoptypOverleafEpoch: 7,
     ipc: { postMessage(value) { messages.push(JSON.parse(value)); } },
     localStorage: { setItem(key, value) { if (options.storageDenied) throw new Error('Storage disabled'); storageWrites.set(key, value); } },
-    location: { pathname: options.pathname || '/project/' + PID, href: 'https://www.overleaf.com/project/' + PID, reload() { window.reloaded = true; }, assign(value) { window.navigated = value; } },
+    location: { origin: 'https://www.overleaf.com', pathname: options.pathname || '/project/' + PID, href: 'https://www.overleaf.com/project/' + PID, reload() { window.reloaded = true; }, assign(value) { window.navigated = value; } },
     overleaf: { unstable: { store: {
       get(key) { return values.get(key); },
       watch(key, fn) { if (!watches.has(key)) watches.set(key, new Set()); watches.get(key).add(fn); return () => watches.get(key).delete(fn); },
@@ -49,7 +52,7 @@ function harness(options = {}) {
   };
   window.top = window;
   const context = vm.createContext({
-    window, document: { querySelector(selector) { const match = selector.match(/data-file-id="([a-f0-9]+)"/); const node = nodes.get(match?.[1]); return node ? { closest() { return node; } } : null; } },
+    window, document: { querySelector(selector) { if (selector === 'meta[name="ol-user_id"]') return options.selfUserId ? { content: options.selfUserId } : null; const match = selector.match(/data-file-id="([a-f0-9]+)"/); const node = nodes.get(match?.[1]); return node ? { closest() { return node; } } : null; } },
     setTimeout(fn, delay) { const timer = ++nextTimer; timers.set(timer, { fn, delay }); return timer; },
     clearTimeout(timer) { timers.delete(timer); },
     URL, URLSearchParams, TextDecoder, TextEncoder, Uint8Array, AbortController,
@@ -71,7 +74,7 @@ function harness(options = {}) {
   window.io = { connect() { return socket; } };
   window.io.connect();
   const tree = { _id: PID, name: 'Paper', rootDoc_id: MAIN, rootFolder: [{ _id: ROOT, name: '', docs: [{ _id: MAIN, name: 'main.tex' }], fileRefs: [{ _id: ASSET, name: 'figure.png' }], folders: [{ _id: FOLDER, name: 'sections', docs: [{ _id: OTHER, name: 'intro.tex' }], fileRefs: [], folders: [] }] }] };
-  function project(permissionsLevel = 'owner', value = tree) { server('joinProjectResponse', { project: value, permissionsLevel, protocolVersion: 2 }); }
+  function project(permissionsLevel = 'owner', value = tree) { server('joinProjectResponse', { project: value, permissionsLevel, protocolVersion: 2, publicId: socket.publicId }); }
   function command(value) { window.tiptoptypOverleaf.command({ epoch: 7, ...value }); }
   function flush(delay = 0) {
     for (let count = 0; count < 100; count++) {
@@ -82,7 +85,7 @@ function harness(options = {}) {
     throw new Error('Timer loop did not settle');
   }
   async function settle() { for (let i = 0; i < 25; i++) await Promise.resolve(); flush(); }
-  return { window, messages, events, timers, socketEvents, watches, storageWrites, socket, server, trigger, set, view, project, command, flush, settle, sources, requests, dispatches, nodes, tree, maxInflight: () => maxInflight };
+  return { window, messages, events, timers, socketEvents, watches, storageWrites, emitted, socket, server, trigger, set, view, project, command, flush, settle, sources, requests, dispatches, nodes, tree, maxInflight: () => maxInflight };
 }
 const ofType = (h, event) => h.messages.filter(message => message.event === event);
 
@@ -384,4 +387,201 @@ test('CAS rejection of an unflushed hosted edit uses the authoritative baseline,
   assert.equal(conflict.request, 17); assert.equal(conflict.source, 'Main source.');
   await h.settle();
   assert.ok(ofType(h, 'document').every(value => value.source === 'Main source.'));
+});
+
+
+const SELF = id('1'), ALICE = id('2'), BOB = id('3');
+function lastPresence(h) { return ofType(h, 'presence').at(-1); }
+function peer(h, value = {}) {
+  h.server('clientTracking.clientUpdated', { id: 'alice-connection', user_id: ALICE, name: 'Alice', doc_id: MAIN, row: 0, column: 2, ...value });
+}
+function snapshot(h, values, afterRequest = () => {}) {
+  let reply;
+  h.socket.emit('clientTracking.getConnectedUsers', (...args) => { reply = args; });
+  const request = h.emitted.at(-1);
+  afterRequest();
+  request.args.at(-1)(null, values);
+  return reply;
+}
+function fnv(source) {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(source)) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
+  return hash.toString(16).padStart(16, '0');
+}
+test('official connected-user callback is transparent and excludes only this public connection', async () => {
+  const h = harness({ selfUserId: SELF }); h.project(); await h.settle();
+  const values = [
+    { client_id: 'own-connection', user_id: SELF, first_name: 'Me', last_name: '', cursorData: { doc_id: MAIN, row: 0, column: 1 } },
+    { client_id: 'another-own-tab', user_id: SELF, first_name: 'Same', last_name: 'Account', cursorData: { doc_id: MAIN, row: 0, column: 2 } },
+    { client_id: 'alice-connection', user_id: ALICE, first_name: 'Alice', last_name: 'Example', cursorData: { doc_id: OTHER, row: 0, column: 3 } },
+  ];
+  const reply = snapshot(h, values); h.flush(100);
+  assert.equal(reply[0], null); assert.equal(reply[1], values);
+  const value = lastPresence(h);
+  assert.equal(value.origin, 'https://www.overleaf.com');
+  assert.equal(value.own_id, 'own-connection'); assert.equal(value.self_user_id, SELF);
+  assert.deepEqual(value.peers.map(peer => peer.id), ['another-own-tab', 'alice-connection']);
+  assert.equal(value.peers[0].user_id, SELF);
+  assert.equal(value.peers[1].name, 'Alice Example');
+  assert.equal(h.emitted.filter(value => value.event === 'clientTracking.getConnectedUsers').length, 1, 'no extra refresh RPC');
+});
+test('late initial presence replies preserve subsequent updates and disconnected tombstones', async () => {
+  const h = harness(); h.project(); await h.settle();
+  snapshot(h, [
+    { client_id: 'alice-connection', user_id: ALICE, first_name: 'Old', cursorData: { doc_id: MAIN, row: 0, column: 1 } },
+    { client_id: 'gone-connection', user_id: BOB, first_name: 'Gone' },
+  ], () => {
+    peer(h, { name: 'New name', column: 4 });
+    h.server('clientTracking.clientDisconnected', 'gone-connection');
+  });
+  h.flush(100);
+  assert.deepEqual(lastPresence(h).peers.map(value => [value.id, value.name, value.column]), [['alice-connection', 'New name', 4]]);
+});
+test('carets use authoritative UTF-16 offsets and source fingerprints without exporting source', async () => {
+  const h = harness();
+  const source = 'é🙂z\nsecond line';
+  h.sources.set(MAIN, source); h.view.state = { doc: { toString: () => source } };
+  h.project(); await h.settle();
+  peer(h, { row: 1, column: 3 }); h.flush(100);
+  const value = lastPresence(h), document = value.documents[0];
+  assert.equal(document.source_fingerprint, fnv(source)); assert.equal(document.source_utf16, source.length);
+  assert.deepEqual(document.cursors, [{ id: 'alice-connection', anchor: 8, head: 8 }]);
+  assert.ok(!JSON.stringify(value).includes(source));
+  peer(h, { row: 0, column: 2 }); h.flush(100);
+  assert.deepEqual(lastPresence(h).documents, [], 'surrogate splits are rejected');
+  peer(h, { row: 2, column: 0 }); h.flush(100);
+  assert.deepEqual(lastPresence(h).documents, [], 'unknown lines are rejected');
+  peer(h, { row: 1, column: 100 }); h.flush(100);
+  assert.deepEqual(lastPresence(h).documents, [], 'columns beyond a line are rejected');
+});
+test('FNV fingerprint matches native known vectors including astral characters', async () => {
+  for (const [source, expected] of [['', 'cbf29ce484222325'], ['hello', 'a430d84680aabd0b'], ['é🙂z', '3a046d85bff8a56f']]) {
+    const h = harness(); h.sources.set(MAIN, source); h.view.state = { doc: { toString: () => source } };
+    h.project(); await h.settle(); peer(h, { column: 0 }); h.flush(100);
+    assert.equal(lastPresence(h).documents[0].source_fingerprint, expected);
+  }
+});
+test('presence bursts coalesce at 10Hz, snapshots replace, and leave/disconnect clear every caret', async () => {
+  const h = harness(); h.project(); await h.settle(); h.messages.length = 0;
+  for (let i = 0; i < 100; i++) peer(h, { column: i % 10 });
+  assert.equal(ofType(h, 'presence').length, 0);
+  assert.equal([...h.timers.values()].filter(value => value.delay === 100).length, 1);
+  h.flush(100); assert.equal(ofType(h, 'presence').length, 1); assert.equal(lastPresence(h).peers[0].column, 9);
+  peer(h, { column: 9 }); h.flush(100); assert.equal(ofType(h, 'presence').length, 1, 'unchanged snapshots are not emitted');
+  h.server('clientTracking.clientDisconnected', 'alice-connection'); h.flush(100);
+  assert.deepEqual(lastPresence(h).peers, []); assert.deepEqual(lastPresence(h).documents, []);
+  peer(h); h.flush(100); h.server('disconnect');
+  assert.deepEqual(lastPresence(h).peers, []); assert.deepEqual(lastPresence(h).documents, []);
+  assert.equal(h.timers.size, 0);
+});
+test('peer count, output names, and delayed initial response history remain bounded', async () => {
+  const h = harness(); h.project(); await h.settle();
+  for (let i = 0; i < 1000; i++) peer(h, { id: 'client-' + i, name: 'a\u0000'.repeat(1000) });
+  h.flush(100);
+  assert.equal(lastPresence(h).peers.length, 128);
+  assert.equal(lastPresence(h).documents[0].cursors.length, 128);
+  assert.ok(lastPresence(h).peers.every(value => value.name.length === 128 && !value.name.includes('\u0000')));
+  snapshot(h, [{ client_id: 'ghost-client', first_name: 'Ghost' }], () => {
+    for (let i = 0; i < 1000; i++) h.server('clientTracking.clientDisconnected', 'deleted-' + i);
+  });
+  h.flush(100);
+  assert.ok(!lastPresence(h).peers.some(value => value.id === 'ghost-client'));
+});
+test('old carets are suppressed after an OT update until both source and position are fresh', async () => {
+  const h = harness(); h.project(); await h.settle(); peer(h); h.flush(100);
+  assert.equal(lastPresence(h).documents.length, 1);
+  h.sources.set(MAIN, 'Changed source.'); h.view.state = { doc: { toString: () => 'Changed source.' } };
+  h.server('otUpdateApplied', { doc: MAIN, v: 21, op: ['remote'] }); h.flush(100);
+  assert.deepEqual(lastPresence(h).documents, []);
+  await h.settle(); h.flush(100);
+  assert.deepEqual(lastPresence(h).documents, [], 'a stale coordinate must not attach to a new text revision');
+  peer(h, { column: 3 }); h.flush(100);
+  assert.equal(lastPresence(h).documents[0].source_fingerprint, fnv('Changed source.'));
+});
+test('optimistic hosted text cannot become the source anchor for remote carets', async () => {
+  const h = harness(); h.project(); await h.settle();
+  h.view.state = { doc: { toString: () => 'Unflushed browser edit.' } };
+  peer(h); h.flush(100);
+  assert.equal(lastPresence(h).peers.length, 1); assert.deepEqual(lastPresence(h).documents, []);
+});
+test('native selection publishes only the official caret schema and never writes source or OT', async () => {
+  const h = harness(); const source = 'é🙂z\nsecond line';
+  h.sources.set(MAIN, source); h.view.state = { doc: { toString: () => source } };
+  h.project(); await h.settle();
+  h.command({ command: 'cursor', id: MAIN, source_fingerprint: fnv(source), anchor: 1, head: 8 });
+  h.flush(100);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.dispatches)), [{ selection: { anchor: 1, head: 8 } }]);
+  const updates = h.emitted.filter(value => value.event === 'clientTracking.updatePosition');
+  assert.equal(updates.length, 1); assert.deepEqual(JSON.parse(JSON.stringify(updates[0].args)), [{ doc_id: MAIN, row: 1, column: 3 }]);
+  assert.equal(h.emitted.filter(value => value.event === 'applyOtUpdate').length, 0);
+  assert.equal(h.view.state.doc.toString(), source);
+});
+test('native caret commands are latest-wins and stale/surrogate-split inputs are ignored', async () => {
+  const h = harness(); const source = 'é🙂z';
+  h.sources.set(MAIN, source); h.view.state = { doc: { toString: () => source } };
+  h.project(); await h.settle();
+  for (let i = 0; i < 100; i++) h.command({ command: 'cursor', id: MAIN, source_fingerprint: fnv(source), anchor: 0, head: i % 2 ? 4 : 1 });
+  assert.equal([...h.timers.values()].filter(value => value.delay === 100).length, 1);
+  h.flush(100); assert.equal(h.dispatches.length, 1); assert.equal(h.dispatches[0].selection.head, 4);
+  for (const overrides of [{ epoch: 6 }, { source_fingerprint: '0000000000000000' }, { anchor: 2, head: 2 }, { head: 99 }, { id: ASSET }]) {
+    h.command({ command: 'cursor', id: MAIN, source_fingerprint: fnv(source), anchor: 1, head: 3, ...overrides }); h.flush(100);
+  }
+  assert.equal(h.dispatches.length, 1); assert.equal(h.emitted.filter(value => value.event === 'clientTracking.updatePosition').length, 1);
+});
+test('immutable CodeMirror text and sparse line checkpoints are reused across caret motion', async () => {
+  const h = harness(); const source = Array.from({ length: 10000 }, (_, i) => 'row ' + i).join('\n');
+  let reads = 0;
+  h.sources.set(MAIN, source); h.view.state = { doc: { toString: () => { reads++; return source; } } };
+  h.project(); await h.settle();
+  for (let i = 0; i < 100; i++) {
+    peer(h, { row: 9000 + i, column: 2 }); h.flush(100);
+    h.command({ command: 'cursor', id: MAIN, source_fingerprint: fnv(source), anchor: source.length - i, head: source.length - i }); h.flush(100);
+  }
+  assert.equal(reads, 1, 'source conversion and fingerprinting must be cached by immutable Text identity');
+  const document = lastPresence(h).documents[0];
+  assert.equal(document.cursors[0].head, source.indexOf('row 9099') + 2);
+});
+test('deleting a document removes its peer caret without losing project badges', async () => {
+  const h = harness(); h.project(); await h.settle(); peer(h, { doc_id: OTHER }); h.flush(100);
+  assert.equal(lastPresence(h).documents[0].id, OTHER);
+  h.server('removeEntity', FOLDER); h.flush(100);
+  assert.deepEqual(lastPresence(h).documents, []); assert.equal(lastPresence(h).peers.length, 1); assert.equal(lastPresence(h).peers[0].doc_id, null);
+});
+
+test('a parked native document publishes a source-checked head without activating another editor', async () => {
+  const h = harness(); h.project(); await h.settle();
+  h.command({ command: 'cursor', id: OTHER, source_fingerprint: fnv('Other source.'), anchor: 0, head: 3 }); h.flush(100);
+  assert.equal(h.dispatches.length, 0); assert.equal(h.window.navigated, undefined);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.emitted.at(-1))), { event: 'clientTracking.updatePosition', args: [{ doc_id: OTHER, row: 0, column: 3 }] });
+  h.command({ command: 'cursor', id: OTHER, source_fingerprint: fnv('Wrong text.'), anchor: 0, head: 3 }); h.flush(100);
+  assert.equal(h.emitted.filter(value => value.event === 'clientTracking.updatePosition').length, 1);
+});
+test('a replaced editor cannot turn a deferred caret into an uncaught failure', async () => {
+  const h = harness(); h.project(); await h.settle();
+  h.command({ command: 'cursor', id: MAIN, source_fingerprint: fnv('Main source.'), anchor: 0, head: 2 });
+  h.view.dispatch = () => { throw new Error('Destroyed view'); };
+  assert.doesNotThrow(() => h.flush(100));
+  assert.equal(h.emitted.filter(value => value.event === 'clientTracking.updatePosition').length, 0);
+});
+
+test('a rejoin response public ID outranks the socket property until the official handler runs', async () => {
+  const h = harness(); h.project(); await h.settle();
+  h.server('disconnect');
+  h.server('joinProjectResponse', { project: h.tree, permissionsLevel: 'owner', publicId: 'new-connection' });
+  assert.equal(h.socket.publicId, 'own-connection', 'the real official handler updates this after the injected listener');
+  peer(h, { id: 'new-connection', user_id: SELF });
+  peer(h, { id: 'own-connection', user_id: SELF });
+  h.socket.publicId = 'new-connection';
+  await h.settle(); h.flush(100);
+  assert.equal(lastPresence(h).own_id, 'new-connection');
+  assert.deepEqual(lastPresence(h).peers.map(value => value.id), ['own-connection']);
+});
+test('bounded labels never split Unicode surrogate pairs or emit invalid identities', async () => {
+  const h = harness(); h.project(); await h.settle();
+  peer(h, { name: 'a'.repeat(127) + '🙂' }); h.flush(100);
+  assert.equal(lastPresence(h).peers[0].name, 'a'.repeat(127));
+  peer(h, { id: 'bad\ud800' }); h.flush(100);
+  assert.equal(lastPresence(h).peers.length, 1);
+  peer(h, { name: '\ud800\u0000' }); h.flush(100);
+  assert.equal(lastPresence(h).peers[0].name, 'Anonymous');
 });

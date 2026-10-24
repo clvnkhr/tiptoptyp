@@ -7501,6 +7501,7 @@ dependencies = [
  "harper-typst",
  "image",
  "libghostty-vt",
+ "md5",
  "memmap2",
  "nix",
  "notify",

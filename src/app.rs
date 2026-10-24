@@ -72,6 +72,7 @@ mod editor_view;
 #[cfg(test)]
 mod git_toolbar_tooltip_tests;
 mod latexdiff;
+mod overleaf_presence;
 mod table_editor;
 mod table_samples;
 mod table_workbench;
@@ -7235,6 +7236,8 @@ impl EditorApp {
                 if native_hover_text(response, "Show preview controls").clicked() {
                     self.toggle_main_preview_controls();
                 }
+                let collaborators = self.overleaf_collaborators();
+                overleaf_presence::badges(ui, &collaborators);
                 // Lay out the title last so it gets precisely the space left
                 // between the menus and the right-aligned control group.
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {

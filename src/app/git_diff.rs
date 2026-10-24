@@ -78,6 +78,7 @@ impl EditorApp {
                 ui.memory_mut(|m| m.request_focus(id));
             }
         }
+        let overleaf_cursors = self.overleaf_presence_for_active();
         let snapshot = self.editor_snapshot(ui.ctx());
         let key = self.document().key();
         let cursor_line = snapshot
@@ -200,6 +201,16 @@ impl EditorApp {
             ),
             output.viewport.right_bottom(),
         );
+        if self.document().key() == key {
+            overleaf_presence::paint(ui, &output.edit, attention_viewport, &overleaf_cursors);
+        }
+        if output.edit.response.has_focus() {
+            self.publish_overleaf_cursor(
+                ui.ctx(),
+                cursor.secondary.index.0,
+                cursor.primary.index.0,
+            );
+        }
         let effect_paint = effect_paint.map(|marker| marker.finish(ui));
         reveal::paint_editor(
             ui,

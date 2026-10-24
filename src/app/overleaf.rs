@@ -1,7 +1,8 @@
 //! Overleaf owns the saved version; local files are a compiler/LSP working mirror.
 use super::*;
 use crate::overleaf::{
-    BrowserCommand, BrowserEvent, Entry, EntryKind, Mirror, Model, ModelChange, ProjectUrl, Tree,
+    BrowserCommand, BrowserEvent, Collaborator, Entry, EntryKind, Mirror, Model, ModelChange,
+    ProjectUrl, RemoteCursor, SourceIndex, Tree,
 };
 use crate::worker::{ExclusiveJob, OperationSummary};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -36,6 +37,19 @@ pub(super) struct State {
     open_after: Option<String>,
     blocked: BTreeSet<String>,
     focus: bool,
+    presence_cache: Option<ActivePresenceCache>,
+    last_cursor: Option<(u64, DocumentKey, usize, usize)>,
+    last_cursor_at: Option<Instant>,
+    empty_cursors: Arc<[RemoteCursor]>,
+    empty_collaborators: Arc<[Collaborator]>,
+}
+struct ActivePresenceCache {
+    key: DocumentKey,
+    id: String,
+    snapshot: tiptoptyp::mitex_document::CanonicalSnapshot,
+    index: SourceIndex,
+    generation: u64,
+    cursors: Arc<[RemoteCursor]>,
 }
 struct Connection {
     project: ProjectUrl,
@@ -277,6 +291,145 @@ impl EditorApp {
         };
         Some((workspace, format!("Overleaf · {} · {state}", tree.name)))
     }
+    pub(super) fn overleaf_collaborators(&self) -> Arc<[Collaborator]> {
+        self.overleaf
+            .connection
+            .as_ref()
+            .filter(|connection| connection.online)
+            .map_or_else(
+                || self.overleaf.empty_collaborators.clone(),
+                |connection| connection.model.presence().collaborators(),
+            )
+    }
+    /// Shared, revision-owned overlay data. Idle paint only clones an Arc;
+    /// canonical/auto-miTeX coordinates are rebuilt when that revision changes.
+    pub(super) fn overleaf_presence_for_active(&mut self) -> Arc<[RemoteCursor]> {
+        let Some(connection) = self
+            .overleaf
+            .connection
+            .as_ref()
+            .filter(|connection| connection.online)
+        else {
+            self.overleaf.presence_cache = None;
+            return self.overleaf.empty_cursors.clone();
+        };
+        let Some(id) = self
+            .document()
+            .path()
+            .as_ref()
+            .and_then(|path| self.overleaf_entry(path))
+            .map(|entry| entry.id.as_str())
+        else {
+            self.overleaf.presence_cache = None;
+            return self.overleaf.empty_cursors.clone();
+        };
+        // Local edits have no trustworthy server cursor coordinates yet.
+        // Keep badges, but never reindex source or paint stale remote carets.
+        if self.document().is_dirty() {
+            return self.overleaf.empty_cursors.clone();
+        }
+        let key = self.document().key();
+        let generation = connection.model.presence().generation();
+        if self
+            .overleaf
+            .presence_cache
+            .as_ref()
+            .is_none_or(|cache| cache.key != key || cache.id != id)
+        {
+            let Ok(snapshot) = self.document().canonical_snapshot() else {
+                self.overleaf.presence_cache = None;
+                return self.overleaf.empty_cursors.clone();
+            };
+            self.overleaf.presence_cache = Some(ActivePresenceCache {
+                key,
+                id: id.to_owned(),
+                index: SourceIndex::new(snapshot.source()),
+                snapshot,
+                generation: generation.wrapping_sub(1),
+                cursors: Arc::default(),
+            });
+        }
+        let cache = self.overleaf.presence_cache.as_mut().unwrap();
+        if cache.generation != generation {
+            let presence = self.overleaf.connection.as_ref().unwrap().model.presence();
+            let cursors = presence.cursors(&cache.id, &cache.index, cache.snapshot.source());
+            cache.cursors = cursors
+                .iter()
+                .filter_map(|cursor| {
+                    let anchor = cache
+                        .snapshot
+                        .editor_scalar_cursor(tiptoptyp_core::text::ScalarOffset::new(
+                            cursor.anchor,
+                        ))?
+                        .get();
+                    let head = cache
+                        .snapshot
+                        .editor_scalar_cursor(tiptoptyp_core::text::ScalarOffset::new(cursor.head))?
+                        .get();
+                    Some(RemoteCursor {
+                        anchor,
+                        head,
+                        ..cursor.clone()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into();
+            cache.generation = generation;
+        }
+        cache.cursors.clone()
+    }
+    /// The official site transports the selection head only. Preserve the full
+    /// local selection in the bridge while publishing only source-safe carets.
+    pub(super) fn publish_overleaf_cursor(
+        &mut self,
+        context: &egui::Context,
+        anchor: usize,
+        head: usize,
+    ) {
+        if self.document().is_dirty() || self.overleaf.browser.is_none() {
+            return;
+        }
+        let _ = self.overleaf_presence_for_active();
+        let Some(cache) = self.overleaf.presence_cache.as_ref() else {
+            return;
+        };
+        let identity = (self.overleaf.epoch, cache.key, anchor, head);
+        if self.overleaf.last_cursor == Some(identity) {
+            return;
+        }
+        let interval = Duration::from_millis(100);
+        if let Some(last) = self.overleaf.last_cursor_at {
+            let elapsed = last.elapsed();
+            if elapsed < interval {
+                context.request_repaint_after(interval - elapsed);
+                return;
+            }
+        }
+        let position = |offset| {
+            cache
+                .snapshot
+                .canonical_lsp_position(tiptoptyp_core::text::ScalarOffset::new(offset))
+                .and_then(|position| {
+                    cache
+                        .index
+                        .utf16_at_position(position.line.get(), position.character.get())
+                })
+        };
+        let Some((anchor, head)) = position(anchor).zip(position(head)) else {
+            return;
+        };
+        let command = BrowserCommand::Cursor {
+            epoch: self.overleaf.epoch,
+            id: cache.id.clone(),
+            source_fingerprint: cache.index.fingerprint.clone(),
+            anchor,
+            head,
+        };
+        if self.overleaf.send(command).is_ok() {
+            self.overleaf.last_cursor = Some(identity);
+            self.overleaf.last_cursor_at = Some(Instant::now());
+        }
+    }
     pub(super) fn overleaf_entry(&self, path: &Path) -> Option<&Entry> {
         let connection = self.overleaf.connection.as_ref()?;
         let relative = path
@@ -477,6 +630,13 @@ impl EditorApp {
         if event.epoch() != connection.model.epoch() {
             return Ok(());
         }
+        if matches!(&event, BrowserEvent::Document{id,..} | BrowserEvent::Ack{id,..}
+            if self.overleaf.presence_cache.as_ref().is_some_and(|cache|&cache.id==id))
+        {
+            // A prior cursor command can have arrived before the hosted editor
+            // installed this file or confirmed this source. Retry once ready.
+            self.overleaf.last_cursor = None;
+        }
         self.prune_overleaf_bindings();
         let bindings: Vec<_> = self
             .tabs
@@ -560,6 +720,7 @@ impl EditorApp {
                     });
                 }
             }
+            ModelChange::Presence => {}
             ModelChange::Project => {
                 let connection = self.overleaf.connection.as_mut().unwrap();
                 let root = connection.root.clone();
@@ -779,6 +940,7 @@ impl EditorApp {
                     self.overleaf.error = Some(error);
                     if let Some(connection) = &mut self.overleaf.connection {
                         connection.online = false;
+                        connection.model.clear_presence();
                         connection.status = "Reconnect required".into();
                     }
                 }
@@ -1085,7 +1247,7 @@ impl EditorApp {
     }
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn overleaf_inspection(&self) -> serde_json::Value {
-        serde_json::json!({"visible":self.overleaf.visible,"query_fingerprint":crate::desktop_test::fingerprint(&self.overleaf.query),"error":self.overleaf.error,"connection":self.overleaf.connection.is_some(),"browser":self.overleaf.browser.is_some(),"create_browser":self.overleaf.create_browser,"pending":self.overleaf.pending.is_some(),"epoch":self.overleaf.epoch})
+        serde_json::json!({"visible":self.overleaf.visible,"query_fingerprint":crate::desktop_test::fingerprint(&self.overleaf.query),"error":self.overleaf.error,"connection":self.overleaf.connection.is_some(),"browser":self.overleaf.browser.is_some(),"create_browser":self.overleaf.create_browser,"pending":self.overleaf.pending.is_some(),"epoch":self.overleaf.epoch,"collaborator_count":self.overleaf_collaborators().len(),"cursor_count":self.overleaf.presence_cache.as_ref().filter(|cache|cache.key==self.document().key() && self.overleaf.connection.as_ref().is_some_and(|connection|connection.online && connection.model.presence().generation()==cache.generation)).map_or(0,|cache|cache.cursors.len())})
     }
     pub(super) fn show_overleaf(&mut self, context: &egui::Context) {
         if !self.overleaf.visible && self.overleaf.browser.is_none() {
@@ -1297,6 +1459,7 @@ impl EditorApp {
             self.overleaf.sender = None;
             if let Some(connection) = &mut self.overleaf.connection {
                 connection.online = false;
+                connection.model.clear_presence();
                 connection.status = "Disconnected".into();
             }
         }

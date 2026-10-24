@@ -34,6 +34,7 @@ pub(crate) struct InFlight {
 pub(crate) enum ModelChange {
     Ignored,
     Project,
+    Presence,
     Document {
         id: String,
         source: String,
@@ -69,6 +70,7 @@ pub(crate) struct Model {
     documents: BTreeMap<String, Document>,
     in_flight: Option<InFlight>,
     next_request: u64,
+    presence: presence::Presence,
 }
 impl Model {
     pub(crate) fn new(epoch: u64) -> Self {
@@ -79,6 +81,7 @@ impl Model {
             documents: BTreeMap::new(),
             in_flight: None,
             next_request: 0,
+            presence: Default::default(),
         }
     }
     pub(crate) fn for_project(epoch: u64, project: &ProjectUrl) -> Self {
@@ -92,6 +95,12 @@ impl Model {
     }
     pub(crate) fn tree(&self) -> Option<&Tree> {
         self.tree.as_ref()
+    }
+    pub(crate) fn presence(&self) -> &presence::Presence {
+        &self.presence
+    }
+    pub(crate) fn clear_presence(&mut self) {
+        self.presence.clear();
     }
     pub(crate) fn document(&self, id: &str) -> Option<&Document> {
         self.documents.get(id)
@@ -111,6 +120,7 @@ impl Model {
     pub(crate) fn reconnect(&mut self, epoch: u64) {
         self.epoch = epoch;
         self.in_flight = None;
+        self.presence.clear();
     }
     pub(crate) fn set_draft(&mut self, id: &str, source: String) -> Result<bool, String> {
         check_source(&source)?;
@@ -252,6 +262,7 @@ impl Model {
                         || document.is_dirty()
                         || publishing == Some(id.as_str())
                 });
+                self.presence.retain_tree(&tree);
                 self.project_id = Some(project_id);
                 self.tree = Some(tree);
                 Ok(ModelChange::Project)
@@ -370,8 +381,18 @@ impl Model {
                 }
                 Ok(ModelChange::File { id, path, base64 })
             }
+            BrowserEvent::Presence { snapshot, .. } => {
+                Ok(if self.presence.replace(snapshot, self.tree.as_ref()) {
+                    ModelChange::Presence
+                } else {
+                    ModelChange::Ignored
+                })
+            }
             BrowserEvent::Error { message, .. } => Ok(ModelChange::Error(message)),
             BrowserEvent::Status { state, message, .. } => {
+                if !matches!(state.as_str(), "connected" | "saving") {
+                    self.presence.clear();
+                }
                 Ok(ModelChange::Status { state, message })
             }
         }

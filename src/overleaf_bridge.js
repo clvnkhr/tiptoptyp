@@ -50,6 +50,250 @@
   const downloads = new Set();
   const downloadingIds = new Set();
   const wrappedViews = new WeakSet();
+  const MAX_PEERS = 128;
+  const PRESENCE_INTERVAL = 100;
+  const peers = new Map();
+  const viewSources = new WeakMap();
+  let ownId = null;
+  let selfUserId = null;
+  let presenceTimer = null;
+  let cursorTimer = null;
+  let queuedCursor = null;
+  let lastOwnPosition = '';
+  let lastPresence = '';
+  let lastPresenceHadPeers = false;
+  let trackingRequest = 0;
+  let trackingChanges = null;
+
+  function boundedIdentity(value) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 128 || /[\u0000-\u001f\u007f]/.test(value)) return null;
+    for (const character of value) if (character.length === 1 && /[\uD800-\uDFFF]/.test(character)) return null;
+    return value;
+  }
+  function refreshOwnIdentity() {
+    ownId = ownId || boundedIdentity(socket?.publicId);
+    selfUserId = boundedIdentity(document.querySelector('meta[name="ol-user_id"]')?.content);
+    if (ownId) peers.delete(ownId);
+  }
+  function sourceInfo(source) {
+    return { source, fingerprint: null, checkpoints: [0], indexedRow: 0, indexedOffset: 0, indexedEnd: false, recentLine: null, lineBounds: new Map() };
+  }
+  function fingerprint(info) {
+    if (info.fingerprint !== null) return info.fingerprint;
+    // FNV-1a 64, using two 32-bit words rather than per-byte BigInt allocation.
+    let high = 0xcbf29ce4, low = 0x84222325;
+    for (const byte of new TextEncoder().encode(info.source)) {
+      low = (low ^ byte) >>> 0;
+      const product = low * 0x1b3;
+      high = (Math.imul(high, 0x1b3) + Math.imul(low, 0x100) + Math.floor(product / 0x100000000)) >>> 0;
+      low = product >>> 0;
+    }
+    info.fingerprint = high.toString(16).padStart(8, '0') + low.toString(16).padStart(8, '0');
+    return info.fingerprint;
+  }
+  function advanceLine(info) {
+    const next = info.source.indexOf('\n', info.indexedOffset);
+    if (next < 0) { info.indexedEnd = true; return false; }
+    info.indexedOffset = next + 1;
+    info.indexedRow++;
+    if (info.indexedRow % 128 === 0) info.checkpoints.push(info.indexedOffset);
+    return true;
+  }
+  function validOffset(source, offset) {
+    return Number.isSafeInteger(offset) && offset >= 0 && offset <= source.length && !(offset > 0 && offset < source.length && /[\uD800-\uDBFF]/.test(source[offset - 1]) && /[\uDC00-\uDFFF]/.test(source[offset]));
+  }
+  function lineBounds(info, row) {
+    let bounds = info.lineBounds.get(row);
+    if (!bounds) {
+      const block = Math.floor(row / 128);
+      let from = info.checkpoints[block];
+      for (let currentRow = block * 128; currentRow < row; currentRow++) from = info.source.indexOf('\n', from) + 1;
+      let end = info.source.indexOf('\n', from);
+      if (end < 0) end = info.source.length;
+      bounds = { row, from, end };
+      info.lineBounds.set(row, bounds);
+      if (info.lineBounds.size > 32) info.lineBounds.delete(info.lineBounds.keys().next().value);
+    }
+    return bounds;
+  }
+  function positionOffset(info, row, column) {
+    if (!Number.isSafeInteger(row) || row < 0 || row > MAX_SOURCE || !Number.isSafeInteger(column) || column < 0 || column > MAX_SOURCE) return null;
+    while (info.indexedRow < row && !info.indexedEnd) advanceLine(info);
+    if (info.indexedRow < row) return null;
+    const bounds = lineBounds(info, row);
+    const offset = bounds.from + column;
+    return offset <= bounds.end && validOffset(info.source, offset) ? offset : null;
+  }
+  function offsetPosition(info, offset) {
+    const recent = info.recentLine;
+    if (recent && offset >= recent.from && offset <= recent.end) return { row: recent.row, column: offset - recent.from };
+    while (!info.indexedEnd && info.indexedOffset < offset) {
+      const next = info.source.indexOf('\n', info.indexedOffset);
+      if (next < 0) { info.indexedEnd = true; break; }
+      if (next + 1 > offset) break;
+      advanceLine(info);
+    }
+    let low = 0, high = info.checkpoints.length;
+    while (low + 1 < high) {
+      const middle = (low + high) >>> 1;
+      if (info.checkpoints[middle] <= offset) low = middle; else high = middle;
+    }
+    let row = low * 128, start = info.checkpoints[low];
+    while (true) {
+      const next = info.source.indexOf('\n', start);
+      if (next < 0 || next + 1 > offset) break;
+      row++; start = next + 1;
+    }
+    info.recentLine = lineBounds(info, row);
+    return { row, column: offset - start };
+  }
+  function currentSourceInfo() {
+    const id = read('editor.open_doc_id'), view = read('editor.view'), doc = view?.state?.doc;
+    if (!ID.test(id || '') || entries.get(id)?.kind !== 'doc' || !doc || typeof doc.toString !== 'function' || typeof view.dispatch !== 'function') return null;
+    let info = viewSources.get(doc);
+    if (!info) {
+      const source = doc.toString();
+      if (source.length > MAX_SOURCE || new TextEncoder().encode(source).byteLength > MAX_SOURCE) return null;
+      info = sourceInfo(source); viewSources.set(doc, info);
+    }
+    return { id, view, info };
+  }
+  function normalizePeer(value, initial = false) {
+    if (!value || typeof value !== 'object') return null;
+    const id = boundedIdentity(initial ? value.client_id : value.id);
+    if (!id || id === ownId) return null;
+    const cursor = initial ? value.cursorData : value;
+    const rawName = initial ? [value.first_name, value.last_name].filter(part => typeof part === 'string').join(' ') : value.name;
+    function label(text) {
+      if (typeof text !== 'string') return '';
+      let result = '';
+      for (const character of text.slice(0, 512)) {
+        if (/[\u0000-\u001f\u007f]/.test(character) || (character.length === 1 && /[\uD800-\uDFFF]/.test(character))) continue;
+        if (result.length + character.length > 128) break;
+        result += character;
+      }
+      return result.trim();
+    }
+    const name = label(rawName) || label(value.email) || 'Anonymous';
+    const docId = ID.test(cursor?.doc_id || '') ? cursor.doc_id : null;
+    return { id, user_id: boundedIdentity(value.user_id), name, doc_id: docId,
+      row: Number.isSafeInteger(cursor?.row) && cursor.row >= 0 && cursor.row <= MAX_SOURCE ? cursor.row : null,
+      column: Number.isSafeInteger(cursor?.column) && cursor.column >= 0 && cursor.column <= MAX_SOURCE ? cursor.column : null,
+      revision: docId ? documentRevision.get(docId) || 0 : 0 };
+  }
+  function rememberTrackingChange(id, peer) {
+    if (!trackingChanges) return;
+    if (!trackingChanges.has(id) && trackingChanges.size >= MAX_PEERS * 2) {
+      // Discard an excessively delayed initial reply, rather than resurrecting a
+      // disconnected client after its bounded change history has been evicted.
+      trackingRequest++; trackingChanges = null; return;
+    }
+    trackingChanges.set(id, peer);
+  }
+  function updatePeer(value) {
+    if (!connected) return;
+    refreshOwnIdentity();
+    const peer = normalizePeer(value);
+    if (!peer) return;
+    rememberTrackingChange(peer.id, peer);
+    if (peers.has(peer.id) || peers.size < MAX_PEERS) peers.set(peer.id, peer);
+    queuePresence();
+  }
+  function removePeer(id) {
+    if (!boundedIdentity(id)) return;
+    rememberTrackingChange(id, null);
+    peers.delete(id); queuePresence();
+  }
+  function receiveConnectedUsers(values, request) {
+    if (!connected || request !== trackingRequest || !Array.isArray(values)) return;
+    refreshOwnIdentity();
+    const next = new Map();
+    // Bound traversal too: a hostile response cannot make every update O(n).
+    for (const value of values.slice(0, MAX_PEERS * 2)) {
+      const peer = normalizePeer(value, true);
+      if (peer && next.size < MAX_PEERS) next.set(peer.id, peer);
+    }
+    for (const [id, peer] of trackingChanges || []) {
+      if (peer) { if (next.has(id) || next.size < MAX_PEERS) next.set(id, peer); }
+      else next.delete(id);
+    }
+    trackingChanges = null;
+    peers.clear();
+    for (const [id, peer] of next) peers.set(id, peer);
+    queuePresence();
+  }
+  function queuePresence() {
+    if (stopped || presenceTimer !== null || (!peers.size && !lastPresenceHadPeers)) return;
+    presenceTimer = setTimeout(() => { presenceTimer = null; flushPresence(); }, PRESENCE_INTERVAL);
+  }
+  function flushPresence() {
+    refreshOwnIdentity();
+    const documents = new Map(), visiblePeers = [];
+    let active = null;
+    for (const peer of connected ? peers.values() : []) {
+      if (peer.id === ownId) continue;
+      const { revision, ...value } = peer;
+      if (entries.get(value.doc_id)?.kind !== 'doc') { value.doc_id = null; value.row = null; value.column = null; }
+      visiblePeers.push(value);
+      if (value.doc_id === null || value.row === null || value.column === null || dirty.has(value.doc_id) || (outgoingOt.get(value.doc_id) || 0) !== 0 || pending?.id === value.doc_id || opening?.id === value.doc_id) continue;
+      const source = authoritativeSources.get(value.doc_id);
+      const currentRevision = documentRevision.get(value.doc_id) || 0;
+      if (!source || source.revision !== currentRevision || revision !== currentRevision) continue;
+      if (read('editor.open_doc_id') === value.doc_id) {
+        active ??= currentSourceInfo();
+        if (!active || active.id !== value.doc_id || fingerprint(active.info) !== fingerprint(source.info)) continue;
+      }
+      const offset = positionOffset(source.info, value.row, value.column);
+      if (offset === null) continue;
+      let document = documents.get(value.doc_id);
+      if (!document) {
+        document = { id: value.doc_id, source_fingerprint: fingerprint(source.info), source_utf16: source.source.length, cursors: [] };
+        documents.set(value.doc_id, document);
+      }
+      // Overleaf publishes only the caret head; it does not expose selections.
+      document.cursors.push({ id: peer.id, anchor: offset, head: offset });
+    }
+    const fields = { origin: window.location.origin, own_id: ownId, self_user_id: selfUserId, peers: visiblePeers, documents: [...documents.values()] };
+    const encoded = JSON.stringify(fields);
+    lastPresenceHadPeers = visiblePeers.length > 0;
+    if (encoded !== lastPresence) { lastPresence = encoded; post('presence', fields); }
+  }
+  function clearPresence() {
+    clearTimeout(presenceTimer); presenceTimer = null;
+    clearTimeout(cursorTimer); cursorTimer = null;
+    queuedCursor = null; lastOwnPosition = '';
+    trackingRequest++; trackingChanges = null; peers.clear();
+    flushPresence();
+  }
+  function queueCursor(command) {
+    if (!connected || !ID.test(command.id || '') || !/^[a-f0-9]{16}$/.test(command.source_fingerprint || '') || !Number.isSafeInteger(command.anchor) || !Number.isSafeInteger(command.head)) return;
+    queuedCursor = { id: command.id, source_fingerprint: command.source_fingerprint, anchor: command.anchor, head: command.head };
+    if (cursorTimer === null) cursorTimer = setTimeout(() => {
+      cursorTimer = null;
+      const cursor = queuedCursor; queuedCursor = null;
+      if (!connected || !cursor || entries.get(cursor.id)?.kind !== 'doc') return;
+      try {
+        const active = opening ? null : currentSourceInfo();
+        const server = authoritativeSources.get(cursor.id);
+        const activeMatches = active?.id === cursor.id;
+        const info = activeMatches ? active.info : server?.info;
+        // A parked native tab can publish its caret without activating the
+        // hosted editor, but only against our exact acknowledged server text.
+        if (!info || (!activeMatches && (server.revision !== (documentRevision.get(cursor.id) || 0) || dirty.has(cursor.id) || pending?.id === cursor.id)) || fingerprint(info) !== cursor.source_fingerprint || !validOffset(info.source, cursor.anchor) || !validOffset(info.source, cursor.head)) return;
+        if (activeMatches) {
+          const selection = active.view.state.selection?.main;
+          if (selection?.anchor !== cursor.anchor || selection?.head !== cursor.head) active.view.dispatch({ selection: { anchor: cursor.anchor, head: cursor.head } });
+        }
+        const position = { doc_id: cursor.id, ...offsetPosition(info, cursor.head) };
+        const encoded = JSON.stringify(position);
+        if (encoded !== lastOwnPosition) {
+          // The server validates this exact strict schema: no selection extensions.
+          socket.emit('clientTracking.updatePosition', position);
+          lastOwnPosition = encoded;
+        }
+      } catch (_) { /* A destroyed/replaced editor can safely drop an ephemeral caret. */ }
+    }, PRESENCE_INTERVAL);
+  }
 
   function post(event, fields = {}) {
     if (stopped) return;
@@ -82,12 +326,13 @@
     const previous = authoritativeSources.get(id);
     if (previous) authoritativeBytes -= previous.bytes;
     authoritativeSources.delete(id);
-    authoritativeSources.set(id, { source, bytes });
+    authoritativeSources.set(id, { source, bytes, revision: documentRevision.get(id) || 0, info: previous?.source === source ? previous.info : sourceInfo(source) });
     authoritativeBytes += bytes;
     for (const [key, value] of authoritativeSources) {
       if (authoritativeBytes <= MAX_AUTHORITATIVE_BYTES) break;
       authoritativeSources.delete(key); authoritativeBytes -= value.bytes;
     }
+    queuePresence();
   }
   function dropAuthoritative(id) {
     const previous = authoritativeSources.get(id);
@@ -113,7 +358,7 @@
     store = next;
     for (const key of ['editor.view', 'editor.open_doc_id']) {
       unwatch.push(store.watch(key, () => {
-        wrapView();
+        wrapView(); queuePresence();
         if (opening && read('editor.open_doc_id') === opening.id) finishOpen();
       }));
     }
@@ -127,6 +372,7 @@
     const setState = view.setState;
     view.setState = function (...args) {
       const result = setState.apply(this, args);
+      queuePresence();
       if (opening && read('editor.open_doc_id') === opening.id) { opening.installed = true; finishOpen(); }
       return result;
     };
@@ -162,6 +408,8 @@
         }
       }
       for (const root of value.rootFolder) { folder(root, '', 0, true); nextRootIds.add(root._id); }
+      ownId = boundedIdentity(payload.publicId) || boundedIdentity(socket?.publicId);
+      refreshOwnIdentity();
       project = { project_id: value._id, name: String(value.name || 'Overleaf'), root_doc: ID.test(value.rootDoc_id || '') ? value.rootDoc_id : null };
       entries = next;
       for (const map of [outgoingOt, lastOwnAckVersion, documentRevision]) for (const id of map.keys()) {
@@ -177,10 +425,11 @@
       treeRevision++;
       downloadQueue = new Set([...entries.values()].filter(entry => entry.kind !== 'folder').map(entry => entry.id));
       publishProject();
+      flushPresence();
       status('connected');
       attachStore();
       pumpDownloads();
-    } catch (error) { connected = false; status('error', error.message); }
+    } catch (error) { connected = false; clearPresence(); status('error', error.message); }
   }
   function publishProject() {
     if (project) post('project', { ...project, entries: [...entries.values()] });
@@ -224,25 +473,30 @@
       }
       treeRevision++;
       publishProject();
+      queuePresence();
       pumpDownloads();
     } catch (error) { status('error', error.message); }
   }
   function invalidateDocument(id) {
     if (!entries.has(id)) return;
     documentRevision.set(id, (documentRevision.get(id) || 0) + 1);
+    queuePresence();
     downloadQueue.add(id); pumpDownloads();
   }
   function bindSocket(value) {
     if (!value || typeof value.on !== 'function' || value === socket) return value;
     if (socket) for (const [event, handler] of socketListeners.splice(0)) socket.removeListener?.(event, handler);
+    connected = false; clearPresence(); ownId = null;
     socket = value;
     projectWideUpdates = null;
     warnedDocRooms = false;
     function on(event, handler) { value.on(event, handler); socketListeners.push([event, handler]); }
     on('joinProjectResponse', setProject);
-    on('disconnect', () => { connected = false; status('disconnected'); });
-    on('connectionRejected', () => { connected = false; status('signed-out', 'Sign in to Overleaf again.'); });
-    on('project:access:revoked', () => { connected = false; status('error', 'Overleaf project access was revoked.'); });
+    on('clientTracking.clientUpdated', updatePeer);
+    on('clientTracking.clientDisconnected', removePeer);
+    on('disconnect', () => { connected = false; clearPresence(); status('disconnected'); });
+    on('connectionRejected', () => { connected = false; clearPresence(); status('signed-out', 'Sign in to Overleaf again.'); });
+    on('project:access:revoked', () => { connected = false; clearPresence(); status('error', 'Overleaf project access was revoked.'); });
     on('otUpdateApplied', update => {
       const ownAck = update && !Object.prototype.hasOwnProperty.call(update, 'op') && Number.isSafeInteger(update.v) && update.v >= 0;
       if (ownAck && (entries.has(update.doc) || pending?.id === update.doc) && update.v > (lastOwnAckVersion.get(update.doc) ?? -1)) {
@@ -253,7 +507,7 @@
       }
       invalidateDocument(update?.doc);
     });
-    on('otUpdateError', () => { connected = false; status('error', 'Overleaf could not save the document. Your local changes are retained.'); });
+    on('otUpdateError', () => { connected = false; clearPresence(); status('error', 'Overleaf could not save the document. Your local changes are retained.'); });
     on('reciveNewDoc', (parent, item) => treeChanged('create', parent, item, 'doc'));
     on('reciveNewFile', (parent, item) => treeChanged('create', parent, item, 'file'));
     on('reciveNewFolder', (parent, item) => treeChanged('create', parent, item, 'folder'));
@@ -262,6 +516,14 @@
     on('removeEntity', id => treeChanged('remove', id));
     const emit = value.emit;
     value.emit = function (event, ...args) {
+      if (event === 'clientTracking.getConnectedUsers' && typeof args.at(-1) === 'function') {
+        const callback = args.at(-1), request = ++trackingRequest;
+        trackingChanges = new Map();
+        args[args.length - 1] = function (...reply) {
+          if (!reply[0] && socket === value && !stopped) receiveConnectedUsers(reply[1], request);
+          return callback.apply(this, reply);
+        };
+      }
       if (event === 'joinDoc' && typeof args.at(-1) === 'function') {
         const callback = args.at(-1);
         args[args.length - 1] = function (...reply) {
@@ -277,7 +539,7 @@
       }
       if (event === 'applyOtUpdate' && (entries.has(args[0]) || pending?.id === args[0])) {
         const id = args[0];
-        dirty.add(id);
+        dirty.add(id); queuePresence();
         const count = outgoingOt.get(id) || 0;
         if (count >= MAX_OUTGOING_OT || count === -1) {
           outgoingOt.set(id, -1);
@@ -342,6 +604,7 @@
     clearTimeout(request.timer);
     clearTimeout(request.stepTimer);
     opening = null;
+    queuePresence();
     downloadQueue.add(request.id); pumpDownloads();
     if (queuedEdit?.id === request.id) {
       const command = queuedEdit; queuedEdit = null;
@@ -516,6 +779,7 @@
     const id = event.detail?.id;
     if ((outgoingOt.get(id) || 0) !== 0) return;
     dirty.delete(id);
+    queuePresence();
     pumpDownloads();
     if (!pending || event.detail?.id !== pending.id || !pending.sent || !pending.acknowledged) return;
     const value = current();
@@ -530,6 +794,7 @@
     drainQueuedOpen();
   }
   function stop() {
+    connected = false; clearPresence();
     clearTimeout(bootTimer);
     if (pending) clearTimeout(pending.timer);
     if (opening) { clearTimeout(opening.timer); clearTimeout(opening.stepTimer); }
@@ -548,6 +813,7 @@
         attachStore();
         switch (command.command) {
           case 'edit': requestEdit(command); break;
+          case 'cursor': queueCursor(command); break;
           case 'open': {
             const entry = entries.get(command.id);
             if (!entry || entry.path !== command.path) throw new Error('This Overleaf file is no longer in the project.');

@@ -421,6 +421,7 @@ impl EditorApp {
                 crate::auto_pairs::ascii_punctuation(&mut input.events);
             });
         }
+        let overleaf_cursors = self.overleaf_presence_for_active();
         let particle_settings = self.settings.editor_effects;
         let typing_intent = editor_particles::capture(
             ui,
@@ -498,6 +499,7 @@ impl EditorApp {
         let mut table_cursor = None;
         let mut completion_anchor: Option<Rect> = None;
         let mut editor_has_focus = false;
+        let mut overleaf_cursor = None;
         let editor_base_slot = ui.painter().add(egui::Shape::Noop);
         let editor_margin = egui::Margin {
             left: gutter_width,
@@ -815,6 +817,11 @@ impl EditorApp {
                     }
                 }
                 painter.set(delimiter_fill_slot, egui::Shape::Vec(backgrounds));
+            }
+            // A keystroke may have changed offsets after the presence snapshot
+            // was prepared. Wait for the next source-validated snapshot.
+            if !changed {
+                overleaf_presence::paint(ui, &output, visible_viewport, &overleaf_cursors);
             }
             for &index in self.writing.markers(document.key()) {
                 if self
@@ -1173,6 +1180,11 @@ impl EditorApp {
                 typing_intent,
                 changed,
             );
+            // Fold/gutter interactions may preserve or retarget TextEdit's
+            // hit-tested caret. Publish the final cursor, never that transient one.
+            if output.response.has_focus() {
+                overleaf_cursor = output.state.cursor.char_range();
+            }
             (
                 output.response.rect,
                 visuals.corner_radius,
@@ -1183,6 +1195,13 @@ impl EditorApp {
             )
         });
 
+        if let Some(cursor) = overleaf_cursor {
+            self.publish_overleaf_cursor(
+                ui.ctx(),
+                cursor.secondary.index.0,
+                cursor.primary.index.0,
+            );
+        }
         if ui.input(|i| i.pointer.any_released()) {
             ui.ctx()
                 .data_mut(|d| d.remove::<CCursorRange>(fold_press_id));

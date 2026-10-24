@@ -132,6 +132,7 @@ Commands are tagged with `command`:
 | --- | --- |
 | `open` | `id`, exact `path` |
 | `edit` | `id`, exact `base`, complete `source`, `request` |
+| `cursor` | `id`, `source_fingerprint`, UTF-16 `anchor`, `head` |
 | `refresh` | reload only after pending writes finish |
 | `disconnect` | unsubscribe, abort downloads, disconnect |
 
@@ -144,6 +145,7 @@ Events are tagged with `event`:
 | `ack` | `id`, `request`, server-confirmed complete `source` |
 | `file` | `id`, `path`, `base64` |
 | `conflict` | `id`, `request`, current `source`, `message` |
+| `presence` | `origin`, nullable `own_id`, `self_user_id`, complete `peers`, complete `documents` |
 | `status` | `state`, optional `message` |
 | `error` | `message` |
 
@@ -156,11 +158,65 @@ conflict queues a fresh guarded server download. Disconnection or a server save 
 was accepted. After an ambiguous failure, the official browser client retains
 its own pending operations and the native editor retains the local edit.
 
+## Collaborators and carets
+
+The bridge observes the official frontend's existing
+`clientTracking.getConnectedUsers` callback and project-wide
+`clientTracking.clientUpdated` / `clientTracking.clientDisconnected` events. It
+never requests an extra user-list refresh. Connections are identified by their
+public client ID; only this WebView's connection is excluded. Another window
+signed into the same account remains visible. Late initial replies cannot
+resurrect clients that disconnected or replace a newer position update.
+
+Each `presence` message replaces the complete previous snapshot. A peer is
+`{id, user_id, name, doc_id, row, column}`; unknown identity or coordinates are
+`null`. Names are bounded to 128 characters, with Overleaf's name/email/Anonymous
+fallback. The message also carries the current origin, own public connection ID
+and account ID. Native badges use the exact site color algorithm: MD5-derived
+hue, the site's reserved own-user hue of 200 and anonymous hue of 100, at
+`hsl(hue, 70%, 50%)`. This is not a theme-selected approximation.
+
+A document cursor snapshot is
+`{id, source_fingerprint, source_utf16, cursors:[{id,anchor,head}]}`. The
+fingerprint is lowercase 16-digit FNV-1a64 over UTF-8; offsets and total length
+are UTF-16, matching CodeMirror. Only the cached authoritative server source can
+anchor a remote cursor. A cursor disappears while that document has unconfirmed
+writes, after its text revision changes until a new position arrives, or when
+coordinates are invalid. Native rendering independently requires a matching
+source fingerprint. The bridge never exports source text as part of presence.
+
+**Ordinary Overleaf publishes a caret, not a selected range.** Its server uses a
+strict schema containing only `doc_id`, `row` and `column`; adding selection keys
+is rejected and can disconnect the client. Consequently received cursors have
+`anchor === head`. We do not guess a range or represent the caret as a selection.
+Native selections are installed using public CodeMirror selection dispatch when
+that document is active, and their head is published through the exact supported
+server schema. A parked tab can publish its head against an exact authoritative
+source fingerprint without opening or modifying the hosted document. Invalid or
+stale ephemeral cursor commands are quietly discarded.
+
+Presence and outgoing cursor bursts are coalesced with at most one 100 ms timer
+each, no idle polling, at most 128 peers and 128 total cursors. The native inbox
+keeps only the newest presence snapshot; it does not compete with source/save
+acknowledgements. UTF-8 hashing and source conversion are cached per authoritative
+source or immutable CodeMirror Text identity; line lookup uses sparse checkpoints
+and bounded recent-line caches. Disconnect, access revocation and teardown clear
+all peers, cursors and timers. This feature does not add another OT writer or
+change source synchronization authority.
+
 ## Primary implementation references
 
-Checked against the official source on 24 October 2026. These are implementation
-references, not guarantees about a particular Overleaf Cloud rollout.
+Checked against the official source on 24 October 2026. Collaborator protocol and
+colors were verified at upstream commit
+[`e039ad26c5bf5422eb57b89fc7e57c75055e631d`](https://github.com/overleaf/overleaf/commit/e039ad26c5bf5422eb57b89fc7e57c75055e631d).
+These are implementation references, not guarantees about a particular Overleaf Cloud rollout.
 
+- [Connected-user payloads, live events and own-client filtering](https://github.com/overleaf/overleaf/blob/e039ad26c5bf5422eb57b89fc7e57c75055e631d/services/web/frontend/js/features/ide-react/context/online-users-context.tsx)
+- [Exact site collaborator hue algorithm](https://github.com/overleaf/overleaf/blob/e039ad26c5bf5422eb57b89fc7e57c75055e631d/services/web/frontend/js/shared/utils/colors.ts)
+- [Site caret and badge color rendering](https://github.com/overleaf/overleaf/blob/e039ad26c5bf5422eb57b89fc7e57c75055e631d/services/web/frontend/js/features/source-editor/extensions/cursor-highlights.ts)
+- [Cursor head row/UTF-16 column semantics](https://github.com/overleaf/overleaf/blob/e039ad26c5bf5422eb57b89fc7e57c75055e631d/services/web/frontend/js/features/source-editor/extensions/cursor-position.ts)
+- [Strict server position schema: selection extensions are not accepted](https://github.com/overleaf/overleaf/blob/e039ad26c5bf5422eb57b89fc7e57c75055e631d/services/real-time/app/js/Router.js)
+- [Project-wide collaborator updates and identity fields](https://github.com/overleaf/overleaf/blob/e039ad26c5bf5422eb57b89fc7e57c75055e631d/services/real-time/app/js/WebsocketController.js)
 - [Exposed `editor.view`, document ID and name](https://github.com/overleaf/overleaf/blob/main/services/web/frontend/js/shared/context/ide-context.tsx)
 - [CodeMirror view exposure](https://github.com/overleaf/overleaf/blob/main/services/web/frontend/js/features/ide-react/context/editor-view-context.tsx)
 - [Exposed store `get` and subscribing `watch`](https://github.com/overleaf/overleaf/blob/main/services/web/frontend/js/features/ide-react/scope-value-store/react-scope-value-store.ts)
@@ -201,5 +257,9 @@ node --test scripts/test_overleaf_bridge.cjs
 The tests exercise the real bridge script with a small fake official-client
 surface. They cover full project hydration, save acknowledgements, collaborator
 changes, stale download rejection, exact bases, Unicode, permissions, changing
-files, nested deep links, live tree updates, invalid paths and cleanup. A logged-in
+files, nested deep links, live tree updates, invalid paths and cleanup. Presence
+regressions cover own-client filtering, late callbacks, full replacement/leave
+cleanup, Unicode positions and fingerprints, revision gating, bounded/coalesced
+bursts, cached source conversion, parked native tabs, and source-free selection
+publication through the strict official schema. A logged-in
 Overleaf project must additionally be checked before claiming live compatibility.
