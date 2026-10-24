@@ -425,8 +425,8 @@ impl EditorApp {
         );
         add(
             Group::Files,
-            "File import",
-            "Imports dropped files into the workspace.",
+            "File operations",
+            "Creates, duplicates and imports workspace files.",
             queued(
                 self.file_import.activity(),
                 !self.queued_file_drops.is_empty(),

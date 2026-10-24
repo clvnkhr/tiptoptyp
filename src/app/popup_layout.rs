@@ -297,7 +297,7 @@ pub(super) fn workspace_context_menu_size(is_file: bool, style: &egui::Style) ->
     // A file has three copy actions where a directory has one.
     menu_popup_size(
         METRICS.menu.workspace_width,
-        if is_file { 9 } else { 7 },
+        if is_file { 11 } else { 9 },
         1,
         style,
     )

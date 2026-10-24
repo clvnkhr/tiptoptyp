@@ -560,6 +560,14 @@ impl EditorApp {
     }
 
     pub(super) fn preflight_parked_rename(&self, old: &Path, new: &Path) -> Result<(), String> {
+        if self.tabs.records.values().any(|tab| {
+            tab.document
+                .path()
+                .as_ref()
+                .is_some_and(|path| path != old && path.starts_with(old))
+        }) {
+            return Err("Close files inside this folder before renaming it".into());
+        }
         if self.path_open_in_another_tab(new) {
             return Err("The destination is open in another tab".into());
         }

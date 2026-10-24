@@ -432,6 +432,13 @@ impl EditorApp {
             .clamp(1.0, METRICS.popup.rename_max_width);
         let theme = context.theme();
         let style = context.style_of(theme);
+        let shortcuts = self.settings.effective_shortcuts();
+        let child = scoped_child_viewport_id(context, "tiptoptyp-rename-overlay");
+        let admitted = self
+            .pending_widget_paste
+            .is_some_and(|pending| pending.admits(child, context.cumulative_frame_nr()));
+        let mut paste_requested = false;
+        let mut paste_admitted = false;
         let Some(dialog) = &mut self.rename_dialog else {
             return;
         };
@@ -440,9 +447,23 @@ impl EditorApp {
         let mut overlay_had_focus = self.rename_overlay_had_focus;
         let mut suspend_overlay = false;
         let captures = self.captures.clone();
-        let spec =
-            ChildViewSpec::modal("tiptoptyp-rename-overlay", "Rename", window_rect, "rename");
+        let title = if dialog.create { "New file" } else { "Rename" };
+        let primary = if dialog.create { "Create" } else { "Rename" };
+        let spec = ChildViewSpec::modal("tiptoptyp-rename-overlay", title, window_rect, "rename");
         ChildViewHost::show(context, &captures, spec, theme, &style, |ui, input| {
+            handle_window_management_shortcuts(ui.ctx(), ui.ctx().viewport_id(), &shortcuts);
+            let edits = prepare_child_widget_edit_events(ui.ctx(), &shortcuts, admitted);
+            paste_requested |= edits.paste_requested;
+            paste_admitted |= edits.requested_paste_admitted;
+            let _queued =
+                crate::child_view::begin_queued_edit_events(ui.ctx(), &mut dialog.edit_events);
+            cancel |= [ShortcutAction::CloseWindow, ShortcutAction::CloseTab]
+                .into_iter()
+                .any(|action| {
+                    shortcuts.egui(action).is_some_and(|shortcut| {
+                        ui.input_mut(|input| input.consume_shortcut(&shortcut))
+                    })
+                });
             cancel |= {
                 if input.focused == Some(true) {
                     overlay_had_focus = true;
@@ -461,18 +482,31 @@ impl EditorApp {
                         theme::apply_compact_tool_spacing(ui);
                         ui.set_min_width(dialog_width);
                         ui.set_max_width(dialog_width);
-                        ui.label(RichText::new("Rename").strong());
+                        ui.label(RichText::new(title).strong());
                         let response = ui.add_sized(
                             [dialog_width, METRICS.popup.rename_input_height],
                             egui::TextEdit::singleline(&mut dialog.name).id_salt("rename-name"),
                         );
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe("rename.name", &response);
+                        if response.changed() {
+                            dialog.error = None;
+                        }
+                        if let Some(error) = &dialog.error {
+                            ui.colored_label(error_color(ui.ctx()), error);
+                        }
                         if dialog.focus {
                             response.request_focus();
+                            crate::window_host::focus(
+                                ui.ctx(),
+                                ui.ctx().viewport_id(),
+                                crate::window_host::FocusCause::UserAction,
+                            );
                             dialog.focus = false;
                         }
                         submit |= response.lost_focus()
                             && ui.input(|input| input.key_pressed(egui::Key::Enter));
-                        match dialog_footer(ui, "Rename", None, true, false) {
+                        match workspace_actions::file_dialog_footer(ui, primary) {
                             Some(AppModalChoice::Primary) => submit = true,
                             Some(AppModalChoice::Cancel) => cancel = true,
                             _ => {}
@@ -480,6 +514,12 @@ impl EditorApp {
                     });
                 });
         });
+        if paste_admitted {
+            self.pending_widget_paste = None;
+        }
+        if paste_requested {
+            self.request_widget_paste(context, child);
+        }
         self.rename_overlay_had_focus = overlay_had_focus;
         if suspend_overlay {
             self.rename_overlay_suspended = true;
@@ -494,7 +534,11 @@ impl EditorApp {
             self.rename_overlay_had_focus = false;
             self.rename_overlay_suspended = false;
             crate::window_host::return_focus(context);
-            self.commit_rename(dialog.path, dialog.name, context);
+            if dialog.create {
+                self.create_workspace_file(dialog, context);
+            } else {
+                self.commit_rename(dialog.path, dialog.name, context);
+            }
         }
     }
 
@@ -1549,6 +1593,8 @@ impl EditorApp {
                                         path,
                                         *is_file,
                                         preview_selected,
+                                        !self.is_overleaf_path(path)
+                                            && !self.file_import.is_running(),
                                         &mut action,
                                     );
                                 }

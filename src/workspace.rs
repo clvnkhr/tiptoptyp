@@ -7,6 +7,9 @@ use std::{
     sync::Arc,
 };
 
+mod mutations;
+pub(crate) use mutations::validate_entry_name;
+
 /// Workspace mutations require a target resolved through its owning root.
 pub(crate) struct WorkspaceRoot(PathBuf);
 pub(crate) struct WorkspaceDirectory {

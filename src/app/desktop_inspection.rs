@@ -95,6 +95,17 @@ impl EditorApp {
             "settings_query_fingerprint": settings_query_fingerprint,
             "settings_text_input_focused": settings_text_input_focused,
         });
+        observation["file_dialog"] =
+            self.rename_dialog
+                .as_ref()
+                .map_or(serde_json::Value::Null, |dialog| {
+                    serde_json::json!({
+                        "create": dialog.create,
+                        "name_fingerprint": crate::desktop_test::fingerprint(&dialog.name),
+                        "path": dialog.path,
+                        "error": dialog.error,
+                    })
+                });
         observation["auto_pair_delimiters"] = serde_json::json!(self.settings.auto_pair_delimiters);
         observation["auto_save"] = serde_json::json!(self.settings.auto_save);
         observation["indent_spaces"] = serde_json::json!(self.settings.indent_spaces);

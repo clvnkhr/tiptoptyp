@@ -35,6 +35,7 @@ from desktop_ui_settings_links_journeys import SETTINGS_LINK_JOURNEYS
 from desktop_ui_tool_defaults_journeys import TOOL_DEFAULTS_JOURNEYS
 from desktop_ui_activity_journeys import ACTIVITY_JOURNEYS
 from desktop_ui_overleaf_journeys import OVERLEAF_JOURNEYS
+from desktop_ui_explorer_journeys import EXPLORER_JOURNEYS, prepare_explorer_files
 from desktop_ui_indentation_journeys import INDENTATION_JOURNEYS
 from desktop_ui_latexdiff_journeys import LATEXDIFF_JOURNEYS
 from desktop_ui_texdoc_journeys import TEXDOC_JOURNEYS, texdoc_program
@@ -45,7 +46,7 @@ from desktop_ui_inactive_preview_journeys import INACTIVE_PREVIEW_JOURNEYS
 ROOT = Path(__file__).resolve().parent.parent
 
 JOURNEY_NAMES = (
-    "all", *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
+    "all", *EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
     *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find",
     "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview",
     "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
@@ -60,7 +61,7 @@ JOURNEY_NAMES = (
 def selected_journeys(name):
     # Optional local ML must never become a hidden prerequisite of "all".
     if name == 'all':
-        return [*OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS]
+        return [*EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS]
     return list(TEX_JOURNEYS) if name == 'tex' else [name]
 
 
@@ -1048,6 +1049,8 @@ def main():
                 if fixture.suffix == ".typ"
                 else "Desktop journey fixture.\n"
             )
+            if args.journey in ("all", *EXPLORER_JOURNEYS):
+                prepare_explorer_files(directory)
             if args.journey in CITATION_JOURNEYS:
                 fixture.write_text(CITATION_SOURCE, encoding="utf-8")
                 (directory / "references.bib").write_text(CITATION_EXISTING, encoding="utf-8")

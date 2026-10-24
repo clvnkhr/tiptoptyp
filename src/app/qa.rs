@@ -902,6 +902,9 @@ impl QaSession {
                         path,
                         name,
                         focus: false,
+                        create: false,
+                        error: None,
+                        edit_events: Vec::new(),
                     });
                 }
             }

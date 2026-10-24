@@ -1322,6 +1322,7 @@ fn context_menu_sizes_include_every_action_and_separator() {
                             Path::new("/workspace/main.typ"),
                             is_file,
                             false,
+                            true,
                             &mut None,
                         );
                     });
@@ -3153,7 +3154,7 @@ fn file_context_menu_exposes_each_copy_contract() {
         .with_size(Vec2::new(320.0, 360.0))
         .build_ui_state(
             move |ui, action| {
-                show_workspace_popup_ui(ui, &path, true, false, action);
+                show_workspace_popup_ui(ui, &path, true, false, true, action);
             },
             None::<AppPopupAction>,
         );
@@ -9686,6 +9687,9 @@ fn repeated_drops_queue_while_a_dialog_is_open_and_are_consumed_once() {
         path: root.path().join("old.typ"),
         name: "new.typ".into(),
         focus: false,
+        create: false,
+        error: None,
+        edit_events: Vec::new(),
     });
     for name in ["first.typ", "second.typ", "third.typ"] {
         context

@@ -100,6 +100,7 @@ mod saves;
 mod tabs;
 mod terminal_panel;
 use crate::terminal::{BottomPanel, MAX_TERMINAL_PANES, PanelTab, TerminalTabs, terminal_id};
+mod workspace_actions;
 mod workspace_view;
 use lifecycle::DocumentLifecycle;
 mod help;
@@ -769,6 +770,9 @@ struct RenameDialog {
     path: PathBuf,
     name: String,
     focus: bool,
+    create: bool,
+    error: Option<String>,
+    edit_events: Vec<egui::Event>,
 }
 
 #[derive(Debug, Clone)]
@@ -777,6 +781,11 @@ enum WorkspaceMenuAction {
     OpenInNewWindow(PathBuf),
     TogglePreview(PathBuf),
     Rename(PathBuf),
+    NewFile {
+        directory: PathBuf,
+        tex: bool,
+    },
+    Duplicate(PathBuf),
     Delete(PathBuf),
     Copy {
         path: PathBuf,
@@ -853,6 +862,7 @@ struct FileImportResult {
     message: String,
     imported: Vec<PathBuf>,
     warning: Option<String>,
+    follow_up: Option<workspace_actions::FileFollowUp>,
 }
 
 impl crate::worker::OperationSummary for FileImportResult {
@@ -1514,6 +1524,7 @@ pub struct EditorApp {
     workspace: Option<WorkspaceTree>,
     workspace_error: Option<String>,
     file_import: crate::worker::ExclusiveJob<FileImportResult>,
+    pending_workspace_dialog: Option<(PathBuf, RenameDialog)>,
     queued_file_drops: VecDeque<PendingFileDrop>,
     package_uninstall: crate::worker::ExclusiveJob<String>,
     workspace_service: WorkspaceClient,
@@ -1853,6 +1864,7 @@ impl EditorApp {
             workspace: None,
             workspace_error: None,
             file_import: Default::default(),
+            pending_workspace_dialog: None,
             queued_file_drops: VecDeque::new(),
             package_uninstall: Default::default(),
             workspace_service: WorkspaceClient::new(
@@ -2293,7 +2305,7 @@ impl EditorApp {
         self.poll_export_dialog(context);
         self.poll_tool_picker(context);
         self.poll_document_dialog(context);
-        self.poll_file_import();
+        self.poll_file_import(context);
         self.poll_package_catalog(context);
         self.poll_font_catalog(context);
         self.consume_settings_actions(context, frame);
@@ -3970,6 +3982,8 @@ impl EditorApp {
             && viewport == scoped_child_viewport_id(context, citation::SALT);
         let table_child = self.table_editor.is_some()
             && viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor");
+        let rename_child = self.rename_dialog.is_some()
+            && viewport == scoped_child_viewport_id(context, "tiptoptyp-rename-overlay");
         let find_child = viewport == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT);
         let controls_child = viewport == scoped_child_viewport_id(context, preview_controls::SALT)
             || viewport
@@ -3983,6 +3997,7 @@ impl EditorApp {
             && !latexdiff_child
             && !texdoc_child
             && !citation_child
+            && !rename_child
             && !self.problems_focused(context, viewport)
             && !self.activity_focused(context, viewport)
             && (focused == Some(source_editor_id(context)) || !context.egui_wants_keyboard_input())
@@ -3994,7 +4009,8 @@ impl EditorApp {
             || table_child
             || latexdiff_child
             || texdoc_child
-            || citation_child)
+            || citation_child
+            || rename_child)
             && viewport != context.viewport_id()
         {
             let event = match command {
@@ -4012,7 +4028,9 @@ impl EditorApp {
                 _ => None,
             };
             if let Some(event) = event {
-                if find_child {
+                if rename_child {
+                    self.rename_dialog.as_mut().unwrap().edit_events.push(event);
+                } else if find_child {
                     self.find_bar.edit_events.push(event);
                 } else if latexdiff_child {
                     self.latexdiff.as_mut().unwrap().edit_events.push(event);
@@ -4425,7 +4443,7 @@ impl EditorApp {
         context.request_repaint();
     }
 
-    fn poll_file_import(&mut self) {
+    fn poll_file_import(&mut self, context: &egui::Context) {
         match self.file_import.poll() {
             LatestJobPoll::Ready(result) => {
                 let FileImportResult {
@@ -4433,12 +4451,37 @@ impl EditorApp {
                     message,
                     imported,
                     warning,
+                    follow_up,
                 } = result;
                 if workspace != self.workspace_root {
                     return;
                 }
                 if let Some(path) = imported.last() {
                     self.explorer.select_path(path.clone());
+                }
+                match follow_up {
+                    Some(workspace_actions::FileFollowUp::Open(path)) => {
+                        self.queued_open_requests.push_back(path);
+                    }
+                    Some(workspace_actions::FileFollowUp::Rename(path)) => {
+                        if let Some(name) = path.file_name() {
+                            self.pending_workspace_dialog = Some((
+                                workspace.clone(),
+                                RenameDialog {
+                                    name: name.to_string_lossy().into_owned(),
+                                    path,
+                                    focus: true,
+                                    create: false,
+                                    error: None,
+                                    edit_events: Vec::new(),
+                                },
+                            ));
+                        }
+                    }
+                    Some(workspace_actions::FileFollowUp::RetryCreate(dialog)) => {
+                        self.pending_workspace_dialog = Some((workspace.clone(), dialog));
+                    }
+                    None => {}
                 }
                 let has_warning = warning.is_some();
                 self.notice = Some(Notice {
@@ -4453,6 +4496,7 @@ impl EditorApp {
                     },
                 });
                 self.refresh_workspace();
+                context.request_repaint();
             }
             LatestJobPoll::Failed(message) => {
                 self.show_file_error(message);
@@ -4460,10 +4504,21 @@ impl EditorApp {
             }
             LatestJobPoll::Pending | LatestJobPoll::Idle => {}
         }
+        if !self.document_flow_busy()
+            && !self.settings_visible
+            && context.input(|input| input.viewport().focused != Some(false))
+            && let Some((workspace, dialog)) = self.pending_workspace_dialog.take()
+            && workspace == self.workspace_root
+            && !self.is_overleaf_path(&dialog.path)
+        {
+            self.rename_dialog = Some(dialog);
+            self.rename_overlay_had_focus = false;
+            self.rename_overlay_suspended = false;
+        }
     }
 
     fn handle_dropped_file(&mut self, context: &egui::Context) {
-        self.poll_file_import();
+        self.poll_file_import(context);
         let id = viewport_scoped_id(context, "file-drop-target");
         let paths: Vec<_> = context.input_mut(|input| {
             std::mem::take(&mut input.raw.dropped_files)
@@ -4566,6 +4621,7 @@ impl EditorApp {
                                 message,
                                 imported: imported_paths,
                                 warning: (!errors.is_empty()).then(|| errors.join("\n")),
+                                follow_up: None,
                             })
                         })
                 {
@@ -7828,6 +7884,9 @@ impl EditorApp {
             name: name.to_string_lossy().into_owned(),
             path,
             focus: true,
+            create: false,
+            error: None,
+            edit_events: Vec::new(),
         });
         self.rename_overlay_had_focus = false;
         self.rename_overlay_suspended = false;
@@ -7835,15 +7894,12 @@ impl EditorApp {
 
     fn commit_rename(&mut self, old_path: PathBuf, name: String, context: &egui::Context) {
         let name = name.trim();
-        let mut components = Path::new(name).components();
-        let valid_name = matches!(components.next(), Some(std::path::Component::Normal(_)))
-            && components.next().is_none();
-        if !valid_name {
-            self.notice = Some(Notice {
-                message: "Enter a filename without folders".to_owned(),
-                kind: NoticeKind::Error,
-            });
+        if let Err(error) = crate::workspace::validate_entry_name(name.as_ref()) {
             self.begin_rename(old_path);
+            if let Some(dialog) = &mut self.rename_dialog {
+                dialog.name = name.into();
+                dialog.error = Some(error.to_string());
+            }
             return;
         }
         let Some(parent) = old_path.parent() else {
@@ -7866,19 +7922,6 @@ impl EditorApp {
             && self.should_keep_designated_preview(&new_path);
         let reload_binary_document =
             renames_current_document && self.document().kind().preview_only();
-        let destination_is_same_entry = old_path
-            .canonicalize()
-            .ok()
-            .zip(new_path.canonicalize().ok())
-            .is_some_and(|(old, new)| old == new);
-        if fs::symlink_metadata(&new_path).is_ok() && !destination_is_same_entry {
-            self.notice = Some(Notice {
-                message: format!("{} already exists", new_path.display()),
-                kind: NoticeKind::Error,
-            });
-            self.begin_rename(old_path);
-            return;
-        }
         let renamed_kind =
             crate::document::detect_document(&new_path, self.document().source().as_bytes())
                 .ok()
@@ -7889,11 +7932,25 @@ impl EditorApp {
             return;
         }
         if let Err(error) = self.preflight_parked_rename(&old_path, &new_path) {
-            self.show_file_error(error);
+            self.begin_rename(old_path);
+            if let Some(dialog) = &mut self.rename_dialog {
+                dialog.name = name.into();
+                dialog.error = Some(error);
+            }
             return;
         }
-        if let Err(error) = fs::rename(&old_path, &new_path) {
-            self.show_file_error(format!("Could not rename {}: {error}", old_path.display()));
+        if let Err(error) = crate::workspace::WorkspaceRoot::open(parent)
+            .and_then(|root| root.rename(&old_path, name.as_ref()))
+        {
+            self.begin_rename(old_path);
+            if let Some(dialog) = &mut self.rename_dialog {
+                dialog.name = name.into();
+                dialog.error = Some(if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    format!("{name} already exists")
+                } else {
+                    error.to_string()
+                });
+            }
             return;
         }
         let new_path = new_path.canonicalize().unwrap_or(new_path);
@@ -8045,6 +8102,12 @@ impl EditorApp {
                     self.toggle_file_for_preview(path, context)
                 }
                 WorkspaceMenuAction::Rename(path) => self.begin_rename(path),
+                WorkspaceMenuAction::NewFile { directory, tex } => {
+                    self.begin_workspace_new_file(directory, tex);
+                }
+                WorkspaceMenuAction::Duplicate(path) => {
+                    self.duplicate_workspace_entry(path, context);
+                }
                 WorkspaceMenuAction::Delete(path) => {
                     if !self.document_flow_busy() {
                         self.document_workflow.set_modal(AppModal::DeleteFile {
@@ -11912,6 +11975,7 @@ fn is_child_widget_viewport(context: &egui::Context, viewport: egui::ViewportId)
         && (viewport == scoped_child_viewport_id(context, find_bar::VIEWPORT_SALT)
             || viewport == scoped_child_viewport_id(context, preview_controls::SALT)
             || viewport == scoped_child_viewport_id(context, "tiptoptyp-table-editor")
+            || viewport == scoped_child_viewport_id(context, "tiptoptyp-rename-overlay")
             || viewport == scoped_child_viewport_id(context, latexdiff::SALT)
             || viewport == scoped_child_viewport_id(context, tex_documentation::SALT)
             || viewport == scoped_child_viewport_id(context, citation::SALT)
@@ -12364,6 +12428,7 @@ fn show_workspace_popup_ui(
     path: &Path,
     is_file: bool,
     preview_selected: bool,
+    mutable: bool,
     action: &mut Option<AppPopupAction>,
 ) {
     ui.spacing_mut().item_spacing.y = theme::SPACE.small;
@@ -12392,12 +12457,46 @@ fn show_workspace_popup_ui(
             WorkspaceMenuAction::TogglePreview(path.to_path_buf()),
         ));
     }
-    if menu_item_enabled(ui, is_file, "Delete…", None).clicked() {
+    let new_file = menu_item_enabled(
+        ui,
+        mutable,
+        if is_file {
+            "New file next to this file…"
+        } else {
+            "New file in this folder…"
+        },
+        None,
+    );
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("menu.workspace.new_file", &new_file);
+    if new_file.clicked() {
+        let directory = if is_file {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+        *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::NewFile {
+            directory: directory.to_path_buf(),
+            tex: is_file
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("tex")),
+        }));
+    }
+    let duplicate = menu_item_enabled(ui, mutable, "Duplicate…", None);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("menu.workspace.duplicate", &duplicate);
+    if duplicate.clicked() {
+        *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::Duplicate(
+            path.to_path_buf(),
+        )));
+    }
+    if menu_item_enabled(ui, mutable && is_file, "Delete…", None).clicked() {
         *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::Delete(
             path.to_path_buf(),
         )));
     }
-    if menu_item_enabled(ui, is_file, "Rename…", None).clicked() {
+    if menu_item_enabled(ui, mutable && is_file, "Rename…", None).clicked() {
         *action = Some(AppPopupAction::Workspace(WorkspaceMenuAction::Rename(
             path.to_path_buf(),
         )));
