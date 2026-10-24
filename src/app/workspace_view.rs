@@ -11,6 +11,7 @@ pub(super) fn empty_workspace_command(command: AppCommand) -> bool {
             | AppCommand::Open
             | AppCommand::OpenInNewWindow
             | AppCommand::ChangeWorkspaceRoot
+            | AppCommand::Overleaf
             | AppCommand::Settings
             | AppCommand::Terminal
             | AppCommand::Panel
@@ -231,6 +232,19 @@ fn labeled_empty_action(ui: &mut egui::Ui, action: &str, caption: &str) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overleaf_connection_is_available_without_an_open_document() {
+        assert!(empty_workspace_command(AppCommand::Overleaf));
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.empty_workspace(&context);
+        assert!(app.tabs.is_empty());
+        assert!(app.native_command_enabled(AppCommand::Overleaf));
+        app.execute_app_command(AppCommand::Overleaf, &context, None);
+        assert!(app.overleaf.visible);
+    }
 
     #[test]
     fn opted_in_image_assets_follow_dark_page_appearance() {

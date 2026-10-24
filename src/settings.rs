@@ -744,6 +744,9 @@ pub(crate) struct AppSettings {
     pub(crate) shortcut_overrides: ShortcutOverrides,
     /// Optional Typst-only style layers for each interface appearance.
     pub(crate) typst_overrides: TypstOverrideThemes,
+    /// Verified Overleaf project URLs, newest first. Authentication stays in WebKit.
+    #[serde(default, deserialize_with = "deserialize_overleaf_projects")]
+    pub(crate) overleaf_projects: Vec<String>,
     /// Most recently used canonical workspace roots, newest first.
     pub(crate) recent_workspaces: Vec<String>,
     /// Last successfully opened source document, keyed by canonical project root.
@@ -833,6 +836,7 @@ impl Default for AppSettings {
             fixed_tab_width: false,
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides: TypstOverrideThemes::default(),
+            overleaf_projects: Vec::new(),
             recent_workspaces: Vec::new(),
             last_opened_files: BTreeMap::new(),
             typst: ToolPreference::for_tool(crate::toolchain::ToolKind::Typst),
@@ -934,6 +938,7 @@ impl AppSettings {
             fixed_tab_width,
             shortcut_overrides,
             typst_overrides,
+            overleaf_projects,
             recent_workspaces,
             last_opened_files,
             typst,
@@ -956,6 +961,19 @@ impl AppSettings {
             egui::Theme::Light => &mut self.light_theme,
             egui::Theme::Dark => &mut self.dark_theme,
         }
+    }
+
+    /// Remember a successfully connected project without persisting browser
+    /// cookies, credentials, or a URL containing an access token.
+    pub(crate) fn remember_overleaf_project(&mut self, url: &str) -> Result<(), String> {
+        let project = crate::overleaf::ProjectUrl::parse(url)?;
+        let canonical = project.url().to_owned();
+        let mut projects = normalize_overleaf_projects(&self.overleaf_projects)?;
+        projects.retain(|value| value != &canonical);
+        projects.insert(0, canonical);
+        projects.truncate(8);
+        self.overleaf_projects = projects;
+        Ok(())
     }
 
     /// Move a successfully opened workspace to the front of the recent list.
@@ -1067,6 +1085,28 @@ impl AppSettings {
     pub(crate) fn effective_shortcuts(&self) -> ShortcutBindings {
         ShortcutBindings::current(&self.shortcut_overrides)
     }
+}
+
+fn deserialize_overleaf_projects<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<String>::deserialize(deserializer)?;
+    normalize_overleaf_projects(&values).map_err(serde::de::Error::custom)
+}
+
+fn normalize_overleaf_projects(values: &[String]) -> Result<Vec<String>, String> {
+    let mut projects = Vec::new();
+    // Validate every supplied entry, including those beyond the history limit;
+    // invalid options should produce an error instead of disappearing silently.
+    for (index, value) in values.iter().enumerate() {
+        let project = crate::overleaf::ProjectUrl::parse(value)
+            .map_err(|error| format!("Overleaf project {}: {error}", index + 1))?;
+        if projects.len() < 8 && !projects.iter().any(|url| url == project.url()) {
+            projects.push(project.url().to_owned());
+        }
+    }
+    Ok(projects)
 }
 
 /// Canonicalize workspace roots when possible and otherwise normalize their
@@ -1299,6 +1339,7 @@ mod tests {
         assert!(settings.effective_shortcuts().conflicts().is_empty());
         assert!(settings.last_opened_files.is_empty());
         assert!(settings.recent_workspaces.is_empty());
+        assert!(settings.overleaf_projects.is_empty());
         assert_eq!(settings.typst.mode, ToolMode::Bundled);
         assert_eq!(settings.tinymist.mode, ToolMode::Bundled);
     }
@@ -1455,6 +1496,9 @@ mod tests {
                 "/workspace".to_owned(),
                 "/workspace/main.typ".to_owned(),
             )]),
+            overleaf_projects: vec![
+                "https://www.overleaf.com/project/0123456789abcdef01234567".into(),
+            ],
             recent_workspaces: vec!["/workspace".to_owned()],
             typst: ToolPreference {
                 command: Default::default(),
@@ -2080,6 +2124,86 @@ mod tests {
         assert!(
             !current.preview_follow_edits,
             "an unchanged stale toggle must not overwrite it"
+        );
+    }
+
+    #[test]
+    fn overleaf_history_is_canonical_bounded_unique_and_independently_merged() {
+        let mut settings = AppSettings::default();
+        assert!(settings.overleaf_projects.is_empty());
+        for index in 0..12 {
+            settings
+                .remember_overleaf_project(&format!(
+                    "https://www.overleaf.com/project/{index:024x}/"
+                ))
+                .unwrap();
+        }
+        assert_eq!(settings.overleaf_projects.len(), 8);
+        assert!(settings.overleaf_projects[0].ends_with("00000000000000000000000b"));
+        settings
+            .remember_overleaf_project("https://WWW.OVERLEAF.COM/project/00000000000000000000000A/")
+            .unwrap();
+        assert_eq!(settings.overleaf_projects.len(), 8);
+        assert_eq!(
+            settings.overleaf_projects[0],
+            "https://www.overleaf.com/project/00000000000000000000000a"
+        );
+        let mut storage = MemoryStorage::default();
+        settings.save(&mut storage);
+        assert_eq!(
+            AppSettings::load(Some(&storage)).unwrap().overleaf_projects,
+            settings.overleaf_projects
+        );
+        let base = AppSettings::default();
+        let mut current = base.clone();
+        current.auto_save = false;
+        current.apply_edits(&base, settings.clone());
+        assert!(!current.auto_save);
+        assert_eq!(current.overleaf_projects, settings.overleaf_projects);
+        let mut unrelated = base.clone();
+        unrelated.line_wrap = false;
+        current.apply_edits(&base, unrelated);
+        assert_eq!(current.overleaf_projects, settings.overleaf_projects);
+    }
+
+    #[test]
+    fn overleaf_history_json_rejects_invalid_and_credential_bearing_urls_with_field_errors() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("overleaf_projects");
+        assert!(
+            crate::settings_json::parse(&value.to_string())
+                .unwrap()
+                .overleaf_projects
+                .is_empty()
+        );
+        for invalid in [
+            "https://www.overleaf.com/project/no",
+            "http://www.overleaf.com/project/0123456789abcdef01234567",
+            "https://user:secret@www.overleaf.com/project/0123456789abcdef01234567",
+            "https://www.overleaf.com/project/0123456789abcdef01234567?token=secret",
+        ] {
+            value["overleaf_projects"] = serde_json::json!([invalid]);
+            let error = crate::settings_json::parse(&value.to_string()).unwrap_err();
+            assert!(
+                error.contains("overleaf_projects") && error.contains("Overleaf project 1"),
+                "{error}"
+            );
+            let mut storage = MemoryStorage::default();
+            storage.set_string(STORAGE_KEY, value.to_string());
+            assert!(AppSettings::load(Some(&storage)).is_err());
+        }
+        let mut projects: Vec<String> = (0..10)
+            .map(|index| format!("https://overleaf.example/project/{index:024x}"))
+            .collect();
+        projects.insert(1, projects[0].clone());
+        value["overleaf_projects"] = serde_json::json!(projects);
+        let parsed = crate::settings_json::parse(&value.to_string()).unwrap();
+        assert_eq!(parsed.overleaf_projects.len(), 8);
+        projects.push("not a URL".into());
+        value["overleaf_projects"] = serde_json::json!(projects);
+        assert!(
+            crate::settings_json::parse(&value.to_string()).is_err(),
+            "even a truncated invalid history entry must be explained"
         );
     }
 }

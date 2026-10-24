@@ -41,6 +41,12 @@ impl EditorApp {
         format_after: bool,
         context: &egui::Context,
     ) -> bool {
+        if self.document_workflow.save_in_flight {
+            return false;
+        }
+        if super::overleaf::is_mirror_path(&path) {
+            return self.submit_overleaf_save(tab, &path, context);
+        }
         let started = Instant::now();
         if self.snapshot_scene.is_some() || self.save_job.is_running() {
             return false;

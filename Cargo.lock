@@ -7533,6 +7533,7 @@ dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "tract-onnx",
  "typst-syntax 0.15.1",
+ "unicode-normalization",
  "ureq",
  "url",
  "winit",

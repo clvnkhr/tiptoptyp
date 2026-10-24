@@ -31,6 +31,7 @@ pub(super) struct Input<'a> {
     pub error: Option<&'a str>,
     pub order: ExplorerOrder,
     pub git_visible: bool,
+    pub read_only: bool,
     pub tex: bool,
     pub handwriting: crate::settings::HandwritingSettings,
 }
@@ -63,16 +64,19 @@ pub(super) fn show(
     mut show_git: impl FnMut(&mut egui::Ui) -> crate::git::view::Output,
 ) -> Output {
     let explorer_rect = ui.max_rect();
-    let file_drag_hovered = super::file_drag_hovered_over(ui.ctx(), explorer_rect)
-        || ui.ctx().data(|data| {
-            data.get_temp::<bool>(egui::Id::new("qa-explorer-drop"))
-                .unwrap_or(false)
-        });
-    offer_file_drop_target(
-        ui,
-        explorer_rect,
-        FileDropTarget::Folder(input.root.to_owned()),
-    );
+    let file_drag_hovered = !input.read_only
+        && (super::file_drag_hovered_over(ui.ctx(), explorer_rect)
+            || ui.ctx().data(|data| {
+                data.get_temp::<bool>(egui::Id::new("qa-explorer-drop"))
+                    .unwrap_or(false)
+            }));
+    if !input.read_only {
+        offer_file_drop_target(
+            ui,
+            explorer_rect,
+            FileDropTarget::Folder(input.root.to_owned()),
+        );
+    }
     let label = input.label;
     let mut output = Output::default();
     theme::panel_header(ui, "workspace-header", |ui| {
@@ -234,7 +238,12 @@ pub(super) fn show(
                     }
                     let tree = TreeView::new(tree_id)
                         .allow_multi_selection(false)
+                        .allow_drag_and_drop(!input.read_only)
                         .fallback_context_menu(|ui, selected: &Vec<PathBuf>| {
+                            if input.read_only {
+                                ui.close();
+                                return;
+                            }
                             let Some(path) = selected.first().cloned() else {
                                 ui.close();
                                 return;
@@ -255,14 +264,17 @@ pub(super) fn show(
                         .scope(|ui| {
                             theme::apply_active_row_selection(ui);
                             tree.show_state(ui, &mut tree_state, |builder| {
-                                add_workspace_nodes(
+                                add_workspace_nodes_with_access(
                                     builder,
                                     &snapshot.nodes,
-                                    active,
-                                    preview,
-                                    &context,
-                                    file_matches.as_deref(),
-                                    input.statuses,
+                                    WorkspaceRows {
+                                        active,
+                                        preview,
+                                        context: &context,
+                                        matches: file_matches.as_deref(),
+                                        git: input.statuses,
+                                        read_only: input.read_only,
+                                    },
                                 );
                             })
                         })
@@ -270,7 +282,7 @@ pub(super) fn show(
                     tree_state.store(ui, tree_id);
                     for action in actions {
                         match action {
-                            TreeAction::MoveExternal(drop) => {
+                            TreeAction::MoveExternal(drop) if !input.read_only => {
                                 if let Some(path) = drop.source.into_iter().find(|path| {
                                     find_node(path).is_some_and(WorkspaceNode::is_file)
                                 }) {
@@ -428,6 +440,7 @@ pub(super) fn file_drop_hint_rect(available: Rect, text_size: Vec2) -> Rect {
     )
 }
 
+#[cfg(test)]
 pub(super) fn add_workspace_nodes(
     builder: &mut TreeViewBuilder<'_, PathBuf>,
     nodes: &[WorkspaceNode],
@@ -437,6 +450,43 @@ pub(super) fn add_workspace_nodes(
     matches: Option<&WorkspaceMatches>,
     git: &crate::git::editor::FileStatuses,
 ) {
+    add_workspace_nodes_with_access(
+        builder,
+        nodes,
+        WorkspaceRows {
+            active,
+            preview,
+            context,
+            matches,
+            git,
+            read_only: false,
+        },
+    );
+}
+
+#[derive(Clone, Copy)]
+struct WorkspaceRows<'a> {
+    active: Option<&'a Path>,
+    preview: Option<&'a Path>,
+    context: &'a egui::Context,
+    matches: Option<&'a WorkspaceMatches>,
+    git: &'a crate::git::editor::FileStatuses,
+    read_only: bool,
+}
+
+fn add_workspace_nodes_with_access(
+    builder: &mut TreeViewBuilder<'_, PathBuf>,
+    nodes: &[WorkspaceNode],
+    input: WorkspaceRows<'_>,
+) {
+    let WorkspaceRows {
+        active,
+        preview,
+        context,
+        matches,
+        git,
+        read_only,
+    } = input;
     for node in nodes {
         if matches.is_some_and(|matches| !matches.contains(&node.path)) {
             continue;
@@ -450,6 +500,7 @@ pub(super) fn add_workspace_nodes(
             let drop_directory = node.path.clone();
             let open = builder.node(
                 NodeBuilder::dir(node.path.clone())
+                    .drop_allowed(!read_only)
                     .default_open(active.is_some_and(|path| path.starts_with(&node.path)))
                     .icon(|ui| paint_tree_icon(ui, true))
                     .label_ui(move |ui| {
@@ -460,19 +511,13 @@ pub(super) fn add_workspace_nodes(
                         );
                         let text = RichText::new(&label).color(color);
                         let response = ui.add(workspace_entry_label(text, is_active));
-                        offer_folder_row_drop(ui, response.rect, &drop_directory);
+                        if !read_only {
+                            offer_folder_row_drop(ui, response.rect, &drop_directory);
+                        }
                     }),
             );
             if open {
-                add_workspace_nodes(
-                    builder,
-                    &node.children,
-                    active,
-                    preview,
-                    context,
-                    matches,
-                    git,
-                );
+                add_workspace_nodes_with_access(builder, &node.children, input);
             }
             builder.close_dir();
         } else if node.is_file() {
@@ -508,7 +553,7 @@ pub(super) fn add_workspace_nodes(
                                 );
                             }
                         });
-                        if let Some(parent) = hover_path.parent() {
+                        if !read_only && let Some(parent) = hover_path.parent() {
                             offer_folder_row_drop(ui, row.response.rect, parent);
                         }
                         if let Some(kind) = hover_kind {
@@ -1806,5 +1851,162 @@ fn paint_filetype_icon(ui: &mut egui::Ui, path: &Path) {
         color,
     ) {
         paint_ui_icon(ui.painter(), rect, UiIcon::File, color);
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::{Input, show};
+    use crate::{
+        app::FileDropTarget,
+        explorer::{ExplorerOrder, ExplorerPanelState, ExplorerSection},
+        project_index::ProjectIndex,
+        workspace::{WorkspaceNode, WorkspaceSnapshot},
+    };
+    use eframe::egui::{Pos2, Vec2};
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    use std::{
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
+
+    #[derive(Default)]
+    struct State {
+        panel: ExplorerPanelState,
+        drawing: crate::handwriting::Drawing,
+        read_only: bool,
+        offered_drop: bool,
+        opened: Option<PathBuf>,
+        context_menu: Option<PathBuf>,
+        change_root: bool,
+    }
+
+    fn harness(read_only: bool) -> Harness<'static, State> {
+        let root = PathBuf::from("/overleaf/project");
+        let file = |name: &str| WorkspaceNode {
+            name: name.into(),
+            path: root.join(name),
+            relative_path: name.into(),
+            kind: crate::workspace::WorkspaceNodeKind::File,
+            children: Vec::new(),
+        };
+        let snapshot = Arc::new(WorkspaceSnapshot {
+            root: root.clone(),
+            nodes: vec![
+                WorkspaceNode {
+                    name: "chapters".into(),
+                    path: root.join("chapters"),
+                    relative_path: "chapters".into(),
+                    kind: crate::workspace::WorkspaceNodeKind::Directory,
+                    children: vec![file("chapters/section.tex")],
+                },
+                file("main.tex"),
+                file("notes.tex"),
+            ],
+        });
+        let index = ProjectIndex::default();
+        let statuses = crate::git::editor::FileStatuses::default();
+        Harness::builder()
+            .with_size(Vec2::new(400.0, 800.0))
+            .with_step_dt(1.0 / 60.0)
+            .build_ui_state(
+                move |ui, state: &mut State| {
+                    let drop_id = super::super::viewport_scoped_id(ui.ctx(), "file-drop-target");
+                    ui.ctx()
+                        .data_mut(|data| data.remove::<FileDropTarget>(drop_id));
+                    let output = show(
+                        ui,
+                        Input {
+                            root: &root,
+                            label: "Overleaf project",
+                            generation: Some(1),
+                            snapshot: Some(&snapshot),
+                            index: &index,
+                            active: None,
+                            preview: None,
+                            statuses: &statuses,
+                            error: None,
+                            order: ExplorerOrder::default(),
+                            git_visible: false,
+                            read_only: state.read_only,
+                            tex: true,
+                            handwriting: Default::default(),
+                        },
+                        &mut state.panel,
+                        &mut state.drawing,
+                        |_| Default::default(),
+                    );
+                    state.offered_drop = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<FileDropTarget>(drop_id).is_some());
+                    if let Some(path) = output.open {
+                        state.opened = Some(path);
+                    }
+                    if let Some(menu) = output.context_menu {
+                        state.context_menu = Some(menu.path);
+                    }
+                    state.change_root |= output.change_root;
+                },
+                State {
+                    read_only,
+                    ..Default::default()
+                },
+            )
+    }
+
+    #[test]
+    fn read_only_explorer_offers_no_folder_file_or_panel_import_targets() {
+        for read_only in [false, true] {
+            let mut harness = harness(read_only);
+            harness.run();
+            for label in ["chapters", "main.tex"] {
+                let row = harness.get_by_label(label).rect();
+                harness.hover_at(row.center());
+                harness.run();
+                assert_eq!(harness.state().offered_drop, !read_only, "{label}");
+            }
+            harness.hover_at(Pos2::new(350.0, 750.0));
+            harness.run();
+            assert_eq!(harness.state().offered_drop, !read_only);
+        }
+    }
+
+    #[test]
+    fn read_only_explorer_blocks_filesystem_context_menus_but_keeps_open_and_search() {
+        for read_only in [false, true] {
+            let mut harness = harness(read_only);
+            harness.run();
+            harness.get_by_label("main.tex").click_secondary();
+            harness.run();
+            assert_eq!(harness.state().context_menu.is_some(), !read_only);
+        }
+        let mut harness = harness(true);
+        harness.run();
+        harness.get_by_label("main.tex").click();
+        harness.step();
+        harness.get_by_label("main.tex").click();
+        harness.step();
+        assert_eq!(
+            harness.state().opened.as_deref(),
+            Some(Path::new("/overleaf/project/main.tex"))
+        );
+        harness.state_mut().panel.focus_search();
+        harness.run();
+        harness.get_by_label("Find in Files").type_text("main");
+        harness.run();
+        assert_eq!(harness.state().panel.query(ExplorerSection::Files), "main");
+        harness.get_by_label("main.tex");
+        assert!(harness.query_by_label("notes.tex").is_none());
+    }
+
+    #[test]
+    fn read_only_workspace_header_still_requests_connection_management() {
+        let mut harness = harness(true);
+        harness.run();
+        harness.get_by_label("Overleaf project").click();
+        harness.step();
+        harness.get_by_label("Overleaf project").click();
+        harness.step();
+        assert!(harness.state().change_root);
     }
 }

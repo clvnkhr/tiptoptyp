@@ -14,6 +14,8 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.heading("Help & tips");
         ui.label("Shortcuts below reflect your custom bindings. Preview shortcuts require preview focus; its border shows focus. Escape returns to the editor.");
         tool_options::show(ui, settings);
+        ui.heading("Overleaf");
+        ui.label("File → Connect to Overleaf, also in the command palette, opens a project URL. Sign in once in the app's Overleaf window; this session is separate from Safari. Hide the window to keep syncing in the background. Explorer lists the project's server files. With Auto-save on, edits are sent after a typing pause; a save becomes complete only when Overleaf acknowledges it and the local compiler copy is updated. Overleaf remains the saved source of truth. Offline edits and conflicts keep your local draft; use Save As for a local copy before discarding it. Recent project URLs are remembered, but opening the app never connects automatically.");
         ui.heading("TeX tools & citations");
         ui.label("Search TeXdoc in the command palette or choose File → TeXdoc · Package Documentation. Enter a package or class such as amsmath to open its installed manual in a tab. Online manual opens the official TeXdoc copy when local documentation is unavailable.");
         ui.label("Settings → Tools → TeX tools keeps the compiler, build driver, Build bibliography toggle and Clear Biber cache together. System pdfLaTeX, XeLaTeX and LuaLaTeX use finite latexmk builds by default; latexmk chooses BibTeX or Biber from the document. Direct engine runs basic TeX passes without bibliography automation. Tectonic manages its own BibTeX passes. Install missing tools through your TeX distribution, then refresh tools.");

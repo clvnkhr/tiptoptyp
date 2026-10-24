@@ -91,6 +91,8 @@ mod image_view;
 mod lifecycle;
 mod math_format;
 mod mitex_mode;
+mod overleaf;
+mod overleaf_input;
 mod panel_handles;
 pub(crate) use tooltips::native_hover_text;
 mod saves;
@@ -1448,6 +1450,7 @@ pub struct EditorApp {
     bottom_panel: BottomPanel,
     problems: problems::State,
     diagnostic_regions: diagnostic_regions::State,
+    overleaf: overleaf::State,
     terminal: TerminalTabs,
     settings_visible: bool,
     settings_open_requested: bool,
@@ -1786,6 +1789,7 @@ impl EditorApp {
             bottom_panel: BottomPanel::default(),
             problems: Default::default(),
             diagnostic_regions: Default::default(),
+            overleaf: Default::default(),
             terminal: TerminalTabs::default(),
             settings_visible: false,
             settings_open_requested: false,
@@ -2089,7 +2093,11 @@ impl EditorApp {
                         .cached_table_at_cursor(self.document().key())
                         .is_some()
             }
-            CommandRequirement::SavedDocument => self.document().path().is_some(),
+            CommandRequirement::SavedDocument => self
+                .document()
+                .path()
+                .as_ref()
+                .is_some_and(|path| !overleaf::is_mirror_path(path)),
             CommandRequirement::LocalVersions => {
                 crate::file_versions::AVAILABLE
                     && self.document().path().is_some()
@@ -2186,6 +2194,7 @@ impl EditorApp {
         if !self.lifecycle.suspend() {
             return;
         }
+        self.overleaf = overleaf::State::default();
         self.terminal = TerminalTabs::default();
         self.bottom_panel = BottomPanel::default();
         self.tabs = tabs::Tabs::default();
@@ -2689,6 +2698,9 @@ impl EditorApp {
     }
 
     fn remember_open_document(&mut self, path: &Path) {
+        if overleaf::is_mirror_path(path) {
+            return;
+        }
         let Some(parent) = path.parent() else {
             return;
         };
@@ -2773,7 +2785,7 @@ impl EditorApp {
     }
 
     fn tick_autosave(&mut self, context: &egui::Context) {
-        if self.save_job.is_running() {
+        if self.save_job.is_running() || self.document_workflow.save_in_flight {
             return;
         }
         if self.snapshot_scene.is_some() {
@@ -3164,7 +3176,7 @@ impl EditorApp {
         }
         // Settings is a native keyboard owner. Its callback handles its own
         // controls and shortcuts; the document router must not read that input.
-        if ["tiptoptyp-settings", snippet_window::SALT]
+        if ["tiptoptyp-settings", snippet_window::SALT, overleaf::SALT]
             .into_iter()
             .any(|salt| shortcut_viewport == scoped_child_viewport_id(context, salt))
         {
@@ -3593,6 +3605,9 @@ impl EditorApp {
         context: &egui::Context,
         frame: Option<&eframe::Frame>,
     ) {
+        if self.route_overleaf_command(command, context) {
+            return;
+        }
         if self.version_history.is_some() {
             let viewport = focused_input_viewport(context);
             if viewport != context.viewport_id() {
@@ -3692,6 +3707,7 @@ impl EditorApp {
             AppCommand::LatexDiff => self.begin_latexdiff(context),
             AppCommand::TexDocumentation => self.begin_tex_documentation(None, context),
             AppCommand::ImportCitation => self.begin_citation(context),
+            AppCommand::Overleaf => self.begin_overleaf(context),
             AppCommand::RevertTo => self.begin_version_history(context),
             AppCommand::NewTable => self.begin_new_table(context),
             AppCommand::EditTable => {
@@ -4492,6 +4508,10 @@ impl EditorApp {
                 context.request_repaint();
             }
             FileDropTarget::Folder(directory) => {
+                if overleaf::is_mirror_path(&directory) {
+                    self.show_file_error("Manage Overleaf files in Overleaf; the working copy cannot import local files.".into());
+                    return;
+                }
                 let root = self.workspace_root.clone();
                 if let Err(error) =
                     self.file_import
@@ -4744,6 +4764,7 @@ impl EditorApp {
         self.workspace_root = root.clone();
         self.explorer.clear_selection();
         self.tabs.set_workspace(&root);
+        self.restore_overleaf_tab_workspaces();
         self.workspace = None;
         self.explorer.clear_workspace_filter();
         self.workspace_error = None;
@@ -4772,6 +4793,9 @@ impl EditorApp {
     }
 
     fn remember_workspace(&mut self, root: &Path) {
+        if overleaf::is_mirror_path(root) {
+            return;
+        }
         self.settings.remember_workspace(root);
         if let Some(settings) = &mut self.pending_settings {
             settings.remember_workspace(root);
@@ -5778,6 +5802,9 @@ impl EditorApp {
             return;
         };
         if !self.document().kind().is_editable() {
+            return;
+        }
+        if overleaf::is_mirror_path(&path) {
             return;
         }
         let stamp = match external_file_stamp(&path) {
@@ -7717,6 +7744,12 @@ impl EditorApp {
     }
 
     fn begin_rename(&mut self, path: PathBuf) {
+        if overleaf::is_mirror_path(&path) {
+            self.show_file_error(
+                "Rename Overleaf files in Overleaf; the working copy follows its file tree.".into(),
+            );
+            return;
+        }
         let Some(name) = path.file_name() else {
             return;
         };
@@ -8065,8 +8098,22 @@ impl EditorApp {
 
     fn show_workspace(&mut self, ui: &mut egui::Ui) {
         let _span = crate::performance::span("ui.explorer");
+        let remote = self
+            .overleaf_explorer()
+            .map(|(workspace, label)| (workspace.clone(), label));
+        let workspace = remote
+            .as_ref()
+            .map(|(workspace, _)| workspace)
+            .or(self.workspace.as_ref());
+        let explorer_root = remote
+            .as_ref()
+            .map(|(workspace, _)| workspace.root().to_owned())
+            .unwrap_or_else(|| self.workspace_root.clone());
+        let read_only = remote.is_some();
         let label = if self.snapshot_scene.is_some() {
             "Theme gallery workspace".to_owned()
+        } else if let Some((_, label)) = &remote {
+            label.clone()
         } else {
             self.workspace
                 .as_ref()
@@ -8078,10 +8125,11 @@ impl EditorApp {
         let output = explorer_view::show(
             ui,
             explorer_view::Input {
-                root: &self.workspace_root,
+                root: &explorer_root,
                 label: &label,
-                generation: self.workspace.as_ref().map(WorkspaceTree::generation),
-                snapshot: self.workspace.as_ref().map(WorkspaceTree::shared_snapshot),
+                generation: workspace.map(WorkspaceTree::generation),
+                snapshot: workspace.map(WorkspaceTree::shared_snapshot),
+                read_only,
                 index: &self.project_index,
                 active: self.tabs.current_record().document.path().as_deref(),
                 preview: preview.as_deref(),
@@ -8108,10 +8156,18 @@ impl EditorApp {
             self.insert_generated_symbol(ui.ctx(), &symbol);
         }
         if output.change_root {
-            self.open_workspace_chooser();
+            if read_only {
+                self.begin_overleaf(ui.ctx());
+            } else {
+                self.open_workspace_chooser();
+            }
         }
         if output.refresh {
-            self.refresh_workspace();
+            if read_only {
+                self.refresh_overleaf();
+            } else {
+                self.refresh_workspace();
+            }
         }
         if output.repaint {
             ui.ctx().request_repaint();
@@ -8133,6 +8189,7 @@ impl EditorApp {
             self.open_package_manager(ui.ctx());
         }
         if let Some(path) = output.open
+            && !self.open_overleaf_path(&path)
             && self
                 .document()
                 .path()
@@ -9518,6 +9575,7 @@ impl EditorApp {
         self.execute_pending_app_popup_action(&context, frame);
         self.poll_hunk_action();
         self.poll_save(&context);
+        self.poll_overleaf(&context);
         self.poll_version_history(&context);
         self.tick_parked_autosave(&context);
         let drop_id = viewport_scoped_id(&context, "file-drop-target");
@@ -9760,6 +9818,7 @@ impl EditorApp {
         self.show_latexdiff(&context, frame);
         self.show_tex_documentation(&context);
         self.show_citation(&context, frame);
+        self.show_overleaf(&context);
         self.poll_biber_cache(&context);
         self.show_liquid_review(&context);
         self.show_app_modal_window(&context);
@@ -11530,7 +11589,7 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 22] {
+fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 23] {
     use crate::child_view::child_viewport_id;
     [
         child_viewport_id(current, find_bar::VIEWPORT_SALT),
@@ -11545,6 +11604,7 @@ fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 22] {
         child_viewport_id(current, latexdiff::SALT),
         child_viewport_id(current, tex_documentation::SALT),
         child_viewport_id(current, citation::SALT),
+        child_viewport_id(current, overleaf::SALT),
         child_viewport_id(current, liquid::SALT),
         child_viewport_id(current, "tiptoptyp-rename-overlay"),
         child_viewport_id(current, "tiptoptyp-workspace-chooser"),
@@ -11771,6 +11831,7 @@ fn is_child_widget_viewport(context: &egui::Context, viewport: egui::ViewportId)
             || viewport == scoped_child_viewport_id(context, latexdiff::SALT)
             || viewport == scoped_child_viewport_id(context, tex_documentation::SALT)
             || viewport == scoped_child_viewport_id(context, citation::SALT)
+            || viewport == scoped_child_viewport_id(context, overleaf::SALT)
             || viewport
                 == crate::child_view::child_viewport_id(
                     scoped_child_viewport_id(context, "preview-window"),

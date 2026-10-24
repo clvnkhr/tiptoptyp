@@ -22,6 +22,7 @@ pub(crate) enum ShortcutAction {
     Open,
     OpenInNewWindow,
     ChangeWorkspaceRoot,
+    Overleaf,
     Save,
     SaveAs,
     RevertTo,
@@ -103,7 +104,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 87] = [
+    pub(crate) const ALL: [Self; 88] = [
         Self::Settings,
         Self::CommandPalette,
         Self::New,
@@ -113,6 +114,7 @@ impl ShortcutAction {
         Self::Open,
         Self::OpenInNewWindow,
         Self::ChangeWorkspaceRoot,
+        Self::Overleaf,
         Self::Save,
         Self::SaveAs,
         Self::RevertTo,
@@ -204,6 +206,7 @@ impl ShortcutAction {
             Self::Open => "file.open",
             Self::OpenInNewWindow => "file.open_in_new_window",
             Self::ChangeWorkspaceRoot => "file.change_workspace_root",
+            Self::Overleaf => "file.overleaf",
             Self::Save => "file.save",
             Self::SaveAs => "file.save_as",
             Self::RevertTo => "file.revert_to",
@@ -300,6 +303,7 @@ impl ShortcutAction {
             Self::Open => "Open",
             Self::OpenInNewWindow => "Open in new window",
             Self::ChangeWorkspaceRoot => "Change workspace root",
+            Self::Overleaf => "Connect to Overleaf…",
             Self::Save => "Save",
             Self::SaveAs => "Save as",
             Self::RevertTo => "Revert to…",
@@ -396,6 +400,7 @@ impl ShortcutAction {
             | Self::Open
             | Self::OpenInNewWindow
             | Self::ChangeWorkspaceRoot
+            | Self::Overleaf
             | Self::Save
             | Self::SaveAs
             | Self::RevertTo
@@ -1227,6 +1232,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         | Action::LatexDiff
         | Action::TexDocumentation
         | Action::ImportCitation
+        | Action::Overleaf
         | Action::RevertTo
         | Action::NewFromTemplate
         | Action::ComfyPreview => {
@@ -1340,6 +1346,7 @@ mod tests {
                             | ShortcutAction::LatexDiff
                             | ShortcutAction::TexDocumentation
                             | ShortcutAction::ImportCitation
+                            | ShortcutAction::Overleaf
                             | ShortcutAction::EditTable
                             | ShortcutAction::NewFromTemplate
                             | ShortcutAction::ComfyPreview

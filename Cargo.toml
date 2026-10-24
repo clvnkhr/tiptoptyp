@@ -14,6 +14,7 @@ native-ui-tests = []
 desktop-ui-tests = []
 
 [dependencies]
+unicode-normalization = "0.1.25"
 zstd = { version = "0.13.3", default-features = false }
 sha2 = { version = "0.10", features = ["asm"] }
 tract-onnx = { version = "0.23.8", default-features = false }

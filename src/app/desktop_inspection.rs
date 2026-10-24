@@ -133,6 +133,7 @@ impl EditorApp {
         observation["latexdiff"] = self.latexdiff_inspection();
         observation["tex_documentation"] = self.tex_documentation_inspection();
         observation["citation"] = self.citation_inspection();
+        observation["overleaf"] = self.overleaf_inspection();
         observation["palette_query_fingerprint"] =
             crate::desktop_test::fingerprint(&self.command_palette.query).into();
         observation["palette_selected"] = self

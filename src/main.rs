@@ -59,6 +59,11 @@ mod native_menu;
 mod native_window;
 #[allow(unsafe_code)]
 mod open_requests;
+#[allow(unsafe_code)]
+mod overleaf;
+#[allow(unsafe_code)]
+mod overleaf_browser;
+mod overleaf_inbox;
 mod package_catalog;
 mod pdf;
 mod pdfium;

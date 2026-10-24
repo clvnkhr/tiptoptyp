@@ -69,6 +69,7 @@ commands! {
     Open => ("Open…", File, 0, Always, 101),
     OpenInNewWindow => ("Open in New Window…", File, 0, Always, 107),
     ChangeWorkspaceRoot => ("Change Workspace Root…", File, 0, Always, 102),
+    Overleaf => ("Connect to Overleaf…", File, 0, Always, 216),
     Save => ("Save", File, 1, Always, 103),
     SaveAs => ("Save As…", File, 1, Always, 104),
     Rename => ("Rename…", File, 1, SavedDocument, 108),
@@ -694,6 +695,29 @@ mod tests {
         assert_eq!(
             native_menu_request_from_tag(spec.native_id),
             Some(NativeMenuRequest::Command(AppCommand::CommandPalette))
+        );
+    }
+
+    #[test]
+    fn overleaf_is_an_always_available_file_command_without_a_default_chord() {
+        let spec = command_spec(AppCommand::Overleaf);
+        assert_eq!(spec.title, "Connect to Overleaf…");
+        assert_eq!(spec.menu, CommandMenu::File);
+        assert_eq!(spec.section, 0);
+        assert_eq!(spec.requirement, CommandRequirement::Always);
+        assert_eq!(spec.native_id, 216);
+        assert_eq!(spec.shortcut_action.id(), "file.overleaf");
+        assert_eq!(spec.shortcut_action.label(), spec.title);
+        assert_eq!(spec.shortcut_action.group(), "File");
+        for platform in [ShortcutPlatform::MacOs, ShortcutPlatform::Other] {
+            assert_eq!(
+                ShortcutBindings::defaults(platform).binding(spec.shortcut_action),
+                None
+            );
+        }
+        assert_eq!(
+            native_menu_request_from_tag(spec.native_id),
+            Some(NativeMenuRequest::Command(AppCommand::Overleaf))
         );
     }
 

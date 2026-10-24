@@ -251,6 +251,7 @@ fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_gi
                     explorer_view::Input {
                         root,
                         label: "/workspace",
+                        read_only: false,
                         generation: Some(1),
                         snapshot: None,
                         index: &index,
@@ -5108,6 +5109,7 @@ fn hidden_files_skip_query_classification_until_the_section_is_open() {
                     explorer_view::Input {
                         root,
                         label: "/workspace",
+                        read_only: false,
                         generation: Some(1),
                         snapshot: Some(&state.1),
                         index: &index,
