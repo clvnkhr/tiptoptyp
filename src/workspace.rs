@@ -201,7 +201,6 @@ impl WorkspaceSnapshot {
 #[derive(Debug, Clone)]
 pub struct WorkspaceTree {
     snapshot: Arc<WorkspaceSnapshot>,
-    generation: u64,
 }
 
 impl WorkspaceTree {
@@ -210,10 +209,7 @@ impl WorkspaceTree {
     }
 
     pub fn from_shared(snapshot: Arc<WorkspaceSnapshot>) -> Self {
-        Self {
-            snapshot,
-            generation: 0,
-        }
+        Self { snapshot }
     }
 
     pub fn root(&self) -> &Path {
@@ -224,13 +220,7 @@ impl WorkspaceTree {
         &self.snapshot
     }
 
-    /// Increments only when the visible tree structure changes.
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
-    /// Apply a completed background scan, incrementing the visible generation
-    /// only when the tree structure changed.
+    /// Apply a completed background scan only when the tree structure changed.
     #[cfg(test)]
     pub fn apply_snapshot(&mut self, next: WorkspaceSnapshot) -> bool {
         self.apply_shared(Arc::new(next))
@@ -242,7 +232,6 @@ impl WorkspaceTree {
         }
 
         self.snapshot = next;
-        self.generation = self.generation.wrapping_add(1);
         true
     }
 }
@@ -531,25 +520,24 @@ mod tests {
     }
 
     #[test]
-    fn caches_until_refresh_and_tracks_structural_generations() {
+    fn caches_until_refresh_and_reuses_unchanged_structural_snapshots() {
         let project = TempProject::new("cache");
         project.file("main.typ", "first");
         let mut tree = workspace_tree(project.path());
-        assert_eq!(tree.generation(), 0);
 
         project.file("chapter.typ", "chapter");
         assert!(tree.shared_snapshot().find("chapter.typ").is_none());
         assert!(refresh_workspace_tree(&mut tree).unwrap());
         assert!(tree.shared_snapshot().find("chapter.typ").is_some());
-        assert_eq!(tree.generation(), 1);
+        let cached = tree.shared_snapshot().clone();
 
         assert!(!refresh_workspace_tree(&mut tree).unwrap());
-        assert_eq!(tree.generation(), 1);
+        assert!(Arc::ptr_eq(tree.shared_snapshot(), &cached));
 
         // Contents do not affect the filesystem panel's structural snapshot.
         project.file("main.typ", "second");
         assert!(!refresh_workspace_tree(&mut tree).unwrap());
-        assert_eq!(tree.generation(), 1);
+        assert!(Arc::ptr_eq(tree.shared_snapshot(), &cached));
     }
 
     #[test]
@@ -597,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_refresh_preserves_the_cached_snapshot_and_generation() {
+    fn a_failed_refresh_preserves_the_cached_snapshot() {
         let project = TempProject::new("failed-refresh");
         project.file("main.typ", "main");
         let mut tree = workspace_tree(project.path());
@@ -609,7 +597,6 @@ mod tests {
             io::ErrorKind::NotFound
         );
         assert_eq!(tree.shared_snapshot(), &cached);
-        assert_eq!(tree.generation(), 0);
     }
 
     #[test]

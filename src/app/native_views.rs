@@ -373,6 +373,12 @@ impl EditorApp {
         match requested_action {
             Some(TableEditorUiAction::Cancel) => self.cancel_table_editor(context),
             Some(TableEditorUiAction::Apply) => {
+                if self.overleaf_source_locked() {
+                    self.table_editor.as_mut().unwrap().set_error(
+                        "Wait for Overleaf to finish syncing before applying changes.".into(),
+                    );
+                    return;
+                }
                 if let Err(error) = self.validate_table_sample_locks() {
                     self.table_editor.as_mut().unwrap().set_error(error);
                     return;
@@ -509,8 +515,22 @@ impl EditorApp {
                 PathBuf::from("Recent/Research notes"),
             ]
         } else {
-            self.settings.existing_recent_workspaces()
+            self.settings
+                .existing_recent_workspaces()
+                .into_iter()
+                .filter(|root| !self.is_overleaf_path(root))
+                .collect()
         };
+        let recent_projects = if self.snapshot_scene.is_some() {
+            Vec::new()
+        } else {
+            self.settings
+                .overleaf_projects
+                .iter()
+                .map(|url| (url.clone(), self.overleaf_project_label(url)))
+                .collect::<Vec<_>>()
+        };
+        let mut selected_project = None;
         let mut selected = None;
         let mut removed = None;
         let mut choose_folder = false;
@@ -544,7 +564,7 @@ impl EditorApp {
                             ui.set_width(card_width);
                             let content_top = ui.next_widget_position().y;
                             ui.label(RichText::new("Change workspace root").strong());
-                            if !recent_workspaces.is_empty() {
+                            if !recent_workspaces.is_empty() || !recent_projects.is_empty() {
                                 ui.add_space(theme::SPACE.small);
                                 ui.label(
                                     RichText::new("Recent")
@@ -572,6 +592,15 @@ impl EditorApp {
                                         reserved,
                                     ))
                                     .show(ui, |ui| {
+                                        for (url, label) in &recent_projects {
+                                            let response = ui.add_sized(
+                                                [ui.available_width(), METRICS.menu.row_height],
+                                                egui::Button::new(label).truncate(),
+                                            );
+                                            if native_hover_text(response, url.clone()).clicked() {
+                                                selected_project = Some(url.clone());
+                                            }
+                                        }
                                         for path in &recent_workspaces {
                                             match show_recent_workspace_row(ui, path, card_width) {
                                                 Some(RecentWorkspaceAction::Open(path)) => {
@@ -597,7 +626,13 @@ impl EditorApp {
             },
         );
 
-        if let Some(path) = removed {
+        if let Some(url) = selected_project {
+            self.workspace_chooser_visible = false;
+            crate::window_host::return_focus(context);
+            if let Err(error) = self.open_overleaf_project_url(&url, None, context) {
+                self.show_file_error(error);
+            }
+        } else if let Some(path) = removed {
             self.forget_workspace(&path);
             context.request_repaint();
         } else if let Some(path) = selected {
@@ -1349,7 +1384,7 @@ impl EditorApp {
             interactive_preview: can_sync_preview,
             new_table: self.native_command_enabled(AppCommand::NewTable),
             edit_table: self.native_command_enabled(AppCommand::EditTable),
-            source_read_only: self.table_editor.is_some(),
+            source_read_only: self.table_editor.is_some() || self.overleaf_source_locked(),
             ..Default::default()
         };
         let layout_state = self.layout_menu_state();

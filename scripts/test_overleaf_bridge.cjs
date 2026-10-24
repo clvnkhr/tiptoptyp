@@ -585,3 +585,36 @@ test('bounded labels never split Unicode surrogate pairs or emit invalid identit
   peer(h, { name: '\ud800\u0000' }); h.flush(100);
   assert.equal(lastPresence(h).peers[0].name, 'Anonymous');
 });
+
+test('deferred native downloads refetch text and assets without activating or editing the hosted editor', async () => {
+  const h = harness(); h.project(); await h.settle();
+  const originalRequests = h.requests.length;
+  h.messages.length = 0;
+  h.sources.set(OTHER, 'Fresh background source.');
+  h.command({ command: 'download', id: OTHER, path: 'sections/intro.tex' });
+  h.command({ command: 'download', id: ASSET, path: 'figure.png' });
+  await h.settle();
+  assert.equal(h.requests.length, originalRequests + 2);
+  assert.equal(ofType(h, 'document').at(-1).id, OTHER);
+  assert.equal(ofType(h, 'document').at(-1).source, 'Fresh background source.');
+  assert.equal(ofType(h, 'file').at(-1).base64, 'AP9A');
+  assert.equal(h.view.state.doc.toString(), 'Main source.');
+  assert.equal(h.dispatches.length, 0);
+  assert.equal(h.window.navigated, undefined);
+  assert.equal(h.emitted.filter(value => value.event === 'applyOtUpdate').length, 0);
+  assert.ok(h.maxInflight() <= 2);
+});
+test('deferred native downloads reject stale epochs, stale paths, folders and unknown identities', async () => {
+  const h = harness(); h.project(); await h.settle();
+  const originalRequests = h.requests.length;
+  h.messages.length = 0;
+  h.command({ command: 'download', epoch: 6, id: OTHER, path: 'sections/intro.tex' });
+  h.command({ command: 'download', id: OTHER, path: 'old.tex' });
+  h.command({ command: 'download', id: FOLDER, path: 'sections' });
+  h.command({ command: 'download', id: id('9'), path: 'missing.tex' });
+  await h.settle();
+  assert.equal(h.requests.length, originalRequests);
+  assert.equal(ofType(h, 'error').length, 3);
+  assert.equal(h.dispatches.length, 0);
+  assert.equal(h.window.navigated, undefined);
+});

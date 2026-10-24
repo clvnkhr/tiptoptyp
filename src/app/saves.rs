@@ -44,7 +44,7 @@ impl EditorApp {
         if self.document_workflow.save_in_flight {
             return false;
         }
-        if super::overleaf::is_mirror_path(&path) {
+        if self.is_overleaf_path(&path) {
             return self.submit_overleaf_save(tab, &path, context);
         }
         let started = Instant::now();

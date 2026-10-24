@@ -299,11 +299,20 @@ impl EditorApp {
             .find(|spec| spec.shortcut_action == action)
         {
             return match action {
-                A::Undo => source_focus && self.editor_history_availability(context).0,
-                A::Redo => source_focus && self.editor_history_availability(context).1,
+                A::Undo => {
+                    source_focus
+                        && !self.overleaf_source_locked()
+                        && self.editor_history_availability(context).0
+                }
+                A::Redo => {
+                    source_focus
+                        && !self.overleaf_source_locked()
+                        && self.editor_history_availability(context).1
+                }
                 A::ToggleComment | A::Format | A::NewTable | A::EditTable => {
                     source_focus && self.native_command_enabled(spec.command)
                 }
+                A::Cut | A::Paste if source_focus && self.overleaf_source_locked() => false,
                 A::Cut | A::Copy | A::Paste | A::SelectAll => {
                     origin.terminal
                         || source_focus
@@ -344,7 +353,7 @@ impl EditorApp {
             | A::Minimize
             | A::ToggleFullscreen => true,
             A::NextTab | A::PreviousTab => self.tabs.len() > 1,
-            A::ToggleTexMode => source_focus && origin.tex_mode,
+            A::ToggleTexMode => source_focus && !self.overleaf_source_locked() && origin.tex_mode,
             A::UseTabForPreview => {
                 has_source && self.document().kind().typesetting_language().is_some()
             }
@@ -352,7 +361,8 @@ impl EditorApp {
                 source_focus && self.document().kind().is_typst() && self.settings.line_numbers
             }
             A::FindNext | A::FindPrevious => source_focus || origin.terminal,
-            A::ReplaceOne | A::ReplaceAll | A::ToggleFindCase | A::ToggleFindRegex => source_focus,
+            A::ReplaceOne | A::ReplaceAll => source_focus && !self.overleaf_source_locked(),
+            A::ToggleFindCase | A::ToggleFindRegex => source_focus,
             A::ToggleLineWrap | A::ToggleLineNumbers | A::ToggleStickyContext => has_source,
             A::PreviewZoomIn | A::PreviewZoomOut | A::PreviewZoomReset => {
                 !self.tabs.is_empty() && self.preview_visible()

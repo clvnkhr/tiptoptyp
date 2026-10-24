@@ -245,6 +245,9 @@ impl EditorApp {
             Some(full_view::Action::Previous) => self.navigate_document_diff(ui.ctx(), true),
             Some(full_view::Action::Next) => self.navigate_document_diff(ui.ctx(), false),
             Some(full_view::Action::RevertLine(index)) => {
+                if self.overleaf_source_locked() {
+                    return;
+                }
                 if let Some(text) = self
                     .document_diff
                     .as_ref()

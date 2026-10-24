@@ -58,6 +58,8 @@ fn fixture(root: &Path, context: &egui::Context) -> EditorApp {
         model,
         status: "Connected".into(),
         online: true,
+        storage: None,
+        hydration: Hydration::default(),
     });
     app.document_mut().replace_loaded_unprojected(
         "Main old\n".into(),
@@ -112,6 +114,9 @@ fn apply_work(
     epoch: u64,
     context: &egui::Context,
 ) {
+    // This helper dispatches new work now. Capture its generation before any
+    // filesystem effects, exactly as the production mirror worker does.
+    let hydration_session = app.overleaf.connection.as_ref().unwrap().hydration.session;
     let mirror = Mirror::open(root).unwrap();
     let result = match &work.data {
         MirrorData::Document(source) => mirror.write_document(&work.entry, source),
@@ -119,6 +124,7 @@ fn apply_work(
     };
     app.apply_overleaf_mirror(
         Mirrored {
+            hydration_session,
             epoch,
             tree: None,
             error: None,
@@ -421,13 +427,12 @@ fn connect_dialog_rejects_blank_and_typed_invalid_urls_without_a_browser() {
     assert!(harness.state().overleaf.browser.is_none());
     assert!(harness.state().overleaf.connection.is_none());
     let invalid = "http://www.overleaf.com/project/0123456789abcdef01234567";
-    harness
-        .get_by_role(egui::accesskit::Role::TextInput)
-        .click();
+    let url_field = egui_kittest::kittest::by()
+        .role(egui::accesskit::Role::TextInput)
+        .predicate(|node| node.placeholder() == Some("https://www.overleaf.com/project/…"));
+    harness.get(url_field.clone()).click();
     harness.run();
-    harness
-        .get_by_role(egui::accesskit::Role::TextInput)
-        .type_text(invalid);
+    harness.get(url_field).type_text(invalid);
     harness.run();
     assert_eq!(harness.state().overleaf.query, invalid);
     harness.get_by_label("Connect").click();
@@ -440,6 +445,7 @@ fn connect_dialog_rejects_blank_and_typed_invalid_urls_without_a_browser() {
     assert_eq!(app.overleaf.epoch, 0);
     assert_eq!(app.document().key(), original);
     assert_eq!(app.document().source(), "Local document");
+    assert_eq!(app.overleaf.storage_draft.as_ref().unwrap().directory, "");
 }
 
 #[test]
@@ -542,6 +548,7 @@ fn apply_pending_cache(app: &mut EditorApp, root: &Path, context: &egui::Context
         if app.overleaf.tree_pending.is_none() && app.overleaf.queued.is_empty() {
             return;
         }
+        let hydration_session = app.overleaf.connection.as_ref().unwrap().hydration.session;
         let tree = app.overleaf.tree_pending.take();
         let mirror = Mirror::open(root).unwrap();
         if let Some(tree) = &tree {
@@ -561,6 +568,7 @@ fn apply_pending_cache(app: &mut EditorApp, root: &Path, context: &egui::Context
             .collect();
         app.apply_overleaf_mirror(
             Mirrored {
+                hydration_session,
                 epoch: EPOCH,
                 tree,
                 error: None,
@@ -654,6 +662,7 @@ fn rename_during_ack_cache_completion_cannot_restore_an_obsolete_path() {
         .unwrap();
     app.apply_overleaf_mirror(
         Mirrored {
+            hydration_session: 0,
             epoch: EPOCH,
             tree: None,
             error: None,
@@ -802,9 +811,31 @@ fn save_as_local_copy_breaks_remote_entity_binding_and_is_not_retargeted() {
 #[test]
 fn reconnect_after_ack_before_cache_receipt_resets_only_the_old_save_transaction() {
     let directory = tempfile::tempdir().unwrap();
-    let root = directory.path().canonicalize().unwrap();
+    let base = directory.path().canonicalize().unwrap();
+    let project =
+        ProjectUrl::parse(&format!("https://www.overleaf.com/project/{PROJECT}")).unwrap();
+    let storage = crate::overleaf::StorageLease::prepare(
+        &project,
+        &crate::overleaf::StorageOptions {
+            keep_local_copy: true,
+            directory: Some(base.clone()),
+        },
+        &base,
+    )
+    .unwrap();
+    let root = storage.root().to_owned();
     let context = egui::Context::default();
     let mut app = fixture(&root, &context);
+    app.overleaf.connection.as_mut().unwrap().storage = Some(storage);
+    app.settings
+        .set_overleaf_storage_preference(
+            project.url(),
+            crate::settings::OverleafStoragePreference {
+                keep_local_copy: true,
+                directory: Some(base.to_string_lossy().into_owned()),
+            },
+        )
+        .unwrap();
     let tab = app.tabs.active_id().unwrap();
     let wire = pending_save(&mut app, tab, "a", "Old connection acknowledged\n");
     app.update_overleaf_event(
@@ -835,6 +866,7 @@ fn reconnect_after_ack_before_cache_receipt_resets_only_the_old_save_transaction
     let next_wire = pending_save(&mut app, tab, "a", "New connection draft\n");
     app.apply_overleaf_mirror(
         Mirrored {
+            hydration_session: 0,
             epoch: EPOCH,
             tree: None,
             error: None,
@@ -1007,7 +1039,15 @@ fn connect_url_field_clears_native_window_controls_at_every_ui_scale() {
             .ctx
             .memory(|memory| memory.area_rect(egui::Id::new(child)))
             .expect("the embedded connection window must exist");
-        let url = harness.get_by_role(egui::accesskit::Role::TextInput).rect();
+        let url = harness
+            .get(
+                egui_kittest::kittest::by()
+                    .role(egui::accesskit::Role::TextInput)
+                    .predicate(|node| {
+                        node.placeholder() == Some("https://www.overleaf.com/project/…")
+                    }),
+            )
+            .rect();
         let native_inset = (url.left() - window.left()) * zoom;
         assert!(
             native_inset >= 80.0,
@@ -1292,4 +1332,862 @@ fn working_alone_does_not_reindex_the_document_for_each_native_keystroke() {
         assert_eq!(app.overleaf.presence_cache.as_ref().unwrap().key, indexed);
         assert_ne!(app.document().key(), indexed);
     }
+}
+
+#[test]
+fn syncing_remote_source_rejects_typing_paste_and_find_replacement_but_keeps_selection() {
+    for diff in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let mut harness = editor_particles::tests::editor(false);
+        let context = harness.ctx.clone();
+        let mut app = fixture(&root, &context);
+        app.snapshot_scene = None;
+        app.settings.sticky_context_rows = false;
+        app.overleaf.connection.as_mut().unwrap().online = false;
+        if diff {
+            app.document_diff = Some(crate::git::editor::document_diff::DocumentDiff::new(
+                "Main before\n".into(),
+                app.document().source(),
+            ));
+        }
+        app.document_mut().set_history_reset(false);
+        app.pending_editor_selection = Some(EditorSelection::Focus(0..4));
+        *harness.state_mut() = app;
+        harness.run_steps(3);
+        assert!(harness.state().overleaf_source_locked());
+        let key = harness.state().document().key();
+        let source = harness.state().document().source().clone();
+        harness.event(egui::Event::Text("must not replace selection".into()));
+        harness.run_steps(1);
+        harness.event(egui::Event::Paste("must not paste".into()));
+        harness.run_steps(1);
+        assert_eq!(harness.state().document().source(), &source);
+        assert_eq!(harness.state().document().key(), key);
+        assert_eq!(harness.state().document_diff.is_some(), diff);
+        harness.state_mut().store_editor_cursor(
+            &context,
+            CCursorRange {
+                primary: CCursor::new(4),
+                secondary: CCursor::new(0),
+                ..Default::default()
+            },
+        );
+        let editor = source_editor_id(&context);
+        context.memory_mut(|memory| memory.request_focus(editor));
+        harness.key_press_modifiers(Modifiers::SHIFT, egui::Key::ArrowRight);
+        harness.run_steps(1);
+        assert_eq!(
+            harness
+                .state_mut()
+                .editor_snapshot(&context)
+                .cursor
+                .as_sorted_char_range(),
+            egui::text::CharIndex(0)..egui::text::CharIndex(5),
+        );
+        harness.event(egui::Event::Copy);
+        harness.run_steps(1);
+        assert!(
+            harness
+                .output()
+                .platform_output
+                .commands
+                .iter()
+                .any(|command| {
+                    matches!(command, egui::OutputCommand::CopyText(text) if text == "Main ")
+                })
+        );
+        let app = harness.state_mut();
+        app.find_bar.query = "Main".into();
+        app.find_bar.replacement = "Changed".into();
+        app.apply_find_actions(&context, false, false, true, false);
+        app.apply_find_actions(&context, false, false, false, true);
+        assert_eq!(app.document().source(), &source);
+        assert_eq!(app.document().key(), key);
+    }
+}
+
+#[test]
+fn syncing_remote_source_blocks_commands_and_generated_insertions_without_disabling_widget_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.overleaf.connection.as_mut().unwrap().online = false;
+    assert!(app.overleaf_source_locked());
+    let key = app.document().key();
+    let source = app.document().source().clone();
+    for spec in crate::native_menu::COMMAND_SPECS {
+        if !source_mutating_command(spec.command) {
+            continue;
+        }
+        if settings_window::is_widget_edit_command(spec.command) {
+            assert!(app.native_command_enabled(spec.command));
+        } else {
+            assert!(!app.native_command_enabled(spec.command));
+        }
+        app.execute_app_command(spec.command, &context, None);
+        assert_eq!(app.document().key(), key, "{:?}", spec.command);
+        assert_eq!(app.document().source(), &source, "{:?}", spec.command);
+    }
+    app.insert_editor_text(&context, "file dropped from Explorer");
+    app.insert_generated_symbol(
+        &context,
+        &crate::handwriting::Insertion {
+            text: "\\alpha".into(),
+            package: None,
+        },
+    );
+    assert_eq!(app.document().key(), key);
+    assert_eq!(app.document().source(), &source);
+    assert!(app.table_editor.is_none());
+    assert!(app.citation.is_none());
+}
+
+#[test]
+fn formatter_and_current_diagnostic_replies_cannot_edit_while_remote_source_is_syncing() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.overleaf.connection.as_mut().unwrap().online = false;
+    let key = app.document().key();
+    let source = app.document().source().clone();
+    app.format_request_key = Some(key);
+    app.manual_format_revision = Some(key.revision);
+    app.receive_formatted_document(&context, Generation(1), "file:///ignored", 0, None);
+    assert!(app.format_request_key.is_none());
+    assert!(app.manual_format_revision.is_none());
+    let diagnostic = Diagnostic {
+        correction: Some(crate::diagnostics::DiagnosticCorrection {
+            range: 0..4,
+            original: "Main".into(),
+            rule: None,
+            category: None,
+            replacements: vec!["Changed".into()],
+            document: Some(key),
+        }),
+        provider: Some("Harper".into()),
+        severity: DiagnosticSeverity::Help,
+        source: DiagnosticSource::Main,
+        location: Some(crate::diagnostics::DiagnosticLocation { line: 1, column: 1 }),
+        message: "Correction".into(),
+        details: Vec::new(),
+    };
+    assert!(
+        app.apply_diagnostic_correction(&diagnostic, 0, &context)
+            .is_err()
+    );
+    assert_eq!(app.document().key(), key);
+    assert_eq!(app.document().source(), &source);
+}
+
+#[test]
+fn local_document_remains_editable_while_a_parked_overleaf_project_is_syncing() {
+    let directory = tempfile::tempdir().unwrap();
+    let base = directory.path().canonicalize().unwrap();
+    let root = base.join("remote");
+    fs::create_dir(&root).unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.overleaf.connection.as_mut().unwrap().online = false;
+    app.document_mut().replace_loaded_unprojected(
+        "Local\n".into(),
+        base.join("local.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    assert!(!app.overleaf_source_locked());
+    app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(0)));
+    app.insert_editor_text(&context, "Allowed ");
+    assert_eq!(app.document().source(), "Allowed Local\n");
+}
+
+#[test]
+fn reconnect_rename_waits_for_fresh_remote_bytes_before_relocating_an_open_tab() {
+    for fresh in ["Main old\n", "Fresh remote revision\n"] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        let tab = app.tabs.active_id().unwrap();
+        app.overleaf.tab_entities.insert(tab, "a".into());
+        let connection = app.overleaf.connection.as_mut().unwrap();
+        connection.online = false;
+        connection.hydration.restart();
+        app.update_overleaf_event(listing(Some("renamed.tex")), &context)
+            .unwrap();
+        assert!(
+            app.overleaf.queued.is_empty(),
+            "the retained model baseline is not a fresh server snapshot"
+        );
+        assert_eq!(app.document().path().as_ref(), Some(&root.join("main.tex")));
+        assert!(!root.join("renamed.tex").exists());
+        assert!(app.overleaf_source_locked());
+        app.update_overleaf_event(
+            BrowserEvent::Document {
+                epoch: EPOCH,
+                id: "a".into(),
+                path: "renamed.tex".into(),
+                source: fresh.into(),
+            },
+            &context,
+        )
+        .unwrap();
+        let work = app
+            .overleaf
+            .queued
+            .front()
+            .expect("fresh bytes must be materialized, including unchanged contents");
+        assert_eq!(work.entry.id, "a");
+        assert_eq!(work.entry.path, "renamed.tex");
+        assert!(matches!(&work.data, MirrorData::Document(source) if source == fresh));
+        assert_eq!(app.document().path().as_ref(), Some(&root.join("main.tex")));
+    }
+}
+
+#[test]
+fn matching_old_session_mirror_receipts_cannot_complete_a_new_hydration_barrier() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    let tree = app
+        .overleaf
+        .connection
+        .as_ref()
+        .unwrap()
+        .model
+        .tree()
+        .unwrap()
+        .clone();
+    let hydration = &mut app.overleaf.connection.as_mut().unwrap().hydration;
+    let old_session = hydration.session;
+    hydration.restart();
+    hydration.reset(&tree);
+    let current_session = hydration.session;
+    let make_files = || {
+        tree.entries()
+            .iter()
+            .map(|entry| {
+                let source = if entry.id == "a" {
+                    "Main old\n"
+                } else {
+                    "Chapter old\n"
+                };
+                let result = Mirror::open(&root).unwrap().write_document(entry, source);
+                (
+                    MirrorWork {
+                        entry: entry.clone(),
+                        data: MirrorData::Document(source.into()),
+                        save: None,
+                    },
+                    result,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    app.apply_overleaf_mirror(
+        Mirrored {
+            epoch: EPOCH,
+            hydration_session: old_session,
+            tree: Some(tree.clone()),
+            error: None,
+            files: make_files(),
+        },
+        &context,
+    );
+    app.finish_overleaf_hydration(&context);
+    assert!(
+        app.overleaf_source_locked(),
+        "old matching tree and file receipts must not retire the new session"
+    );
+    app.apply_overleaf_mirror(
+        Mirrored {
+            epoch: EPOCH,
+            hydration_session: current_session,
+            tree: Some(tree),
+            error: None,
+            files: Vec::new(),
+        },
+        &context,
+    );
+    app.finish_overleaf_hydration(&context);
+    assert!(
+        app.overleaf_source_locked(),
+        "the new tree receipt alone cannot reuse old-session files"
+    );
+    let current_files = app
+        .overleaf
+        .connection
+        .as_ref()
+        .unwrap()
+        .model
+        .tree()
+        .unwrap()
+        .entries()
+        .iter()
+        .map(|entry| {
+            let source = if entry.id == "a" {
+                "Main old\n"
+            } else {
+                "Chapter old\n"
+            };
+            let result = Mirror::open(&root).unwrap().write_document(entry, source);
+            (
+                MirrorWork {
+                    entry: entry.clone(),
+                    data: MirrorData::Document(source.into()),
+                    save: None,
+                },
+                result,
+            )
+        })
+        .collect();
+    app.apply_overleaf_mirror(
+        Mirrored {
+            epoch: EPOCH,
+            hydration_session: current_session,
+            tree: None,
+            error: None,
+            files: current_files,
+        },
+        &context,
+    );
+    app.finish_overleaf_hydration(&context);
+    assert!(
+        !app.overleaf_source_locked(),
+        "fresh successful receipts must actually release editing"
+    );
+}
+
+#[test]
+fn rejected_or_unsent_refresh_preserves_pending_saves_passive_work_and_sync_readiness() {
+    for phase in 0..3 {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        let tab = app.tabs.active_id().unwrap();
+        if phase < 2 {
+            let wire = pending_save(&mut app, tab, "a", "Retained local save\n");
+            if phase == 1 {
+                app.update_overleaf_event(
+                    BrowserEvent::Ack {
+                        epoch: EPOCH,
+                        id: "a".into(),
+                        request: wire,
+                        source: "Retained local save\n".into(),
+                    },
+                    &context,
+                )
+                .unwrap();
+                assert!(app.overleaf.pending.is_none());
+                assert!(app.overleaf.save_active);
+            }
+        }
+        app.overleaf.queue(MirrorWork {
+            entry: entry("b", "chapter.tex", EntryKind::Doc),
+            data: MirrorData::Document("Chapter old\n".into()),
+            save: None,
+        });
+        let key = app.document().key();
+        let source = app.document().source().clone();
+        let pending = app.overleaf.pending.as_ref().map(|save| save.wire);
+        let save_active = app.overleaf.save_active;
+        let save_in_flight = app.document_workflow.save_in_flight;
+        let queued: Vec<_> = app
+            .overleaf
+            .queued
+            .iter()
+            .map(|work| (work.entry.clone(), work.save.is_some()))
+            .collect();
+        let connection = app.overleaf.connection.as_mut().unwrap();
+        connection.hydration.session = 17;
+        let status = connection.status.clone();
+        assert!(connection.online);
+        assert!(!connection.hydration.pending);
+        // There is deliberately no browser. The last case exercises failed
+        // dispatch, while the first two must refuse even to attempt refresh.
+        app.refresh_overleaf();
+        let connection = app.overleaf.connection.as_ref().unwrap();
+        assert!(connection.online, "phase {phase}");
+        assert!(!connection.hydration.pending, "phase {phase}");
+        assert_eq!(connection.hydration.session, 17);
+        assert_eq!(connection.status, status);
+        assert_eq!(app.overleaf.pending.as_ref().map(|save| save.wire), pending);
+        assert_eq!(app.overleaf.save_active, save_active);
+        assert_eq!(app.document_workflow.save_in_flight, save_in_flight);
+        assert_eq!(
+            app.overleaf
+                .queued
+                .iter()
+                .map(|work| (work.entry.clone(), work.save.is_some()))
+                .collect::<Vec<_>>(),
+            queued
+        );
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.document().source(), &source);
+        assert!(app.overleaf.error.is_some());
+    }
+}
+
+#[test]
+fn passive_mirror_queue_retains_large_project_listings_up_to_the_declared_entry_limit() {
+    let work = |index| MirrorWork {
+        entry: entry(
+            &format!("doc-{index}"),
+            &format!("part-{index}.tex"),
+            EntryKind::Doc,
+        ),
+        data: MirrorData::Document("x".into()),
+        save: None,
+    };
+    let mut state = State::default();
+    for index in 0..300 {
+        state.queue(work(index));
+    }
+    assert_eq!(
+        state.queued.len(),
+        300,
+        "a project with more than 256 tiny files must not silently lose downloads"
+    );
+    assert!(state.error.is_none());
+    // Fill the remaining fixture slots directly so testing the upper bound
+    // doesn't turn into a quadratic 10,000-enqueue performance workload.
+    state
+        .queued
+        .extend((300..crate::overleaf::MAX_ENTRIES - 1).map(work));
+    state.queue(work(crate::overleaf::MAX_ENTRIES - 1));
+    assert_eq!(state.queued.len(), crate::overleaf::MAX_ENTRIES);
+    assert!(state.error.is_none());
+    assert!(
+        state
+            .queued
+            .iter()
+            .enumerate()
+            .all(|(index, work)| work.entry.id == format!("doc-{index}"))
+    );
+    state.queue(work(crate::overleaf::MAX_ENTRIES));
+    assert_eq!(state.queued.len(), crate::overleaf::MAX_ENTRIES);
+    assert!(
+        state.error.is_some(),
+        "the declared project bound remains enforced"
+    );
+}
+
+#[test]
+fn delayed_project_and_file_publications_cannot_replace_a_newer_local_editor() {
+    for edit_before_project in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let base = directory.path().canonicalize().unwrap();
+        let remote = base.join("remote");
+        let local = base.join("local");
+        fs::create_dir(&remote).unwrap();
+        fs::create_dir(&local).unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&remote, &context);
+        app.workspace_root = local.clone();
+        let path = local.join("draft.tex");
+        app.document_mut().replace_loaded_unprojected(
+            "Local source\n".into(),
+            path.clone(),
+            DocumentKind::Tex,
+            None,
+        );
+        app.overleaf.connection.as_mut().unwrap().online = false;
+        app.overleaf.awaiting_project = true;
+        app.arm_overleaf_navigation();
+        if edit_before_project {
+            app.document_mut().edit(CCursorRange::default(), |source| {
+                source.push_str("new typing")
+            });
+        }
+        app.update_overleaf_event(listing(Some("main.tex")), &context)
+            .unwrap();
+        if edit_before_project {
+            assert_eq!(app.workspace_root, local);
+        } else {
+            assert_eq!(
+                app.workspace_root, remote,
+                "the authorized Project update advances its owner's expected workspace"
+            );
+            app.document_mut().edit(CCursorRange::default(), |source| {
+                source.push_str("new typing")
+            });
+        }
+        let key = app.document().key();
+        let source = app.document().source().clone();
+        app.update_overleaf_event(
+            BrowserEvent::Document {
+                epoch: EPOCH,
+                id: "a".into(),
+                path: "main.tex".into(),
+                source: "Fresh remote source\n".into(),
+            },
+            &context,
+        )
+        .unwrap();
+        let work = app.overleaf.queued.pop_front().unwrap();
+        apply_work(&mut app, work, &remote, EPOCH, &context);
+        assert_eq!(app.document().path().as_ref(), Some(&path));
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.document().source(), &source);
+        assert!(app.overleaf.open_after.is_none());
+        assert!(
+            app.overleaf.connection.is_some(),
+            "background sync remains connected independently of navigation"
+        );
+        assert_eq!(
+            fs::read_to_string(remote.join("main.tex")).unwrap(),
+            "Fresh remote source\n"
+        );
+    }
+}
+
+#[test]
+fn authorized_project_workspace_change_does_not_cancel_its_delayed_document_open() {
+    let directory = tempfile::tempdir().unwrap();
+    let base = directory.path().canonicalize().unwrap();
+    let remote = base.join("remote");
+    let local = base.join("local");
+    fs::create_dir(&remote).unwrap();
+    fs::create_dir(&local).unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&remote, &context);
+    app.workspace_root = local.clone();
+    app.document_mut().replace_loaded_unprojected(
+        "Local\n".into(),
+        local.join("draft.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    app.overleaf.connection.as_mut().unwrap().online = false;
+    app.overleaf.awaiting_project = true;
+    app.arm_overleaf_navigation();
+    app.overleaf.reopen_relative = Some((
+        format!("https://www.overleaf.com/project/{PROJECT}"),
+        EPOCH,
+        PathBuf::from("main.tex"),
+    ));
+    app.update_overleaf_event(listing(Some("main.tex")), &context)
+        .unwrap();
+    assert!(app.overleaf_navigation_current());
+    assert!(
+        app.overleaf.reopen_relative.is_none(),
+        "a relative reopen request is consumed by one project listing"
+    );
+    app.update_overleaf_event(
+        BrowserEvent::Document {
+            epoch: EPOCH,
+            id: "a".into(),
+            path: "main.tex".into(),
+            source: "Fresh remote\n".into(),
+        },
+        &context,
+    )
+    .unwrap();
+    let work = app.overleaf.queued.pop_front().unwrap();
+    apply_work(&mut app, work, &remote, EPOCH, &context);
+    assert_eq!(
+        app.document().path().as_ref(),
+        Some(&remote.join("main.tex"))
+    );
+    assert_eq!(app.document().source(), "Fresh remote\n");
+    assert_eq!(app.workspace_root, remote);
+    assert!(app.overleaf.navigation.is_none());
+}
+
+#[test]
+fn reconnect_uses_pending_storage_preferences_and_persists_same_storage_draft_changes() {
+    for use_draft in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let base = directory.path().canonicalize().unwrap();
+        let project =
+            ProjectUrl::parse(&format!("https://www.overleaf.com/project/{PROJECT}")).unwrap();
+        let lease = crate::overleaf::StorageLease::prepare(
+            &project,
+            &crate::overleaf::StorageOptions {
+                keep_local_copy: false,
+                directory: None,
+            },
+            &base,
+        )
+        .unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(lease.root(), &context);
+        app.overleaf.connection.as_mut().unwrap().storage = Some(lease);
+        let preference = crate::settings::OverleafStoragePreference {
+            keep_local_copy: false,
+            directory: Some(base.join("chosen-folder").to_string_lossy().into_owned()),
+        };
+        if use_draft {
+            app.settings
+                .set_overleaf_storage_preference(
+                    project.url(),
+                    crate::settings::OverleafStoragePreference {
+                        keep_local_copy: false,
+                        directory: None,
+                    },
+                )
+                .unwrap();
+            app.overleaf.storage_draft =
+                Some(storage_ui::StorageDraft::new(project.url(), &preference));
+        } else {
+            let mut pending = app.settings.clone();
+            pending
+                .set_overleaf_storage_preference(project.url(), preference.clone())
+                .unwrap();
+            app.pending_settings = Some(pending);
+        }
+        app.overleaf.query = project.url().into();
+        app.overleaf.reopen_relative = Some((
+            "https://www.overleaf.com/project/ffffffffffffffffffffffff".into(),
+            EPOCH,
+            PathBuf::from("chapter.tex"),
+        ));
+        app.connect_overleaf(&context).unwrap();
+        assert!(
+            app.overleaf.reopen_relative.is_none(),
+            "manual Connect clears another project's relative-file request"
+        );
+        assert_eq!(app.overleaf.epoch, EPOCH + 1);
+        assert_eq!(
+            app.pending_settings
+                .as_ref()
+                .unwrap()
+                .overleaf_storage_preference(project.url())
+                .unwrap(),
+            preference
+        );
+        assert!(
+            !app.overleaf.storage_job.is_running(),
+            "reusing the same temporary lease doesn't prepare another copy"
+        );
+    }
+}
+
+#[test]
+fn transport_disconnect_and_reconnect_requires_fresh_documents_and_assets_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    let entries = vec![
+        entry("a", "main.tex", EntryKind::Doc),
+        entry("b", "chapter.tex", EntryKind::Doc),
+        entry("image", "image.png", EntryKind::File),
+    ];
+    let project_event = || BrowserEvent::Project {
+        epoch: EPOCH,
+        project_id: PROJECT.into(),
+        name: "Remote paper".into(),
+        entries: entries.clone(),
+        root_doc: Some("a".into()),
+    };
+    let connection = app.overleaf.connection.as_mut().unwrap();
+    connection.model.apply(project_event()).unwrap();
+    let tree = connection.model.tree().unwrap().clone();
+    connection.hydration.reset(&tree);
+    connection.hydration.accept_tree(&tree);
+    for entry in tree.entries() {
+        connection.hydration.accept_file(entry);
+    }
+    connection.hydration.pending = false;
+    let prior_session = connection.hydration.session;
+    app.update_overleaf_event(
+        BrowserEvent::Status {
+            epoch: EPOCH,
+            state: "disconnected".into(),
+            message: None,
+        },
+        &context,
+    )
+    .unwrap();
+    assert!(app.overleaf_source_locked());
+    assert_ne!(
+        app.overleaf.connection.as_ref().unwrap().hydration.session,
+        prior_session
+    );
+    app.update_overleaf_event(
+        BrowserEvent::Status {
+            epoch: EPOCH,
+            state: "connected".into(),
+            message: None,
+        },
+        &context,
+    )
+    .unwrap();
+    app.update_overleaf_event(project_event(), &context)
+        .unwrap();
+    let session = app.overleaf.connection.as_ref().unwrap().hydration.session;
+    for (id, path, source) in [
+        ("a", "main.tex", "Main old\n"),
+        ("b", "chapter.tex", "Chapter old\n"),
+    ] {
+        app.update_overleaf_event(
+            BrowserEvent::Document {
+                epoch: EPOCH,
+                id: id.into(),
+                path: path.into(),
+                source: source.into(),
+            },
+            &context,
+        )
+        .unwrap();
+    }
+    let tree = app.overleaf.tree_pending.take().unwrap();
+    let mirror = Mirror::open(&root).unwrap();
+    mirror.apply_tree(&tree).unwrap();
+    let files = app
+        .overleaf
+        .queued
+        .drain(..)
+        .map(|work| {
+            let MirrorData::Document(source) = &work.data else {
+                panic!("only documents arrived");
+            };
+            let result = mirror.write_document(&work.entry, source);
+            (work, result)
+        })
+        .collect();
+    app.apply_overleaf_mirror(
+        Mirrored {
+            epoch: EPOCH,
+            hydration_session: session,
+            tree: Some(tree),
+            error: None,
+            files,
+        },
+        &context,
+    );
+    app.finish_overleaf_hydration(&context);
+    assert!(
+        app.overleaf_source_locked(),
+        "old asset completion cannot substitute for this session's download"
+    );
+    app.update_overleaf_event(
+        BrowserEvent::File {
+            epoch: EPOCH,
+            id: "image".into(),
+            path: "image.png".into(),
+            base64: "YQ==".into(),
+        },
+        &context,
+    )
+    .unwrap();
+    let work = app.overleaf.queued.pop_front().unwrap();
+    let MirrorData::File(base64) = &work.data else {
+        panic!("asset bytes");
+    };
+    let result = mirror.write_file(&work.entry, base64);
+    app.apply_overleaf_mirror(
+        Mirrored {
+            epoch: EPOCH,
+            hydration_session: session,
+            tree: None,
+            error: None,
+            files: vec![(work, result)],
+        },
+        &context,
+    );
+    app.finish_overleaf_hydration(&context);
+    assert!(!app.overleaf_source_locked());
+}
+
+#[test]
+fn stale_passive_receipt_cannot_requeue_an_old_baseline_under_a_fresh_remote_name() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    let tab = app.tabs.active_id().unwrap();
+    app.overleaf.tab_entities.insert(tab, "a".into());
+    let key = app.document().key();
+    let old_session = app.overleaf.connection.as_ref().unwrap().hydration.session;
+    let old_work = MirrorWork {
+        entry: entry("a", "main.tex", EntryKind::Doc),
+        data: MirrorData::Document("Main old\n".into()),
+        save: None,
+    };
+    let old_result = Mirror::open(&root)
+        .unwrap()
+        .write_document(&old_work.entry, "Main old\n");
+    let connection = app.overleaf.connection.as_mut().unwrap();
+    connection.online = false;
+    connection.hydration.restart();
+    app.update_overleaf_event(listing(Some("renamed.tex")), &context)
+        .unwrap();
+    assert!(app.overleaf.queued.is_empty());
+    app.apply_overleaf_mirror(
+        Mirrored {
+            epoch: EPOCH,
+            hydration_session: old_session,
+            tree: None,
+            error: None,
+            files: vec![(old_work, old_result)],
+        },
+        &context,
+    );
+    assert!(
+        app.overleaf.queued.is_empty(),
+        "retargeting an obsolete receipt must not republish its cached baseline as current work"
+    );
+    assert_eq!(app.document().key(), key);
+    assert_eq!(app.document().path().as_ref(), Some(&root.join("main.tex")));
+    assert_eq!(app.document().source(), "Main old\n");
+    assert!(!root.join("renamed.tex").exists());
+    app.finish_overleaf_hydration(&context);
+    assert!(app.overleaf_source_locked());
+    for (id, path, source) in [
+        ("a", "renamed.tex", "Fresh remote version\n"),
+        ("b", "chapter.tex", "Chapter old\n"),
+    ] {
+        app.update_overleaf_event(
+            BrowserEvent::Document {
+                epoch: EPOCH,
+                id: id.into(),
+                path: path.into(),
+                source: source.into(),
+            },
+            &context,
+        )
+        .unwrap();
+    }
+    let tree = app.overleaf.tree_pending.take().unwrap();
+    let session = app.overleaf.connection.as_ref().unwrap().hydration.session;
+    let mirror = Mirror::open(&root).unwrap();
+    mirror.apply_tree(&tree).unwrap();
+    let files = app
+        .overleaf
+        .queued
+        .drain(..)
+        .map(|work| {
+            let MirrorData::Document(source) = &work.data else {
+                panic!("document refresh");
+            };
+            let result = mirror.write_document(&work.entry, source);
+            (work, result)
+        })
+        .collect();
+    app.apply_overleaf_mirror(
+        Mirrored {
+            epoch: EPOCH,
+            hydration_session: session,
+            tree: Some(tree),
+            error: None,
+            files,
+        },
+        &context,
+    );
+    app.finish_overleaf_hydration(&context);
+    assert_eq!(
+        app.document().path().as_ref(),
+        Some(&root.join("renamed.tex"))
+    );
+    assert_eq!(app.document().source(), "Fresh remote version\n");
+    assert!(
+        !app.overleaf_source_locked(),
+        "fresh current-session receipts still complete the normal rename"
+    );
 }

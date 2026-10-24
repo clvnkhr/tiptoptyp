@@ -159,7 +159,7 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(unix)]
-mod unix {
+pub(super) mod unix {
     use super::*;
     use nix::libc;
     use std::{
@@ -203,12 +203,18 @@ mod unix {
         // SAFETY: openat returned a newly owned descriptor.
         Ok(unsafe { fs::File::from_raw_fd(fd) })
     }
-    pub(super) fn root_directory(root: &Path) -> io::Result<fs::File> {
+    pub(in crate::overleaf) fn root_directory(root: &Path) -> io::Result<fs::File> {
+        root_directory_with(root, true)
+    }
+    pub(in crate::overleaf) fn root_directory_existing(root: &Path) -> io::Result<fs::File> {
+        root_directory_with(root, false)
+    }
+    fn root_directory_with(root: &Path, create: bool) -> io::Result<fs::File> {
         let mut result = fs::File::open("/")?;
         for component in root.components() {
             match component {
                 Component::RootDir => {}
-                Component::Normal(part) => result = open_directory(&result, part, true)?,
+                Component::Normal(part) => result = open_directory(&result, part, create)?,
                 _ => return Err(io::Error::other("Mirror path must be normalized")),
             }
         }
@@ -236,7 +242,11 @@ mod unix {
         )?;
         Ok((parent, file))
     }
-    pub(super) fn read(root: &fs::File, path: &Path, cap: usize) -> io::Result<Vec<u8>> {
+    pub(in crate::overleaf) fn read(
+        root: &fs::File,
+        path: &Path,
+        cap: usize,
+    ) -> io::Result<Vec<u8>> {
         let (parent, file) = parent(root, path, false)?;
         // SAFETY: validated terminated filename under retained parent.
         let fd = unsafe {
@@ -276,7 +286,7 @@ mod unix {
             Err(io::Error::last_os_error())
         }
     }
-    pub(super) fn write(root: &fs::File, path: &Path, bytes: &[u8]) -> io::Result<()> {
+    pub(in crate::overleaf) fn write(root: &fs::File, path: &Path, bytes: &[u8]) -> io::Result<()> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let (parent, file) = parent(root, path, true)?;
         // An existing symlink is rejected explicitly; renameat also never

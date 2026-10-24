@@ -39,6 +39,9 @@ impl EditorApp {
         index: usize,
         context: &egui::Context,
     ) -> Result<(), String> {
+        if self.overleaf_source_locked() {
+            return Err("Wait for Overleaf to finish syncing before applying corrections.".into());
+        }
         if self.tabs.is_empty()
             || !self.document().kind().is_editable()
             || !self.diagnostic_targets_current_document(diagnostic)

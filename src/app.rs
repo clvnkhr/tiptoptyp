@@ -1689,7 +1689,10 @@ impl EditorApp {
             snapshot_scene.is_none() && initial_path.as_ref().is_some_and(|path| path.is_dir());
         let workspace_root = initial_workspace.root;
         let initial_document = initial_workspace.document;
-        if invalid_initial_path.is_none() {
+        if invalid_initial_path.is_none()
+            && !overleaf::is_mirror_path(&workspace_root)
+            && overleaf::reopen::known_project_for_path(&settings, &workspace_root).is_none()
+        {
             settings.remember_workspace(&workspace_root);
         }
         let applied_theme_request =
@@ -1962,14 +1965,21 @@ impl EditorApp {
                 kind: NoticeKind::Error,
             });
         }
-        if let Some(path) = invalid_initial_path {
+        app.overleaf.context = Some(context.clone());
+        app.prune_overleaf_workspace_history();
+        if let Some(path) = invalid_initial_path
+            && !app.intercept_overleaf_path(&path, context)
+        {
             app.notice = Some(Notice {
                 message: format!("{} does not exist", canonical_or_absolute(&path).display()),
                 kind: NoticeKind::Error,
             });
         }
 
-        if open_empty_workspace {
+        if open_empty_workspace && app.intercept_overleaf_path(&app.workspace_root.clone(), context)
+        {
+            // The server listing will establish this workspace after sign-in.
+        } else if open_empty_workspace {
             app.empty_workspace(context);
             app.refresh_workspace();
         } else if let Some(path) = initial_document {
@@ -2083,6 +2093,12 @@ impl EditorApp {
         if self.snippets_visible && self.snippet_window.lock().unwrap().focused {
             return snippet_window::accepts_native_command(command);
         }
+        if self.overleaf_source_locked()
+            && source_mutating_command(command)
+            && !settings_window::is_widget_edit_command(command)
+        {
+            return false;
+        }
         if self.tabs.is_empty() {
             let terminal_search = self.bottom_panel.selected() == Some(PanelTab::Terminal)
                 && !self.terminal.is_off()
@@ -2105,7 +2121,7 @@ impl EditorApp {
                 .document()
                 .path()
                 .as_ref()
-                .is_some_and(|path| !overleaf::is_mirror_path(path)),
+                .is_some_and(|path| !self.is_overleaf_path(path)),
             CommandRequirement::LocalVersions => {
                 crate::file_versions::AVAILABLE
                     && self.document().path().is_some()
@@ -2706,7 +2722,7 @@ impl EditorApp {
     }
 
     fn remember_open_document(&mut self, path: &Path) {
-        if overleaf::is_mirror_path(path) {
+        if self.is_overleaf_path(path) {
             return;
         }
         let Some(parent) = path.parent() else {
@@ -3707,7 +3723,9 @@ impl EditorApp {
             });
             return;
         }
-        if !self.native_command_enabled(command) {
+        if (self.overleaf_source_locked() && source_mutating_command(command))
+            || !self.native_command_enabled(command)
+        {
             return;
         }
         match command {
@@ -4516,7 +4534,7 @@ impl EditorApp {
                 context.request_repaint();
             }
             FileDropTarget::Folder(directory) => {
-                if overleaf::is_mirror_path(&directory) {
+                if self.is_overleaf_path(&directory) {
                     self.show_file_error("Manage Overleaf files in Overleaf; the working copy cannot import local files.".into());
                     return;
                 }
@@ -4600,6 +4618,12 @@ impl EditorApp {
     }
 
     fn queue_open_path(&mut self, path: PathBuf) {
+        if let Some(context) = self.overleaf.context.clone()
+            && self.intercept_overleaf_path(&path, &context)
+        {
+            self.workspace_chooser_visible = false;
+            return;
+        }
         let path = canonical_or_absolute(&path);
         let (action, description) = if path.is_dir() {
             (
@@ -4684,6 +4708,7 @@ impl EditorApp {
     }
 
     fn open_workspace_chooser(&mut self) {
+        self.prune_overleaf_workspace_history();
         self.workspace_chooser_visible = true;
     }
 
@@ -4764,6 +4789,11 @@ impl EditorApp {
     }
 
     fn finish_open_folder_selection(&mut self, folder: PathBuf) {
+        if let Some(context) = self.overleaf.context.clone()
+            && self.intercept_overleaf_path(&folder, &context)
+        {
+            return;
+        }
         let root = canonical_or_absolute(&folder);
         if !root.is_dir() {
             self.show_file_error(format!("{} is not a folder", root.display()));
@@ -4801,7 +4831,7 @@ impl EditorApp {
     }
 
     fn remember_workspace(&mut self, root: &Path) {
-        if overleaf::is_mirror_path(root) {
+        if self.is_overleaf_path(root) {
             return;
         }
         self.settings.remember_workspace(root);
@@ -4871,6 +4901,11 @@ impl EditorApp {
     }
 
     fn load_path(&mut self, path: PathBuf) -> bool {
+        if let Some(context) = self.overleaf.context.clone()
+            && self.intercept_overleaf_path(&path, &context)
+        {
+            return false;
+        }
         let started = Instant::now();
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
@@ -5812,7 +5847,7 @@ impl EditorApp {
         if !self.document().kind().is_editable() {
             return;
         }
-        if overleaf::is_mirror_path(&path) {
+        if self.is_overleaf_path(&path) {
             return;
         }
         let stamp = match external_file_stamp(&path) {
@@ -7316,6 +7351,9 @@ impl EditorApp {
     }
 
     fn undo_editor(&mut self, context: &egui::Context, redo: bool) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         self.snippet_session = None;
         if self.table_editor.is_some() {
             return;
@@ -7395,6 +7433,9 @@ impl EditorApp {
     }
 
     fn cut_editor_selection(&mut self, context: &egui::Context) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }
@@ -7423,6 +7464,9 @@ impl EditorApp {
     }
 
     fn request_editor_paste(&mut self, context: &egui::Context) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }
@@ -7451,6 +7495,9 @@ impl EditorApp {
     }
 
     fn toggle_comments(&mut self, context: &egui::Context) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }
@@ -7506,6 +7553,9 @@ impl EditorApp {
     }
 
     fn request_format_document(&mut self) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         self.format_after_math_conversion = None;
         self.activity.format_error = None;
         if self.table_editor.is_some() {
@@ -7603,6 +7653,11 @@ impl EditorApp {
         version: i32,
         edits: Option<Vec<LspTextEdit>>,
     ) {
+        if self.overleaf_source_locked() {
+            self.format_request_key = None;
+            self.manual_format_revision = None;
+            return;
+        }
         let Some(request_key) = self.format_request_key else {
             return;
         };
@@ -7703,6 +7758,9 @@ impl EditorApp {
     }
 
     fn begin_table_editor(&mut self, table: EditableTable) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }
@@ -7731,6 +7789,9 @@ impl EditorApp {
     }
 
     fn begin_new_table(&mut self, context: &egui::Context) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() || !self.document().kind().is_typst() {
             return;
         }
@@ -7754,7 +7815,7 @@ impl EditorApp {
     }
 
     fn begin_rename(&mut self, path: PathBuf) {
-        if overleaf::is_mirror_path(&path) {
+        if self.is_overleaf_path(&path) {
             self.show_file_error(
                 "Rename Overleaf files in Overleaf; the working copy follows its file tree.".into(),
             );
@@ -7901,6 +7962,9 @@ impl EditorApp {
                 self.follow_preview_link(&target)
             }
             AppPopupAction::Editor(EditorMenuAction::ConvertMath(target, choice)) => {
+                if self.overleaf_source_locked() {
+                    return;
+                }
                 if target.document_key != Some(self.document().key())
                     || self.document().source().get(target.range.clone())
                         != Some(target.original.as_str())
@@ -8029,6 +8093,9 @@ impl EditorApp {
         family: &str,
         context: &egui::Context,
     ) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }
@@ -8124,6 +8191,8 @@ impl EditorApp {
             "Theme gallery workspace".to_owned()
         } else if let Some((_, label)) = &remote {
             label.clone()
+        } else if let Some(label) = self.overleaf_workspace_label() {
+            label
         } else {
             self.workspace
                 .as_ref()
@@ -8137,7 +8206,6 @@ impl EditorApp {
             explorer_view::Input {
                 root: &explorer_root,
                 label: &label,
-                generation: workspace.map(WorkspaceTree::generation),
                 snapshot: workspace.map(WorkspaceTree::shared_snapshot),
                 read_only,
                 index: &self.project_index,
@@ -8499,6 +8567,9 @@ impl EditorApp {
     }
 
     fn request_editor_completion(&mut self, cursor: usize, anchor: Rect, explicit: bool) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }
@@ -8788,6 +8859,9 @@ impl EditorApp {
     }
 
     fn apply_editor_completion(&mut self, index: usize, context: &egui::Context) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }
@@ -9554,6 +9628,7 @@ impl EditorApp {
         self.poll_font_catalog(&context);
         self.poll_package_catalog(&context);
         self.sync_runtime_settings(&context);
+        self.poll_overleaf(&context);
         self.receive_compile_results();
         self.receive_asset_results(&context);
         self.update_image_residency();
@@ -9585,7 +9660,6 @@ impl EditorApp {
         self.execute_pending_app_popup_action(&context, frame);
         self.poll_hunk_action();
         self.poll_save(&context);
-        self.poll_overleaf(&context);
         self.poll_version_history(&context);
         self.tick_parked_autosave(&context);
         let drop_id = viewport_scoped_id(&context, "file-drop-target");
@@ -11973,6 +12047,7 @@ fn source_mutating_command(command: AppCommand) -> bool {
             | AppCommand::ComfyPreview
             | AppCommand::NewTable
             | AppCommand::EditTable
+            | AppCommand::ImportCitation
     )
 }
 

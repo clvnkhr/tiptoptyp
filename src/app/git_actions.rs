@@ -241,6 +241,9 @@ impl EditorApp {
             }
         };
         if action == Action::Revert {
+            if self.overleaf_source_locked() {
+                return;
+            }
             let replacement = hunks::revert(&source, &chunk.hunk).and_then(|text| {
                 self.document()
                     .project_canonical_change(

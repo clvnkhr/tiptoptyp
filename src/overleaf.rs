@@ -5,6 +5,7 @@
 mod mirror;
 mod model;
 mod presence;
+mod storage;
 
 pub(crate) use mirror::Mirror;
 pub(crate) use model::{Model, ModelChange};
@@ -14,11 +15,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
 };
+pub(crate) use storage::{StorageLease, StorageOptions, StoredProject, finish_temporary_cleanup};
 use unicode_normalization::UnicodeNormalization as _;
 
 pub(crate) const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_ENTRIES: usize = 10_000;
+pub(crate) const MAX_ENTRIES: usize = 10_000;
 // The browser IPC envelope is capped at 16 MiB. A retained listing must be
 // readable under the same bound on the next worker/session.
 const MAX_TREE_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
@@ -263,6 +265,11 @@ pub(crate) fn validate_path(path: &str) -> Result<PathBuf, String> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "lowercase")]
 pub(crate) enum BrowserCommand {
+    Download {
+        id: String,
+        path: String,
+        epoch: u64,
+    },
     Open {
         id: String,
         path: String,

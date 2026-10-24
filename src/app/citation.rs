@@ -195,6 +195,9 @@ fn citation_text(kind: DocumentKind, key: &str) -> String {
 }
 impl EditorApp {
     pub(super) fn begin_citation(&mut self, context: &egui::Context) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.document_flow_busy() {
             return;
         }
@@ -256,6 +259,11 @@ impl EditorApp {
             .collect()
     }
     fn insert_imported_citation(&mut self, target: &Target, key: &str) -> Result<(), String> {
+        if self.overleaf_source_locked() {
+            return Err(
+                "Citation saved; wait for Overleaf to finish syncing before inserting it.".into(),
+            );
+        }
         if self.tabs.is_empty() || self.document().key() != target.key {
             return Err(
                 "Citation saved; the document changed, so no citation was inserted.".into(),
@@ -391,6 +399,19 @@ impl EditorApp {
                 self.citation.as_mut().unwrap().lookup(context, dirty);
             }
             Some(Action::Import) => {
+                let destination = PathBuf::from(self.citation.as_ref().unwrap().destination.trim());
+                if self.is_overleaf_path(&canonical_or_absolute(&destination)) {
+                    self.citation.as_mut().unwrap().error = Some(
+                        "Import citations into the bibliography on Overleaf; local working copies follow the server.".into(),
+                    );
+                    return;
+                }
+                if self.overleaf_source_locked() {
+                    self.citation.as_mut().unwrap().error = Some(
+                        "Wait for Overleaf to finish syncing before importing citations.".into(),
+                    );
+                    return;
+                }
                 let dirty = self.dirty_bibliographies();
                 self.citation.as_mut().unwrap().import(context, dirty);
             }

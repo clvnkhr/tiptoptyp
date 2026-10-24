@@ -22,7 +22,6 @@ use std::{
 pub(super) struct Input<'a> {
     pub root: &'a Path,
     pub label: &'a str,
-    pub generation: Option<u64>,
     pub snapshot: Option<&'a Arc<WorkspaceSnapshot>>,
     pub index: &'a ProjectIndex,
     pub active: Option<&'a Path>,
@@ -77,7 +76,6 @@ pub(super) fn show(
             FileDropTarget::Folder(input.root.to_owned()),
         );
     }
-    let label = input.label;
     let mut output = Output::default();
     theme::panel_header(ui, "workspace-header", |ui| {
         let action_width = METRICS.explorer.header_refresh_width;
@@ -93,14 +91,7 @@ pub(super) fn show(
             .truncate()
             .sense(Sense::click()),
         );
-        let mut hover = input.generation.map_or_else(
-                || format!("{label}\nDouble-click to change workspace root"),
-                |generation| {
-                    format!(
-                        "{label}\nFilesystem snapshot generation {generation}\nDouble-click to change workspace root"
-                    )
-                },
-            );
+        let mut hover = input.root.display().to_string();
         if let Some(warning) = input.index.warning() {
             hover.push_str("\nSome Explorer entries could not be discovered.\n");
             hover.push_str(warning);
@@ -1919,7 +1910,6 @@ mod read_only_tests {
                         Input {
                             root: &root,
                             label: "Overleaf project",
-                            generation: Some(1),
                             snapshot: Some(&snapshot),
                             index: &index,
                             active: None,

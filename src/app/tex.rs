@@ -337,6 +337,11 @@ impl EditorApp {
         key: DocumentKey,
         edits: Option<Vec<LspTextEdit>>,
     ) {
+        if self.overleaf_source_locked() {
+            self.format_request_key = None;
+            self.manual_format_revision = None;
+            return;
+        }
         if self.format_request_key != Some(key) || self.document().key() != key {
             return;
         }
@@ -380,6 +385,9 @@ impl EditorApp {
     }
 
     pub(super) fn request_tex_format(&mut self) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         self.activity.format_error = None;
         // mark_edited runs before actions; refuse an out-of-date service snapshot.
         if self

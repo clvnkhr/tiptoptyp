@@ -821,6 +821,13 @@
             else if (entry.kind === 'file') { downloadQueue.add(entry.id); pumpDownloads(); }
             break;
           }
+          case 'download': {
+            const entry = entries.get(command.id);
+            if (!entry || entry.path !== command.path || entry.kind === 'folder') throw new Error('This Overleaf file is no longer in the project.');
+            downloadQueue.add(entry.id);
+            pumpDownloads();
+            break;
+          }
           case 'refresh':
             if (pending) throw new Error('Wait for the current Overleaf edit to finish saving.');
             window.location.reload();

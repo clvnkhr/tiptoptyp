@@ -157,6 +157,9 @@ fn main() -> eframe::Result {
     let profile = performance::Session::from_env()
         .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()))?;
     let result = run(profile.persistence_path());
+    if !overleaf::finish_temporary_cleanup(std::time::Duration::from_secs(10)) {
+        eprintln!("tiptoptyp: temporary Overleaf cleanup did not finish before shutdown");
+    }
     let recorded = profile
         .finish()
         .map_err(|error| eframe::Error::AppCreation(std::io::Error::other(error).into()));

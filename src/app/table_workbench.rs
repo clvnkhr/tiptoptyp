@@ -103,6 +103,9 @@ impl EditorApp {
         crate::window_host::return_focus(context);
     }
     pub(super) fn begin_table_target(&mut self, target: TableTarget) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.table_editor.is_some() {
             return;
         }

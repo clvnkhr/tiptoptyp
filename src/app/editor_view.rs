@@ -27,6 +27,9 @@ impl EditorApp {
     }
 
     pub(super) fn insert_editor_text(&mut self, context: &egui::Context, text: &str) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         let snapshot = self.editor_snapshot(context);
         let range = snapshot.cursor.as_sorted_char_range();
         let start = snapshot
@@ -53,7 +56,8 @@ impl EditorApp {
         context: &egui::Context,
         symbol: &crate::handwriting::Insertion,
     ) {
-        if self.table_editor.is_some()
+        if self.overleaf_source_locked()
+            || self.table_editor.is_some()
             || self.tool_dialog_open()
             || self.version_history.is_some()
             || self.liquid.visible()
@@ -97,8 +101,10 @@ impl EditorApp {
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let source = self.tabs.current_record().document.source();
         let document_key = self.document().key();
-        let enabled =
-            self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible();
+        let enabled = self.table_editor.is_none()
+            && !self.tool_dialog_open()
+            && !self.liquid.visible()
+            && !self.overleaf_source_locked();
         let actions = {
             let _queued = crate::child_view::begin_queued_edit_events(
                 ui.ctx(),
@@ -153,7 +159,10 @@ impl EditorApp {
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
         if replace_one
-            && (self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible())
+            && (self.table_editor.is_none()
+                && !self.tool_dialog_open()
+                && !self.liquid.visible()
+                && !self.overleaf_source_locked())
         {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
@@ -185,7 +194,10 @@ impl EditorApp {
             }
         }
         if replace_all
-            && (self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible())
+            && (self.table_editor.is_none()
+                && !self.tool_dialog_open()
+                && !self.liquid.visible()
+                && !self.overleaf_source_locked())
         {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
@@ -216,6 +228,10 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
+        if self.overleaf_source_locked() {
+            self.editor_completion = None;
+            self.snippet_session = None;
+        }
         if self.version_history.is_some() {
             self.show_version_history_panel(ui);
             return;
@@ -231,7 +247,7 @@ impl EditorApp {
             // Render the normal editor in this same pass. An empty return
             // lets egui shrink the resizable side panel to its minimum.
         }
-        if self.document_diff.is_some() {
+        if self.document_diff.is_some() && !self.overleaf_source_locked() {
             self.show_document_diff(ui);
             return;
         }
@@ -242,11 +258,12 @@ impl EditorApp {
             ui.horizontal_wrapped(|ui| {
                 ui.weak(format!(
                     "Outside this workspace: {}",
-                    self.workspace_root.display()
+                    self.overleaf_workspace_label()
+                        .unwrap_or_else(|| self.workspace_root.display().to_string())
                 ));
                 if ui
                     .button("Switch to this workspace root")
-                    .on_hover_text(path.parent().unwrap_or(&path).display().to_string())
+                    .on_hover_text(self.document_location_label(path.parent().unwrap_or(&path)))
                     .clicked()
                 {
                     let root = discover_project_root(path.parent().unwrap_or(&path));
@@ -259,7 +276,10 @@ impl EditorApp {
             .ctx()
             .data_mut(|data| data.remove_temp::<(PathBuf, Pos2)>(drop_id))
             && ui.max_rect().contains(position)
-            && (self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible())
+            && (self.table_editor.is_none()
+                && !self.tool_dialog_open()
+                && !self.liquid.visible()
+                && !self.overleaf_source_locked())
         {
             let text = self
                 .document()
@@ -274,8 +294,21 @@ impl EditorApp {
         }
 
         let _span = crate::performance::span("ui.source");
-        let read_only =
-            self.table_editor.is_some() || self.tool_dialog_open() || self.liquid.visible();
+        let read_only = self.overleaf_source_locked()
+            || self.table_editor.is_some()
+            || self.tool_dialog_open()
+            || self.liquid.visible();
+        if self.overleaf_source_locked() {
+            let open = ui
+                .horizontal(|ui| {
+                    ui.weak("Overleaf · read-only until synced");
+                    ui.small_button("Open Overleaf").clicked()
+                })
+                .inner;
+            if open {
+                self.begin_overleaf(ui.ctx());
+            }
+        }
         if self.table_editor.is_some() {
             egui::Frame::new()
                 .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.15))
@@ -1497,8 +1530,10 @@ impl EditorApp {
         let mut actions = find_bar::FindBarActions::default();
         let source = self.tabs.current_record().document.source();
         let key = self.document().key();
-        let editable =
-            self.table_editor.is_none() && !self.tool_dialog_open() && !self.liquid.visible();
+        let editable = self.table_editor.is_none()
+            && !self.tool_dialog_open()
+            && !self.liquid.visible()
+            && !self.overleaf_source_locked();
         let shortcuts = self.settings.effective_shortcuts();
         let allow_requested_paste = self
             .pending_widget_paste

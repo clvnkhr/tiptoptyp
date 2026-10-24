@@ -103,6 +103,60 @@ document revision are discarded and refreshed. There are no periodic project
 polls after setup. Setup polling is bounded to 30 seconds; each download is bounded
 to 30 seconds, 4 MiB of UTF-8 source or 8 MiB of binary data. IPC is capped at
 16 MiB. Failed downloads are reported instead of retried indefinitely.
+The native write queue is bounded to 64 MiB. If a burst exceeds that budget,
+only the affected file identities are retained; after writes drain, those files
+are downloaded again one at a time without activating the hosted editor. A
+second overflow or a 35-second retry timeout is reported rather than looping.
+
+## Local-copy storage and reopening
+
+The connection window has a project-specific **Keep local copy** choice. It is
+on by default. With no custom folder, macOS uses
+`~/Library/Application Support/dev.tiptoptyp.editor/overleaf/`; other platforms
+use their application-data directory. A chosen folder is a **base**, not the
+project root: the app appends `<origin-hash>-<project-id>` so projects from
+different Overleaf servers cannot share a mirror accidentally. Preparing folders
+and the file picker do not block the UI. Changing the folder or storage mode
+requires closing that project's open tabs first.
+
+Settings JSON exposes the choices in `overleaf_storage`, keyed by canonical
+project URL. Each value contains `keep_local_copy` and nullable `directory`.
+At most 32 explicit project preferences are retained. Folder paths must be
+absolute and contain no control characters; validation normalizes `.` and `..`
+without filesystem work on the UI thread. Authentication still lives only in the
+WebView's separate browser-data store.
+
+Turning local copies off creates a unique private temporary directory. The UI
+uses the project name and project-relative file labels instead of showing its
+physical path; hovering the workspace root reveals that path. Managed mirrors
+are excluded from ordinary local-workspace and last-file history. The project
+URL, rather than a disposable folder path, is the durable recent-project entry.
+The temporary directory stays alive while its workspace, tabs, unsynced drafts,
+or mirror jobs still need it. Releasing the last lease schedules deletion on a
+background worker. Selected base folders and persistent copies are never removed
+by that cleanup. Normal shutdown waits up to ten seconds for outstanding cleanup
+and reports an incomplete cleanup; forced termination can leave temporary files.
+
+Each managed root has a bounded version-1 descriptor at
+`.tiptoptyp/overleaf-project.json` containing its project URL and persistence
+mode, without credentials. Secure descriptor discovery is bounded and runs on an
+explicit-open worker. A reopened managed root or a contained file reconnects to
+its project instead of treating old disk contents as an ordinary local document.
+Configured and previous default roots are also recognized without per-frame
+filesystem probes. Discovery cannot steal navigation from an editor that changed
+while the worker was running. Missing authentication or a sync failure leaves
+managed source unavailable for editing; it never silently admits the cached copy.
+
+Connecting and reconnecting start an editing barrier. The latest project tree,
+all current text documents, and binary assets must be obtained from the server,
+accepted for the current connection generation, and successfully written to the
+working copy before the project becomes **Ready**. Stale tree/file receipts,
+including receipts from before a rename or reconnect, cannot open that barrier.
+Native typing, paste, replacement, generated insertions and formatter replies
+cannot mutate locked source, while selection and ordinary widget editing remain
+available. Existing unsynced drafts continue to use the conflict-preserving save
+rules above. The mirror remains a compiler/LSP input; Overleaf remains the source
+of truth whether the local files are retained or temporary.
 
 ## Hosted frontend resource use
 

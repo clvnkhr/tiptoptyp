@@ -236,6 +236,9 @@ enum Action {
 
 impl EditorApp {
     pub(super) fn begin_liquid_check(&mut self, target: BoundSelection, context: &egui::Context) {
+        if self.overleaf_source_locked() {
+            return;
+        }
         if self.document_flow_busy() || self.liquid.busy() {
             return;
         }
@@ -468,6 +471,9 @@ impl EditorApp {
         edits: &[SourceEdit],
         _context: &egui::Context,
     ) -> Result<(), String> {
+        if self.overleaf_source_locked() {
+            return Err("Wait for Overleaf to finish syncing before applying corrections.".into());
+        }
         if self.tabs.is_empty()
             || !target.current(self.document().key())
             || target.snapshot.source() != self.document().source()

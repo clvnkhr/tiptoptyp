@@ -681,6 +681,9 @@ impl EditorApp {
     }
 
     pub(super) fn open_tab_path(&mut self, path: PathBuf, context: &egui::Context) -> bool {
+        if self.intercept_overleaf_path(&path, context) {
+            return false;
+        }
         self.open_tab_path_with(canonical_or_absolute(&path), context, |app, path| {
             app.load_path(path)
         })
@@ -691,6 +694,9 @@ impl EditorApp {
         path: PathBuf,
         context: &egui::Context,
     ) -> bool {
+        if self.intercept_overleaf_path(&path, context) {
+            return false;
+        }
         let started = Instant::now();
         let Some((source, kind)) = crate::git::repository::diff::read_editable_source(&path) else {
             return false;
@@ -1040,7 +1046,7 @@ impl EditorApp {
                                                 response.clone(),
                                                 document.path().as_ref().map_or_else(
                                                     || "Unsaved document".into(),
-                                                    |path| path.display().to_string(),
+                                                    |path| self.document_location_label(path),
                                                 ),
                                             );
                                         }

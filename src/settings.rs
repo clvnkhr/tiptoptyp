@@ -605,6 +605,66 @@ impl ToolbarStyle {
     }
 }
 
+pub(crate) const MAX_OVERLEAF_STORAGE_PREFERENCES: usize = 32;
+
+/// Storage belongs to a project, independently of its recent-project ordering.
+/// `directory` is a base folder; each project receives its own namespaced child.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct OverleafStoragePreference {
+    pub(crate) keep_local_copy: bool,
+    pub(crate) directory: Option<String>,
+}
+
+impl Default for OverleafStoragePreference {
+    fn default() -> Self {
+        Self {
+            keep_local_copy: true,
+            directory: None,
+        }
+    }
+}
+
+impl OverleafStoragePreference {
+    /// Validate without probing or creating directories on the UI thread.
+    pub(crate) fn normalized(mut self) -> Result<Self, String> {
+        if let Some(directory) = self.directory.as_mut() {
+            if directory.trim().is_empty() {
+                return Err("directory: enter an absolute folder path, or use null for the default location".into());
+            }
+            if directory.len() > 4096 || directory.chars().any(char::is_control) {
+                return Err(
+                    "directory: use a folder path of at most 4096 bytes without control characters"
+                        .into(),
+                );
+            }
+            let path = Path::new(directory);
+            if !path.is_absolute() {
+                return Err(
+                    "directory: enter an absolute folder path, such as /Users/me/Overleaf".into(),
+                );
+            }
+            let mut normalized = PathBuf::new();
+            for component in path.components() {
+                match component {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        if !matches!(
+                            normalized.components().next_back(),
+                            Some(Component::RootDir | Component::Prefix(_))
+                        ) {
+                            normalized.pop();
+                        }
+                    }
+                    _ => normalized.push(component.as_os_str()),
+                }
+            }
+            *directory = normalized.to_string_lossy().into_owned();
+        }
+        Ok(self)
+    }
+}
+
 /// Persisted user choices for the current settings schema.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AppSettings {
@@ -749,6 +809,9 @@ pub(crate) struct AppSettings {
     /// Verified Overleaf project URLs, newest first. Authentication stays in WebKit.
     #[serde(default, deserialize_with = "deserialize_overleaf_projects")]
     pub(crate) overleaf_projects: Vec<String>,
+    /// Project-specific local copies. The default keeps a copy in Application Support.
+    #[serde(default, deserialize_with = "deserialize_overleaf_storage")]
+    pub(crate) overleaf_storage: BTreeMap<String, OverleafStoragePreference>,
     /// Most recently used canonical workspace roots, newest first.
     pub(crate) recent_workspaces: Vec<String>,
     /// Last successfully opened source document, keyed by canonical project root.
@@ -840,6 +903,7 @@ impl Default for AppSettings {
             shortcut_overrides: ShortcutOverrides::default(),
             typst_overrides: TypstOverrideThemes::default(),
             overleaf_projects: Vec::new(),
+            overleaf_storage: BTreeMap::new(),
             recent_workspaces: Vec::new(),
             last_opened_files: BTreeMap::new(),
             typst: ToolPreference::for_tool(crate::toolchain::ToolKind::Typst),
@@ -863,11 +927,27 @@ impl AppSettings {
     /// Apply only the fields changed in an independently rendered Settings
     /// window. Preserve newer document history and edits from sibling windows.
     pub(crate) fn apply_edits(&mut self, base: &Self, edited: Self) {
+        // Merge each project independently: two windows can change different
+        // storage choices while project history continues updating separately.
+        for url in base.overleaf_storage.keys() {
+            if !edited.overleaf_storage.contains_key(url) {
+                self.overleaf_storage.remove(url);
+            }
+        }
+        for (url, preference) in &edited.overleaf_storage {
+            if base.overleaf_storage.get(url) != Some(preference)
+                && (self.overleaf_storage.contains_key(url)
+                    || self.overleaf_storage.len() < MAX_OVERLEAF_STORAGE_PREFERENCES)
+            {
+                self.overleaf_storage
+                    .insert(url.clone(), preference.clone());
+            }
+        }
         macro_rules! merge {
             ($($field:ident),+ $(,)?) => {
                 // Exhaustive destructuring makes adding a setting without
                 // considering deferred edits a compile error.
-                let Self { $($field),+ } = edited;
+                let Self { overleaf_storage: _, $($field),+ } = edited;
                 $(if $field != base.$field { self.$field = $field; })+
             };
         }
@@ -980,6 +1060,41 @@ impl AppSettings {
         Ok(())
     }
 
+    pub(crate) fn overleaf_storage_preference(
+        &self,
+        url: &str,
+    ) -> Result<OverleafStoragePreference, String> {
+        let project = crate::overleaf::ProjectUrl::parse(url)?;
+        Ok(self
+            .overleaf_storage
+            .get(project.url())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub(crate) fn set_overleaf_storage_preference(
+        &mut self,
+        url: &str,
+        preference: OverleafStoragePreference,
+    ) -> Result<(), String> {
+        let project = crate::overleaf::ProjectUrl::parse(url)?;
+        let preference = preference.normalized()?;
+        if preference == OverleafStoragePreference::default() {
+            self.overleaf_storage.remove(project.url());
+            return Ok(());
+        }
+        if !self.overleaf_storage.contains_key(project.url())
+            && self.overleaf_storage.len() >= MAX_OVERLEAF_STORAGE_PREFERENCES
+        {
+            return Err(format!(
+                "overleaf_storage: keep settings for at most {MAX_OVERLEAF_STORAGE_PREFERENCES} projects"
+            ));
+        }
+        self.overleaf_storage
+            .insert(project.url().to_owned(), preference);
+        Ok(())
+    }
+
     /// Move a successfully opened workspace to the front of the recent list.
     ///
     /// Canonicalize the root once at the point it enters MRU history so path
@@ -1089,6 +1204,39 @@ impl AppSettings {
     pub(crate) fn effective_shortcuts(&self) -> ShortcutBindings {
         ShortcutBindings::current(&self.shortcut_overrides)
     }
+}
+
+fn deserialize_overleaf_storage<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, OverleafStoragePreference>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let preferences = BTreeMap::<String, OverleafStoragePreference>::deserialize(deserializer)?;
+    if preferences.len() > MAX_OVERLEAF_STORAGE_PREFERENCES {
+        return Err(serde::de::Error::custom(format!(
+            "keep storage settings for at most {MAX_OVERLEAF_STORAGE_PREFERENCES} projects"
+        )));
+    }
+    preferences
+        .into_iter()
+        .enumerate()
+        .map(|(index, (url, preference))| {
+            let field = format!("Overleaf storage entry {}", index + 1);
+            let project = crate::overleaf::ProjectUrl::parse(&url)
+                .map_err(|error| serde::de::Error::custom(format!("{field}: {error}")))?;
+            if project.url() != url {
+                return Err(serde::de::Error::custom(format!(
+                    "{field}: use the canonical project URL {}",
+                    project.url()
+                )));
+            }
+            let preference = preference
+                .normalized()
+                .map_err(|error| serde::de::Error::custom(format!("{field}.{error}")))?;
+            Ok((url, preference))
+        })
+        .collect()
 }
 
 fn deserialize_overleaf_projects<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -1505,6 +1653,13 @@ mod tests {
             overleaf_projects: vec![
                 "https://www.overleaf.com/project/0123456789abcdef01234567".into(),
             ],
+            overleaf_storage: BTreeMap::from([(
+                "https://www.overleaf.com/project/0123456789abcdef01234567".into(),
+                OverleafStoragePreference {
+                    keep_local_copy: true,
+                    directory: Some("/workspace/overleaf".into()),
+                },
+            )]),
             recent_workspaces: vec!["/workspace".to_owned()],
             typst: ToolPreference {
                 command: Default::default(),
@@ -2167,6 +2322,212 @@ mod tests {
         assert!(current.tex_preview_follow_edits);
         assert!(!current.preview_follow_edits);
         assert!(!current.auto_save);
+    }
+
+    #[test]
+    fn overleaf_storage_defaults_persist_and_reset_without_changing_project_history() {
+        let project = "https://www.overleaf.com/project/0123456789abcdef01234567";
+        let mut settings = AppSettings::default();
+        assert!(settings.overleaf_storage.is_empty());
+        assert_eq!(
+            settings.overleaf_storage_preference(project).unwrap(),
+            OverleafStoragePreference::default()
+        );
+        let preference = OverleafStoragePreference {
+            keep_local_copy: false,
+            directory: Some("/workspace/one/../overleaf/".into()),
+        };
+        settings
+            .set_overleaf_storage_preference(project, preference)
+            .unwrap();
+        settings.remember_overleaf_project(project).unwrap();
+        let expected = OverleafStoragePreference {
+            keep_local_copy: false,
+            directory: Some("/workspace/overleaf".into()),
+        };
+        assert_eq!(
+            settings.overleaf_storage_preference(project).unwrap(),
+            expected
+        );
+        let mut storage = MemoryStorage::default();
+        settings.save(&mut storage);
+        assert_eq!(
+            AppSettings::load(Some(&storage))
+                .unwrap()
+                .overleaf_storage_preference(project)
+                .unwrap(),
+            expected
+        );
+        settings
+            .set_overleaf_storage_preference(
+                "https://WWW.OVERLEAF.COM/project/0123456789ABCDEF01234567/",
+                OverleafStoragePreference::default(),
+            )
+            .unwrap();
+        assert!(settings.overleaf_storage.is_empty());
+        assert_eq!(settings.overleaf_projects, [project]);
+        let mut value = serde_json::to_value(settings).unwrap();
+        value.as_object_mut().unwrap().remove("overleaf_storage");
+        assert!(
+            crate::settings_json::parse(&value.to_string())
+                .unwrap()
+                .overleaf_storage
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn overleaf_storage_merges_different_projects_and_history_independently() {
+        let first = "https://www.overleaf.com/project/000000000000000000000001";
+        let second = "https://www.overleaf.com/project/000000000000000000000002";
+        let preference = OverleafStoragePreference {
+            keep_local_copy: false,
+            directory: None,
+        };
+        let base = AppSettings::default();
+        let mut current = base.clone();
+        current
+            .set_overleaf_storage_preference(first, preference.clone())
+            .unwrap();
+        current.remember_overleaf_project(first).unwrap();
+        let mut edited = base.clone();
+        edited
+            .set_overleaf_storage_preference(second, preference.clone())
+            .unwrap();
+        current.apply_edits(&base, edited);
+        assert_eq!(current.overleaf_storage.len(), 2);
+        assert_eq!(current.overleaf_projects, [first]);
+        let base = current.clone();
+        let mut reset_first = base.clone();
+        reset_first
+            .set_overleaf_storage_preference(first, OverleafStoragePreference::default())
+            .unwrap();
+        let changed = OverleafStoragePreference {
+            keep_local_copy: true,
+            directory: Some("/workspace/other".into()),
+        };
+        current
+            .set_overleaf_storage_preference(second, changed.clone())
+            .unwrap();
+        current.apply_edits(&base, reset_first);
+        assert_eq!(
+            current.overleaf_storage_preference(first).unwrap(),
+            OverleafStoragePreference::default()
+        );
+        assert_eq!(
+            current.overleaf_storage_preference(second).unwrap(),
+            changed
+        );
+    }
+
+    #[test]
+    fn overleaf_storage_rejects_unsafe_paths_and_urls_atomically() {
+        let project = "https://www.overleaf.com/project/0123456789abcdef01234567";
+        let mut settings = AppSettings::default();
+        for directory in [
+            "",
+            " ",
+            "relative",
+            "~/Overleaf",
+            "/workspace/\nsecrets",
+            "/workspace/\0",
+        ] {
+            let invalid = OverleafStoragePreference {
+                keep_local_copy: true,
+                directory: Some(directory.into()),
+            };
+            assert!(
+                settings
+                    .set_overleaf_storage_preference(project, invalid)
+                    .unwrap_err()
+                    .contains("directory")
+            );
+            assert!(settings.overleaf_storage.is_empty());
+        }
+        for url in [
+            "not a URL",
+            "https://www.overleaf.com/project/0123456789abcdef01234567?token=secret",
+            "https://me:secret@www.overleaf.com/project/0123456789abcdef01234567",
+        ] {
+            assert!(
+                settings
+                    .set_overleaf_storage_preference(url, OverleafStoragePreference::default())
+                    .is_err()
+            );
+            assert!(settings.overleaf_storage_preference(url).is_err());
+        }
+    }
+
+    #[test]
+    fn overleaf_storage_json_reports_project_and_directory_errors_and_normalizes_paths() {
+        let project = "https://www.overleaf.com/project/0123456789abcdef01234567";
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value["overleaf_storage"] =
+            serde_json::json!({project: {"directory": "/workspace/a/../overleaf"}});
+        let parsed = crate::settings_json::parse(&value.to_string()).unwrap();
+        let preference = parsed.overleaf_storage_preference(project).unwrap();
+        assert!(preference.keep_local_copy);
+        assert_eq!(preference.directory.as_deref(), Some("/workspace/overleaf"));
+        for entry in [
+            serde_json::json!({project: {"directory": "relative"}}),
+            serde_json::json!({project: {"directory": ""}}),
+            serde_json::json!({project: {"keep_local_copy": "sometimes"}}),
+            serde_json::json!({project: {"mystery": true}}),
+            serde_json::json!({format!("{project}/"): {}}),
+            serde_json::json!({format!("{project}?token=secret"): {}}),
+        ] {
+            value["overleaf_storage"] = entry;
+            let error = crate::settings_json::parse(&value.to_string()).unwrap_err();
+            assert!(error.contains("overleaf_storage"), "{error}");
+            let mut storage = MemoryStorage::default();
+            storage.set_string(STORAGE_KEY, value.to_string());
+            assert!(AppSettings::load(Some(&storage)).is_err());
+        }
+    }
+
+    #[test]
+    fn overleaf_storage_preferences_are_bounded_without_dropping_existing_choices() {
+        let mut settings = AppSettings::default();
+        let preference = OverleafStoragePreference {
+            keep_local_copy: false,
+            directory: None,
+        };
+        for index in 0..MAX_OVERLEAF_STORAGE_PREFERENCES {
+            settings
+                .set_overleaf_storage_preference(
+                    &format!("https://www.overleaf.com/project/{index:024x}"),
+                    preference.clone(),
+                )
+                .unwrap();
+        }
+        let extra = "https://www.overleaf.com/project/ffffffffffffffffffffffff";
+        assert!(
+            settings
+                .set_overleaf_storage_preference(extra, preference.clone())
+                .unwrap_err()
+                .contains("at most 32")
+        );
+        assert_eq!(
+            settings.overleaf_storage.len(),
+            MAX_OVERLEAF_STORAGE_PREFERENCES
+        );
+        // Existing projects remain editable when the map is full.
+        settings
+            .set_overleaf_storage_preference(
+                "https://www.overleaf.com/project/000000000000000000000000",
+                OverleafStoragePreference {
+                    directory: Some("/workspace/overleaf".into()),
+                    ..preference.clone()
+                },
+            )
+            .unwrap();
+        let mut value = serde_json::to_value(settings).unwrap();
+        value["overleaf_storage"][extra] = serde_json::to_value(preference).unwrap();
+        let error = crate::settings_json::parse(&value.to_string()).unwrap_err();
+        assert!(
+            error.contains("overleaf_storage") && error.contains("at most 32"),
+            "{error}"
+        );
     }
 
     #[test]

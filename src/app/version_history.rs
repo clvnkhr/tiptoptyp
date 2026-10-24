@@ -374,6 +374,7 @@ impl EditorApp {
         }
     }
     pub(super) fn poll_version_history(&mut self, context: &egui::Context) {
+        let source_locked = self.overleaf_source_locked();
         let Some(dialog) = self.version_history.as_mut() else {
             return;
         };
@@ -386,6 +387,11 @@ impl EditorApp {
             self.preview_controls.close_for_version_history();
         }
         if let Some(source) = restore {
+            if source_locked {
+                self.version_history.as_mut().unwrap().error =
+                    Some("Wait for Overleaf to finish syncing before restoring a version.".into());
+                return;
+            }
             let key = dialog.key;
             let path = dialog.path.clone();
             if self.document().key() != key
