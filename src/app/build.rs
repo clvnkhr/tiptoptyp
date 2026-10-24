@@ -161,18 +161,22 @@ impl EditorApp {
                     self.activity.build = crate::activity::Activity::Idle;
                     self.preview.status = PreviewStatus::Ready(result.elapsed);
                     self.complete_pending_export();
-                    if self.settings.preview_follow_edits
-                        && self.preview_visible()
-                        && self.tex_tools.synctex.is_some()
-                        && self.current_is_preview_document()
-                        && self.document().kind() == DocumentKind::Tex
-                        && let Some(caret) = &self.last_editor_caret
-                        && caret.key == self.document().key()
-                    {
-                        self.jump_source_to_preview_with_mode(caret.char_index, true);
-                    }
+                    self.follow_tex_edit_after_compile();
                 }
             }
+        }
+    }
+
+    fn follow_tex_edit_after_compile(&mut self) {
+        if self.settings.tex_preview_follow_edits
+            && self.preview_visible()
+            && self.tex_tools.synctex.is_some()
+            && self.current_is_preview_document()
+            && self.document().kind() == DocumentKind::Tex
+            && let Some(caret) = &self.last_editor_caret
+            && caret.key == self.document().key()
+        {
+            self.jump_source_to_preview_with_mode(caret.char_index, true);
         }
     }
 
@@ -222,5 +226,81 @@ impl EditorApp {
             }
         }
         self.preview.set_diagnostics(raw, diagnostics);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tex_app(context: &egui::Context, root: &Path) -> EditorApp {
+        let mut app = EditorApp::dormant_for_tests(context, root.into());
+        app.document_mut().replace_loaded_unprojected(
+            "first line\nsecond line".into(),
+            root.join("main.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        app.view_mode = ViewMode::Split;
+        app.tex_tools.synctex = Some(root.join("synctex"));
+        app.last_editor_caret = Some(EditorCaretState {
+            key: app.document().key(),
+            char_index: 15,
+            rect: Rect::NOTHING,
+        });
+        assert!(app.current_is_preview_document());
+        assert!(app.preview_visible());
+        app
+    }
+
+    #[test]
+    fn tex_recompile_preserves_scroll_by_default_and_manual_synctex_still_works() {
+        let context = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        let mut app = tex_app(&context, root.path());
+        assert!(
+            app.settings.preview_follow_edits,
+            "Typst keeps its separate default"
+        );
+        app.follow_tex_edit_after_compile();
+        assert_eq!(app.synctex.activity(), crate::activity::Activity::Idle);
+
+        app.jump_source_to_preview(15);
+        assert!(matches!(
+            app.synctex.activity(),
+            crate::activity::Activity::Pending(_)
+        ));
+    }
+
+    #[test]
+    fn tex_recompile_follows_only_when_its_own_setting_is_enabled() {
+        let context = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        let mut app = tex_app(&context, root.path());
+        app.settings.preview_follow_edits = false;
+        app.settings.tex_preview_follow_edits = true;
+        app.follow_tex_edit_after_compile();
+        assert!(matches!(
+            app.synctex.activity(),
+            crate::activity::Activity::Pending(_)
+        ));
+    }
+
+    #[test]
+    fn tex_follow_does_not_reveal_a_hidden_preview_or_stale_caret() {
+        let context = egui::Context::default();
+        let root = tempfile::tempdir().unwrap();
+        for hide_preview in [true, false] {
+            let mut app = tex_app(&context, root.path());
+            app.settings.tex_preview_follow_edits = true;
+            if hide_preview {
+                app.view_mode = ViewMode::Code;
+            } else {
+                app.document_mut()
+                    .edit(CCursorRange::default(), |source| source.push('!'));
+            }
+            app.follow_tex_edit_after_compile();
+            assert_eq!(app.synctex.activity(), crate::activity::Activity::Idle);
+        }
     }
 }

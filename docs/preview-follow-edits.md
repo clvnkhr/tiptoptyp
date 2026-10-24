@@ -16,12 +16,17 @@ An explicit preview jump supersedes a pending automatic jump.
 Hidden and paused previews do not follow edits. Changing the active document,
 revision, Tinymist session, backend or toggle discards pending work. Automatic
 following does not focus the editor or open the preview from Code view.
-TeX PDFs use the SyncTeX map attached to an accepted build. When the installed
-`synctex` utility is available, a visible TeX preview follows the caret after each
-accepted compile. One coalescing worker performs the lookup; its result is checked
-against the current preview path and PDF generation. New point coordinates wait
-for that PDF's page dimensions. Without the utility, automatic following stays
-inactive. Opened PDF assets do not have source mapping.
+TeX previews keep their page-relative scroll position after recompilation by
+default. **Settings → Preview → Follow TeX edits in preview** opts into following
+the source caret independently of the Typst setting. Automatic following uses
+the SyncTeX map attached to the accepted build and leaves context above the
+destination, without the manual reveal animation. Turning the setting off,
+hiding the preview or pausing compilation discards queued automatic navigation.
+One coalescing worker performs the lookup; its result is checked against the
+current preview path and PDF generation. New point coordinates wait for that
+PDF's page dimensions. Without the installed `synctex` utility, automatic
+following stays inactive. Manual SyncTeX navigation works with either setting.
+Opened PDF assets do not have source mapping.
 Source that produces no rendered location, such as a comment, may have no jump
 target. Tinymist compile reports are unversioned; the adapter admits only reports
 for the current session/preview entry received after the edit and waits through

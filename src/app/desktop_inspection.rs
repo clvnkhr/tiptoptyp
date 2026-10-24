@@ -164,6 +164,9 @@ impl EditorApp {
         });
         observation["settings_category"] = settings_category.into();
         observation["compact_layout_controls"] = self.settings.compact_layout_controls.into();
+        observation["preview_follow_edits"] = serde_json::json!(self.settings.preview_follow_edits);
+        observation["tex_preview_follow_edits"] =
+            serde_json::json!(self.settings.tex_preview_follow_edits);
         observation["pdfium_render"] = self.pdfium_preview.inspected_render();
         observation["fullscreen"] = context
             .input(|input| input.viewport().fullscreen.unwrap_or(false))

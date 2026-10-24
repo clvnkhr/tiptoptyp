@@ -8,6 +8,7 @@ on:
         type: choice
         options: [
           "all",
+          "overleaf_connection",
           "indentation",
           "tool_defaults",
           "settings_links",
@@ -24,6 +25,7 @@ on:
           "tex_editing",
           "tex_intelligence",
           "tex_save",
+          "tex_preview_scroll",
           "harper_math_prose",
           "harper_settings",
           "images",

@@ -6919,8 +6919,21 @@ fn settings_search_indexes_every_visible_setting_label() {
     assert!(settings_search_results("autosave").contains(&SettingsTarget::AutoSave));
     assert_eq!(
         settings_search_results("follow edits"),
-        vec![SettingsTarget::PreviewFollowEdits]
+        vec![
+            SettingsTarget::PreviewFollowEdits,
+            SettingsTarget::TexPreviewFollowEdits
+        ]
     );
+    for query in [
+        "TeX follow edits",
+        "preserve scroll position",
+        "synctex automatic",
+    ] {
+        assert_eq!(
+            settings_search_results(query),
+            vec![SettingsTarget::TexPreviewFollowEdits]
+        );
+    }
     assert_eq!(
         settings_search_results("titlebar"),
         vec![SettingsTarget::TitleBarMenus]

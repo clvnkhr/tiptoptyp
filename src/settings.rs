@@ -704,6 +704,8 @@ pub(crate) struct AppSettings {
     pub(crate) source_preview_trigger: SourcePreviewTrigger,
     #[serde(default = "default_true")]
     pub(crate) preview_follow_edits: bool,
+    #[serde(default)]
+    pub(crate) tex_preview_follow_edits: bool,
     pub(crate) auto_save: bool,
     pub(crate) auto_save_delay_ms: u64,
     pub(crate) hover_delay_ms: u64,
@@ -817,6 +819,7 @@ impl Default for AppSettings {
             explorer_order: ExplorerOrder::default(),
             source_preview_trigger: SourcePreviewTrigger::DoubleClick,
             preview_follow_edits: true,
+            tex_preview_follow_edits: false,
             auto_save: true,
             auto_save_delay_ms: 750,
             hover_delay_ms: DEFAULT_HOVER_DELAY_MS,
@@ -919,6 +922,7 @@ impl AppSettings {
             explorer_order,
             source_preview_trigger,
             preview_follow_edits,
+            tex_preview_follow_edits,
             auto_save,
             auto_save_delay_ms,
             hover_delay_ms,
@@ -1331,6 +1335,7 @@ mod tests {
         );
         assert!(settings.auto_save);
         assert!(settings.preview_follow_edits);
+        assert!(!settings.tex_preview_follow_edits);
         assert_eq!(settings.auto_save_delay_ms, 750);
         assert!(!settings.fixed_tab_width);
         assert_eq!(settings.hover_delay_ms, DEFAULT_HOVER_DELAY_MS);
@@ -1473,6 +1478,7 @@ mod tests {
             },
             source_preview_trigger: SourcePreviewTrigger::ModifierClick,
             preview_follow_edits: false,
+            tex_preview_follow_edits: true,
             auto_save: false,
             auto_save_delay_ms: 1_500,
             hover_delay_ms: 450,
@@ -2125,6 +2131,42 @@ mod tests {
             !current.preview_follow_edits,
             "an unchanged stale toggle must not overwrite it"
         );
+    }
+
+    #[test]
+    fn tex_preview_follow_edits_defaults_off_persists_and_merges_independently() {
+        let base = AppSettings::default();
+        assert!(!base.tex_preview_follow_edits);
+        assert!(base.preview_follow_edits);
+        let mut edited = base.clone();
+        edited.tex_preview_follow_edits = true;
+        let mut storage = MemoryStorage::default();
+        edited.save(&mut storage);
+        let loaded = AppSettings::load(Some(&storage)).unwrap();
+        assert!(loaded.tex_preview_follow_edits);
+        assert!(loaded.preview_follow_edits);
+
+        let mut value = serde_json::to_value(&edited).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("tex_preview_follow_edits");
+        storage.set_string(STORAGE_KEY, value.to_string());
+        let loaded = AppSettings::load(Some(&storage)).unwrap();
+        assert!(!loaded.tex_preview_follow_edits);
+        assert!(loaded.preview_follow_edits);
+
+        let mut current = base.clone();
+        current.preview_follow_edits = false;
+        current.apply_edits(&base, edited);
+        assert!(current.tex_preview_follow_edits);
+        assert!(!current.preview_follow_edits);
+        let mut unrelated = base.clone();
+        unrelated.auto_save = false;
+        current.apply_edits(&base, unrelated);
+        assert!(current.tex_preview_follow_edits);
+        assert!(!current.preview_follow_edits);
+        assert!(!current.auto_save);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 """Native TeX journeys; fixtures are real files and tools are never mocked."""
 
-TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save", "harper_math_prose", "harper_settings")
+TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save", "tex_preview_scroll", "harper_math_prose", "harper_settings")
 TEX_SOURCE = "\\documentclass{article}\n\\begin{document}\nA sample with $\\alpha + \\alpha$.\n\\end{document}\n"
 
 

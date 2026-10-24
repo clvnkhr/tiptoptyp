@@ -24,8 +24,10 @@ zoom/fit width, pinch zoom, outlines, internal page links and external HTTP(S)/m
 links. Drag over text within a page and copy it; the page context menu also offers
 Copy page text. Find is case-insensitive, highlights visible matches and navigates
 matching pages. With a PDF page focused, Find, Copy and Select All target the PDF;
-Select All selects the current page. Source synchronization remains a Tinymist
-feature. Search results report matching pages, not individual match counts.
+Select All selects the current page. Typst source synchronization uses Tinymist;
+TeX PDFs use SyncTeX. TeX recompiles preserve the scroll position by default;
+**Settings → Preview → Follow TeX edits in preview** enables automatic following.
+Search results report matching pages, not individual match counts.
 
 Current limitations: selection is within one page; search navigation advances
 between matching pages. There is no thumbnail strip, cross-page selection,

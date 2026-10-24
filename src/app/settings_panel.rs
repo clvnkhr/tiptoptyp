@@ -1371,10 +1371,23 @@ impl SettingsPanel<'_> {
                 ui.checkbox(
                     &mut edited.preview_follow_edits,
                     SettingsTarget::PreviewFollowEdits.label(),
-                )
-                .on_hover_text(
-                    "Automatically scroll the Tinymist preview to your edit after compilation. Does not move the editor cursor. PDFium previews do not support source jumps.",
                 );
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::TexPreviewFollowEdits,
+                    &mut settings_scroll_target,
+                );
+                let _tex_follow_response = ui.checkbox(
+                    &mut edited.tex_preview_follow_edits,
+                    SettingsTarget::TexPreviewFollowEdits.label(),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if ui.is_rect_visible(_tex_follow_response.rect) {
+                    crate::desktop_test::observe(
+                        "settings.preview.tex_follow_edits",
+                        &_tex_follow_response,
+                    );
+                }
                 if !deterministic_settings
                     && self.status.requested_backend.is_interactive()
                     && !self.status.interactive_active
@@ -3396,6 +3409,14 @@ mod tests {
         assert!(harness.state().1.preview_follow_edits);
         assert!(harness.state().2.iter().any(|action| {
             matches!(action, SettingsAction::Update(settings) if !settings.preview_follow_edits)
+        }));
+        harness.state_mut().2.clear();
+        harness.get_by_label("Follow TeX edits in preview").click();
+        harness.run();
+        assert!(!harness.state().1.tex_preview_follow_edits);
+        assert!(harness.state().1.preview_follow_edits);
+        assert!(harness.state().2.iter().any(|action| {
+            matches!(action, SettingsAction::Update(settings) if settings.tex_preview_follow_edits && settings.preview_follow_edits)
         }));
         harness.state_mut().2.clear();
         category(&mut harness, SettingsSection::Editor);

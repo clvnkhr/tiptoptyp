@@ -1044,13 +1044,14 @@ enum SettingsTarget {
     PreviewBackend,
     PreviewZoomSnapshot,
     PreviewFollowEdits,
+    TexPreviewFollowEdits,
     ToolchainStatus,
     ProjectRoot,
     UiScreenshots,
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 63] = [
+    const ALL: [Self; 64] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -1111,6 +1112,7 @@ impl SettingsTarget {
         Self::PreviewBackend,
         Self::PreviewZoomSnapshot,
         Self::PreviewFollowEdits,
+        Self::TexPreviewFollowEdits,
         Self::ToolchainStatus,
         Self::ProjectRoot,
         Self::UiScreenshots,
@@ -1178,6 +1180,7 @@ impl SettingsTarget {
             Self::PreviewBackend => "Typst preview backend",
             Self::PreviewZoomSnapshot => "Smooth Tinymist zoom",
             Self::PreviewFollowEdits => "Follow Typst edits in preview",
+            Self::TexPreviewFollowEdits => "Follow TeX edits in preview",
             Self::ToolchainStatus => "Service status",
             Self::ProjectRoot => "Project root",
             Self::UiScreenshots => "UI screenshots",
@@ -1248,6 +1251,7 @@ impl SettingsTarget {
             Self::PreviewBackend
             | Self::PreviewZoomSnapshot
             | Self::PreviewFollowEdits
+            | Self::TexPreviewFollowEdits
             | Self::PreviewJump => SettingsSection::Preview,
         }
     }
@@ -1378,6 +1382,9 @@ impl SettingsTarget {
                 "cached viewport screenshot bitmap image scale zoom sharp render"
             }
             Self::PreviewFollowEdits => "automatic scroll jump sync source typing changes",
+            Self::TexPreviewFollowEdits => {
+                "latex automatic scroll position keep preserve jump sync synctex source typing changes recompilation"
+            }
             Self::ToolchainStatus => "tools typst tinymist lsp vector watcher pdf syntax ready",
             Self::ProjectRoot => "workspace folder directory path",
             Self::UiScreenshots => "capture png main settings both output directory",

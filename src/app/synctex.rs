@@ -48,8 +48,17 @@ impl EditorApp {
         self.synctex.error = None;
     }
     pub(super) fn poll_synctex(&mut self, context: &egui::Context) {
+        // A setting/layout change also cancels an automatic lookup already
+        // queued or running. Manual forward/inverse search remains independent.
+        let automatic_allowed = self.settings.tex_preview_follow_edits
+            && self.preview_visible()
+            && !self.compilation_paused;
+        if !automatic_allowed {
+            self.pdfium_preview.cancel_automatic_follow();
+        }
         if let LatestJobPoll::Ready(reply) = self.synctex.job.poll()
             && self.synctex.pending.is_none()
+            && (!reply.automatic || automatic_allowed)
             && self
                 .synctex
                 .artifact
@@ -96,6 +105,9 @@ impl EditorApp {
         else {
             return;
         };
+        if automatic && !automatic_allowed {
+            return;
+        }
         let Some(artifact) = artifact else {
             if !automatic {
                 self.show_file_error("Compile this TeX document to produce its SyncTeX map".into());
@@ -154,6 +166,90 @@ mod tests {
         assert!(!app.synctex.job.is_running());
         assert!(app.synctex.pending.is_none());
     }
+    #[test]
+    fn turning_off_follow_discards_queued_automatic_queries_without_work() {
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.view_mode = ViewMode::Split;
+        app.settings.tex_preview_follow_edits = true;
+        app.synctex.artifact = Some(VersionedMap {
+            path: app.preview_document_path(),
+            key: ArtifactKey::unversioned(1),
+            map: Arc::new(crate::synctex::Artifact {
+                data: Arc::from([]),
+                compressed: false,
+                root: directory.path().into(),
+                mirror: directory.path().join("mirror"),
+            }),
+            pdf: Arc::from(&b"PDF"[..]),
+        });
+        app.request_synctex(
+            crate::synctex::Query::Page {
+                page: 0,
+                x: 0.0,
+                y: 0.0,
+            },
+            true,
+        );
+        app.settings.tex_preview_follow_edits = false;
+        app.poll_synctex(&context);
+        assert!(app.synctex.pending.is_none());
+        assert!(!app.synctex.job.is_running());
+        assert!(app.synctex.error.is_none());
+        assert!(app.document_workflow.modal().is_none());
+    }
+
+    #[test]
+    fn retired_automatic_lookup_cannot_reopen_preview_but_manual_search_can() {
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        for automatic in [true, false] {
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            app.view_mode = ViewMode::Code;
+            app.settings.tex_preview_follow_edits = false;
+            let artifact = VersionedMap {
+                path: app.preview_document_path(),
+                key: ArtifactKey::unversioned(1),
+                map: Arc::new(crate::synctex::Artifact {
+                    data: Arc::from([]),
+                    compressed: false,
+                    root: directory.path().into(),
+                    mirror: directory.path().join("mirror"),
+                }),
+                pdf: Arc::from(&b"PDF"[..]),
+            };
+            app.synctex.artifact = Some(artifact.clone());
+            app.synctex
+                .job
+                .start("test lookup", move || {
+                    Ok(Reply {
+                        path: artifact.path,
+                        key: artifact.key,
+                        automatic,
+                        result: Ok(crate::synctex::Destination::Page {
+                            page: 0,
+                            x: 80.0,
+                            y: 400.0,
+                        }),
+                    })
+                })
+                .unwrap();
+            app.synctex.job.wait_until_ready_for_test().unwrap();
+            app.poll_synctex(&context);
+            assert!(!app.synctex.job.is_running());
+            assert_eq!(
+                app.view_mode,
+                if automatic {
+                    ViewMode::Code
+                } else {
+                    ViewMode::Split
+                }
+            );
+            assert!(app.document_workflow.modal().is_none());
+        }
+    }
+
     #[test]
     fn queued_pdf_coordinates_cannot_use_a_retired_preview_or_compile_map() {
         for switch_preview in [false, true] {

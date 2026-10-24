@@ -159,6 +159,8 @@ pub(super) struct PdfiumView {
     settling: bool,
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     page_geometry: Option<(usize, Rect, Rect, f32, u64)>,
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    source_position: Option<(usize, Vec2, u64)>,
     catalog: Option<Arc<Catalog>>,
     residents: BTreeMap<usize, Resident>,
     active_scale: u32,
@@ -168,6 +170,7 @@ pub(super) struct PdfiumView {
     page: usize,
     goto: Option<usize>,
     pending_position: Option<(usize, f32)>,
+    automatic_position: bool,
     position_point: Option<Vec2>,
     position_pdf: Option<Arc<[u8]>>,
     reveal: Option<PdfReveal>,
@@ -215,6 +218,8 @@ impl Default for PdfiumView {
             settling: false,
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             page_geometry: None,
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            source_position: None,
             catalog: None,
             residents: BTreeMap::new(),
             active_scale: 0,
@@ -224,6 +229,7 @@ impl Default for PdfiumView {
             page: 0,
             goto: None,
             pending_position: None,
+            automatic_position: false,
             position_point: None,
             position_pdf: None,
             reveal: None,
@@ -371,6 +377,11 @@ impl PdfiumView {
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn inspected_render(&self) -> serde_json::Value {
         serde_json::json!({
+            "revision": self.revision,
+            "active_revision": self.active_revision,
+            "source_position": self.source_position.map(|(page, point, revision)| serde_json::json!({
+                "page": page, "point": [point.x, point.y], "revision": revision,
+            })),
             "requested_scale": self.requested.as_ref().map(|key| key.scale),
             "desired_scale": self.desired.as_ref().map(|key| key.scale),
             "active_scale": self.active_scale,
@@ -408,7 +419,10 @@ impl PdfiumView {
             return;
         }
         self.go_to_position(page, y);
-        self.position_point = explicit.then_some(egui::vec2(x, y));
+        // Automatic following needs the same visible context as a manual jump.
+        // Only the attention animation depends on whether it was explicit.
+        self.position_point = Some(egui::vec2(x, y));
+        self.automatic_position = !explicit;
         self.position_pdf = expected_pdf.clone();
         if explicit {
             self.reveal = Some(PdfReveal {
@@ -430,11 +444,13 @@ impl PdfiumView {
     pub(super) fn clear_reveal(&mut self) {
         self.reveal = None;
         self.pending_position = None;
+        self.automatic_position = false;
         self.position_pdf = None;
         self.position_point = None;
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         {
             self.reveal_observation = None;
+            self.source_position = None;
         }
     }
 
@@ -445,6 +461,12 @@ impl PdfiumView {
                 "active": false, "pending": self.reveal.is_some(),
             })
         })
+    }
+
+    pub(super) fn cancel_automatic_follow(&mut self) {
+        if self.automatic_position && self.pending_position.is_some() {
+            self.clear_reveal();
+        }
     }
 
     pub(super) fn go_to_position(&mut self, page: usize, y: f32) {
@@ -467,7 +489,14 @@ impl PdfiumView {
         }
         if let Some((page, y)) = self.pending_position.take() {
             self.position_pdf = None;
+            self.automatic_position = false;
             if let Some(size) = self.catalog.as_ref().and_then(|c| c.sizes.get(page)) {
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                {
+                    self.source_position = self
+                        .position_point
+                        .map(|point| (page, point, self.active_revision));
+                }
                 push_history(&mut self.back, self.anchor);
                 self.forward.clear();
                 self.anchor = (page, (y / size[1]).clamp(0.0, 1.0));
@@ -556,6 +585,7 @@ impl PdfiumView {
             let position_point = matches.then_some(self.position_point).flatten();
             *self = Self {
                 pending_position: position,
+                automatic_position: matches && self.automatic_position,
                 position_pdf,
                 reveal,
                 position_point,
@@ -1738,6 +1768,62 @@ mod tests {
     }
 
     #[test]
+    fn automatic_source_follow_keeps_text_above_its_baseline_inside_the_viewport() {
+        let context = egui::Context::default();
+        let mut view = PdfiumView {
+            path: PathBuf::from("main.tex"),
+            worker: Some(Worker::idle_for_tests()),
+            catalog: Some(Arc::new(Catalog {
+                sizes: vec![[400.0, 1000.0]; 3],
+                outline: vec![],
+            })),
+            fit: false,
+            ..Default::default()
+        };
+        // Repeated accepted PDFs, different pages and scales: automatic
+        // navigation must leave context above the SyncTeX text baseline.
+        for (revision, page, zoom) in [(1, 1, 1.0), (2, 2, 1.5), (3, 0, 0.75)] {
+            let bytes: Arc<[u8]> = Arc::from([revision as u8]);
+            view.bytes = Some(bytes.clone());
+            view.revision = revision;
+            view.active_revision = revision;
+            view.zoom = zoom;
+            view.reveal_position_for_pdf(page, 180.0, 400.0, false, Some(bytes.clone()));
+            context
+                .run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 300.0))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        view.show(
+                            ui,
+                            PathBuf::from("main.tex"),
+                            bytes.clone(),
+                            (Color32::WHITE, Color32::BLACK),
+                            true,
+                            Default::default(),
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
+            let offset = egui::scroll_area::State::load(&context, view.scroll_owner.unwrap())
+                .unwrap()
+                .offset;
+            let baseline_y = view.tops[page] + 400.0 * zoom - offset.y;
+            assert!(
+                (24.0..270.0).contains(&baseline_y),
+                "automatic follow clipped its text: baseline={baseline_y}, scroll={offset:?}"
+            );
+            assert!(
+                view.reveal.is_none(),
+                "automatic following must stay silent"
+            );
+            assert!(view.pending_position.is_none());
+        }
+    }
+
+    #[test]
     fn explicit_pdf_reveal_keeps_both_coordinates_and_automatic_follow_is_silent() {
         let mut view = PdfiumView::default();
         view.reveal_position(2, 125.0, 360.0, true);
@@ -1748,10 +1834,24 @@ mod tests {
         assert!(reveal.attention.started.is_none());
         view.reveal_position(2, 200.0, 400.0, false);
         assert!(view.reveal.is_none());
-        assert!(view.position_point.is_none());
+        assert_eq!(view.position_point, Some(egui::vec2(200.0, 400.0)));
         assert_eq!(view.pending_position, Some((2, 400.0)));
         view.reveal_position(0, f32::NAN, 10.0, true);
         assert!(view.reveal.is_none());
+    }
+
+    #[test]
+    fn disabling_follow_cancels_only_automatic_positions_waiting_for_pdf_dimensions() {
+        for explicit in [true, false] {
+            let mut view = PdfiumView::default();
+            let next: Arc<[u8]> = Arc::from([2u8]);
+            view.reveal_position_for_pdf(1, 80.0, 400.0, explicit, Some(next));
+            view.cancel_automatic_follow();
+            assert_eq!(view.pending_position.is_some(), explicit);
+            assert_eq!(view.position_point.is_some(), explicit);
+            assert_eq!(view.position_pdf.is_some(), explicit);
+            assert_eq!(view.reveal.is_some(), explicit);
+        }
     }
 
     #[test]

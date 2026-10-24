@@ -389,6 +389,33 @@ mod tests {
 
     use super::*;
     #[test]
+    fn tex_preview_follow_edits_json_accepts_booleans_and_rejects_other_types() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        for enabled in [false, true] {
+            value["tex_preview_follow_edits"] = serde_json::json!(enabled);
+            let parsed = parse(&value.to_string()).unwrap();
+            assert_eq!(parsed.tex_preview_follow_edits, enabled);
+            assert!(parsed.preview_follow_edits);
+            assert_eq!(
+                parse(&serde_json::to_string(&parsed).unwrap()).unwrap(),
+                parsed
+            );
+        }
+        for invalid in [
+            serde_json::json!("yes"),
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ] {
+            value["tex_preview_follow_edits"] = invalid;
+            let error = parse(&value.to_string()).unwrap_err();
+            assert!(
+                error.contains("tex_preview_follow_edits") && error.contains("bool"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn compact_layout_controls_json_accepts_boolean_modes_and_rejects_invalid_choices() {
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         for compact in [false, true] {

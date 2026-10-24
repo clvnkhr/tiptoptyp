@@ -38,6 +38,92 @@ Last page body.
 """
 
 
+JUMP_TEX_AUTO_SOURCE = r"""\documentclass{article}
+\usepackage[paperwidth=400pt,paperheight=1500pt,margin=24pt]{geometry}
+\pagestyle{empty}
+\begin{document}
+\vspace*{400pt}
+First automatic target.
+\newpage
+\vspace*{540pt}
+Middle automatic target.
+\newpage
+\vspace*{660pt}
+Last automatic target.
+\end{document}
+"""
+
+
+def compiled_pdf_geometry(document, previous_revision):
+    """Require freshly painted geometry from a new fully admitted PDF."""
+    from desktop_ui_journeys import pdfium_render_state
+    render = pdfium_render_state(document)
+    revision, active = render.get("revision"), render.get("active_revision")
+    if (type(previous_revision) is not int or previous_revision < 0
+            or type(revision) is not int or revision <= previous_revision
+            or type(active) is not int or active != revision
+            or document.get("preview_pdfium_ready") is not True
+            or document.get("compile_indicator_spinning") is not False):
+        raise AssertionError("edit has not admitted its newly compiled PDF")
+    geometry = render.get("page_geometry")
+    if (not isinstance(geometry, dict) or type(document.get("frame")) is not int
+            or type(geometry.get("frame")) is not int or geometry["frame"] != document["frame"]
+            or type(geometry.get("page")) is not int
+            or type(document.get("preview_page")) is not int
+            or geometry["page"] != document["preview_page"]):
+        raise AssertionError("edit lacks fresh painted PDF geometry")
+    rect, visible, zoom = geometry.get("rect"), geometry.get("interact"), geometry.get("zoom")
+    if (not isinstance(rect, list) or len(rect) != 4
+            or not isinstance(visible, list) or len(visible) != 4
+            or any(type(n) not in (int, float) or not math.isfinite(n)
+                   for n in (*rect, *visible, zoom))
+            or min(rect[2], rect[3], visible[2], visible[3], zoom) <= 0):
+        raise AssertionError("invalid compiled page geometry")
+    if (not isinstance(document.get("preview_reveal"), dict)
+            or not reveal_retired(document["preview_reveal"])):
+        raise AssertionError("automatic compile unexpectedly armed a reveal animation")
+    return render, geometry
+
+
+def assert_pdfium_scroll_preserved(document, previous):
+    """A default TeX recompile must retain the user's visible page and offset."""
+    render, geometry = compiled_pdf_geometry(document, previous["revision"])
+    baseline = previous["page_geometry"]
+    if (geometry["page"] != baseline["page"]
+            or abs(geometry["zoom"] - baseline["zoom"]) > 0.0001
+            or any(abs(geometry["rect"][axis] - baseline["rect"][axis]) > 1
+                   for axis in (0, 1))):
+        raise AssertionError("default TeX recompilation moved the preview scroll position")
+    position = render.get("source_position")
+    if isinstance(position, dict) and position.get("revision") == render["revision"]:
+        raise AssertionError("disabled TeX edit-follow still applied a source destination")
+    return {"revision": render["revision"], "page": geometry["page"],
+            "page_origin": geometry["rect"][:2], "zoom": geometry["zoom"]}
+
+
+def assert_automatic_pdf_follow(document, previous_revision, page):
+    """Check the new PDF's actual destination baseline independently of its cue."""
+    render, geometry = compiled_pdf_geometry(document, previous_revision)
+    position = render.get("source_position")
+    if (not isinstance(position, dict)
+            or type(position.get("revision")) is not int or position["revision"] != render["revision"]
+            or type(position.get("page")) is not int or position["page"] != page
+            or geometry["page"] != page):
+        raise AssertionError("automatic follow belongs to another PDF or source destination")
+    point, rect = position.get("point"), geometry["rect"]
+    visible, zoom = geometry["interact"], geometry["zoom"]
+    if (not isinstance(point, list) or len(point) != 2
+            or any(type(n) not in (int, float) or not math.isfinite(n) for n in point)):
+        raise AssertionError("invalid automatic-follow destination")
+    center = [rect[axis] + point[axis] * zoom for axis in (0, 1)]
+    inset = min(24, visible[3] * 0.1)
+    if (not visible[0] <= center[0] <= visible[0] + visible[2]
+            or not visible[1] + inset <= center[1] <= visible[1] + visible[3] - inset):
+        raise AssertionError("automatic-follow baseline is clipped at the preview edge")
+    return {"revision": render["revision"], "page": page, "center": center,
+            "visible": visible, "top_inset": center[1] - visible[1]}
+
+
 def source_region(source, heading):
     """TeX can attribute a heading box to the following paragraph's line."""
     lines = source.splitlines(keepends=True)
@@ -334,6 +420,123 @@ class PreviewJumpJourneys:
         if path.read_text() != source:
             raise AssertionError("source navigation rewrote its fixture on disk")
 
+    def jump_tex_automatic_follow(self):
+        """Real edits preserve scrolling by default and optionally follow safely."""
+        from desktop_ui_journeys import fingerprint
+        original = self.snapshot()["document"]
+        follow = original.get("tex_preview_follow_edits")
+        if not isinstance(follow, bool):
+            raise AssertionError("missing effective TeX edit-follow preference")
+        if follow:
+            self.tex_settings([('"tex_preview_follow_edits": true', '"tex_preview_follow_edits": false')])
+        if original["compilation_paused"]:
+            self.key(15, "cmd+shift")
+            self.wait("automatic TeX compilation resumes for edit-follow checks",
+                      lambda d: not d["compilation_paused"])
+        try:
+            source = JUMP_TEX_AUTO_SOURCE
+            path = self.directory / "preview-jump-automatic.tex"
+            tab = self.jump_open_fixture(path, source)
+            self.key(15)
+            self.jump_renderer_ready("Pdfium")
+            if not self.snapshot()["document"]["preview_controls_open"]:
+                self.click("preview.open")
+            self.click("preview.Fit page width")
+            self.click("preview.Minimize controls")
+            self.jump_renderer_ready("Pdfium")
+            for enabled in (False, True):
+                if enabled:
+                    self.tex_settings([('"tex_preview_follow_edits": false',
+                                        '"tex_preview_follow_edits": true')])
+                    self.wait("TeX edit-follow opts in independently of Typst",
+                              lambda d: d["tex_preview_follow_edits"] is True
+                              and d["preview_follow_edits"] is original["preview_follow_edits"])
+                for iteration, (page, label, addition) in enumerate((
+                        (1, "Middle automatic target.", " One."),
+                        (2, "Last automatic target.", " Two."),
+                        (1, "Middle automatic target.", " Three."))):
+                    # The user's visible page deliberately differs from the
+                    # active source location before every automatic compile.
+                    self.jump_preview_page(0)
+                    if not enabled:
+                        self.wait_target("preview.page")
+                        initial = self.snapshot()
+                        target = initial["targets"]["preview.page"]
+                        top = initial["document"]["pdfium_render"]["page_geometry"]["rect"][1]
+                        self.native("wheel", target["x"], target["y"], -8)
+                        deadline = time.monotonic() + 4
+                        last, stable = None, 0
+                        while True:
+                            document = self.snapshot()["document"]
+                            geometry = document["pdfium_render"].get("page_geometry") or {}
+                            current = (geometry.get("rect") or [None, None])[1]
+                            fresh = (geometry.get("frame") == document["frame"]
+                                     and geometry.get("page") == 0
+                                     and type(current) in (int, float)
+                                     and math.isfinite(current) and current <= top - 12)
+                            if fresh:
+                                stable = stable + 1 if last is not None and abs(current - last) <= 0.25 else 0
+                                last = current
+                                if stable >= 4:
+                                    break
+                            else:
+                                stable, last = 0, None
+                            if time.monotonic() >= deadline:
+                                raise AssertionError("TeX preview did not settle at a nonzero native-wheel offset")
+                            time.sleep(0.06)
+                        self.stable_state(lambda d:
+                                          d["pdfium_render"]["page_geometry"]["page"] == 0
+                                          and abs(d["pdfium_render"]["page_geometry"]["rect"][1] - last) <= 1)
+                        self.record("preview.jump.scrolled", iteration=iteration,
+                                    page=0, previous_top=top, scrolled_top=last)
+                    line = source_region(source, label)[0]
+                    column = len(source.splitlines()[line])
+                    self.jump_caret(source, line, column)
+                    before = self.snapshot()["document"]
+                    previous = before["pdfium_render"]
+                    if type(previous.get("revision")) is not int:
+                        raise AssertionError("missing PDFium document revision")
+                    at = sum(map(len, source.splitlines(keepends=True)[:line])) + column
+                    source = source[:at] + addition + source[at:]
+                    caret = at + len(addition)
+                    self.native("text", addition)
+
+                    def placement(d):
+                        if enabled:
+                            return assert_automatic_pdf_follow(d, previous["revision"], page)
+                        return assert_pdfium_scroll_preserved(d, previous)
+
+                    def completed(d):
+                        if (d["path"] != str(path) or d["source_fingerprint"] != fingerprint(source)
+                                or d["source_bytes"] != len(source.encode("utf-8"))
+                                or d["cursor"] != [caret, caret] or not d["editor_keyboard_focused"]):
+                            return False
+                        try:
+                            placement(d)
+                            return True
+                        except AssertionError:
+                            return False
+
+                    arrived = self.wait("edited TeX automatically compiles with its chosen scroll behavior",
+                                        completed, timeout=60)
+                    observed = placement(arrived["document"])
+                    self.stable_state(completed)
+                    self.record("preview.jump.automatic", follow_enabled=enabled, iteration=iteration,
+                                source_fingerprint=fingerprint(source), cursor=[caret, caret],
+                                previous_revision=previous["revision"], placement=observed, silent=True)
+                    if getattr(self, "capture_review", False) and enabled and iteration == 0:
+                        self.capture_viewport("main")
+            return tab
+        finally:
+            if original["compilation_paused"]:
+                self.key(15, "cmd+shift")
+                self.wait("edit-follow check restores paused compilation",
+                          lambda d: d["compilation_paused"])
+            if self.snapshot()["document"]["tex_preview_follow_edits"] is not follow:
+                old, new = ("true", "false") if not follow else ("false", "true")
+                self.tex_settings([(f'"tex_preview_follow_edits": {old}',
+                                    f'"tex_preview_follow_edits": {new}')])
+
     def jump_detached_partial_inverse(self, source, path):
         from desktop_ui_journeys import fingerprint
         first = source_region(source, "First target")
@@ -443,6 +646,28 @@ class PreviewJumpJourneys:
             self.jump_effect_settings(original)
         self.record("navigation.reveal.options", independent_off=True,
                     configured_duration_ms=1500, configured_size_percent=150, restored=original)
+
+    def tex_preview_scroll(self):
+        """Isolated automatic TeX recompiles, independent of Tinymist journeys."""
+        self.focus_document_window()
+        before = self.snapshot()["document"]
+        if before["find_visible"]:
+            self.click("find.close")
+            self.wait("source Find closes before TeX scroll checks", lambda d: not d["find_visible"])
+        self.click("editor.source")
+        if before["line_wrap"]:
+            self.key(6, "cmd+alt")
+            self.wait("TeX scroll fixture uses logical source lines", lambda d: not d["line_wrap"])
+        tab = self.jump_tex_automatic_follow()
+        self.restore_partial_fixture_tabs(before, [tab])
+        if before["line_wrap"]:
+            self.click("editor.source")
+            self.key(6, "cmd+alt")
+            self.wait("TeX scroll journey restores line wrapping", lambda d: d["line_wrap"])
+        if before["view_mode"] != "Split":
+            self.key(19 if before["view_mode"] == "Code" else 21)
+            self.wait("TeX scroll journey restores its original panels",
+                      lambda d: d["view_mode"] == before["view_mode"])
 
     def preview_jump(self):
         self.focus_document_window()
