@@ -531,3 +531,46 @@ fn a_new_request_supersedes_failure_but_observing_idle_does_not() {
     assert_eq!(queued(failed, true, "Queued"), Activity::Pending("Queued"));
     assert_eq!(queued(Activity::Running, true, "Queued"), Activity::Running);
 }
+
+#[test]
+fn newer_services_are_in_the_live_and_snapshot_activity_inventory() {
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, std::env::temp_dir());
+    let key = app.document().key();
+    let live = app.activity_indicators();
+    let fixture = fixture_indicators();
+    for (name, group) in [
+        ("Overleaf", Group::Files),
+        ("Overleaf sync", Group::Files),
+        ("Overleaf save", Group::Files),
+        ("Liquid", Group::Checks),
+        ("LaTeXdiff", Group::Tools),
+        ("TeXdoc", Group::Tools),
+        ("Citation import", Group::Files),
+        ("Local versions", Group::Files),
+        ("Table values", Group::Code),
+        ("Biber cache", Group::Tools),
+        ("Component downloads", Group::Tools),
+        ("File operations", Group::Files),
+    ] {
+        for rows in [&live, &fixture] {
+            let row = rows
+                .iter()
+                .find(|row| row.name == name)
+                .unwrap_or_else(|| panic!("Missing Activity status: {name}"));
+            assert_eq!(row.group, group, "{name}");
+        }
+    }
+    for rows in [&live, &fixture] {
+        let names: HashSet<_> = rows.iter().map(|row| row.name).collect();
+        assert_eq!(names.len(), rows.len(), "Duplicate Activity sources");
+    }
+    assert_eq!(
+        app.activity_indicators(),
+        live,
+        "Observation changed work state"
+    );
+    assert_eq!(app.document().key(), key);
+    assert!(!app.file_import.is_running());
+    assert!(!app.save_job.is_running());
+}

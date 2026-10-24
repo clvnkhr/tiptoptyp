@@ -4,6 +4,89 @@ TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save", "tex_preview_scro
 TEX_SOURCE = "\\documentclass{article}\n\\begin{document}\nA sample with $\\alpha + \\alpha$.\n\\end{document}\n"
 
 
+TEX_PARITY_SOURCE = (
+    "\\documentclass{article}\n"
+    "\\usepackage{amsmath}\n"
+    "\\newcommand{\\parityname}{Native}\n"
+    "\\begin{document}\n"
+    "\\section{Native parity section}\n"
+    "\\label{sec:parity}\n"
+    "\\input{parity-child}\n"
+    "See \\ref{sec:parity} and \\ref{sec:child}.\n"
+    "% table insertion\n\n"
+    "\\end{document}\n"
+)
+TEX_PARITY_CHILD = (
+    "\\subsection{Included parity section}\n"
+    "\\label{sec:child}\n"
+    "Included body.\n"
+)
+
+
+def tex_source_owner_preserved(document, previous):
+    """Tab activation rekeys revisions; compare the visible source and owner instead."""
+    import re
+    fields = ("path", "active_tab_id", "document_kind", "source_fingerprint",
+              "source_bytes", "cursor", "dirty")
+    for state in (previous, document):
+        if (not isinstance(state, dict) or not all(field in state for field in fields)
+                or state["path"] is not None and not isinstance(state["path"], str)
+                or type(state["active_tab_id"]) is not int or state["active_tab_id"] < 0
+                or not isinstance(state["document_kind"], str)
+                or not isinstance(state["source_fingerprint"], str)
+                or not re.fullmatch(r"[0-9a-f]{16}", state["source_fingerprint"])
+                or type(state["source_bytes"]) is not int or state["source_bytes"] < 0
+                or type(state["dirty"]) is not bool
+                or not isinstance(state["cursor"], list) or len(state["cursor"]) != 2
+                or any(type(position) is not int or position < 0 for position in state["cursor"])):
+            raise AssertionError("Complete source ownership observation is required")
+    return all(document[field] == previous[field] for field in fields)
+
+
+def tex_parity_index_ready(document, main, child):
+    """Require the actual completed TeX graph, including its source identities."""
+    from desktop_ui_journeys import fingerprint
+    import re
+    index = document.get("project_index")
+    if not isinstance(index, dict) or type(index.get("pending")) is not bool:
+        raise AssertionError("TeX project-index observation is missing")
+    digest = lambda value: isinstance(value, str) and re.fullmatch(r"[0-9a-f]{16}", value)
+    for field in ("outline", "symbols", "labels", "references"):
+        entries = index.get(field)
+        if not isinstance(entries, list) or any(
+                not isinstance(row, dict) or not digest(row.get("name"))
+                or not digest(row.get("path")) or type(row.get("line")) is not int
+                or row["line"] < 1 for row in entries):
+            raise AssertionError("Incomplete TeX project-index rows: " + field)
+    for field in ("packages", "subfiles"):
+        entries = index.get(field)
+        if not isinstance(entries, list) or not all(digest(value) for value in entries):
+            raise AssertionError("Incomplete TeX project-index entries: " + field)
+    if "warning" not in index or index["warning"] is not None and not digest(index["warning"]):
+        raise AssertionError("Incomplete TeX project-index warning state")
+    if index["pending"] or index["warning"] is not None:
+        return False
+    main, child = fingerprint(str(main.resolve())), fingerprint(str(child.resolve()))
+    expected = {
+        "outline": [("Native parity section", main, 5, 1),
+                    ("Included parity section", child, 1, 2)],
+        "symbols": [("\\parityname", main, 3)],
+        "labels": [("sec:parity", main, 6), ("sec:child", child, 2)],
+        "references": [("sec:parity", main, 8), ("sec:child", main, 8)],
+    }
+    for field, rows in expected.items():
+        if len(index[field]) != len(rows):
+            return False
+        for name, path, line, *level in rows:
+            if not any(row["name"] == fingerprint(name) and row["path"] == path
+                       and row["line"] == line
+                       and (not level or type(row.get("level")) is int and row["level"] == level[0])
+                       for row in index[field]):
+                return False
+    return (index["packages"] == [fingerprint("amsmath")]
+            and index["subfiles"] == [child])
+
+
 HARPER_TYPOS = "This sentence contains a misspelld word.\nThis is the the simple result.\n"
 HARPER_FORMATTED_REPETITION = "This is the #emph[the] result.\n"
 
@@ -519,7 +602,237 @@ class TexJourneys:
         self.stable_state(lambda d: d["path"] == str(path) and d["source_fingerprint"] == fingerprint(TEX_SOURCE))
         if path.read_text() != TEX_SOURCE:
             raise AssertionError("TeX editing changed disk despite disabled autosave")
+        self.tex_parity(path)
         self.tex_settings([('"auto_save": false', '"auto_save": true')])
+
+    def tex_parity_command(self, query, action):
+        self.palette_open()
+        result = self.palette_query(query)
+        if result["palette_selected"] != action or action not in result["palette_enabled"]:
+            raise AssertionError("TeX palette command is missing or disabled: " + action)
+        self.key(36, "none")
+        self.wait("TeX palette command closes the palette", lambda d: not d["palette_visible"])
+
+    def tex_parity(self, path):
+        """Exercise language parity through real menus, grid edits and native Save."""
+        from desktop_ui_journeys import fingerprint
+        self.focus_document_window()
+        original = self.snapshot()["document"]
+        view = original["view_mode"]
+        explorer = original["explorer_visible"]
+        child = self.directory / "parity-child.tex"
+        main = self.directory / "parity-main.tex"
+        child.write_text(TEX_PARITY_CHILD)
+        main.write_text(TEX_PARITY_SOURCE)
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(TEX_PARITY_SOURCE)
+        self.key(35, "cmd+alt")
+        self.key(20)
+        self.wait("active native TeX source owns preview before indexing", lambda d:
+                  d["path"] == str(path) and d["document_kind"] == "Tex"
+                  and d["preview_tab_id"] == d["active_tab_id"]
+                  and d["source_fingerprint"] == fingerprint(TEX_PARITY_SOURCE))
+        self.wait("TeX index includes real included-file headings and cross references",
+                  lambda d: tex_parity_index_ready(d, path, child), timeout=20)
+        if not explorer:
+            self.key(18)
+            self.wait("Explorer is visible for native preview selection", lambda d: d["explorer_visible"])
+        before = self.snapshot()["document"]
+        self.explorer_menu(main.name, "preview")
+        owner = lambda d: tex_source_owner_preserved(d, before)
+        self.wait("Explorer selects another TeX preview without switching the edited tab", lambda d:
+                  owner(d) and d["preview_path"] == str(main)
+                  and d["preview_tab_id"] != d["active_tab_id"]
+                  and d["preview_backend"] == "PDFium" and d["preview_pdfium_ready"]
+                  and not d["compile_indicator_spinning"], timeout=60)
+        self.wait("TeX index follows the new preview owner rather than stale editor paths", lambda d:
+                  owner(d) and tex_parity_index_ready(d, main, child), timeout=20)
+        if self.capture_review:
+            self.capture_viewport("main")
+        self.record("tex.explorer_preview", source=path.name, preview=main.name,
+                    active_tab_preserved=True, included_file_index=True)
+        self.tex_parity_tables(TEX_PARITY_SOURCE)
+        self.tex_parity_new_tab()
+        self.tex_parity_templates(path)
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(TEX_SOURCE)
+        self.key(35, "cmd+alt")
+        self.wait("TeX parity restores source and its preview owner", lambda d:
+                  d["path"] == str(path) and d["document_kind"] == "Tex"
+                  and d["source_fingerprint"] == fingerprint(TEX_SOURCE)
+                  and d["preview_tab_id"] == d["active_tab_id"])
+        if not explorer:
+            self.key(18)
+            self.wait("TeX parity restores Explorer visibility", lambda d: not d["explorer_visible"])
+        self.key({"Code": 19, "Split": 20, "Preview": 21}[view])
+        self.wait("TeX parity restores the original layout", lambda d: d["view_mode"] == view)
+        if path.read_text() != TEX_SOURCE or child.read_text() != TEX_PARITY_CHILD \
+                or main.read_text() != TEX_PARITY_SOURCE:
+            raise AssertionError("TeX parity changed a fixture on disk despite disabled autosave")
+
+    def tex_parity_tables(self, source):
+        from desktop_ui_journeys import fingerprint
+        from desktop_ui_math_grid_journeys import math_grid_fingerprint
+        from desktop_ui_newest_journeys import assert_table_grid_only
+        for disposition in ("cancel", "apply"):
+            self.click("editor.source")
+            self.key(126, "cmd")
+            for _ in range(source.splitlines().index("% table insertion") + 1):
+                self.key(125, "none")
+            before = self.snapshot()["document"]
+            old = {name: target["frame"] for name, target in self.snapshot()["targets"].items()
+                   if name.startswith("table.")}
+            self.tex_parity_command("New table", "edit.new_table")
+            self.wait("New Table opens a native TeX draft", lambda d: d["table_editor_open"])
+            self.table_target("table.cell.0.0", previous_frame=old.get("table.cell.0.0"))
+            state = self.snapshot()
+            assert_table_grid_only(state)
+            draft = state["document"]["table_draft"]
+            if (draft["math"] is not False or draft["kind"] != "tabular"
+                    or [draft["rows"], draft["columns"]] != [2, 2]
+                    or draft["fingerprint"] != math_grid_fingerprint([["", ""], ["", ""]])):
+                raise AssertionError("New Table chose Typst syntax or a nonempty TeX grid")
+            self.click("table.cell.0.0")
+            self.wait_target("table.cell.0.0", focused=True)
+            self.key(0)
+            self.native("text", "Native parity table")
+            self.wait("native TeX cell editing changes only the table draft", lambda d:
+                      d["table_draft"] is not None and d["table_draft"]["valid"]
+                      and d["table_draft"]["fingerprint"] == math_grid_fingerprint(
+                          [["Native parity table", ""], ["", ""]])
+                      and d["source_fingerprint"] == fingerprint(source))
+            if self.capture_review and disposition == "cancel":
+                self.capture_viewport("table-editor")
+            self.table_target("table." + disposition)
+            self.click("table." + disposition)
+            self.wait("native TeX table draft closes", lambda d: not d["table_editor_open"])
+            if disposition == "cancel":
+                self.source_is(source)
+                self.stable_state(lambda d: all(d[field] == before[field] for field in
+                                  ("active_tab_id", "path", "source_fingerprint", "source_bytes", "revision",
+                                   "preview_tab_id", "preview_path")), frames=4)
+            else:
+                changed = self.wait("New Table applies only to the active TeX source", lambda d:
+                                    d["source_fingerprint"] != fingerprint(source)
+                                    and d["source_bytes"] > len(source.encode())
+                                    and all(d[field] == before[field] for field in
+                                            ("active_tab_id", "path", "preview_tab_id", "preview_path")))["document"]
+                self.click("editor.source")
+                self.key(3)
+                self.wait_target("find.query", focused=True)
+                self.key(0)
+                self.native("text", "Native parity table")
+                self.wait("inserted TeX table contains the edited literal cell", lambda d:
+                          d["find_selected"] is not None
+                          and d["find_query_fingerprint"] == fingerprint("Native parity table")
+                          and d["source_fingerprint"] == changed["source_fingerprint"])
+                self.click("find.close")
+                self.wait("Find closes before TeX table Undo", lambda d: not d["find_visible"])
+                self.click("editor.source")
+                self.key(6)
+                self.source_is(source)
+                self.key(6, "cmd+shift")
+                self.wait("one Redo restores the complete inserted TeX table", lambda d:
+                          d["source_fingerprint"] == changed["source_fingerprint"]
+                          and d["source_bytes"] == changed["source_bytes"])
+                self.key(6)
+                self.source_is(source)
+            self.record("tex.new_table", disposition=disposition, kind="tabular",
+                        grid=[2, 2], exact_undo=disposition == "apply")
+
+    def tex_parity_new_tab(self):
+        from desktop_ui_journeys import fingerprint
+        self.click("editor.source")
+        before = self.snapshot()["document"]
+        self.key(45)  # Cmd+N inherits the active source's language.
+        self.wait("New creates a clean blank TeX tab without replacing its pinned preview", lambda d:
+                  d["document_kind"] == "Tex" and d["path"] is None and not d["dirty"]
+                  and d["tabs"] == before["tabs"] + 1
+                  and d["active_tab_id"] != before["active_tab_id"]
+                  and d["source_fingerprint"] == fingerprint("") and d["source_bytes"] == 0
+                  and not d["modal_open"] and all(d[field] == before[field] for field in
+                                               ("preview_tab_id", "preview_path")))
+        self.tex_close_created_tab(before, self.snapshot()["document"]["active_tab_id"])
+        self.record("tex.new", document_kind="Tex", clean_blank=True,
+                    pinned_preview_preserved=True, original_source_restored=True)
+
+    def tex_close_created_tab(self, before, created_id):
+        self.key(13)
+        self.wait("new TeX tab closes cleanly and preserves the pinned preview", lambda d:
+                  not d["modal_open"] and d["tabs"] == before["tabs"]
+                  and d["active_tab_id"] != created_id
+                  and all(d[field] == before[field] for field in ("preview_tab_id", "preview_path")))
+        # Closing selects the left neighbour in tab order, which need not be
+        # the source that was active before an appended tab was created.
+        self.click("tab." + str(before["active_tab_id"]))
+        restored = lambda d: (not d["modal_open"] and tex_source_owner_preserved(d, before)
+                              and all(d[field] == before[field] for field in
+                                      ("tabs", "preview_tab_id", "preview_path")))
+        self.wait("returning to the original TeX tab restores its exact source and caret", restored)
+        self.stable_state(restored, frames=4)
+
+    def tex_template_target(self, previous_frame):
+        """A just-closed TeX picker must not prove the next picker's language."""
+        import time
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            state = self.snapshot()
+            target = state["targets"].get("template.selected.tex")
+            if (state["document"]["template_picker_open"] and target
+                    and target["enabled"] and target["age_ms"] <= 500
+                    and target["frame"] != previous_frame):
+                return
+            time.sleep(0.05)
+        raise AssertionError("template picker did not expose a fresh TeX selection")
+
+    def tex_parity_templates(self, path):
+        from pathlib import Path
+        from desktop_ui_journeys import fingerprint
+        formatter = self.snapshot()["document"].get("tex_formatter")
+        if formatter not in ("badness", "tex-fmt", "disabled"):
+            raise AssertionError("The active TeX formatter observation is unavailable")
+        # This checks typed-template ownership, not the selected formatter's
+        # output. Manual-save formatting has its own source/tool coverage.
+        if formatter != "disabled":
+            self.tex_settings([(f'"formatter": "{formatter}"', '"formatter": "disabled"')])
+        for disposition in ("cancel", "create"):
+            self.click("editor.source")
+            before = self.snapshot()["document"]
+            previous = self.snapshot()["targets"].get("template.selected.tex", {}).get("frame")
+            self.tex_parity_command("New from template", "file.new_from_template")
+            self.wait("template picker opens from native TeX source", lambda d: d["template_picker_open"])
+            self.tex_template_target(previous)
+            self.wait_target("template." + disposition)
+            self.click("template." + disposition)
+            if disposition == "cancel":
+                self.wait("template Cancel preserves TeX source and tab ownership", lambda d:
+                          not d["template_picker_open"] and all(d[field] == before[field] for field in
+                              ("tabs", "active_tab_id", "path", "source_fingerprint", "source_bytes",
+                               "revision", "preview_path", "preview_tab_id")))
+            else:
+                template = (Path(__file__).resolve().parents[1]
+                            / "manual-tests/templates/article.tex").read_text()
+                self.wait("TeX template creates a typed TeX tab before any save", lambda d:
+                          not d["template_picker_open"] and d["document_kind"] == "Tex"
+                          and d["path"] is None and d["tabs"] == before["tabs"] + 1
+                          and d["active_tab_id"] != before["active_tab_id"]
+                          and d["source_fingerprint"] == fingerprint(template))
+                destination = self.directory / "parity-template.tex"
+                self.focus_document_window()
+                self.click("editor.source")
+                self.save_to_fixture(destination)
+                self.wait("native Save preserves the template's TeX document type", lambda d:
+                          d["path"] == str(destination) and d["document_kind"] == "Tex"
+                          and not d["dirty"] and d["source_fingerprint"] == fingerprint(template), timeout=20)
+                if destination.read_text() != template:
+                    raise AssertionError("Saving a TeX template changed its source")
+                self.tex_close_created_tab(before, self.snapshot()["document"]["active_tab_id"])
+            self.record("tex.template", disposition=disposition, default_language="Tex",
+                        typed_before_save=disposition == "create")
+        if formatter != "disabled":
+            self.tex_settings([('"formatter": "disabled"', f'"formatter": "{formatter}"')])
 
     def tex_intelligence(self):
         from desktop_ui_journeys import fingerprint

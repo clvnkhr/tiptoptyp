@@ -94,6 +94,18 @@ impl Drop for Dialog {
     }
 }
 impl Dialog {
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        history_activity(
+            [
+                self.list_job.activity(),
+                self.comparison_job.activity(),
+                self.backup_job.activity(),
+                self.pdf_job.activity(),
+            ],
+            self.error.as_deref(),
+        )
+    }
+
     fn new(
         key: DocumentKey,
         path: PathBuf,
@@ -734,6 +746,22 @@ fn show(ui: &mut egui::Ui, dialog: &Dialog, settings: &AppSettings) -> Option<Ac
     action
 }
 
+fn history_activity(
+    jobs: [crate::activity::Activity; 4],
+    error: Option<&str>,
+) -> crate::activity::Activity {
+    use crate::activity::Activity;
+    if jobs.iter().any(|job| matches!(job, Activity::Running)) {
+        Activity::Running
+    } else if let Some(error) = error {
+        Activity::Failed(error.into())
+    } else {
+        jobs.into_iter()
+            .find(|job| matches!(job, Activity::Failed(_)))
+            .unwrap_or(Activity::Idle)
+    }
+}
+
 // Gregorian civil date from Unix days; explicit UTC is deterministic and avoids
 // locale-dependent ambiguous dates without introducing another date library.
 fn timestamp(time: SystemTime) -> String {
@@ -757,4 +785,62 @@ fn timestamp(time: SystemTime) -> String {
         seconds / 60 % 60,
         seconds % 60
     )
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+    use crate::activity::Activity;
+
+    #[test]
+    fn every_version_operation_remains_busy_before_previous_failures() {
+        for running in 0..4 {
+            let mut jobs = std::array::from_fn(|_| Activity::Failed("old failure".into()));
+            jobs[running] = Activity::Running;
+            assert_eq!(
+                history_activity(jobs, Some("previous request failed")),
+                Activity::Running
+            );
+        }
+        assert_eq!(
+            history_activity(std::array::from_fn(|_| Activity::Idle), None),
+            Activity::Idle
+        );
+        assert_eq!(
+            history_activity(
+                std::array::from_fn(|_| Activity::Idle),
+                Some("restore failed")
+            ),
+            Activity::Failed("restore failed".into())
+        );
+        for failed in 0..4 {
+            let mut jobs = std::array::from_fn(|_| Activity::Idle);
+            jobs[failed] = Activity::Failed("worker failed".into());
+            assert_eq!(
+                history_activity(jobs, None),
+                Activity::Failed("worker failed".into())
+            );
+        }
+    }
+
+    #[test]
+    fn reading_version_activity_never_starts_inventory_or_pdf_work() {
+        let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(42), 1, 1);
+        let dialog = Dialog::new(
+            key,
+            "/paper.typ".into(),
+            "Source".into(),
+            false,
+            "/".into(),
+            None,
+        );
+        assert_eq!(dialog.activity(), Activity::Idle);
+        assert_eq!(dialog.activity(), Activity::Idle);
+        assert!(dialog.inventory.is_none());
+        assert!(dialog.comparison.is_none());
+        assert!(!dialog.list_job.is_running());
+        assert!(!dialog.comparison_job.is_running());
+        assert!(!dialog.backup_job.is_running());
+        assert!(!dialog.pdf_job.is_running());
+    }
 }

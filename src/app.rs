@@ -292,7 +292,7 @@ const DEFAULT_SOURCE: &str = r##"#set page(paper: "a4", margin: 2.2cm)
 Edit this document on the left. The PDF preview updates as you type.
 
 #let accent = rgb("#4f8cff")
-#text(fill: accent, weight: "bold")[A small, fast Typst workspace.]
+#text(fill: accent, weight: "bold")[A small, fast Typst and LaTeX workspace.]
 
 == Math and code
 
@@ -1148,7 +1148,7 @@ impl SettingsTarget {
             Self::LocalUseHighlights => "Highlight uses of local definitions",
             Self::TextHighlights => "Custom text highlights",
             Self::LineNumbers => "Line numbers",
-            Self::StickyContextRows => "Sticky context rows",
+            Self::StickyContextRows => "Typst sticky context rows",
             Self::AutoPairDelimiters => "Auto-close delimiters",
             Self::Indentation => "Tab inserts",
             Self::AsciiPunctuation => "Convert CJK punctuation to ASCII when typing",
@@ -1180,7 +1180,7 @@ impl SettingsTarget {
             Self::UiFontWeight => "UI font weight",
             Self::CodeFont => "Code font",
             Self::CodeFontWeight => "Code font weight",
-            Self::PreviewJump => "Typst preview jump",
+            Self::PreviewJump => "Source → preview gesture",
             Self::HoverDelay => "Hover delay",
             Self::TypstCompiler => "Typst compiler",
             Self::TexServices => "TeX tools",
@@ -1374,7 +1374,7 @@ impl SettingsTarget {
             Self::UiFontWeight => "editor interface bold variable",
             Self::CodeFont => "editor source monospace family choose",
             Self::CodeFontWeight => "editor source monospace bold variable",
-            Self::PreviewJump => "editor source sync click double modifier",
+            Self::PreviewJump => "editor source sync tex synctex click double modifier",
             Self::HoverDelay => "editor tooltip wait milliseconds timing",
             Self::TypstCompiler => "tools binary custom bundled path",
             Self::TexServices => {
@@ -2120,7 +2120,8 @@ impl EditorApp {
         match command_spec(command).requirement {
             CommandRequirement::Always => true,
             CommandRequirement::NewTable => {
-                self.document().kind().is_typst() && self.table_editor.is_none()
+                self.document().kind().typesetting_language().is_some()
+                    && self.table_editor.is_none()
             }
             CommandRequirement::EditTable => {
                 self.table_editor.is_none()
@@ -2582,7 +2583,12 @@ impl EditorApp {
                 self.project_root()
                     .join(".tiptoptyp")
                     .join("documents")
-                    .join("untitled.typ")
+                    .join(format!(
+                        "untitled.{}",
+                        self.preview_document_kind()
+                            .typesetting_language()
+                            .map_or("txt", |language| language.extension())
+                    ))
             })
     }
 
@@ -2665,6 +2671,7 @@ impl EditorApp {
         }
         if let Err(error) = self.project_index_job.request(
             ProjectIndexInput {
+                source_directory: self.preview_source_directory(),
                 root,
                 main,
                 overrides,
@@ -2711,12 +2718,14 @@ impl EditorApp {
         let path = canonical_or_absolute(&path);
         if !path.starts_with(&root)
             || !path.is_file()
-            || path
-                .extension()
-                .is_none_or(|extension| !extension.eq_ignore_ascii_case("typ"))
+            || path.extension().is_none_or(|extension| {
+                !["typ", "tex"]
+                    .iter()
+                    .any(|source| extension.eq_ignore_ascii_case(source))
+            })
         {
             self.notice = Some(Notice {
-                message: "Only a Typst file inside the current project can be used for preview"
+                message: "Choose a Typst or LaTeX file inside the current project for preview"
                     .to_owned(),
                 kind: NoticeKind::Error,
             });
@@ -2806,6 +2815,8 @@ impl EditorApp {
             if let Err(error) = self.sync_tinymist_change() {
                 self.preview.tinymist_state = ServiceState::Degraded(error);
             }
+        }
+        if self.document().kind().typesetting_language().is_some() {
             self.schedule_project_index();
         }
         self.schedule_autosave_if_needed();
@@ -3216,6 +3227,13 @@ impl EditorApp {
             .into_iter()
             .any(|salt| shortcut_viewport == scoped_child_viewport_id(context, salt))
         {
+            return;
+        }
+        if self.overleaf.review.is_some() {
+            let shortcuts = self.settings.effective_shortcuts();
+            if !self.handle_terminal_shortcuts(context, shortcut_viewport, &shortcuts, frame) {
+                self.handle_overleaf_review_shortcuts(context, shortcut_viewport);
+            }
             return;
         }
         if self.version_history.is_some() {
@@ -3644,6 +3662,19 @@ impl EditorApp {
         if self.route_overleaf_command(command, context) {
             return;
         }
+        if self.overleaf.review.is_some() {
+            let viewport = focused_input_viewport(context);
+            if viewport != context.viewport_id() {
+                self.route_edit_command_to_focused_widget(command, context, viewport);
+            } else if command == AppCommand::CloseTab {
+                self.close_overleaf_review(context);
+            } else if !self.route_edit_command_to_focused_widget(command, context, viewport)
+                && self.pdfium_preview_requested()
+            {
+                self.pdfium_preview.command(command, context, false);
+            }
+            return;
+        }
         if self.version_history.is_some() {
             let viewport = focused_input_viewport(context);
             if viewport != context.viewport_id() {
@@ -3763,7 +3794,7 @@ impl EditorApp {
                 }
             }
             AppCommand::New => self.new_document(),
-            AppCommand::NewFromTemplate => self.template_picker = Some(0),
+            AppCommand::NewFromTemplate => self.begin_template_picker(),
             AppCommand::ComfyPreview => self.toggle_comfy(context),
             AppCommand::NewWindow => {
                 self.pending_window_requests
@@ -4107,6 +4138,7 @@ impl EditorApp {
                 || self.table_editor.is_some()
                 || self.tool_dialog_open()
                 || self.version_history.is_some()
+                || self.overleaf.review.is_some()
                 || self.liquid.visible(),
             self.pending_tool_picker.is_some(),
         )
@@ -4728,6 +4760,10 @@ impl EditorApp {
     }
 
     fn reset_untitled_document(&mut self) {
+        self.reset_untitled_document_kind(DocumentKind::Typst);
+    }
+
+    fn reset_untitled_document_kind(&mut self, kind: DocumentKind) {
         // Match opening a saved source: a non-buildable launch tab cannot own
         // the preview of the first newly created source document.
         if self.tab_preview_document().is_none_or(|document| {
@@ -4740,8 +4776,8 @@ impl EditorApp {
         let preserve_preview =
             self.tabs.len() > 1 && self.tabs.active_id() != self.tabs.preview_id();
         let record = self.tabs.current_record_mut();
-        reset_untitled_buffer(&mut record.document, &mut record.autosave);
-        if self.settings.mitex_auto_enable {
+        reset_untitled_buffer(&mut record.document, &mut record.autosave, kind);
+        if kind.is_typst() && self.settings.mitex_auto_enable {
             self.document_mut().replace_unprojected_untitled("");
             self.activate_preferred_tex();
         }
@@ -4754,7 +4790,7 @@ impl EditorApp {
                 return;
             }
             let path = self.tinymist_document_path();
-            self.reopen_tinymist_current_document(&path, DocumentKind::Typst);
+            self.reopen_tinymist_current_document(&path, kind);
             self.git_editor.clear_document();
             self.git_editor.request_refresh();
             return;
@@ -4868,6 +4904,14 @@ impl EditorApp {
             .document()
             .path()
             .as_ref()
+            .is_some_and(|path| self.is_overleaf_path(path) && !path.starts_with(&root))
+        {
+            return;
+        }
+        if self
+            .document()
+            .path()
+            .as_ref()
             .is_some_and(|path| path.starts_with(&root))
         {
             if let Some(path) = self.document().path().clone() {
@@ -4929,6 +4973,7 @@ impl EditorApp {
                 ],
             )
             .add_filter("Typst documents", &["typ"])
+            .add_filter("LaTeX documents", &["tex"])
             .add_filter("PDF documents", &["pdf"]);
         let target = if new_window {
             dialog = dialog.set_title("Open document or folder in new window");
@@ -5118,24 +5163,11 @@ impl EditorApp {
         if self.document_workflow.has_dialog() {
             return false;
         }
-        let untitled = self.document().path().is_none();
-        // An untitled document has no language until the user chooses a name.
-        // The chosen extension determines its kind when the write is admitted.
-        let kind = if untitled {
-            DocumentKind::Text
-        } else {
-            self.document().kind()
-        };
+        let (kind, name) = crate::workflow::document_save_defaults(self.document());
         let Some(dialog) = self.native_file_dialog(frame) else {
             return false;
         };
-        let mut dialog = dialog
-            .set_file_name(if untitled {
-                "Untitled".to_owned()
-            } else {
-                self.document_name()
-            })
-            .set_title("Save document");
+        let mut dialog = dialog.set_file_name(name).set_title("Save document");
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
@@ -5157,7 +5189,7 @@ impl EditorApp {
         if !self.source_preview_available() && self.document().kind() != DocumentKind::Pdf {
             self.notice = Some(Notice {
                 message: format!(
-                    "{} needs a Typst preview entry or PDF document",
+                    "{} needs a Typst or LaTeX preview source, or a PDF document",
                     intent.dialog_title()
                 ),
                 kind: NoticeKind::Info,
@@ -5593,6 +5625,18 @@ impl EditorApp {
         }
     }
 
+    fn document_action_preserves_source(&self, action: &DeferredDocumentAction) -> bool {
+        tabs::opens_tab(action)
+            || matches!(
+                action,
+                DeferredDocumentAction::OpenFolder(_) | DeferredDocumentAction::OpenFolderDialog
+            ) && self
+                .document()
+                .path()
+                .as_ref()
+                .is_some_and(|path| self.is_overleaf_path(path))
+    }
+
     fn request_document_replacement(&mut self, action: DeferredDocumentAction, description: &str) {
         if self.document_flow_busy() {
             return;
@@ -5604,7 +5648,7 @@ impl EditorApp {
             self.tabs.approved.clear();
         }
         let key = self.document().key();
-        let dirty = self.document().is_dirty() && !tabs::opens_tab(&action);
+        let dirty = self.document().is_dirty() && !self.document_action_preserves_source(&action);
         let name = self.document().name();
         self.document_workflow
             .queue_replacement(key, dirty, &name, action, description);
@@ -5693,7 +5737,7 @@ impl EditorApp {
                 self.present_unsaved_prompt(pending);
                 return;
             }
-        } else if self.is_dirty() && !tabs::opens_tab(&pending.action) {
+        } else if self.is_dirty() && !self.document_action_preserves_source(&pending.action) {
             self.present_unsaved_prompt(pending);
             return;
         }
@@ -7389,6 +7433,7 @@ impl EditorApp {
             || self.table_editor.is_some()
             || self.tool_dialog_open()
             || self.version_history.is_some()
+            || self.overleaf.review.is_some()
             || !self.document().kind().is_editable()
         {
             return;
@@ -7848,7 +7893,14 @@ impl EditorApp {
         if self.overleaf_source_locked() {
             return;
         }
-        if self.table_editor.is_some() || !self.document().kind().is_typst() {
+        if self.table_editor.is_some() {
+            return;
+        }
+        if self.document().kind() == DocumentKind::Tex {
+            self.begin_new_tex_table(context);
+            return;
+        }
+        if !self.document().kind().is_typst() {
             return;
         }
         let cursor = self.editor_snapshot(context).cursor.primary.index.0;
@@ -8272,6 +8324,7 @@ impl EditorApp {
                 snapshot: workspace.map(WorkspaceTree::shared_snapshot),
                 read_only,
                 index: &self.project_index,
+                project_kind: self.preview_document_kind(),
                 active: self.tabs.current_record().document.path().as_deref(),
                 preview: preview.as_deref(),
                 statuses: &self.git_editor.statuses,
@@ -8328,6 +8381,9 @@ impl EditorApp {
         }
         if output.packages {
             self.open_package_manager(ui.ctx());
+        }
+        if let Some(query) = output.tex_documentation {
+            self.begin_tex_documentation((!query.is_empty()).then_some(query), ui.ctx());
         }
         if let Some(path) = output.open
             && !self.open_overleaf_path(&path)
@@ -9951,6 +10007,7 @@ impl EditorApp {
         self.update_ltex_checks(&context);
         self.prepare_diagnostic_visibility(Some(&context));
         self.update_liquid();
+        crate::resource_repair::poll();
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);
         self.refresh_diagnostic_tooltip(&context);
@@ -11727,8 +11784,12 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn reset_untitled_buffer(document: &mut DocumentSession, autosave_deadline: &mut Option<Instant>) {
-    document.replace_unprojected_untitled("");
+fn reset_untitled_buffer(
+    document: &mut DocumentSession,
+    autosave_deadline: &mut Option<Instant>,
+    kind: DocumentKind,
+) {
+    document.replace_untitled_kind(kind);
     *autosave_deadline = None;
 }
 
@@ -12442,17 +12503,24 @@ fn show_workspace_popup_ui(
             WorkspaceMenuAction::OpenInNewWindow(path.to_path_buf()),
         ));
     }
-    let is_typst = is_file
+    let is_typesetting = is_file
         && path
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("typ"));
+            .is_some_and(|extension| {
+                ["typ", "tex"]
+                    .iter()
+                    .any(|source| extension.eq_ignore_ascii_case(source))
+            });
     let preview_label = if preview_selected {
         "Preview source"
     } else {
         "Use for preview"
     };
-    if menu_item_enabled(ui, is_typst && !preview_selected, preview_label, None).clicked() {
+    let preview = menu_item_enabled(ui, is_typesetting && !preview_selected, preview_label, None);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("menu.workspace.preview", &preview);
+    if preview.clicked() {
         *action = Some(AppPopupAction::Workspace(
             WorkspaceMenuAction::TogglePreview(path.to_path_buf()),
         ));
@@ -13311,5 +13379,7 @@ fn preserve_workspace_snapshot_for_open(
 mod command_tests;
 #[cfg(test)]
 mod cross_owner_test;
+#[cfg(test)]
+mod language_parity_tests;
 #[cfg(test)]
 mod tests;

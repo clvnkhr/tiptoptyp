@@ -88,6 +88,19 @@ impl Dialog {
             edit_events: Vec::new(),
         }
     }
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        use crate::activity::Activity;
+        if self.generate.is_running() {
+            Activity::Running
+        } else if self.picker.is_some() {
+            Activity::Pending("Choose a file")
+        } else if let Some(error) = &self.error {
+            Activity::Failed(error.clone())
+        } else {
+            self.generate.activity()
+        }
+    }
+
     fn busy(&self) -> bool {
         self.generate.is_running() || self.picker.is_some()
     }
@@ -836,6 +849,32 @@ mod tests {
         dialog.older = "/tmp/older.tex".into();
         dialog
     }
+    #[test]
+    fn activity_reads_ready_error_and_pending_picker_without_polling() {
+        use crate::activity::Activity;
+        let mut dialog = fixture();
+        assert_eq!(dialog.activity(), Activity::Idle);
+        dialog.error = Some("The older file is unavailable".into());
+        assert_eq!(
+            dialog.activity(),
+            Activity::Failed("The older file is unavailable".into())
+        );
+        dialog.picker = Some(PendingDialog::new(
+            Action::Older,
+            std::future::poll_fn(|_| panic!("Activity must not poll file dialogs")),
+        ));
+        assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
+        assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
+        assert!(
+            dialog.picker.is_some(),
+            "observing must not poll or consume the picker"
+        );
+        assert!(!dialog.generate.is_running());
+        dialog.picker = None;
+        dialog.error = None;
+        assert_eq!(dialog.activity(), Activity::Idle);
+    }
+
     fn ui_harness(dialog: Dialog, width: f32) -> Harness<'static, (Dialog, Option<Action>)> {
         Harness::builder()
             .with_size(Vec2::new(width, 440.0))

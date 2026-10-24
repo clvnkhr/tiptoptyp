@@ -254,6 +254,7 @@ fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_gi
                         read_only: false,
                         snapshot: None,
                         index: &index,
+                        project_kind: DocumentKind::Typst,
                         active: Some(&path),
                         preview: Some(&path),
                         statuses: &statuses,
@@ -1110,7 +1111,7 @@ fn closing_retained_root_clears_discarded_buffer_autosave_and_old_receipts() {
         .unwrap();
     let mut deadline = Some(Instant::now());
     assert!(document.is_dirty());
-    reset_untitled_buffer(&mut document, &mut deadline);
+    reset_untitled_buffer(&mut document, &mut deadline, DocumentKind::Typst);
     assert_eq!(document.source(), "");
     assert!(!document.is_dirty());
     assert!(document.path().is_none());
@@ -5112,6 +5113,7 @@ fn hidden_files_skip_query_classification_until_the_section_is_open() {
                         read_only: false,
                         snapshot: Some(&state.1),
                         index: &index,
+                        project_kind: DocumentKind::Typst,
                         active: None,
                         preview: None,
                         statuses: &statuses,
@@ -5293,12 +5295,19 @@ fn explorer_project_sections_preserve_empty_and_filtered_messages() {
         (ExplorerSection::Subfiles, "No included files"),
         (ExplorerSection::Symbols, "No definitions or functions"),
         (ExplorerSection::Packages, "No packages"),
-        (ExplorerSection::Tags, "No tags"),
+        (ExplorerSection::Tags, "No labels"),
         (ExplorerSection::References, "No references"),
     ] {
         for query in ["", "missing"] {
             let mut harness = Harness::builder().build_ui(|ui| {
-                show_project_index_section(ui, section, Path::new("."), &index, query);
+                show_project_index_section(
+                    ui,
+                    section,
+                    Path::new("."),
+                    &index,
+                    DocumentKind::Typst,
+                    query,
+                );
             });
             harness.run();
             harness.get_by_label(if query.is_empty() {
@@ -5307,7 +5316,7 @@ fn explorer_project_sections_preserve_empty_and_filtered_messages() {
                 "No matches"
             });
             if section == ExplorerSection::Packages {
-                harness.get_by_label("Browse packages…");
+                harness.get_by_label("Browse Typst packages…");
             }
         }
     }
@@ -5328,6 +5337,7 @@ fn partial_project_index_does_not_add_a_persistent_warning_row() {
                 ExplorerSection::Contents,
                 project.path(),
                 &partial,
+                DocumentKind::Typst,
                 "no-match",
             );
         });
@@ -5524,16 +5534,18 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
     harness.run();
     let identities = harness.state().body_ids;
     assert!(identities.iter().all(Option::is_some));
-    harness.get_by_label("Tags").click();
+    harness.get_by_label("Labels").click();
     harness.run();
-    assert!(harness.query_by_label("Tags body").is_none());
+    assert!(harness.query_by_label("Labels body").is_none());
     harness.get_by_label("Reorder").click();
     harness.run();
-    assert!(harness.query_by_label("Tags body").is_none());
+    assert!(harness.query_by_label("Labels body").is_none());
     assert!(
         harness.get_by_label("References").rect().top() < harness.get_by_label("Git").rect().top()
     );
-    assert!(harness.get_by_label("Files").rect().top() > harness.get_by_label("Tags").rect().top());
+    assert!(
+        harness.get_by_label("Files").rect().top() > harness.get_by_label("Labels").rect().top()
+    );
     for section in ExplorerSection::ALL {
         if section != ExplorerSection::Tags {
             assert_eq!(
@@ -5591,11 +5603,11 @@ fn explorer_maximize_hides_siblings_and_restores_collapsed_states_and_sizes() {
         );
     harness.run();
     let original = harness.state().bounds;
-    assert!(harness.query_by_label("Tags body").is_none());
+    assert!(harness.query_by_label("Labels body").is_none());
     // A collapsed section can be expanded temporarily without opening it on restore.
-    harness.get_by_label("Maximize Tags section").click();
+    harness.get_by_label("Maximize Labels section").click();
     harness.run();
-    harness.get_by_label("Tags body");
+    harness.get_by_label("Labels body");
     for section in ExplorerSection::ALL {
         if section != ExplorerSection::Tags {
             assert!(harness.query_by_label(section.title()).is_none());
@@ -5607,9 +5619,9 @@ fn explorer_maximize_hides_siblings_and_restores_collapsed_states_and_sizes() {
         bounds.height() > 700.0 && bounds.bottom() <= 800.0,
         "{bounds:?}"
     );
-    harness.get_by_label("Restore Tags section").click();
+    harness.get_by_label("Restore Labels section").click();
     harness.run();
-    assert!(harness.query_by_label("Tags body").is_none());
+    assert!(harness.query_by_label("Labels body").is_none());
     assert_eq!(harness.state().bounds, original);
     assert_eq!(harness.state().layout.weights, weights);
     harness.get_by_label("Maximize Files section").click();
@@ -5655,7 +5667,14 @@ fn tag_and_reference_panels_have_independent_search_and_navigation() {
             .build_ui_state(
                 |ui, target| {
                     install_hover_runtime_config(ui.ctx(), Duration::ZERO);
-                    let outcome = show_project_index_section(ui, section, root, &index, "");
+                    let outcome = show_project_index_section(
+                        ui,
+                        section,
+                        root,
+                        &index,
+                        DocumentKind::Typst,
+                        "",
+                    );
                     if outcome.target.is_some() {
                         *target = outcome.target;
                     }
@@ -5695,8 +5714,14 @@ fn tag_references_expand_to_wrapping_line_links_and_navigate() {
         .with_size(Vec2::new(100.0, 200.0))
         .build_ui_state(
             |ui, target| {
-                let outcome =
-                    show_project_index_section(ui, ExplorerSection::Tags, root, &index, "");
+                let outcome = show_project_index_section(
+                    ui,
+                    ExplorerSection::Tags,
+                    root,
+                    &index,
+                    DocumentKind::Typst,
+                    "",
+                );
                 if outcome.target.is_some() {
                     *target = outcome.target;
                 }

@@ -14,6 +14,62 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+class DocumentWindowFocusContract(unittest.TestCase):
+    def test_main_child_never_replaces_the_inspected_document_root(self):
+        from desktop_ui_journeys import document_window_title
+        document = {'path': '/private/tmp/main.txt', 'dirty': True}
+        windows = [{'AXTitle': 'tiptoptyp Overleaf', 'AXMain': True},
+                   {'AXTitle': 'tiptoptyp Preview', 'AXFocused': True},
+                   {'AXTitle': 'main.txt* — tiptoptyp', 'AXMain': False}]
+        self.assertEqual(document_window_title(document, windows), 'main.txt* — tiptoptyp')
+        journey = object.__new__(runner.Journey)
+        actions = []
+        journey.snapshot = lambda: {'document': {**document, 'focused': False}}
+        def native(command, *args):
+            actions.append((command, *args))
+            return {'windows': windows} if command == 'windows' else {}
+        journey.native = native
+        def wait(description, predicate):
+            self.assertTrue(predicate({'focused': True}))
+            self.assertFalse(predicate({'focused': False}))
+        journey.wait = wait
+        journey.focus_document_window()
+        self.assertEqual(actions, [('windows',), ('activate',), ('raise', 'main.txt* — tiptoptyp')])
+
+    def test_multi_root_selection_uses_exact_filename_and_dirty_marker(self):
+        from desktop_ui_journeys import document_window_title
+        windows = [{'AXTitle': 'other.typ — tiptoptyp', 'AXMain': True},
+                   {'AXTitle': 'main.txt — tiptoptyp'}, {'AXTitle': 'main.txt* — tiptoptyp'}]
+        for dirty, expected in ((False, 'main.txt — tiptoptyp'), (True, 'main.txt* — tiptoptyp')):
+            self.assertEqual(document_window_title({'path': '/private/tmp/main.txt', 'dirty': dirty},
+                                                   windows), expected)
+        unnamed = {'path': None, 'dirty': False}
+        self.assertEqual(document_window_title(unnamed, [{'AXTitle': 'Untitled — tiptoptyp'}]),
+                         'Untitled — tiptoptyp')
+        self.assertEqual(document_window_title(unnamed, [{'AXTitle': 'Fixture root — tiptoptyp'}]),
+                         'Fixture root — tiptoptyp')
+
+    def test_missing_or_ambiguous_document_roots_fail_before_activation(self):
+        from desktop_ui_journeys import document_window_title
+        document = {'path': '/private/tmp/main.txt', 'dirty': False}
+        for windows in ([], [{'AXTitle': 'tiptoptyp Overleaf', 'AXMain': True}],
+                        [{'AXTitle': 'main.txt — tiptoptyp', 'AXMinimized': True}],
+                        [{'AXTitle': 'main.txt — tiptoptyp'}, {'AXTitle': 'main.txt — tiptoptyp'}],
+                        [{'AXTitle': 'other.typ — tiptoptyp'}, {'AXTitle': 'Untitled — tiptoptyp'}]):
+            with self.subTest(windows=windows), self.assertRaises(AssertionError):
+                document_window_title(document, windows)
+        journey = object.__new__(runner.Journey)
+        actions = []
+        journey.snapshot = lambda: {'document': {**document, 'focused': False}}
+        def native(command, *args):
+            actions.append(command)
+            return {'windows': [{'AXTitle': 'tiptoptyp Overleaf', 'AXMain': True}]}
+        journey.native = native
+        with self.assertRaises(AssertionError):
+            journey.focus_document_window()
+        self.assertEqual(actions, ['windows'])
+
+
 class TargetedSnapshotContract(unittest.TestCase):
     def snapshot(self, document_owner, requested):
         import json

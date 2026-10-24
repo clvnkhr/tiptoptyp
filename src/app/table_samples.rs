@@ -14,6 +14,21 @@ pub(super) struct Job {
     view: View,
 }
 impl Job {
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        use crate::activity::Activity;
+        if !self.started {
+            Activity::Inactive("Not requested")
+        } else if self.worker.is_running() || self.view.pending {
+            Activity::Running
+        } else if let Some(error) = &self.view.error {
+            Activity::Failed(error.clone())
+        } else if self.view.locked.is_empty() {
+            Activity::Inactive("No computed cells")
+        } else {
+            self.worker.activity()
+        }
+    }
+
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn inspect(&self) -> serde_json::Value {
         serde_json::json!({"pending":self.view.pending,"failed":self.view.error.is_some(),
@@ -718,6 +733,39 @@ pub(super) fn locked_cell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_distinguishes_unrequested_literal_pending_failed_and_ready_tables() {
+        use crate::activity::Activity;
+        let mut job = Job::default();
+        assert_eq!(job.activity(), Activity::Inactive("Not requested"));
+        job.started = true;
+        assert_eq!(job.activity(), Activity::Inactive("No computed cells"));
+        job.view.locked.insert((0, 0), "#price".into());
+        job.view.pending = true;
+        job.view.error = Some("previous sample failed".into());
+        assert_eq!(job.activity(), Activity::Running);
+        assert_eq!(job.activity(), Activity::Running);
+        assert!(job.view.pending);
+        assert!(
+            !job.worker.is_running(),
+            "reading activity started a worker"
+        );
+        job.view.pending = false;
+        assert_eq!(
+            job.activity(),
+            Activity::Failed("previous sample failed".into())
+        );
+        job.view.error = None;
+        job.view.grid = Some(crate::table_sampling::Grid {
+            columns: 1,
+            rows: 1,
+            cells: Vec::new(),
+        });
+        assert_eq!(job.activity(), Activity::Idle);
+        job.reset();
+        assert_eq!(job.activity(), Activity::Inactive("Not requested"));
+    }
     #[test]
     fn table_samples_apply_refuses_programmatic_overwrite_of_computed_cells() {
         let dir = tempfile::tempdir().unwrap();

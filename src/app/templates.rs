@@ -1,5 +1,21 @@
 use super::*;
 impl EditorApp {
+    pub(super) fn begin_template_picker(&mut self) {
+        let language = if self.tabs.is_empty() {
+            None
+        } else {
+            match self.document().kind() {
+                DocumentKind::Typst => Some(crate::document_templates::Language::Typst),
+                DocumentKind::Tex => Some(crate::document_templates::Language::Tex),
+                _ => None,
+            }
+        };
+        self.template_picker = Some(crate::document_templates::initial_selection(
+            &self.settings.templates,
+            language,
+        ));
+    }
+
     pub(super) fn show_template_picker(&mut self, context: &egui::Context) {
         let Some(selected) = &mut self.template_picker else {
             return;
@@ -83,17 +99,20 @@ fn show_picker(
         .frame(theme::settings_content_frame(ui.style()))
         .show(ui, |ui| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui
-                    .add_enabled(
-                        !settings.templates.is_empty(),
-                        egui::Button::new(RichText::new("Create document").strong())
-                            .fill(ui.visuals().selection.bg_fill),
-                    )
-                    .clicked()
-                {
+                let create = ui.add_enabled(
+                    !settings.templates.is_empty(),
+                    egui::Button::new(RichText::new("Create document").strong())
+                        .fill(ui.visuals().selection.bg_fill),
+                );
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("template.create", &create);
+                if create.clicked() {
                     action = Some(PickerAction::Create);
                 }
-                if ui.button("Cancel").clicked() {
+                let cancel = ui.button("Cancel");
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe("template.cancel", &cancel);
+                if cancel.clicked() {
                     action = Some(PickerAction::Cancel);
                 }
             });
@@ -101,7 +120,7 @@ fn show_picker(
     egui::CentralPanel::default()
         .frame(theme::settings_content_frame(ui.style()))
         .show(ui, |ui| {
-            egui::ComboBox::from_label("Template")
+            let picker = egui::ComboBox::from_label("Template")
                 .selected_text(
                     settings
                         .templates
@@ -113,6 +132,15 @@ fn show_picker(
                         ui.selectable_value(selected, index, &template.name);
                     }
                 });
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            if let Some(template) = settings.templates.get(*selected) {
+                crate::desktop_test::observe(
+                    &format!("template.selected.{}", template.language.extension()),
+                    &picker.response,
+                );
+            }
+            #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+            let _ = picker;
             egui::ScrollArea::both()
                 .id_salt("template-preview-scroll")
                 .auto_shrink([false, false])
@@ -142,6 +170,30 @@ mod tests {
         Harness,
         kittest::{NodeT, Queryable},
     };
+
+    #[test]
+    fn opening_templates_follows_the_active_source_kind_and_keeps_every_language_available() {
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, std::env::temp_dir());
+        let original = app.settings.templates.clone();
+        for kind in [DocumentKind::Tex, DocumentKind::Typst, DocumentKind::Text] {
+            app.document_mut().replace_untitled_kind(kind);
+            app.begin_template_picker();
+            let selected = app.template_picker.unwrap();
+            let expected = match kind {
+                DocumentKind::Tex => crate::document_templates::Language::Tex,
+                _ => crate::document_templates::Language::Typst,
+            };
+            assert_eq!(
+                app.settings.templates[selected].language, expected,
+                "{kind:?}"
+            );
+            assert_eq!(app.settings.templates, original);
+        }
+        app.settings.templates.clear();
+        app.begin_template_picker();
+        assert_eq!(app.template_picker, Some(0));
+    }
 
     #[test]
     fn template_actions_remain_labeled_and_visible_below_long_preview() {

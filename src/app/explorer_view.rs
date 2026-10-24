@@ -24,6 +24,7 @@ pub(super) struct Input<'a> {
     pub label: &'a str,
     pub snapshot: Option<&'a Arc<WorkspaceSnapshot>>,
     pub index: &'a ProjectIndex,
+    pub project_kind: crate::document::DocumentKind,
     pub active: Option<&'a Path>,
     pub preview: Option<&'a Path>,
     pub statuses: &'a crate::git::editor::FileStatuses,
@@ -49,6 +50,7 @@ pub(super) struct Output {
     pub repaint: bool,
     pub insert_symbol: Option<crate::handwriting::Insertion>,
     pub packages: bool,
+    pub tex_documentation: Option<String>,
     pub open: Option<PathBuf>,
     pub index_target: Option<(PathBuf, usize)>,
     pub context_menu: Option<ContextMenu>,
@@ -91,6 +93,8 @@ pub(super) fn show(
             .truncate()
             .sense(Sense::click()),
         );
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("explorer.workspace", &response);
         let mut hover = input.root.display().to_string();
         if let Some(warning) = input.index.warning() {
             hover.push_str("\nSome Explorer entries could not be discovered.\n");
@@ -329,9 +333,13 @@ pub(super) fn show(
                     section,
                     project_root,
                     project_index,
+                    input.project_kind,
                     &normalized_queries[section.index()],
                 );
                 output.packages |= outcome.open_package_manager;
+                if outcome.tex_documentation.is_some() {
+                    output.tex_documentation = outcome.tex_documentation;
+                }
                 if outcome.focused {
                     state.set_focused_section(Some(section));
                 }
@@ -1548,6 +1556,7 @@ pub(super) fn explorer_section_resizable(
 #[derive(Default)]
 pub(super) struct ExplorerProjectSectionOutcome {
     pub(super) open_package_manager: bool,
+    pub(super) tex_documentation: Option<String>,
     pub(super) target: Option<(PathBuf, usize)>,
     pub(super) focused: bool,
 }
@@ -1557,6 +1566,7 @@ pub(super) fn show_project_index_section(
     section: ExplorerSection,
     root: &Path,
     index: &ProjectIndex,
+    project_kind: crate::document::DocumentKind,
     query: &str,
 ) -> ExplorerProjectSectionOutcome {
     let mut outcome = ExplorerProjectSectionOutcome::default();
@@ -1619,10 +1629,22 @@ pub(super) fn show_project_index_section(
             }
         }
         ExplorerSection::Packages => {
-            let browse = crate::app::icons::action_button(ui, "Browse packages…");
+            let tex = project_kind == crate::document::DocumentKind::Tex;
+            let browse = crate::app::icons::action_button(
+                ui,
+                if tex {
+                    "TeXdoc…"
+                } else {
+                    "Browse Typst packages…"
+                },
+            );
             outcome.focused |= browse.has_focus();
             if browse.clicked() {
-                outcome.open_package_manager = true;
+                if tex {
+                    outcome.tex_documentation = Some(String::new());
+                } else {
+                    outcome.open_package_manager = true;
+                }
             }
             ui.separator();
             for package in index
@@ -1631,7 +1653,11 @@ pub(super) fn show_project_index_section(
                 .filter(|package| explorer_text_matches_query(package, query))
             {
                 shown = true;
-                outcome.focused |= explorer_index_row(ui, package, None, 0.0).has_focus();
+                let response = explorer_index_row(ui, package, None, 0.0);
+                outcome.focused |= response.has_focus();
+                if tex && response.clicked() {
+                    outcome.tex_documentation = Some(package.clone());
+                }
             }
         }
         ExplorerSection::Tags => {
@@ -1747,7 +1773,7 @@ pub(super) fn show_project_index_section(
                 ExplorerSection::Subfiles => "No included files",
                 ExplorerSection::Symbols => "No definitions or functions",
                 ExplorerSection::Packages => "No packages",
-                ExplorerSection::Tags => "No tags",
+                ExplorerSection::Tags => "No labels",
                 ExplorerSection::References => "No references",
                 ExplorerSection::Files | ExplorerSection::Git | ExplorerSection::DrawSymbol => {
                     unreachable!("not a project index panel")
@@ -1969,6 +1995,7 @@ mod read_only_tests {
                             label: "Overleaf project",
                             snapshot: Some(&snapshot),
                             index: &index,
+                            project_kind: crate::document::DocumentKind::Tex,
                             active: None,
                             preview: None,
                             statuses: &statuses,

@@ -60,6 +60,7 @@ impl EditorApp {
             || self.table_editor.is_some()
             || self.tool_dialog_open()
             || self.version_history.is_some()
+            || self.overleaf.review.is_some()
             || self.liquid.visible()
         {
             return;
@@ -231,6 +232,10 @@ impl EditorApp {
         if self.overleaf_source_locked() {
             self.editor_completion = None;
             self.snippet_session = None;
+        }
+        if self.overleaf.review.is_some() {
+            self.show_overleaf_review_panel(ui);
+            return;
         }
         if self.version_history.is_some() {
             self.show_version_history_panel(ui);

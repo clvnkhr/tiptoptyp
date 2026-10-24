@@ -364,7 +364,11 @@ impl EditorApp {
                 kind: NoticeKind::Error,
             });
         }
-        if active && unchanged && pending.format_after && self.document().kind().is_typst() {
+        if active
+            && unchanged
+            && pending.format_after
+            && self.document().kind().typesetting_language().is_some()
+        {
             if pending.path_changed {
                 self.format_when_service_ready =
                     save_as_format_handoff(true, self.document().kind(), self.document().key());
@@ -622,27 +626,35 @@ mod tests {
 
     #[test]
     fn auto_save_does_not_format_and_manual_save_as_waits_for_durable_completion() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("note.typ");
-        let context = egui::Context::default();
-        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
-        app.snapshot_scene = None;
-        app.document_mut().replace_unprojected_untitled("hello");
-        let (release, holder) = hold_destination(path.clone());
-        assert!(app.save_to(path.clone(), &context));
-        assert!(app.format_when_service_ready.is_none());
-        assert!(app.document().path().is_none());
-        release.send(()).unwrap();
-        holder.join().unwrap();
-        app.finish_save_for_test(&context);
-        assert_eq!(app.format_when_service_ready, Some(app.document().key()));
-        app.format_when_service_ready = None;
-        app.document_mut()
-            .edit(CCursorRange::default(), |source| source.push('!'));
-        assert!(app.save_to_with_intent(path, SaveIntent::Auto, &context));
-        app.finish_save_for_test(&context);
-        assert!(app.format_when_service_ready.is_none());
-        assert!(app.manual_format_revision.is_none());
+        for (extension, kind) in [("typ", DocumentKind::Typst), ("tex", DocumentKind::Tex)] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join(format!("note.{extension}"));
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+            app.snapshot_scene = None;
+            app.document_mut().replace_untitled_kind(kind);
+            app.document_mut()
+                .edit(CCursorRange::default(), |source| source.push_str("hello"));
+            let (release, holder) = hold_destination(path.clone());
+            assert!(app.save_to(path.clone(), &context));
+            assert!(app.format_when_service_ready.is_none());
+            assert!(app.document().path().is_none());
+            release.send(()).unwrap();
+            holder.join().unwrap();
+            app.finish_save_for_test(&context);
+            assert_eq!(
+                app.format_when_service_ready,
+                Some(app.document().key()),
+                "{kind:?}"
+            );
+            app.format_when_service_ready = None;
+            app.document_mut()
+                .edit(CCursorRange::default(), |source| source.push('!'));
+            assert!(app.save_to_with_intent(path, SaveIntent::Auto, &context));
+            app.finish_save_for_test(&context);
+            assert!(app.format_when_service_ready.is_none());
+            assert!(app.manual_format_revision.is_none());
+        }
     }
 
     #[test]

@@ -45,6 +45,19 @@ enum Action {
     Close,
 }
 impl Dialog {
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        use crate::activity::Activity;
+        if self.job.is_running() {
+            Activity::Running
+        } else if self.picker.is_some() {
+            Activity::Pending("Choose a file")
+        } else if let Some(error) = &self.error {
+            Activity::Failed(error.clone())
+        } else {
+            Activity::Idle
+        }
+    }
+
     fn busy(&self) -> bool {
         self.job.is_running() || self.picker.is_some()
     }
@@ -693,6 +706,30 @@ mod tests {
             snapshot: None, target: None, insert: false, completed: None, error: None,
             job: Default::default(), cancel: Arc::default(), picker: None, focus: true, edit_events: Vec::new() }
     }
+    #[test]
+    fn activity_keeps_pending_picker_and_explicit_import_errors_visible() {
+        use crate::activity::Activity;
+        let mut dialog = fixture();
+        assert_eq!(dialog.activity(), Activity::Idle);
+        dialog.error = Some("The bibliography changed".into());
+        assert_eq!(
+            dialog.activity(),
+            Activity::Failed("The bibliography changed".into())
+        );
+        dialog.picker = Some(PendingDialog::new(
+            (),
+            std::future::poll_fn(|_| panic!("Activity must not poll file dialogs")),
+        ));
+        assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
+        assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
+        assert!(dialog.picker.is_some());
+        assert!(!dialog.job.is_running());
+        dialog.picker = None;
+        dialog.error = None;
+        dialog.completed = Some(("Fixture2026".into(), true));
+        assert_eq!(dialog.activity(), Activity::Idle);
+    }
+
     fn harness(dialog: Dialog) -> Harness<'static, (Dialog, Option<Action>)> {
         let mut fonts_ready = false;
         Harness::builder()

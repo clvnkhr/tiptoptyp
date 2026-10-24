@@ -26,6 +26,7 @@ const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) struct ProjectIndexInput {
     pub(crate) root: PathBuf,
     pub(crate) main: PathBuf,
+    pub(crate) source_directory: PathBuf,
     pub(crate) overrides: std::collections::BTreeMap<PathBuf, String>,
 }
 
@@ -33,6 +34,7 @@ impl ProjectIndexInput {
     fn payload_bytes(&self) -> usize {
         self.root.as_os_str().as_encoded_bytes().len()
             + self.main.as_os_str().as_encoded_bytes().len()
+            + self.source_directory.as_os_str().as_encoded_bytes().len()
             + self
                 .overrides
                 .iter()
@@ -241,6 +243,7 @@ fn worker_loop(shared: &Arc<(Mutex<Queue>, Condvar)>) {
         let output = crate::project_index::analyze_project_cancellable(
             &job.input.root,
             &job.input.main,
+            &job.input.source_directory,
             &job.input.overrides,
             || job.cancelled.load(Ordering::Acquire),
         )
@@ -390,6 +393,7 @@ mod tests {
             input: ProjectIndexInput {
                 root: PathBuf::from("/project"),
                 main: source.into(),
+                source_directory: PathBuf::from("/project"),
                 overrides: Default::default(),
             },
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -493,6 +497,7 @@ mod tests {
         let input = || ProjectIndexInput {
             root: project.path().to_owned(),
             main: main.clone(),
+            source_directory: project.path().to_owned(),
             overrides: std::collections::BTreeMap::from([(main.clone(), source.clone())]),
         };
 
@@ -508,6 +513,7 @@ mod tests {
                 let _ = crate::project_index::analyze_project_cancellable(
                     &input.root,
                     &input.main,
+                    &input.source_directory,
                     &input.overrides,
                     || false,
                 );

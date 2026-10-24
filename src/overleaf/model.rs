@@ -1,10 +1,25 @@
 use super::*;
 
+mod merge;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Conflict {
+    pub(crate) base: String,
     pub(crate) remote: String,
     pub(crate) local: String,
     pub(crate) message: String,
+}
+/// Exact versions shown in a conflict review. A choice cannot be applied after
+/// editing, receiving another remote revision, or starting another session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConflictReview {
+    pub(crate) id: String,
+    pub(crate) base: String,
+    pub(crate) local: String,
+    pub(crate) remote: String,
+    pub(crate) message: String,
+    epoch: u64,
+    generation: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Document {
@@ -71,6 +86,8 @@ pub(crate) struct Model {
     in_flight: Option<InFlight>,
     next_request: u64,
     presence: presence::Presence,
+    review_generation: Option<u64>,
+    verified_documents: BTreeSet<String>,
 }
 impl Model {
     pub(crate) fn new(epoch: u64) -> Self {
@@ -82,6 +99,8 @@ impl Model {
             in_flight: None,
             next_request: 0,
             presence: Default::default(),
+            review_generation: Some(0),
+            verified_documents: BTreeSet::new(),
         }
     }
     pub(crate) fn for_project(epoch: u64, project: &ProjectUrl) -> Self {
@@ -121,6 +140,8 @@ impl Model {
         self.epoch = epoch;
         self.in_flight = None;
         self.presence.clear();
+        self.verified_documents.clear();
+        self.invalidate_reviews();
     }
     pub(crate) fn set_draft(&mut self, id: &str, source: String) -> Result<bool, String> {
         check_source(&source)?;
@@ -140,6 +161,9 @@ impl Model {
         if let Some(conflict) = &mut document.conflict {
             conflict.local = local;
         }
+        if changed {
+            self.invalidate_reviews();
+        }
         Ok(changed)
     }
     /// Publish exactly the document owning the native SaveRequest. Another
@@ -153,6 +177,7 @@ impl Model {
         let tree = self.tree.as_ref()?;
         let document = self.documents.get(id)?;
         if document.conflict.is_some()
+            || !self.verified_documents.contains(id)
             || !tree
                 .entry(id)
                 .is_some_and(|entry| entry.kind == EntryKind::Doc)
@@ -176,21 +201,75 @@ impl Model {
         self.in_flight = Some(pending);
         Some(command)
     }
-    /// Explicitly discard the retained local draft after conflict review.
-    pub(crate) fn resolve_server(&mut self, id: &str) -> bool {
-        let Some(document) = self.documents.get_mut(id) else {
-            return false;
-        };
+    pub(crate) fn conflict_review(&self, id: &str) -> Option<ConflictReview> {
+        if !self.verified_documents.contains(id)
+            || !self
+                .tree
+                .as_ref()?
+                .entry(id)
+                .is_some_and(|entry| entry.kind == EntryKind::Doc)
+        {
+            return None;
+        }
+        let conflict = self.documents.get(id)?.conflict.as_ref()?;
+        Some(ConflictReview {
+            id: id.into(),
+            base: conflict.base.clone(),
+            local: conflict.local.clone(),
+            remote: conflict.remote.clone(),
+            message: conflict.message.clone(),
+            epoch: self.epoch,
+            generation: self.review_generation?,
+        })
+    }
+    /// Cheap frame-time validity check; source equality is checked again when
+    /// applying a choice, rather than cloning all three versions while painting.
+    pub(crate) fn conflict_review_current(&self, review: &ConflictReview) -> bool {
+        self.epoch == review.epoch
+            && self.review_generation == Some(review.generation)
+            && self.verified_documents.contains(&review.id)
+            && self.tree.as_ref().is_some_and(|tree| {
+                tree.entry(&review.id)
+                    .is_some_and(|entry| entry.kind == EntryKind::Doc)
+            })
+            && self
+                .documents
+                .get(&review.id)
+                .is_some_and(|document| document.conflict.is_some())
+    }
+    /// Accept only the exact versions reviewed. This creates a draft; publishing
+    /// it still needs the ordinary explicit save and durable acknowledgement.
+    pub(crate) fn resolve_conflict(
+        &mut self,
+        review: &ConflictReview,
+        source: String,
+    ) -> Result<(), String> {
+        check_source(&source)?;
+        if !self.conflict_review_current(review)
+            || self.conflict_review(&review.id).as_ref() != Some(review)
+        {
+            return Err(
+                "The Overleaf versions changed. Reopen the comparison before choosing a version."
+                    .into(),
+            );
+        }
         if self
             .in_flight
             .as_ref()
-            .is_some_and(|pending| pending.id == id)
+            .is_some_and(|pending| pending.id == review.id)
         {
-            return false;
+            return Err(
+                "Wait for the outstanding Overleaf save before resolving this conflict.".into(),
+            );
         }
-        document.draft = None;
+        let document = self
+            .documents
+            .get_mut(&review.id)
+            .expect("reviewed document");
+        document.draft = (source != document.baseline).then_some(source);
         document.conflict = None;
-        true
+        self.invalidate_reviews();
+        Ok(())
     }
     /// Release a native editor's explicitly discarded/exported draft when its
     /// last binding ends. A live publish still owns that draft until its reply.
@@ -207,6 +286,7 @@ impl Model {
         };
         document.draft = None;
         document.conflict = None;
+        self.invalidate_reviews();
         if self
             .tree
             .as_ref()
@@ -250,7 +330,7 @@ impl Model {
                                 .as_ref()
                                 .is_some_and(|pending| &pending.id == id))
                     {
-                        document.conflict = Some(Conflict { remote: document.baseline.clone(), local: document.source().to_owned(), message: "This document was removed from Overleaf. Your local draft is retained.".into() });
+                        document.conflict = Some(Conflict { base: document.conflict.as_ref().map_or_else(|| document.baseline.clone(), |conflict| conflict.base.clone()), remote: document.baseline.clone(), local: document.source().to_owned(), message: "This document was removed from Overleaf. Your local draft is retained.".into() });
                     }
                 }
                 // Server churn must not retain every previously downloaded
@@ -262,6 +342,9 @@ impl Model {
                         || document.is_dirty()
                         || publishing == Some(id.as_str())
                 });
+                self.verified_documents
+                    .retain(|id| tree.entry(id).is_some());
+                self.invalidate_reviews();
                 self.presence.retain_tree(&tree);
                 self.project_id = Some(project_id);
                 self.tree = Some(tree);
@@ -272,6 +355,7 @@ impl Model {
             } => {
                 self.validate_entry(&id, &path, EntryKind::Doc)?;
                 check_source(&source)?;
+                self.verified_documents.insert(id.clone());
                 let pending = self.in_flight.as_ref().filter(|pending| pending.id == id);
                 if !self.documents.contains_key(&id) {
                     self.documents.insert(
@@ -282,6 +366,7 @@ impl Model {
                             conflict: None,
                         },
                     );
+                    self.invalidate_reviews();
                     return Ok(ModelChange::Document {
                         id,
                         source,
@@ -299,14 +384,34 @@ impl Model {
                     return Ok(ModelChange::Ignored);
                 }
                 let local = document.source().to_owned();
-                let conflicting = (document.is_dirty() || pending.is_some()) && local != source;
-                document.baseline.clone_from(&source);
-                if conflicting {
-                    document.conflict = Some(Conflict { remote: source.clone(), local, message: "Overleaf changed while this document had local edits. Review both versions before publishing.".into() });
+                let base = document.conflict.as_ref().map_or_else(
+                    || document.baseline.clone(),
+                    |conflict| conflict.base.clone(),
+                );
+                let merged = if pending.is_some() {
+                    None
                 } else {
-                    document.draft = None;
+                    merge::reconcile(&base, &local, &source)
+                        .filter(|merged| merged.len() <= MAX_SOURCE_BYTES)
+                };
+                let conflicting = merged.is_none();
+                document.baseline.clone_from(&source);
+                if let Some(merged) = merged {
+                    document.draft = (merged != source).then_some(merged);
                     document.conflict = None;
+                } else {
+                    // Even a remote snapshot matching the newer local draft
+                    // cannot consume it while an older publish owns the ACK.
+                    document.draft =
+                        (pending.is_some() || local != source).then_some(local.clone());
+                    document.conflict = Some(Conflict {
+                        base,
+                        remote: source.clone(),
+                        local,
+                        message: "Overleaf changed while this document had local edits. Review both versions before publishing.".into(),
+                    });
                 }
+                self.invalidate_reviews();
                 Ok(ModelChange::Document {
                     id,
                     source,
@@ -329,16 +434,30 @@ impl Model {
                     .get_mut(&id)
                     .ok_or("The acknowledged document is no longer open.")?;
                 let local = document.source().to_owned();
+                let base = document
+                    .conflict
+                    .as_ref()
+                    .map_or_else(|| pending.base.clone(), |conflict| conflict.base.clone());
                 document.baseline.clone_from(&source);
+                self.verified_documents.insert(id.clone());
                 if source != pending.source {
-                    document.conflict = Some(Conflict { remote: source, local, message: "Overleaf acknowledged different contents. Your local draft is retained.".into() });
+                    document.draft = (local != source).then_some(local.clone());
+                    document.conflict = Some(Conflict { base, remote: source, local, message: "Overleaf acknowledged different contents. Your local draft is retained.".into() });
+                    self.invalidate_reviews();
                     return Ok(ModelChange::Conflict { id });
                 }
                 if document.draft.as_ref() == Some(&source) {
                     document.draft = None;
                 }
-                // A previously detected concurrent edit still requires review.
+                // A previously detected concurrent edit still requires review,
+                // with the latest acknowledged bytes on the remote side.
+                let local = document.source().to_owned();
+                if let Some(conflict) = &mut document.conflict {
+                    conflict.remote.clone_from(&source);
+                    conflict.local = local;
+                }
                 let dirty = document.is_dirty();
+                self.invalidate_reviews();
                 Ok(ModelChange::Acknowledged {
                     id,
                     request,
@@ -357,19 +476,26 @@ impl Model {
                 if !self.matches(&id, request) {
                     return Ok(ModelChange::Ignored);
                 }
-                self.in_flight = None;
+                let pending = self.in_flight.take().expect("matched pending publish");
                 let document = self
                     .documents
                     .get_mut(&id)
                     .ok_or("The conflicting document is no longer open.")?;
                 let local = document.source().to_owned();
+                let base = document
+                    .conflict
+                    .as_ref()
+                    .map_or_else(|| pending.base.clone(), |conflict| conflict.base.clone());
                 document.baseline.clone_from(&source);
                 document.draft = (local != source).then_some(local.clone());
                 document.conflict = Some(Conflict {
+                    base,
                     remote: source,
                     local,
                     message,
                 });
+                self.verified_documents.insert(id.clone());
+                self.invalidate_reviews();
                 Ok(ModelChange::Conflict { id })
             }
             BrowserEvent::File {
@@ -392,10 +518,18 @@ impl Model {
             BrowserEvent::Status { state, message, .. } => {
                 if !matches!(state.as_str(), "connected" | "saving") {
                     self.presence.clear();
+                    self.verified_documents.clear();
+                    self.invalidate_reviews();
                 }
                 Ok(ModelChange::Status { state, message })
             }
         }
+    }
+    fn invalidate_reviews(&mut self) {
+        // Exhaustion permanently disables review tokens instead of reusing one.
+        self.review_generation = self
+            .review_generation
+            .and_then(|value| value.checked_add(1));
     }
     fn matches(&self, id: &str, request: u64) -> bool {
         self.in_flight

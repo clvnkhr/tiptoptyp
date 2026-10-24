@@ -667,6 +667,15 @@ mod tests {
         assert!(harness.state().ui.help_mode);
         harness.get(by().label("10 useful shortcuts"));
         harness.get(by().label("Preview shortcuts"));
+        harness.get_by_label_contains(
+            "Typst with Tinymist: the engine gear refreshes the live preview.",
+        );
+        harness.get_by_label_contains(
+            "TeX or Typst with PDFium: the engine gear compiles and saves the PDF directly;",
+        );
+        harness.get_by_label_contains(
+            "the same click gesture for Typst navigation and TeX SyncTeX navigation",
+        );
         harness.get(by().label("Leave part of your code untouched"));
         harness
             .get(
@@ -695,6 +704,11 @@ mod tests {
         assert!(!live.indentation_guides);
         assert!(live.highlight_local_uses);
         assert!(!live.line_wrap);
+        harness.get(
+            by().label("Typst sticky context rows")
+                .role(egui::accesskit::Role::CheckBox),
+        );
+        assert!(harness.query_by_label("Sticky context rows").is_none());
         harness.get(by().label("Custom text highlights")).click();
         harness.run();
         let first = harness

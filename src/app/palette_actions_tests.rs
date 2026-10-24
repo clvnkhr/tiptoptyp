@@ -868,6 +868,102 @@ fn palette_tool_handoff_restores_source_without_reactivating_owner() {
 }
 
 #[test]
+fn palette_table_and_template_actions_handoff_without_competing_owner_activation() {
+    for (action, source, caret) in [
+        (
+            ShortcutAction::NewTable,
+            "\\begin{document}\n\n\\end{document}",
+            17,
+        ),
+        (
+            ShortcutAction::EditTable,
+            "\\begin{tabular}{l}Cell\\end{tabular}",
+            19,
+        ),
+        (ShortcutAction::NewFromTemplate, "Plain text", 2),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        let mut app = fixture(&context, directory.path());
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("test.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(caret)));
+        app.prepare_editor_source_data();
+        app.editor_data
+            .prepare_table_at_cursor(caret, DocumentKind::Tex);
+        context
+            .run_ui(input(None, Vec::new()), |ui| {
+                app.toggle_command_palette(ui.ctx())
+            })
+            .drop_without_applying_deltas();
+        let origin = app.command_palette_origin.unwrap();
+        query_frame(&context, &mut app, Vec::new());
+        let output = context.run_ui(input(Some("tiptoptyp-popup-overlay"), Vec::new()), |ui| {
+            app.close_app_popup();
+            app.execute_palette_action(action, origin, ui.ctx(), None);
+            assert_eq!(ui.ctx().memory(|memory| memory.focused()), origin.focus);
+        });
+        assert!(
+            if action == ShortcutAction::NewFromTemplate {
+                app.template_picker.is_some()
+            } else {
+                app.table_editor.is_some()
+            },
+            "{action:?}"
+        );
+        assert!(
+            !output
+                .viewport_output
+                .values()
+                .any(|viewport| viewport.commands.contains(&egui::ViewportCommand::Focus)),
+            "{action:?}: child activation must wait until its live paint, with no competing owner Focus"
+        );
+        output.drop_without_applying_deltas();
+        assert_eq!(app.document().source(), source);
+    }
+}
+
+#[test]
+fn refused_palette_table_restores_origin_instead_of_queuing_a_nonexistent_child() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    context.set_embed_viewports(false);
+    let mut app = fixture(&context, directory.path());
+    app.document_mut().replace_loaded_unprojected(
+        "$x + y$".into(),
+        directory.path().join("math.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(3)));
+    context
+        .run_ui(input(None, Vec::new()), |ui| {
+            app.toggle_command_palette(ui.ctx())
+        })
+        .drop_without_applying_deltas();
+    let origin = app.command_palette_origin.unwrap();
+    query_frame(&context, &mut app, Vec::new());
+    let output = context.run_ui(input(Some("tiptoptyp-popup-overlay"), Vec::new()), |ui| {
+        app.close_app_popup();
+        app.execute_palette_action(ShortcutAction::NewTable, origin, ui.ctx(), None);
+        assert_eq!(ui.ctx().memory(|memory| memory.focused()), origin.focus);
+    });
+    assert!(app.table_editor.is_none());
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::Focus)
+    );
+    output.drop_without_applying_deltas();
+    assert_eq!(app.document().source(), "$x + y$");
+}
+
+#[test]
 fn palette_cancel_and_ordinary_commands_still_reactivate_origin() {
     for cancel in [false, true] {
         let directory = tempfile::tempdir().unwrap();

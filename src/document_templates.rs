@@ -20,6 +20,18 @@ pub(crate) struct Template {
     pub(crate) language: Language,
     pub(crate) source: String,
 }
+/// Start in the active source language while preserving the user's template order.
+/// Untyped documents and libraries without a match keep their first template.
+pub(crate) fn initial_selection(templates: &[Template], language: Option<Language>) -> usize {
+    language
+        .and_then(|language| {
+            templates
+                .iter()
+                .position(|template| template.language == language)
+        })
+        .unwrap_or(0)
+}
+
 pub(crate) fn defaults() -> Vec<Template> {
     [
         (
@@ -60,6 +72,52 @@ pub(crate) fn defaults() -> Vec<Template> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn initial_template_matches_each_source_language_without_reordering_the_library() {
+        let templates = defaults();
+        let before = templates.clone();
+        for language in [Language::Typst, Language::Tex] {
+            let index = initial_selection(&templates, Some(language));
+            assert_eq!(templates[index].language, language);
+            assert_eq!(
+                Some(index),
+                templates
+                    .iter()
+                    .position(|template| template.language == language)
+            );
+        }
+        assert_eq!(templates, before);
+        assert_eq!(initial_selection(&templates, None), 0);
+        let mut reordered = templates;
+        reordered.reverse();
+        for language in [Language::Typst, Language::Tex] {
+            let index = initial_selection(&reordered, Some(language));
+            assert_eq!(reordered[index].language, language);
+            assert_eq!(
+                Some(index),
+                reordered
+                    .iter()
+                    .position(|template| template.language == language)
+            );
+        }
+    }
+
+    #[test]
+    fn absent_language_and_empty_libraries_keep_the_available_first_choice() {
+        let typst_only: Vec<_> = defaults()
+            .into_iter()
+            .filter(|template| template.language == Language::Typst)
+            .collect();
+        assert_eq!(initial_selection(&typst_only, Some(Language::Tex)), 0);
+        let tex_only: Vec<_> = defaults()
+            .into_iter()
+            .filter(|template| template.language == Language::Tex)
+            .collect();
+        assert_eq!(initial_selection(&tex_only, Some(Language::Typst)), 0);
+        assert_eq!(initial_selection(&[], Some(Language::Tex)), 0);
+        assert_eq!(initial_selection(&[], None), 0);
+    }
+
     #[test]
     fn custom_templates_roundtrip_and_reject_unknown_languages() {
         let templates = vec![Template {

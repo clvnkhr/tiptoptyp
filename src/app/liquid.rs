@@ -70,6 +70,7 @@ pub(super) struct State {
     job: crate::worker::ExclusiveJob<Reply>,
     next: u64,
     active: Option<u64>,
+    last_error: Option<String>,
     dialog: Option<Dialog>,
     progress: Option<crate::worker::LatestReceiver<Progress>>,
     cancel: Arc<AtomicBool>,
@@ -120,6 +121,7 @@ impl Default for State {
             job: Default::default(),
             next: 0,
             active: None,
+            last_error: None,
             dialog: None,
             progress: None,
             cancel: Arc::default(),
@@ -220,11 +222,85 @@ struct Dialog {
     error: Option<String>,
 }
 impl State {
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        liquid_activity(
+            self.job.is_running(),
+            self.dialog.as_ref(),
+            self.last_error.as_deref(),
+        )
+    }
+
+    fn accepts_reply(&self, id: u64, current: Option<DocumentKey>) -> bool {
+        self.active == Some(id)
+            && !self.cancel.load(Ordering::Acquire)
+            && self.dialog.as_ref().is_some_and(|dialog| {
+                dialog.id == id && current.is_some_and(|key| dialog.target.current(key))
+            })
+    }
+
+    fn accept_reply(&mut self, reply: Reply, current: Option<DocumentKey>) {
+        let accepted = self.accepts_reply(reply.id, current);
+        self.active = None;
+        self.progress = None;
+        if !accepted {
+            return;
+        }
+        let dialog = self.dialog.as_mut().expect("accepted reply has a review");
+        dialog.sent = Some(reply.sent);
+        match reply.result {
+            Ok(review) => {
+                dialog.review = Some(Arc::new(review));
+                dialog.error = None;
+            }
+            Err(error) => {
+                self.last_error = Some(error.clone());
+                dialog.review = None;
+                dialog.error = Some(error);
+            }
+        }
+    }
+
+    fn fail_request(&mut self, error: String, current: Option<DocumentKey>) {
+        let accepted = self
+            .active
+            .is_some_and(|id| self.accepts_reply(id, current));
+        self.active = None;
+        self.progress = None;
+        if accepted {
+            self.last_error = Some(error.clone());
+            self.dialog
+                .as_mut()
+                .expect("accepted failure has a review")
+                .error = Some(error);
+        }
+    }
+
     pub(super) fn busy(&self) -> bool {
         self.job.is_running()
     }
     pub(super) fn visible(&self) -> bool {
         self.dialog.is_some()
+    }
+}
+
+fn liquid_activity(
+    running: bool,
+    dialog: Option<&Dialog>,
+    last_error: Option<&str>,
+) -> crate::activity::Activity {
+    use crate::activity::Activity;
+    // Closing the review cancels acceptance, not the worker's tracked lifetime.
+    if running {
+        Activity::Running
+    } else if let Some(error) = dialog
+        .and_then(|dialog| dialog.error.as_deref())
+        .or(last_error)
+    {
+        Activity::Failed(error.into())
+    } else if dialog.is_some() {
+        Activity::Idle
+    } else {
+        Activity::Inactive("No selection check")
     }
 }
 
@@ -272,9 +348,15 @@ impl EditorApp {
             error: config.as_ref().err().cloned(),
         });
         let Ok(config) = config else {
+            self.liquid.last_error = self
+                .liquid
+                .dialog
+                .as_ref()
+                .and_then(|dialog| dialog.error.clone());
             context.request_repaint();
             return;
         };
+        self.liquid.last_error = None;
         self.liquid.active = Some(id);
         self.liquid.cancel = Arc::default();
         let cancel = self.liquid.cancel.clone();
@@ -368,6 +450,7 @@ impl EditorApp {
             self.liquid.active = None;
             self.liquid.progress = None;
             self.liquid.cancel.store(true, Ordering::Release);
+            self.liquid.last_error = Some(error.clone());
             self.liquid.dialog.as_mut().unwrap().error = Some(error);
         }
     }
@@ -381,39 +464,10 @@ impl EditorApp {
         {
             self.accept_liquid_progress(progress);
         }
+        let current = (!self.tabs.is_empty()).then(|| self.document().key());
         match self.liquid.job.poll() {
-            LatestJobPoll::Ready(reply) => {
-                self.liquid.active = None;
-                self.liquid.progress = None;
-                if let Some(dialog) = &mut self.liquid.dialog
-                    && dialog.id == reply.id
-                    && !self.tabs.is_empty()
-                    && dialog
-                        .target
-                        .current(self.tabs.current_record().document.key())
-                {
-                    dialog.sent = Some(reply.sent);
-                    match reply.result {
-                        Ok(review) => {
-                            dialog.review = Some(Arc::new(review));
-                            dialog.error = None;
-                        }
-                        Err(error) => {
-                            dialog.review = None;
-                            dialog.error = Some(error);
-                        }
-                    }
-                }
-            }
-            LatestJobPoll::Failed(error) => {
-                let active = self.liquid.active.take();
-                self.liquid.progress = None;
-                if let Some(dialog) = &mut self.liquid.dialog
-                    && Some(dialog.id) == active
-                {
-                    dialog.error = Some(error);
-                }
-            }
+            LatestJobPoll::Ready(reply) => self.liquid.accept_reply(reply, current),
+            LatestJobPoll::Failed(error) => self.liquid.fail_request(error, current),
             LatestJobPoll::Pending | LatestJobPoll::Idle => {}
         }
         if let Some(dialog) = &mut self.liquid.dialog
@@ -833,6 +887,146 @@ fn review_diff_height(owner_height: f32, sent_header: f32, sent_body: f32, openn
 mod tests {
     use super::*;
 
+    #[test]
+    fn activity_observes_selection_errors_and_cancelled_workers_without_starting_work() {
+        use crate::activity::Activity;
+        let mut state = State::default();
+        assert_eq!(state.activity(), Activity::Inactive("No selection check"));
+        assert!(!state.busy());
+        assert!(!state.visible());
+        let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(42), 1, 1);
+        let snapshot = crate::document::DocumentSnapshot::fixture(key, "She go.");
+        let target = BoundSelection::new(
+            snapshot,
+            DocumentKind::Typst,
+            CCursorRange::two(CCursor::new(0), CCursor::new(7)),
+        )
+        .unwrap();
+        state.dialog = Some(Dialog {
+            id: 1,
+            target,
+            review: None,
+            sent: None,
+            progress: None,
+            sent_open: false,
+            error: Some("The model could not correct this selection".into()),
+        });
+        assert_eq!(
+            state.activity(),
+            Activity::Failed("The model could not correct this selection".into()),
+            "a successful transport reply must not hide its inner error"
+        );
+        assert_eq!(
+            liquid_activity(true, state.dialog.as_ref(), state.last_error.as_deref()),
+            Activity::Running
+        );
+        state.dialog.as_mut().unwrap().error = None;
+        assert_eq!(
+            state.activity(),
+            Activity::Idle,
+            "an open ready review is healthy"
+        );
+        state.cancel.store(true, Ordering::Release);
+        state.dialog = None;
+        assert_eq!(
+            liquid_activity(true, state.dialog.as_ref(), state.last_error.as_deref()),
+            Activity::Running,
+            "closing the review does not end the tracked worker"
+        );
+        state.last_error = Some("accepted check failed".into());
+        assert_eq!(
+            state.activity(),
+            Activity::Failed("accepted check failed".into())
+        );
+        state.last_error = None;
+        assert_eq!(state.activity(), Activity::Inactive("No selection check"));
+        assert!(!state.busy());
+    }
+
+    #[test]
+    fn accepted_check_failures_survive_review_close_but_cancelled_or_stale_failures_do_not() {
+        use crate::activity::Activity;
+        let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(42), 1, 1);
+        let target = BoundSelection::new(
+            crate::document::DocumentSnapshot::fixture(key, "She go."),
+            DocumentKind::Typst,
+            CCursorRange::two(CCursor::new(0), CCursor::new(7)),
+        )
+        .unwrap();
+        let dialog = || Dialog {
+            id: 7,
+            target: target.clone(),
+            review: None,
+            sent: None,
+            progress: None,
+            sent_open: false,
+            error: None,
+        };
+        let reply = |id| Reply {
+            id,
+            sent: SentInput::new(vec!["She go.".into()]),
+            result: Err("The model input was rejected".into()),
+        };
+        let mut state = State::default();
+        state.active = Some(7);
+        state.dialog = Some(dialog());
+        state.accept_reply(reply(7), Some(key));
+        assert_eq!(
+            state.activity(),
+            Activity::Failed("The model input was rejected".into())
+        );
+        state.dialog = None;
+        state.cancel.store(true, Ordering::Release);
+        assert_eq!(
+            state.activity(),
+            Activity::Failed("The model input was rejected".into())
+        );
+        for (cancelled, current, id, open) in [
+            (true, Some(key), 7, true),
+            (
+                false,
+                Some(DocumentKey {
+                    revision: key.revision + 1,
+                    ..key
+                }),
+                7,
+                true,
+            ),
+            (false, None, 7, true),
+            (false, Some(key), 8, true),
+            (false, Some(key), 7, false),
+        ] {
+            let mut state = State::default();
+            state.active = Some(7);
+            state.dialog = open.then(dialog);
+            state.cancel.store(cancelled, Ordering::Release);
+            state.accept_reply(reply(id), current);
+            assert!(
+                state.last_error.is_none(),
+                "unaccepted outcome was retained"
+            );
+            assert!(
+                state
+                    .dialog
+                    .as_ref()
+                    .is_none_or(|dialog| dialog.error.is_none())
+            );
+        }
+        let mut state = State::default();
+        state.active = Some(7);
+        state.dialog = Some(dialog());
+        state.fail_request("worker stopped".into(), Some(key));
+        assert_eq!(state.last_error.as_deref(), Some("worker stopped"));
+        state.active = Some(7);
+        state.cancel.store(true, Ordering::Release);
+        state.fail_request("Liquid check cancelled.".into(), Some(key));
+        assert_eq!(
+            state.last_error.as_deref(),
+            Some("worker stopped"),
+            "cancellation overwrote a retained actual failure"
+        );
+    }
+
     fn target(app: &EditorApp, range: Range<usize>) -> BoundSelection {
         BoundSelection::new(
             app.document().snapshot(),
@@ -1219,6 +1413,14 @@ outside";
         assert!(dialog.error.as_ref().unwrap().contains("local files"));
         assert!(dialog.review.is_none());
         assert_eq!(app.document().source(), "#emph[She go.]");
+        let failure = app.liquid.activity();
+        assert!(matches!(failure, crate::activity::Activity::Failed(_)));
+        app.close_liquid(&context);
+        assert_eq!(
+            app.liquid.activity(),
+            failure,
+            "closing a failed review must retain its accepted check error"
+        );
     }
 
     #[test]

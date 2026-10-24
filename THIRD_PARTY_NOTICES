@@ -8700,6 +8700,7 @@ Apache License 2.0 (Apache-2.0)
 - nohash-hasher 0.2.0
 - polycool 0.4.0
 - static_assertions 1.1.0
+- tinyvec 1.13.3
 - ureq-proto 0.6.4
 - utf8_iter 1.0.4
 - x11rb-protocol 0.13.2
@@ -16087,6 +16088,7 @@ Apache License 2.0 (Apache-2.0)
 - tract-onnx 0.23.8
 - unicase 2.9.0
 - unicode-normalization-alignments 0.1.12
+- unicode-normalization 0.1.25
 - unicode-segmentation 1.13.3
 - unicode-width 0.2.2
 - unicode-xid 0.2.6
@@ -19222,6 +19224,7 @@ Apache License 2.0 (Apache-2.0)
 - libghostty-vt 0.2.1
 - linebender_resource_handle 0.1.1
 - litrs 1.0.0
+- md5 0.8.1
 - miniz_oxide 0.8.9
 - miniz_oxide 0.9.1
 - monostate-impl 0.1.18

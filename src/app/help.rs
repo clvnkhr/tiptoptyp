@@ -23,10 +23,11 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
         ui.heading("10 useful shortcuts");
         shortcut_table(ui, "help-main-shortcuts", &bindings, &[A::Open, A::Save, A::Find, A::FindReplace, A::Undo, A::Redo, A::Compile, A::Format, A::ToggleComment, A::ToggleLineWrap]);
         ui.heading("Preview shortcuts");
-        ui.label("The engine gear refreshes the live preview. PDF (Compile PDF shortcut) creates a file beside the previewed source; Export PDF lets you choose another destination. A green check confirms a save in this window, yellow means the PDF needs updating, and red means creation failed. Preview loading and private PDF caches do not save that file.");
+        ui.label("Typst with Tinymist: the engine gear refreshes the live preview. PDF (Compile PDF shortcut) compiles and saves a file beside the previewed source. Its green check confirms a save in this window, yellow means the PDF needs updating, and red means creation failed.");
+        ui.label("TeX or Typst with PDFium: the engine gear compiles and saves the PDF directly; there is no separate PDF button. Export PDF lets you choose another destination. Automatic preview updates use private build caches and do not confirm a saved PDF.");
         shortcut_table(ui, "help-preview-shortcuts", &bindings, &[A::PreviewPreviousPage, A::PreviewNextPage, A::PreviewFitWidth, A::PreviewZoomIn, A::PreviewZoomOut, A::PreviewZoomReset, A::SyncPreview, A::ComfyPreview]);
         ui.monospace("t   Switch Tinymist preview appearance (preview focused)\nEscape   Return focus to source");
-        ui.label("Tinymist also accepts Cmd/Ctrl with + / − / 0 for zoom while focused. Use the floating preview controls for Find, Outline and Back/Forward after internal links.");
+        ui.label("Tinymist also accepts Cmd/Ctrl with + / − / 0 for zoom while focused. Both Tinymist and PDFium have floating preview controls for Find, Outline and Back/Forward after internal links. Source → preview gesture in Settings → Preview chooses the same click gesture for Typst navigation and TeX SyncTeX navigation.");
         ui.label("Typst defaults to Tinymist partial (experimental), keeping nearby pages ready and filling distant pages as you navigate. Select Tinymist (Typst only) for the complete renderer. This choice changes only the live viewer, not saved PDFs.");
         ui.label("On macOS, Smooth Tinymist zoom keeps a higher-resolution viewport image over the preview while it redraws. Toggle it in Settings → Preview; it works with both Tinymist viewers.");
         ui.heading("Leave part of your code untouched");

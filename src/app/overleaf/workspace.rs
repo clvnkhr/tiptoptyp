@@ -89,9 +89,10 @@ impl EditorApp {
         {
             return !connection.online
                 || connection.hydration.pending
-                || self
-                    .overleaf_entry(path)
-                    .is_some_and(|entry| self.overleaf.blocked.contains(&entry.id));
+                || self.overleaf_entry(path).is_some_and(|entry| {
+                    self.overleaf.blocked.contains(&entry.id)
+                        || self.overleaf.rebases.contains_key(&entry.id)
+                });
         }
         self.is_overleaf_path(path)
     }
@@ -142,6 +143,7 @@ impl EditorApp {
                 self.overleaf.workspace = None;
                 self.overleaf.tab_entities.clear();
                 self.overleaf.blocked.clear();
+                self.overleaf.rebases.clear();
                 self.prepare_overleaf_browser(context);
             }
             LatestJobPoll::Failed(error) => {

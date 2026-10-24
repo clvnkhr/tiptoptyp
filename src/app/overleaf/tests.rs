@@ -863,7 +863,65 @@ fn reconnect_after_ack_before_cache_receipt_resets_only_the_old_save_transaction
         !app.document_workflow.save_in_flight,
         "an old connection's ACK-cache transaction cannot block the new connection"
     );
+    assert!(
+        app.overleaf
+            .connection
+            .as_mut()
+            .unwrap()
+            .model
+            .publish("a")
+            .is_none(),
+        "a new connection must verify remote contents before accepting another publish"
+    );
+    // The old ACK remains authoritative, but its delayed mirror receipt cannot
+    // hydrate the new session. Deliver a fresh listing and snapshot, then its
+    // own working-copy receipt, before starting the next save transaction.
+    app.update_overleaf_event(
+        BrowserEvent::Project {
+            epoch: EPOCH + 1,
+            project_id: PROJECT.into(),
+            name: "Remote paper".into(),
+            entries: vec![entry("a", "main.tex", EntryKind::Doc)],
+            root_doc: Some("a".into()),
+        },
+        &context,
+    )
+    .unwrap();
+    app.update_overleaf_event(
+        BrowserEvent::Document {
+            epoch: EPOCH + 1,
+            id: "a".into(),
+            path: "main.tex".into(),
+            source: "Old connection acknowledged\n".into(),
+        },
+        &context,
+    )
+    .unwrap();
+    let hydration_session = app.overleaf.connection.as_ref().unwrap().hydration.session;
+    let fresh_tree = app.overleaf.tree_pending.take().unwrap();
+    let mirror = Mirror::open(&root).unwrap();
+    mirror.apply_tree(&fresh_tree).unwrap();
+    let fresh_work = app.overleaf.queued.pop_front().unwrap();
+    let fresh_result = mirror.write_document(&fresh_work.entry, "Old connection acknowledged\n");
+    app.apply_overleaf_mirror(
+        Mirrored {
+            hydration_session,
+            epoch: EPOCH + 1,
+            tree: Some(fresh_tree),
+            error: None,
+            files: vec![(fresh_work, fresh_result)],
+        },
+        &context,
+    );
+    app.finish_overleaf_hydration(&context);
+    assert!(!app.overleaf_source_locked());
+    assert!(!app.document().is_dirty());
+    assert_eq!(
+        app.document().saved_source(),
+        "Old connection acknowledged\n"
+    );
     let next_wire = pending_save(&mut app, tab, "a", "New connection draft\n");
+    assert_ne!(next_wire, wire);
     app.apply_overleaf_mirror(
         Mirrored {
             hydration_session: 0,
@@ -877,7 +935,10 @@ fn reconnect_after_ack_before_cache_receipt_resets_only_the_old_save_transaction
     assert!(app.document_workflow.save_in_flight);
     assert_eq!(app.overleaf.pending.as_ref().unwrap().wire, next_wire);
     assert_eq!(app.document().source(), "New connection draft\n");
-    assert_eq!(app.document().saved_source(), "Main old\n");
+    assert_eq!(
+        app.document().saved_source(),
+        "Old connection acknowledged\n"
+    );
     assert!(app.document().is_dirty());
 }
 
@@ -1946,7 +2007,41 @@ fn reconnect_uses_pending_storage_preferences_and_persists_same_storage_draft_ch
             EPOCH,
             PathBuf::from("chapter.tex"),
         ));
+        let (completed, completion) = std::sync::mpsc::channel();
+        context.set_request_repaint_callback(move |_| {
+            let _ = completed.send(());
+        });
+        app.overleaf
+            .storage_job
+            .start_and_repaint(
+                "Earlier failed Overleaf storage preparation",
+                &context,
+                || Err("Old storage preparation failed".into()),
+            )
+            .unwrap();
+        completion.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(
+            app.overleaf.storage_job.poll(),
+            LatestJobPoll::Failed(_)
+        ));
+        app.overleaf.error = Some("Old storage preparation failed".into());
+        assert_eq!(
+            app.overleaf_connection_activity(),
+            crate::activity::Activity::Failed("Old storage preparation failed".into())
+        );
         app.connect_overleaf(&context).unwrap();
+        assert_eq!(
+            app.overleaf.storage_job.activity(),
+            crate::activity::Activity::Idle
+        );
+        assert_eq!(
+            app.overleaf_connection_activity(),
+            crate::activity::Activity::Running
+        );
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            crate::activity::Activity::Running
+        );
         assert!(
             app.overleaf.reopen_relative.is_none(),
             "manual Connect clears another project's relative-file request"
@@ -2190,4 +2285,539 @@ fn stale_passive_receipt_cannot_requeue_an_old_baseline_under_a_fresh_remote_nam
         !app.overleaf_source_locked(),
         "fresh current-session receipts still complete the normal rename"
     );
+}
+
+mod activity_snapshots {
+    use super::*;
+    use crate::activity::Activity;
+
+    fn status(app: &mut EditorApp, context: &egui::Context, state: &str, message: Option<&str>) {
+        app.update_overleaf_event(
+            BrowserEvent::Status {
+                epoch: EPOCH,
+                state: state.into(),
+                message: message.map(str::to_owned),
+            },
+            context,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn dormant_snapshots_are_read_only_and_remote_save_is_not_local_autosave() {
+        let context = egui::Context::default();
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let dormant = EditorApp::dormant_for_tests(&context, root.clone());
+        for _ in 0..3 {
+            assert_eq!(
+                dormant.overleaf_connection_activity(),
+                Activity::Inactive("Not connected")
+            );
+            assert_eq!(
+                dormant.overleaf_sync_activity(),
+                Activity::Inactive("Not connected")
+            );
+            assert_eq!(
+                dormant.overleaf_save_activity(),
+                Activity::Inactive("Not connected")
+            );
+            assert_eq!(
+                dormant.overleaf_save_for_active(&dormant.overleaf_save_activity()),
+                None
+            );
+        }
+        assert!(!dormant.overleaf.create_browser);
+        assert!(!dormant.overleaf.storage_job.is_running());
+        assert!(!dormant.overleaf.io.is_running());
+        assert!(dormant.overleaf.queued.is_empty());
+        let mut app = fixture(&root, &context);
+        app.settings.auto_save = false;
+        let key = app.document().key();
+        assert_eq!(app.overleaf_connection_activity(), Activity::Idle);
+        assert_eq!(app.overleaf_sync_activity(), Activity::Idle);
+        assert_eq!(
+            app.overleaf_save_for_active(&app.overleaf_save_activity()),
+            Some(Activity::Idle)
+        );
+        assert_eq!(app.document().key(), key);
+        assert!(app.overleaf.pending.is_none());
+    }
+
+    #[test]
+    fn browser_state_distinguishes_sign_in_offline_failure_and_advisory() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        status(&mut app, &context, "loading", None);
+        assert_eq!(app.overleaf_connection_activity(), Activity::Running);
+        assert_eq!(app.overleaf_sync_activity(), Activity::Running);
+        status(&mut app, &context, "signed-out", Some("Please sign in"));
+        assert_eq!(
+            app.overleaf_connection_activity(),
+            Activity::Inactive("Sign in required")
+        );
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Inactive("Sign in required")
+        );
+        status(&mut app, &context, "disconnected", None);
+        assert_eq!(
+            app.overleaf_connection_activity(),
+            Activity::Inactive("Disconnected")
+        );
+        status(&mut app, &context, "error", Some("Permission revoked"));
+        assert_eq!(
+            app.overleaf_connection_activity(),
+            Activity::Failed("Permission revoked".into())
+        );
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Failed("Permission revoked".into())
+        );
+        status(
+            &mut app,
+            &context,
+            "connected",
+            Some("Refresh to check other files on this older server."),
+        );
+        assert_eq!(app.overleaf_connection_activity(), Activity::Idle);
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Pending("Syncing working copy")
+        );
+        // A late event from a superseded connection cannot replace its status.
+        app.update_overleaf_event(
+            BrowserEvent::Status {
+                epoch: EPOCH - 1,
+                state: "error".into(),
+                message: Some("obsolete failure".into()),
+            },
+            &context,
+        )
+        .unwrap();
+        assert_eq!(app.overleaf_connection_activity(), Activity::Idle);
+    }
+
+    #[test]
+    fn sync_snapshots_include_hydration_queued_tree_files_and_deferred_downloads() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        app.overleaf.connection.as_mut().unwrap().hydration.pending = true;
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Pending("Syncing working copy")
+        );
+        app.overleaf.connection.as_mut().unwrap().hydration.pending = false;
+        app.overleaf.tree_pending = app
+            .overleaf
+            .connection
+            .as_ref()
+            .unwrap()
+            .model
+            .tree()
+            .cloned();
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Pending("Working copy queued")
+        );
+        app.overleaf.tree_pending = None;
+        let doc = entry("a", "main.tex", EntryKind::Doc);
+        app.overleaf.queue(MirrorWork {
+            entry: doc.clone(),
+            data: MirrorData::Document("Main old\n".into()),
+            save: None,
+        });
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Pending("Working copy queued")
+        );
+        app.overleaf.queued.clear();
+        app.overleaf.downloads.defer(EPOCH, 0, doc).unwrap();
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Pending("Working copy queued")
+        );
+        app.overleaf.error = Some("Deferred download failed".into());
+        assert_eq!(
+            app.overleaf_sync_activity(),
+            Activity::Failed("Deferred download failed".into())
+        );
+        app.overleaf.downloads.clear();
+        assert_eq!(
+            app.overleaf_connection_activity(),
+            Activity::Failed("Deferred download failed".into())
+        );
+    }
+
+    #[test]
+    fn unsaved_native_edits_in_active_and_parked_tabs_are_never_healthy() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        app.document_mut()
+            .edit(CCursorRange::default(), |source| source.push_str("Unsaved"));
+        assert!(
+            !app.overleaf
+                .connection
+                .as_ref()
+                .unwrap()
+                .model
+                .has_unsynced()
+        );
+        assert_eq!(
+            app.overleaf_save_for_active(&app.overleaf_save_activity()),
+            Some(Activity::Pending("Unsaved changes"))
+        );
+        let _ = park_main(&mut app, &root, &context);
+        assert_eq!(
+            app.overleaf_save_activity(),
+            Activity::Pending("Unsaved changes")
+        );
+        status(&mut app, &context, "signed-out", None);
+        assert_eq!(
+            app.overleaf_save_activity(),
+            Activity::Pending("Sign in to save")
+        );
+        status(&mut app, &context, "disconnected", None);
+        assert_eq!(
+            app.overleaf_save_activity(),
+            Activity::Pending("Offline · unsaved changes")
+        );
+    }
+
+    #[test]
+    fn unrelated_local_edits_do_not_make_remote_save_pending() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        app.document_mut().replace_loaded_unprojected(
+            "Local\n".into(),
+            local.path().join("local.tex"),
+            DocumentKind::Tex,
+            Some(fingerprint(b"Local\n")),
+        );
+        app.document_mut()
+            .edit(CCursorRange::default(), |source| source.push_str("Changed"));
+        assert_eq!(app.overleaf_save_activity(), Activity::Idle);
+        assert_eq!(
+            app.overleaf_save_for_active(&app.overleaf_save_activity()),
+            None
+        );
+    }
+
+    #[test]
+    fn generated_and_untracked_files_do_not_inherit_remote_save_status() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        for relative in [".tiptoptyp/generated.tex", "untracked.tex"] {
+            app.document_mut().replace_loaded_unprojected(
+                "Generated\n".into(),
+                root.join(relative),
+                DocumentKind::Tex,
+                Some(fingerprint(b"Generated\n")),
+            );
+            assert_eq!(app.overleaf_save_for_active(&Activity::Idle), None);
+            app.document_mut().edit(CCursorRange::default(), |source| {
+                source.push_str("Local edit")
+            });
+            assert_eq!(app.overleaf_save_activity(), Activity::Idle);
+        }
+    }
+
+    #[test]
+    fn mirror_work_and_retained_failure_never_report_a_healthy_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        let (release, wait) = std::sync::mpsc::channel();
+        let (repaint, repaints) = std::sync::mpsc::channel();
+        context.set_request_repaint_callback(move |_| {
+            let _ = repaint.send(());
+        });
+        app.overleaf
+            .io
+            .start_and_repaint("Activity mirror test", &context, move || {
+                wait.recv().unwrap();
+                Err("Working copy is not writable".into())
+            })
+            .unwrap();
+        app.overleaf.save_active = true;
+        assert_eq!(app.overleaf_sync_activity(), Activity::Running);
+        assert_eq!(app.overleaf_save_activity(), Activity::Running);
+        release.send(()).unwrap();
+        repaints.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(app.overleaf.io.poll(), LatestJobPoll::Failed(_)));
+        for _ in 0..3 {
+            assert_eq!(
+                app.overleaf_sync_activity(),
+                Activity::Failed("Working copy is not writable".into())
+            );
+            assert_eq!(
+                app.overleaf_save_activity(),
+                Activity::Failed("Working copy is not writable".into())
+            );
+        }
+        assert!(!app.overleaf.io.is_running());
+    }
+
+    #[test]
+    fn save_acknowledgement_timeout_conflict_and_mirror_receipt_are_distinct() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        let tab = app.tabs.active_id().unwrap();
+        let request = pending_save(&mut app, tab, "a", "Saved remotely\n");
+        assert_eq!(
+            app.overleaf_save_activity(),
+            Activity::Pending("Awaiting Overleaf confirmation")
+        );
+        app.overleaf.pending.as_mut().unwrap().started = Instant::now() - SAVE_TIMEOUT;
+        assert!(
+            matches!(app.overleaf_save_activity(), Activity::Failed(error) if error.contains("not confirmed"))
+        );
+        app.overleaf.pending.as_mut().unwrap().started = Instant::now();
+        app.update_overleaf_event(
+            BrowserEvent::Ack {
+                epoch: EPOCH,
+                id: "a".into(),
+                request,
+                source: "Saved remotely\n".into(),
+            },
+            &context,
+        )
+        .unwrap();
+        assert_eq!(
+            app.overleaf_save_activity(),
+            Activity::Pending("Updating working copy")
+        );
+        let work = app.overleaf.queued.pop_front().unwrap();
+        apply_work(&mut app, work, &root, EPOCH, &context);
+        assert_eq!(app.overleaf_save_activity(), Activity::Idle);
+        app.overleaf.blocked.insert("a".into());
+        assert_eq!(
+            app.overleaf_save_activity(),
+            Activity::Failed(CONFLICT_ERROR.into())
+        );
+        app.overleaf.error = Some("Local and Overleaf versions need review".into());
+        assert_eq!(
+            app.overleaf_save_activity(),
+            Activity::Failed("Local and Overleaf versions need review".into())
+        );
+    }
+}
+
+#[test]
+fn chooser_switches_preserve_connection_and_pending_native_save() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    let tab = app.tabs.active_id().unwrap();
+    let wire = pending_save(&mut app, tab, "a", "Local pending source\n");
+    let key = app.document().key();
+    let epoch = app.overleaf.epoch;
+    for _ in 0..3 {
+        app.switch_workspace_chooser(&context, native_views::WorkspaceChooser::Local);
+        assert!(app.workspace_chooser_visible);
+        assert!(!app.overleaf.visible);
+        app.switch_workspace_chooser(&context, native_views::WorkspaceChooser::Overleaf);
+        assert!(!app.workspace_chooser_visible);
+        assert!(app.overleaf.visible);
+        let pending = app.overleaf.pending.as_ref().unwrap();
+        assert_eq!((pending.tab, pending.key, pending.wire), (tab, key, wire));
+        assert!(app.document_workflow.save_in_flight);
+        assert_eq!(app.document().source(), "Local pending source\n");
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.overleaf.epoch, epoch);
+        assert!(app.overleaf.connection.as_ref().unwrap().online);
+        assert_eq!(app.tabs.active_id(), Some(tab));
+        assert_eq!(app.workspace_root, root);
+    }
+}
+
+#[test]
+fn choosing_local_workspace_preserves_active_overleaf_draft_and_binding() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let local_root = local.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    let tab = app.tabs.active_id().unwrap();
+    app.overleaf.tab_entities.insert(tab, "a".into());
+    app.document_mut()
+        .edit(CCursorRange::default(), |text| text.push_str("Unsaved\n"));
+    let key = app.document().key();
+    app.finish_open_folder_selection(local_root.clone());
+    assert_eq!(app.workspace_root, local_root);
+    assert_eq!(app.tabs.active_id(), Some(tab));
+    assert_eq!(app.document().key(), key);
+    assert_eq!(app.document().source(), "Main old\nUnsaved\n");
+    assert!(app.document().is_dirty());
+    assert!(app.overleaf_tab_matches(tab, "a"));
+    assert!(app.overleaf.connection.as_ref().unwrap().online);
+}
+
+#[test]
+fn remote_merge_reaches_native_only_after_mirror_receipt_and_undo_is_respected() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.settings.auto_save = false;
+    let base = "Opening base.\nMiddle base.\nClosing base.\n";
+    let local = base.replace("Opening base.", "Opening local.");
+    let remote = base.replace("Closing base.", "Closing remote.");
+    let merged = local.replace("Closing base.", "Closing remote.");
+    let event = |source: &str| BrowserEvent::Document {
+        epoch: EPOCH,
+        id: "a".into(),
+        path: "main.tex".into(),
+        source: source.into(),
+    };
+    app.update_overleaf_event(event(base), &context).unwrap();
+    let work = app.overleaf.queued.pop_front().unwrap();
+    apply_work(&mut app, work, &root, EPOCH, &context);
+    app.document_mut()
+        .edit(CCursorRange::default(), |text| *text = local.clone());
+    app.update_overleaf_event(event(&remote), &context).unwrap();
+    assert_eq!(app.document().source(), &local);
+    assert!(app.overleaf_source_locked());
+    app.update_overleaf_event(event(&remote), &context).unwrap();
+    assert_eq!(
+        app.overleaf
+            .connection
+            .as_ref()
+            .unwrap()
+            .model
+            .document("a")
+            .unwrap()
+            .source(),
+        merged
+    );
+    let work = app.overleaf.queued.pop_front().unwrap();
+    apply_work(&mut app, work, &root, EPOCH, &context);
+    assert_eq!(app.document().source(), &merged);
+    assert_eq!(app.document().saved_source(), &remote);
+    assert!(app.document().is_dirty());
+    assert!(!app.overleaf_source_locked());
+    assert_eq!(fs::read_to_string(root.join("main.tex")).unwrap(), remote);
+    app.document_mut()
+        .history_step(false, CCursorRange::default())
+        .unwrap();
+    assert_eq!(app.document().source(), &remote);
+    assert!(!app.document().is_dirty());
+    app.update_overleaf_event(event(&remote), &context).unwrap();
+    let model = &app.overleaf.connection.as_ref().unwrap().model;
+    assert_eq!(model.document("a").unwrap().source(), remote);
+    assert!(
+        !model.has_unsynced(),
+        "an undone local edit must not be resurrected"
+    );
+}
+
+#[test]
+fn saving_during_native_merge_handoff_cannot_replace_the_merged_model_draft() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.settings.auto_save = false;
+    let base = "Opening base.\nMiddle base.\nClosing base.\n";
+    let local = base.replace("Opening base.", "Opening local.");
+    let remote = base.replace("Closing base.", "Closing remote.");
+    let merged = local.replace("Closing base.", "Closing remote.");
+    let path = root.join("main.tex");
+    app.overleaf
+        .connection
+        .as_mut()
+        .unwrap()
+        .model
+        .apply(BrowserEvent::Document {
+            epoch: EPOCH,
+            id: "a".into(),
+            path: "main.tex".into(),
+            source: base.into(),
+        })
+        .unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        base.into(),
+        path.clone(),
+        DocumentKind::Tex,
+        Some(fingerprint(base.as_bytes())),
+    );
+    app.document_mut()
+        .edit(CCursorRange::default(), |text| *text = local.clone());
+    app.update_overleaf_event(
+        BrowserEvent::Document {
+            epoch: EPOCH,
+            id: "a".into(),
+            path: "main.tex".into(),
+            source: remote.clone(),
+        },
+        &context,
+    )
+    .unwrap();
+    let tab = app.tabs.active_id().unwrap();
+    assert!(app.overleaf.rebases.contains_key("a"));
+    assert!(!app.submit_overleaf_save(tab, &path, &context));
+    let model = &app.overleaf.connection.as_ref().unwrap().model;
+    assert_eq!(model.document("a").unwrap().source(), merged);
+    assert!(model.in_flight().is_none());
+    assert_eq!(app.document().source(), &local);
+    assert!(app.overleaf.rebases.contains_key("a"));
+}
+
+#[test]
+fn local_chooser_dispatch_preserves_unsaved_and_remotely_removed_overleaf_sources() {
+    for removed in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let local_root = local.path().canonicalize().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        let tab = app.tabs.active_id().unwrap();
+        app.overleaf.tab_entities.insert(tab, "a".into());
+        app.document_mut()
+            .edit(CCursorRange::default(), |text| text.push_str("Unsaved\n"));
+        if removed {
+            app.update_overleaf_event(
+                BrowserEvent::Project {
+                    epoch: EPOCH,
+                    project_id: PROJECT.into(),
+                    name: "Remote paper".into(),
+                    entries: vec![entry("b", "chapter.tex", EntryKind::Doc)],
+                    root_doc: Some("b".into()),
+                },
+                &context,
+            )
+            .unwrap();
+            assert!(app.overleaf_entry(&root.join("main.tex")).is_none());
+        }
+        let key = app.document().key();
+        app.queue_open_path(local_root.clone());
+        assert!(
+            app.document_workflow.modal().is_none(),
+            "the chooser preserves this source"
+        );
+        app.execute_pending_document_action_inner(&context, None);
+        assert!(app.document_workflow.modal().is_none());
+        assert_eq!(app.workspace_root, local_root);
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.document().source(), "Main old\nUnsaved\n");
+        assert!(app.document().is_dirty());
+        assert!(app.overleaf_tab_matches(tab, "a"));
+    }
 }

@@ -100,7 +100,7 @@ commands! {
     Code => ("Code", View, 1, SourcePreview, 302),
     Split => ("Split", View, 1, SourcePreview, 303),
     Preview => ("Preview", View, 1, SourcePreview, 304),
-    Packages => ("Packages…", View, 2, Always, 305),
+    Packages => ("Typst Packages…", View, 2, Always, 305),
     Git => ("Git…", View, 2, Always, 306),
 }
 

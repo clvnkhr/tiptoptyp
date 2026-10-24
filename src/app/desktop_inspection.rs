@@ -147,6 +147,28 @@ impl EditorApp {
         observation["overleaf"] = self.overleaf_inspection();
         observation["palette_query_fingerprint"] =
             crate::desktop_test::fingerprint(&self.command_palette.query).into();
+        observation["tex_formatter"] = serde_json::to_value(self.settings.tex.formatter).unwrap();
+        observation["document_kind"] = format!("{:?}", self.document().kind()).into();
+        observation["workspace_chooser_visible"] = self.workspace_chooser_visible.into();
+        observation["workspace_root_fingerprint"] =
+            crate::desktop_test::fingerprint(&self.workspace_root.to_string_lossy()).into();
+        observation["template_picker_open"] = self.template_picker.is_some().into();
+        let index = &self.project_index;
+        let path_id = |path: &Path| crate::desktop_test::fingerprint(&path.to_string_lossy());
+        let reference_rows = |rows: &[crate::project_index::ReferenceEntry]| {
+            rows.iter().take(64).map(|row| serde_json::json!({
+            "name":crate::desktop_test::fingerprint(&row.label), "path":path_id(&row.path), "line":row.line
+        })).collect::<Vec<_>>()
+        };
+        observation["project_index"] = serde_json::json!({
+            "pending":self.project_index_job.is_running() || self.project_index_deadline.is_pending(),
+            "outline":index.outline.iter().take(64).map(|row| serde_json::json!({"name":crate::desktop_test::fingerprint(&row.title),"path":path_id(&row.path),"line":row.line,"level":row.level})).collect::<Vec<_>>(),
+            "symbols":index.symbols.iter().take(64).map(|row| serde_json::json!({"name":crate::desktop_test::fingerprint(&row.name),"path":path_id(&row.path),"line":row.line})).collect::<Vec<_>>(),
+            "packages":index.packages.iter().take(64).map(|name|crate::desktop_test::fingerprint(name)).collect::<Vec<_>>(),
+            "labels":reference_rows(&index.tags),"references":reference_rows(&index.references),
+            "subfiles":index.subfiles.iter().take(64).map(|path|path_id(path)).collect::<Vec<_>>(),
+            "warning":index.warning().map(crate::desktop_test::fingerprint)
+        });
         observation["palette_selected"] = self
             .command_palette
             .selected_action()

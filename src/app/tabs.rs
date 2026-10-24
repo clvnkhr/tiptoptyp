@@ -351,7 +351,7 @@ impl EditorApp {
     ) -> Result<(), ()> {
         for id in self.tabs.ids() {
             let document = self.document_for_tab(id).unwrap();
-            if !document.kind().is_typst() {
+            if document.kind().typesetting_language().is_none() {
                 continue;
             }
             let path = document.path().clone().unwrap_or_else(|| {
@@ -463,13 +463,22 @@ impl EditorApp {
         }
     }
     pub(super) fn untitled_tab_path(&self, id: u64) -> PathBuf {
-        if let Some(backing) = self.tinymist_sync.tab_backings.get(&id) {
+        let kind = self
+            .document_for_tab(id)
+            .map_or(DocumentKind::Text, |document| document.kind());
+        if kind.is_typst()
+            && let Some(backing) = self.tinymist_sync.tab_backings.get(&id)
+        {
             return backing.path().into();
         }
         self.tab_workspace(id)
             .unwrap_or(&self.workspace_root)
             .join(".tiptoptyp/documents")
-            .join(format!("untitled-{id}.typ"))
+            .join(format!(
+                "untitled-{id}.{}",
+                kind.typesetting_language()
+                    .map_or("txt", |language| language.extension())
+            ))
     }
 
     pub(super) fn prepare_tab_backings(&mut self) -> Result<(), String> {
@@ -680,12 +689,16 @@ impl EditorApp {
     }
 
     pub(super) fn new_tab(&mut self, context: &egui::Context) {
+        let kind = match self.document().kind() {
+            DocumentKind::Tex => DocumentKind::Tex,
+            _ => DocumentKind::Typst,
+        };
         if self.tabs.is_empty() {
             self.tabs.open_first(self.workspace_root.clone());
         } else if self.lifecycle.allows_document_work() {
             self.append_tab(context);
         }
-        self.reset_untitled_document();
+        self.reset_untitled_document_kind(kind);
     }
 
     pub(super) fn open_tab_path(&mut self, path: PathBuf, context: &egui::Context) -> bool {

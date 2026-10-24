@@ -171,6 +171,20 @@ class ActivityJourneys:
         initial = activity_state(ready)
         if initial["total_count"] < 20 or len(initial["groups"]) < 4:
             raise AssertionError("Activity fixture lacks the actual app source inventory")
+        new_sources = {
+            "Overleaf": "Files", "Overleaf sync": "Files", "Overleaf save": "Files",
+            "Liquid": "Checks", "Table values": "Code", "LaTeXdiff": "Tools",
+            "TeXdoc": "Tools", "Citation import": "Files", "Local versions": "Files",
+            "Biber cache": "Tools", "Component downloads": "Tools",
+            "File operations": "Files",
+        }
+        by_name = {row["name"]: row for row in initial["rows"]}
+        for name, group in new_sources.items():
+            if name not in by_name or by_name[name]["group"] != group:
+                raise AssertionError(f"Activity is missing its live {name} status in {group}")
+        for name in new_sources.keys() - {"File operations"}:
+            if by_name[name]["state"] != "Inactive":
+                raise AssertionError(f"Opening Activity started or misreported unused {name}")
         total = initial["total_count"]
         git_rows = [row for row in initial["rows"] if row["group"] == "Git"]
         if len(git_rows) < 2 or not any(row["name"] == "Git status" for row in git_rows):

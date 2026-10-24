@@ -18,6 +18,16 @@ pub(super) struct Dialog {
     pub(super) edit_events: Vec<egui::Event>,
 }
 impl Dialog {
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        documentation_activity(
+            self.job.activity(),
+            self.error.as_deref(),
+            self.results
+                .as_ref()
+                .is_some_and(|results| results.unavailable),
+        )
+    }
+
     fn new(query: Option<String>) -> Self {
         Self {
             query: query.unwrap_or_default(),
@@ -63,6 +73,25 @@ impl Dialog {
         }
     }
 }
+fn documentation_activity(
+    worker: crate::activity::Activity,
+    error: Option<&str>,
+    unavailable: bool,
+) -> crate::activity::Activity {
+    use crate::activity::Activity;
+    if matches!(worker, Activity::Running) {
+        Activity::Running
+    } else if let Some(error) = error {
+        Activity::Failed(error.into())
+    } else if matches!(worker, Activity::Failed(_)) {
+        worker
+    } else if unavailable {
+        Activity::Inactive("TeXdoc unavailable")
+    } else {
+        Activity::Idle
+    }
+}
+
 impl Drop for Dialog {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
@@ -376,6 +405,33 @@ pub(super) fn show_framebuffer_results(ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_distinguishes_unavailable_texdoc_from_ready_and_failed_searches() {
+        use crate::activity::Activity;
+        let mut dialog = Dialog::new(None);
+        assert_eq!(dialog.activity(), Activity::Idle);
+        dialog.results = Some(SearchResult {
+            unavailable: true,
+            manuals: Vec::new(),
+        });
+        assert_eq!(dialog.activity(), Activity::Inactive("TeXdoc unavailable"));
+        dialog.error = Some("The search failed".into());
+        assert_eq!(
+            dialog.activity(),
+            Activity::Failed("The search failed".into())
+        );
+        assert_eq!(
+            documentation_activity(Activity::Running, Some("old failure"), true),
+            Activity::Running
+        );
+        assert_eq!(
+            documentation_activity(Activity::Failed("worker stopped".into()), None, true),
+            Activity::Failed("worker stopped".into())
+        );
+        assert!(!dialog.job.is_running());
+        assert!(dialog.results.as_ref().unwrap().unavailable);
+    }
     use egui_kittest::{
         Harness,
         kittest::{NodeT, Queryable},

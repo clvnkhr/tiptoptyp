@@ -268,7 +268,11 @@ fn concurrent_remote_changes_preserve_draft_and_stop_automatic_overwrite() {
     assert_eq!(document.source(), "local");
     assert_eq!(document.conflict.as_ref().unwrap().remote, "remote");
     assert!(state.publish("a").is_none());
-    assert!(state.resolve_server("a"));
+    let review = state.conflict_review("a").unwrap();
+    assert_eq!(review.base, "old");
+    state
+        .resolve_conflict(&review, review.remote.clone())
+        .unwrap();
     assert_eq!(state.document("a").unwrap().source(), "remote");
     assert!(!state.has_unsynced());
 }
@@ -676,4 +680,263 @@ fn deletion_keeps_even_a_clean_snapshot_while_its_explicit_receipt_is_pending() 
         .unwrap();
     assert!(state.release_native_draft("a"));
     assert!(state.document("a").is_none());
+}
+
+#[test]
+fn reconnect_merges_separate_changes_but_waits_for_explicit_save_acknowledgement() {
+    let base = "Opening baseline.\nMiddle baseline.\nClosing baseline.\n";
+    let local = "Opening local.\nMiddle baseline.\nClosing baseline.\n";
+    let remote = "Opening baseline.\nMiddle baseline.\nClosing remote.\n";
+    let merged = "Opening local.\nMiddle baseline.\nClosing remote.\n";
+    let mut state = model();
+    state.apply(snapshot(7, "a", base)).unwrap();
+    state.set_draft("a", local.into()).unwrap();
+    state.reconnect(8);
+    assert!(
+        state.publish("a").is_none(),
+        "fresh remote contents required"
+    );
+    state.apply(project(8)).unwrap();
+    assert_eq!(
+        state.apply(snapshot(8, "a", remote)).unwrap(),
+        ModelChange::Document {
+            id: "a".into(),
+            source: remote.into(),
+            conflict: false,
+        }
+    );
+    let document = state.document("a").unwrap();
+    assert_eq!(document.baseline, remote);
+    assert_eq!(document.source(), merged);
+    assert!(document.conflict.is_none());
+    assert!(state.in_flight().is_none(), "merging cannot publish");
+    assert!(state.has_unsynced());
+    let Some(BrowserCommand::Edit {
+        request,
+        base,
+        source,
+        ..
+    }) = state.publish("a")
+    else {
+        panic!()
+    };
+    assert_eq!(base, remote);
+    assert_eq!(source, merged);
+    state
+        .apply(BrowserEvent::Ack {
+            epoch: 8,
+            id: "a".into(),
+            request,
+            source,
+        })
+        .unwrap();
+    assert!(!state.has_unsynced());
+}
+
+#[test]
+fn review_preserves_common_base_across_repeated_remote_changes() {
+    let mut state = model();
+    state.set_draft("a", "local".into()).unwrap();
+    state.apply(snapshot(7, "a", "remote")).unwrap();
+    let initial = state.conflict_review("a").unwrap();
+    state.apply(snapshot(7, "a", "other remote")).unwrap();
+    let latest = state.conflict_review("a").unwrap();
+    assert_eq!(
+        (
+            latest.base.as_str(),
+            latest.local.as_str(),
+            latest.remote.as_str()
+        ),
+        ("old", "local", "other remote")
+    );
+    assert!(!state.conflict_review_current(&initial));
+    assert!(
+        state
+            .resolve_conflict(&initial, initial.local.clone())
+            .is_err()
+    );
+    state
+        .resolve_conflict(&latest, "manually merged".into())
+        .unwrap();
+    assert_eq!(state.document("a").unwrap().baseline, "other remote");
+    assert_eq!(state.document("a").unwrap().source(), "manually merged");
+    assert!(state.in_flight().is_none());
+    assert!(state.has_unsynced());
+    assert!(!state.conflict_review_current(&latest));
+}
+
+#[test]
+fn review_choice_rejects_local_edits_same_epoch_reconnect_and_deleted_file() {
+    for change in 0..4 {
+        let mut state = model();
+        state.set_draft("a", "local".into()).unwrap();
+        state.apply(snapshot(7, "a", "remote")).unwrap();
+        let review = state.conflict_review("a").unwrap();
+        match change {
+            0 => {
+                state.set_draft("a", "newer local".into()).unwrap();
+            }
+            1 | 2 => {
+                state.reconnect(7);
+                assert!(
+                    state.conflict_review("a").is_none(),
+                    "cannot review before fresh snapshot"
+                );
+                if change == 2 {
+                    state.apply(snapshot(7, "a", "remote")).unwrap();
+                }
+            }
+            _ => {
+                state
+                    .apply(BrowserEvent::Project {
+                        epoch: 7,
+                        project_id: ID.into(),
+                        name: "Paper".into(),
+                        entries: vec![],
+                        root_doc: None,
+                    })
+                    .unwrap();
+            }
+        }
+        assert!(!state.conflict_review_current(&review));
+        assert!(
+            state
+                .resolve_conflict(&review, review.remote.clone())
+                .is_err()
+        );
+        assert_eq!(
+            state.document("a").unwrap().source(),
+            if change == 0 { "newer local" } else { "local" }
+        );
+        if change == 2 {
+            let fresh = state.conflict_review("a").unwrap();
+            state.resolve_conflict(&fresh, fresh.local.clone()).unwrap();
+            assert!(state.has_unsynced());
+        }
+    }
+}
+
+#[test]
+fn unexpected_ack_and_conflict_keep_the_original_common_base() {
+    for mismatch in [false, true] {
+        let mut state = model();
+        let request = edit(&mut state, "published local");
+        state.set_draft("a", "newer local".into()).unwrap();
+        let event = if mismatch {
+            BrowserEvent::Ack {
+                epoch: 7,
+                id: "a".into(),
+                request,
+                source: "remote".into(),
+            }
+        } else {
+            BrowserEvent::Conflict {
+                epoch: 7,
+                id: "a".into(),
+                request,
+                source: "remote".into(),
+                message: "changed".into(),
+            }
+        };
+        state.apply(event).unwrap();
+        let review = state.conflict_review("a").unwrap();
+        assert_eq!(
+            (
+                review.base.as_str(),
+                review.local.as_str(),
+                review.remote.as_str()
+            ),
+            ("old", "newer local", "remote")
+        );
+    }
+}
+
+#[test]
+fn acknowledgements_update_the_remote_side_of_an_existing_review() {
+    let mut state = model();
+    let request = edit(&mut state, "published local");
+    state.set_draft("a", "newer local".into()).unwrap();
+    state.apply(snapshot(7, "a", "concurrent remote")).unwrap();
+    let old = state.conflict_review("a").unwrap();
+    assert!(
+        state.resolve_conflict(&old, old.local.clone()).is_err(),
+        "save still owns draft"
+    );
+    state
+        .apply(BrowserEvent::Ack {
+            epoch: 7,
+            id: "a".into(),
+            request,
+            source: "published local".into(),
+        })
+        .unwrap();
+    let review = state.conflict_review("a").unwrap();
+    assert_eq!(
+        (
+            review.base.as_str(),
+            review.local.as_str(),
+            review.remote.as_str()
+        ),
+        ("old", "newer local", "published local")
+    );
+    assert!(!state.conflict_review_current(&old));
+}
+
+#[test]
+fn concurrent_snapshot_matching_newer_draft_cannot_retire_an_older_save() {
+    let mut state = model();
+    let request = edit(&mut state, "published local");
+    state.set_draft("a", "newer local".into()).unwrap();
+    assert!(matches!(
+        state.apply(snapshot(7, "a", "newer local")).unwrap(),
+        ModelChange::Document { conflict: true, .. }
+    ));
+    assert_eq!(state.in_flight().unwrap().request, request);
+    assert_eq!(
+        state.document("a").unwrap().draft.as_deref(),
+        Some("newer local")
+    );
+    state
+        .apply(BrowserEvent::Ack {
+            epoch: 7,
+            id: "a".into(),
+            request,
+            source: "published local".into(),
+        })
+        .unwrap();
+    assert_eq!(state.document("a").unwrap().source(), "newer local");
+    let review = state.conflict_review("a").unwrap();
+    assert_eq!(review.remote, "published local");
+    assert_eq!(review.local, "newer local");
+    assert!(state.has_unsynced());
+}
+
+#[test]
+fn transport_disconnect_invalidates_review_until_fresh_document_even_without_new_epoch() {
+    let mut state = model();
+    state.set_draft("a", "local".into()).unwrap();
+    state.apply(snapshot(7, "a", "remote")).unwrap();
+    let review = state.conflict_review("a").unwrap();
+    state
+        .apply(BrowserEvent::Status {
+            epoch: 7,
+            state: "disconnected".into(),
+            message: None,
+        })
+        .unwrap();
+    assert!(!state.conflict_review_current(&review));
+    assert!(state.conflict_review("a").is_none());
+    state
+        .apply(BrowserEvent::Status {
+            epoch: 7,
+            state: "connected".into(),
+            message: None,
+        })
+        .unwrap();
+    assert!(state.conflict_review("a").is_none());
+    state.apply(snapshot(7, "a", "remote")).unwrap();
+    let fresh = state.conflict_review("a").unwrap();
+    assert!(!state.conflict_review_current(&review));
+    state.resolve_conflict(&fresh, fresh.local.clone()).unwrap();
+    assert_eq!(state.document("a").unwrap().source(), "local");
 }

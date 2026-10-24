@@ -1,3 +1,4 @@
+mod tex;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -94,17 +95,22 @@ impl ProjectIndex {
     pub(crate) fn reference_indexes_for_tag(&self, tag: &str) -> &[usize] {
         self.tag_references
             .as_ref()
-            .and_then(|uses| uses.get(tag))
+            .and_then(|uses| uses.get(tag_key(tag)))
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
 
     pub(crate) fn rebuild_tag_references(&mut self) {
         let mut uses = HashMap::<String, Vec<usize>>::new();
+        let tags: HashSet<_> = self.tags.iter().map(|tag| tag_key(&tag.label)).collect();
         for (index, reference) in self.references.iter().enumerate() {
-            uses.entry(reference.label.trim_start_matches('@').to_owned())
-                .or_default()
-                .push(index);
+            let label = reference.label.as_str();
+            let key = if tags.contains(label) {
+                label
+            } else {
+                label.strip_prefix('@').unwrap_or(label)
+            };
+            uses.entry(key.to_owned()).or_default().push(index);
         }
         self.tag_references = (!uses.is_empty()).then(|| Arc::new(uses));
     }
@@ -142,7 +148,16 @@ impl ProjectIndex {
                 ));
             }
             if !self.unresolved_dependencies.is_empty() {
-                warning.push_str("\nExplorer can follow literal paths, such as #include \"chapter.typ\", but cannot evaluate these expressions. Keep computed paths if intentional; compilation still resolves them. Entries from those files may be absent from Explorer.");
+                if self.unresolved_dependencies.iter().any(|dependency| {
+                    dependency
+                        .path
+                        .extension()
+                        .is_some_and(|extension| !extension.eq_ignore_ascii_case("typ"))
+                }) {
+                    warning.push_str("\nExplorer follows literal TeX inputs inside the workspace, such as \\input{chapter}, without expanding macros. Computed, external, or conflicting import contexts are not indexed; compilation still resolves them. Entries from those files may be absent from Explorer.");
+                } else {
+                    warning.push_str("\nExplorer can follow literal paths, such as #include \"chapter.typ\", but cannot evaluate these expressions. Keep computed paths if intentional; compilation still resolves them. Entries from those files may be absent from Explorer.");
+                }
             }
             for failure in self.completeness.unreadable_files.iter().take(8) {
                 warning.push_str(&format!(
@@ -155,9 +170,9 @@ impl ProjectIndex {
     }
 }
 
-/// Build a compact, deterministic index from one Typst entry point.
+/// Build a compact, deterministic index from one Typst or TeX entry point.
 ///
-/// This walks Typst's error-tolerant syntax tree without evaluating code or
+/// This walks Typst syntax or literal TeX commands without evaluating code or
 /// downloading packages. Only literal local import/include paths are followed.
 /// `overrides` lets the currently edited document participate before it is
 /// saved to disk.
@@ -167,12 +182,16 @@ pub fn analyze_project(
     main: &Path,
     overrides: &BTreeMap<PathBuf, String>,
 ) -> ProjectIndex {
-    analyze_project_cancellable(root, main, overrides, || false).unwrap_or_default()
+    analyze_project_cancellable(root, main, main.parent().unwrap_or(root), overrides, || {
+        false
+    })
+    .unwrap_or_default()
 }
 
 pub(crate) fn analyze_project_cancellable(
     root: &Path,
     main: &Path,
+    source_directory: &Path,
     overrides: &BTreeMap<PathBuf, String>,
     mut cancelled: impl FnMut() -> bool,
 ) -> Option<ProjectIndex> {
@@ -182,10 +201,13 @@ pub(crate) fn analyze_project_cancellable(
     let mut paths = PathNormalizer::default();
     let root = paths.normalize(root);
     let main = paths.normalize(main);
+    let tex = main
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("tex"));
     if !main.starts_with(&root)
         || main
             .extension()
-            .is_none_or(|extension| !extension.eq_ignore_ascii_case("typ"))
+            .is_none_or(|extension| !extension.eq_ignore_ascii_case("typ") && !tex)
     {
         return Some(ProjectIndex::default());
     }
@@ -199,6 +221,16 @@ pub(crate) fn analyze_project_cancellable(
         .collect();
     let mut visited = HashSet::new();
     let mut pending = vec![main.clone()];
+    // Saved TeX entries compile beside their source; untitled entries compile
+    // from their real workspace, not the virtual .tiptoptyp identity directory.
+    // Match that explicit compiler directory, keeping containment independent.
+    let tex_base = if tex {
+        paths.normalize(source_directory)
+    } else {
+        root.clone()
+    };
+    let mut tex_contexts = HashMap::from([(main.clone(), tex_base.clone())]);
+    let mut tex_limit_reached = false;
     let mut packages = BTreeSet::new();
 
     while visited.len() < MAX_PROJECT_FILES
@@ -223,33 +255,78 @@ pub(crate) fn analyze_project_cancellable(
         if path != main {
             index.subfiles.push(path.clone());
         }
-        if !visit_source_cancellable(
-            &path,
-            &source,
-            &mut index,
-            &mut packages,
-            |target| {
-                let Some(resolved) = resolve_local_typst_path(&root, &path, target, &mut paths)
-                else {
-                    return;
-                };
-                if !visited.contains(&resolved) {
-                    pending.push(resolved);
-                }
-            },
-            &mut cancelled,
-        ) {
+        let complete = if tex {
+            let context = tex_contexts
+                .get(&path)
+                .cloned()
+                .unwrap_or_else(|| tex_base.clone());
+            tex::visit(
+                &path,
+                &source,
+                &mut index,
+                &mut packages,
+                |target, subfile| {
+                    let Some(resolved) = tex::resolve(&root, &context, target, &mut paths) else {
+                        return false;
+                    };
+                    // subfiles uses subimport: nested inputs inherit the new
+                    // directory until that subfile returns to its caller.
+                    let next_context = if subfile {
+                        resolved.parent().unwrap_or(&root).to_owned()
+                    } else {
+                        context.clone()
+                    };
+                    if let Some(previous) = tex_contexts.get(&resolved) {
+                        // The same source executed under two import directories
+                        // may resolve different inputs. Do not guess the second.
+                        return *previous == next_context;
+                    }
+                    if tex_contexts.len() >= MAX_PROJECT_FILES {
+                        tex_limit_reached = true;
+                    } else {
+                        tex_contexts.insert(resolved.clone(), next_context);
+                        pending.push(resolved);
+                    }
+                    true
+                },
+                &mut cancelled,
+            )
+        } else {
+            visit_source_cancellable(
+                &path,
+                &source,
+                &mut index,
+                &mut packages,
+                |target| {
+                    let Some(resolved) = resolve_local_typst_path(&root, &path, target, &mut paths)
+                    else {
+                        return;
+                    };
+                    if !visited.contains(&resolved) {
+                        pending.push(resolved);
+                    }
+                },
+                &mut cancelled,
+            )
+        };
+        if !complete {
             return None;
         }
     }
 
     // Duplicate/cyclic pending entries do not mean that anything was omitted.
-    index.completeness.file_limit_reached = pending.iter().any(|path| !visited.contains(path));
+    index.completeness.file_limit_reached =
+        tex_limit_reached || pending.iter().any(|path| !visited.contains(path));
     index
         .completeness
         .unreadable_files
         .sort_by(|a, b| a.path.cmp(&b.path));
     index.update_warning();
+    if tex && let Some(minimum) = index.outline.iter().map(|entry| entry.level).min() {
+        for entry in &mut index.outline {
+            entry.level = entry.level - minimum + 1;
+        }
+    }
     index.subfiles.sort();
     index.packages = packages.into_iter().collect();
     index.rebuild_tag_references();
@@ -422,6 +499,13 @@ impl<F: FnMut(&str), C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
             label: self.source[node.range()].to_owned(),
         });
     }
+}
+
+fn tag_key(label: &str) -> &str {
+    label
+        .strip_prefix('<')
+        .and_then(|label| label.strip_suffix('>'))
+        .unwrap_or(label)
 }
 
 struct LineIndex {

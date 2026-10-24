@@ -1041,7 +1041,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in (*TEX_JOURNEYS, *LTEX_JOURNEYS) else "journey.typ" if args.journey in ("all", *LIQUID_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in (*TEX_JOURNEYS, *LTEX_JOURNEYS) else "journey.typ" if args.journey in ("all", "overleaf_storage", *LIQUID_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"

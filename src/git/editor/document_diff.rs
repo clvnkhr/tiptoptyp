@@ -155,7 +155,7 @@ fn matches(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
     }
     vec![]
 }
-fn align_lines(before: &str, current: &str) -> Vec<Pair> {
+pub(crate) fn align_lines(before: &str, current: &str) -> Vec<Pair> {
     let a: Vec<_> = before.split_inclusive('\n').collect();
     let b: Vec<_> = current.split_inclusive('\n').collect();
     let prefix = a.iter().zip(&b).take_while(|(a, b)| a == b).count();

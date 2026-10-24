@@ -633,8 +633,8 @@ pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable>
                     break;
                 };
                 i = end;
-                if name == "verb" {
-                    i = skip_verb(source, i);
+                if let Some(literal) = literal_span(source, start, name, end) {
+                    i = literal.end;
                     continue;
                 }
                 if name != "begin" && name != "end" {
@@ -645,13 +645,6 @@ pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable>
                 };
                 i = end;
                 if name == "begin" {
-                    if matches!(env, "verbatim" | "verbatim*" | "lstlisting" | "minted") {
-                        let closing = format!("\\end{{{env}}}");
-                        i = source[end..]
-                            .find(&closing)
-                            .map_or(source.len(), |offset| end + offset + closing.len());
-                        continue;
-                    }
                     if stack.len() >= 128 {
                         break;
                     }
@@ -866,8 +859,11 @@ fn inferred_math_columns(body: &str) -> Option<usize> {
             }
             b'\\' => {
                 let (name, end) = command(body, i)?;
-                if name == "verb" {
-                    i = skip_verb(body, end);
+                if let Some(literal) = literal_span(body, i, name, end) {
+                    if !literal.closed {
+                        return None;
+                    }
+                    i = literal.end;
                 } else if name == "begin" {
                     i = skip_environment(body, i)?;
                 } else if depth == 0 && !math && matches!(name, "\\" | "tabularnewline") {
@@ -898,16 +894,23 @@ fn skip_environment(source: &str, start: usize) -> Option<usize> {
     if name != "begin" {
         return None;
     }
+    if let Some(literal) = literal_span(source, start, name, args) {
+        return literal.closed.then_some(literal.end);
+    }
     let (name, mut i) = group(source, args, b'{', b'}')?;
     let mut stack = vec![name];
     while i < source.len() {
         match source.as_bytes()[i] {
             b'%' => i = skip_comment(source, i),
             b'\\' => {
+                let start = i;
                 let (command_name, end) = command(source, i)?;
                 i = end;
-                if command_name == "verb" {
-                    i = skip_verb(source, i);
+                if let Some(literal) = literal_span(source, start, command_name, end) {
+                    if !literal.closed {
+                        return None;
+                    }
+                    i = literal.end;
                 } else if matches!(command_name, "begin" | "end") {
                     let (name, next) = group(source, i, b'{', b'}')?;
                     i = next;
@@ -1004,8 +1007,11 @@ fn top_level_parts(source: &str, separator: u8) -> Option<Vec<&str>> {
             b'%' => i = skip_comment(source, i),
             b'\\' => {
                 let (name, end) = command(source, i)?;
-                i = if name == "verb" {
-                    skip_verb(source, end)
+                i = if let Some(literal) = literal_span(source, i, name, end) {
+                    if !literal.closed {
+                        return None;
+                    }
+                    literal.end
                 } else {
                     end
                 };
@@ -1071,6 +1077,13 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
             }
             b'\\' => {
                 let (name, end) = command(body, i)?;
+                if let Some(literal) = literal_span(body, i, name, end) {
+                    if !literal.closed {
+                        return None;
+                    }
+                    i = literal.end;
+                    continue;
+                }
                 if matches!(
                     name,
                     "input"
@@ -1097,10 +1110,6 @@ fn split_rows(body: &str, columns: usize) -> Option<ParsedRows> {
                         | "@tfor"
                 ) {
                     return None;
-                }
-                if name == "verb" {
-                    i = skip_verb(body, end);
-                    continue;
                 }
                 if name == "begin" {
                     i = skip_environment(body, i)?;
@@ -1410,11 +1419,7 @@ fn cell_source(source: &str) -> String {
                 let Some((name, end)) = command(trimmed, i) else {
                     break;
                 };
-                i = if name == "verb" {
-                    skip_verb(trimmed, end)
-                } else {
-                    end
-                };
+                i = literal_span(trimmed, i, name, end).map_or(end, |literal| literal.end);
             }
             _ => i = next_char(trimmed, i),
         }
@@ -1566,12 +1571,13 @@ fn packages(source: &str) -> Vec<String> {
         match source.as_bytes()[i] {
             b'%' => i = skip_comment(source, i),
             b'\\' => {
+                let start = i;
                 let Some((name, mut end)) = command(source, i) else {
                     break;
                 };
                 i = end;
-                if name == "verb" {
-                    i = skip_verb(source, i);
+                if let Some(literal) = literal_span(source, start, name, end) {
+                    i = literal.end;
                     continue;
                 }
                 if !matches!(name, "usepackage" | "RequirePackage") {
@@ -1609,8 +1615,11 @@ fn balanced_braces(source: &str) -> bool {
                 let Some((name, end)) = command(source, i) else {
                     return false;
                 };
-                i = if name == "verb" {
-                    skip_verb(source, end)
+                i = if let Some(literal) = literal_span(source, i, name, end) {
+                    if !literal.closed {
+                        return false;
+                    }
+                    literal.end
                 } else {
                     end
                 };
@@ -1663,8 +1672,11 @@ fn group(source: &str, start: usize, open: u8, close: u8) -> Option<(&str, usize
             b'%' => i = skip_comment(source, i),
             b'\\' => {
                 let (name, end) = command(source, i)?;
-                i = if name == "verb" {
-                    skip_verb(source, end)
+                i = if let Some(literal) = literal_span(source, i, name, end) {
+                    if !literal.closed {
+                        return None;
+                    }
+                    literal.end
                 } else {
                     end
                 };
@@ -1709,20 +1721,88 @@ fn skip_trivia(source: &str, mut start: usize) -> usize {
         start = skip_comment(source, start);
     }
 }
-fn skip_verb(source: &str, mut start: usize) -> usize {
-    if source.as_bytes().get(start) == Some(&b'*') {
-        start += 1;
-    }
-    let Some(delimiter) = source.get(start..).and_then(|tail| tail.chars().next()) else {
-        return source.len();
-    };
-    let content_start = start + delimiter.len_utf8();
-    source[content_start..]
-        .find(delimiter)
-        .map_or(source.len(), |offset| {
-            content_start + offset + delimiter.len_utf8()
-        })
+#[derive(Clone, Copy)]
+struct LiteralSpan {
+    end: usize,
+    closed: bool,
 }
+
+fn literal_span(source: &str, start: usize, name: &str, end: usize) -> Option<LiteralSpan> {
+    if let Some(literal) = crate::editor_math_guides::tex_inline_literal(source, start) {
+        return Some(LiteralSpan {
+            end: literal.end,
+            closed: literal.closed,
+        });
+    }
+    // fancyvrb's capitalised command has the same delimiter syntax as \verb.
+    if name == "Verb" {
+        let at = end + usize::from(source.as_bytes().get(end) == Some(&b'*'));
+        let Some(delimiter) = source[at..]
+            .chars()
+            .next()
+            .filter(|c| !matches!(c, '\n' | '\r'))
+        else {
+            return Some(LiteralSpan {
+                end: at,
+                closed: false,
+            });
+        };
+        let body = at + delimiter.len_utf8();
+        let stop = source[body..]
+            .find([delimiter, '\n', '\r'])
+            .map_or(source.len(), |n| body + n);
+        let closed = source[stop..].starts_with(delimiter);
+        return Some(LiteralSpan {
+            end: stop + if closed { delimiter.len_utf8() } else { 0 },
+            closed,
+        });
+    }
+    if name != "begin" {
+        return None;
+    }
+    // Environment names here must be literal. Do not recurse through the
+    // general group reader while it is itself checking a literal span.
+    let opening = skip_trivia(source, end);
+    if source.as_bytes().get(opening) != Some(&b'{') {
+        return None;
+    }
+    let close = source[opening + 1..].find('}')? + opening + 1;
+    let environment = &source[opening + 1..close];
+    let body = close + 1;
+    if !matches!(
+        environment,
+        "verbatim"
+            | "verbatim*"
+            | "Verbatim"
+            | "Verbatim*"
+            | "BVerbatim"
+            | "LVerbatim"
+            | "SaveVerbatim"
+            | "lstlisting"
+            | "minted"
+            | "comment"
+            | "filecontents"
+            | "filecontents*"
+    ) {
+        return None;
+    }
+    let closing = format!("\\end{{{environment}}}");
+    let mut at = body;
+    for line in source[body..].split_inclusive('\n') {
+        at += line.len();
+        if line.trim() == closing {
+            return Some(LiteralSpan {
+                end: at,
+                closed: true,
+            });
+        }
+    }
+    Some(LiteralSpan {
+        end: source.len(),
+        closed: false,
+    })
+}
+
 fn next_char(source: &str, start: usize) -> usize {
     start + source[start..].chars().next().map_or(0, char::len_utf8)
 }
@@ -2444,6 +2524,85 @@ mod tests {
         let unrelated = "\\begin{tabular}{l}A\\end{tabular}\\begin{broken}\\end{other}";
         assert!(tex_table_at(unrelated, 10).is_some());
     }
+    #[test]
+    fn literal_payloads_cannot_offer_a_table_editor_or_fake_packages() {
+        let fake = r"\begin{tabular}{l}Fake\end{tabular}";
+        let real = r"\begin{tabular}{l}Real\end{tabular}";
+        let mut prefixes = vec![
+            format!(r"\Verb|{fake}|"),
+            format!(r"\lstinline[language=TeX]§{fake}§"),
+            format!(r"\lstinline{{{fake}}}"),
+            format!(r"\mintinline{{tex}}|{fake}|"),
+            format!(r"\mintinline{{tex}}{{{fake}}}"),
+        ];
+        for env in [
+            "comment",
+            "Verbatim",
+            "verbatim",
+            "lstlisting",
+            "minted",
+            "filecontents",
+            "filecontents*",
+        ] {
+            prefixes.push(format!(
+                "\\begin{{{env}}}\n{fake}\n\\usepackage{{fake}}\n\\end{{{env}}}\n"
+            ));
+        }
+        for prefix in prefixes {
+            let source = format!("{prefix}\n{real}");
+            let fake_cursor = source[..source.find("Fake").unwrap()].chars().count();
+            assert!(tex_table_at(&source, fake_cursor).is_none(), "{prefix}");
+            let real_cursor = source[..source.find("Real").unwrap()].chars().count();
+            let table = tex_table_at(&source, real_cursor).unwrap();
+            assert_eq!(table.cells.as_ref().unwrap()[0], ["Real"]);
+            assert!(table.packages.is_empty(), "{prefix}");
+        }
+    }
+
+    #[test]
+    fn literal_cells_keep_separators_comments_braces_and_packages_opaque() {
+        for payload in [
+            r"\verb|& \\ % { \usepackage{fake}|",
+            r"\Verb|& \\ % { \usepackage{fake}|",
+            r"\lstinline[language=TeX]|& \\ % { \usepackage{fake}|",
+            r"\lstinline{& \\ \usepackage{fake}}",
+            r"\mintinline{tex}|& \\ % { \usepackage{fake}|",
+            r"\mintinline{tex}{& \\ \usepackage{fake}}",
+            "\\begin{comment}\n& \\\\ % { \\usepackage{fake}\n\\end{comment}\n",
+            "\\begin{Verbatim}\n& \\\\ % { \\usepackage{fake}\n\\end{Verbatim}\n",
+        ] {
+            let source = format!("\\begin{{tabular}}{{ll}}{payload} & Real\\\\\n\\end{{tabular}}");
+            let mut table = tex_table_at(&source, 1).unwrap_or_else(|| panic!("{payload}"));
+            assert_eq!(table.cells.as_ref().unwrap().len(), 1, "{payload}");
+            assert_eq!(table.cells.as_ref().unwrap()[0][1], "Real", "{payload}");
+            assert!(table.packages.is_empty(), "{payload}");
+            assert_eq!(table.grid_source_edit().unwrap().replacement, source);
+            table.cells.as_mut().unwrap()[0][1] = "Changed".into();
+            let edit = table.grid_source_edit().unwrap();
+            assert!(edit.replacement.contains(payload.trim()), "{payload}");
+            assert!(edit.replacement.contains("Changed"));
+        }
+    }
+
+    #[test]
+    fn raw_environment_closers_must_be_standalone_and_unclosed_inline_literals_stop_at_newline() {
+        for env in ["comment", "verbatim", "Verbatim", "filecontents"] {
+            let source = format!(
+                "\\begin{{{env}}}\nexample \\end{{{env}}} inline\n\\begin{{tabular}}{{l}}Fake\\end{{tabular}}\n\\end{{{env}}}\n\\begin{{tabular}}{{l}}Real\\end{{tabular}}"
+            );
+            let fake_cursor = source[..source.find("Fake").unwrap()].chars().count();
+            assert!(tex_table_at(&source, fake_cursor).is_none(), "{env}");
+            let real_cursor = source[..source.find("Real").unwrap()].chars().count();
+            assert!(tex_table_at(&source, real_cursor).is_some(), "{env}");
+        }
+        for command in ["verb", "Verb", "lstinline", "mintinline{tex}"] {
+            let source =
+                format!("\\{command}|unclosed\n\\begin{{tabular}}{{l}}Real\\end{{tabular}}");
+            let cursor = source[..source.find("Real").unwrap()].chars().count();
+            assert!(tex_table_at(&source, cursor).is_some(), "{command}");
+        }
+    }
+
     #[test]
     fn unsupported_inner_table_does_not_open_its_enclosing_grid() {
         let source = r"\begin{tabular}{l}{\begin{tabular}{Y}Inner\end{tabular}}\end{tabular}";

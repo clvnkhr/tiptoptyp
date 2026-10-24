@@ -69,7 +69,7 @@ impl EditorApp {
         let typst = self.document().kind() == DocumentKind::Typst;
         let tex = self.document().kind() == DocumentKind::Tex;
         let inactive = Activity::Inactive("Not in use");
-        let mut rows = Vec::with_capacity(32);
+        let mut rows = Vec::with_capacity(48);
         let mut add = |group, name, role, state| {
             rows.push(Indicator {
                 group,
@@ -84,6 +84,7 @@ impl EditorApp {
             "Recognizes symbols drawn in Explorer using the offline model.",
             self.symbol_drawing.activity(),
         );
+        let overleaf_save = self.overleaf_save_activity();
         let save_state = if self.save_job.is_running() {
             Activity::Running
         } else {
@@ -92,11 +93,15 @@ impl EditorApp {
                 .as_ref()
                 .map_or_else(|| self.save_job.activity(), |e| Activity::Failed(e.clone()))
         };
-        let save = queued(
-            save_state,
-            self.active_autosave_deadline().is_some(),
-            "Save queued",
-        );
+        let save = self
+            .overleaf_save_for_active(&overleaf_save)
+            .unwrap_or_else(|| {
+                queued(
+                    save_state,
+                    self.active_autosave_deadline().is_some(),
+                    "Save queued",
+                )
+            });
         add(
             Group::Files,
             "Save",
@@ -109,6 +114,13 @@ impl EditorApp {
                 save
             },
         );
+        for (name, state) in [
+            ("Overleaf", self.overleaf_connection_activity()),
+            ("Overleaf sync", self.overleaf_sync_activity()),
+            ("Overleaf save", overleaf_save),
+        ] {
+            add(Group::Files, name, name, state);
+        }
         let build = queued(
             self.activity.build.clone(),
             self.compile_deadline.is_some(),
@@ -385,6 +397,51 @@ impl EditorApp {
                 inactive.clone()
             },
         );
+        add(Group::Checks, "Liquid", "Liquid", self.liquid.activity());
+        add(
+            Group::Code,
+            "Table values",
+            "Table values",
+            self.table_samples.activity(),
+        );
+        for (group, name, state) in [
+            (
+                Group::Tools,
+                "LaTeXdiff",
+                self.latexdiff
+                    .as_ref()
+                    .map_or_else(|| inactive.clone(), latexdiff::Dialog::activity),
+            ),
+            (
+                Group::Tools,
+                "TeXdoc",
+                self.tex_documentation
+                    .as_ref()
+                    .map_or_else(|| inactive.clone(), tex_documentation::Dialog::activity),
+            ),
+            (
+                Group::Files,
+                "Citation import",
+                self.citation
+                    .as_ref()
+                    .map_or_else(|| inactive.clone(), citation::Dialog::activity),
+            ),
+            (
+                Group::Files,
+                "Local versions",
+                self.version_history
+                    .as_ref()
+                    .map_or_else(|| inactive.clone(), version_history::Dialog::activity),
+            ),
+            (Group::Tools, "Biber cache", self.biber_cache.activity()),
+            (
+                Group::Tools,
+                "Component downloads",
+                crate::resource_repair::activity(),
+            ),
+        ] {
+            add(group, name, name, state);
+        }
         add(
             Group::Checks,
             "Unicode",
@@ -492,7 +549,18 @@ fn fixture_indicators() -> Vec<Indicator> {
         ("Fonts", Activity::Idle),
         ("Packages", Activity::Idle),
         ("Package removal", Activity::Idle),
-        ("File import", Activity::Idle),
+        ("File operations", Activity::Idle),
+        ("Overleaf", Activity::Idle),
+        ("Overleaf sync", Activity::Running),
+        ("Overleaf save", Activity::Pending("Awaiting Overleaf")),
+        ("Liquid", Activity::Inactive("No selection check")),
+        ("LaTeXdiff", Activity::Inactive("Not in use")),
+        ("TeXdoc", Activity::Inactive("Not in use")),
+        ("Citation import", Activity::Inactive("Not in use")),
+        ("Local versions", Activity::Inactive("Not in use")),
+        ("Table values", Activity::Inactive("No computed cells")),
+        ("Biber cache", Activity::Inactive("Not requested")),
+        ("Component downloads", Activity::Inactive("Not requested")),
         ("Terminal", Activity::Idle),
     ]
     .into_iter()
@@ -509,12 +577,24 @@ fn fixture_group(name: &str) -> Group {
     match name {
         "Typst" | "Tectonic" | "SyncTeX" | "Live preview" | "Vector view" | "PDFium preview"
         | "Opened PDF" => Group::Preview,
-        "Handwriting" | "Tinymist" | "TexLab" | "Badness" | "Tinymist format" => Group::Code,
-        "Typst diagnostics" | "Compiler diagnostics" | "LTeX+" | "Harper" | "Unicode" => {
-            Group::Checks
+        "Handwriting" | "Tinymist" | "TexLab" | "Badness" | "Tinymist format" | "Table values" => {
+            Group::Code
         }
+        "Typst diagnostics"
+        | "Compiler diagnostics"
+        | "LTeX+"
+        | "Harper"
+        | "Liquid"
+        | "Unicode" => Group::Checks,
         "Git status" | "Git hunks" | "Git mutation" => Group::Git,
-        "Fonts" | "Packages" | "Package removal" | "Terminal" => Group::Tools,
+        "Fonts"
+        | "Packages"
+        | "Package removal"
+        | "Terminal"
+        | "LaTeXdiff"
+        | "TeXdoc"
+        | "Biber cache"
+        | "Component downloads" => Group::Tools,
         _ => Group::Files,
     }
 }

@@ -363,7 +363,8 @@ impl EditorApp {
             A::FindNext | A::FindPrevious => source_focus || origin.terminal,
             A::ReplaceOne | A::ReplaceAll => source_focus && !self.overleaf_source_locked(),
             A::ToggleFindCase | A::ToggleFindRegex => source_focus,
-            A::ToggleLineWrap | A::ToggleLineNumbers | A::ToggleStickyContext => has_source,
+            A::ToggleLineWrap | A::ToggleLineNumbers => has_source,
+            A::ToggleStickyContext => has_source && self.document().kind().is_typst(),
             A::PreviewZoomIn | A::PreviewZoomOut | A::PreviewZoomReset => {
                 !self.tabs.is_empty() && self.preview_visible()
             }
@@ -385,12 +386,15 @@ impl EditorApp {
         if !self.palette_action_enabled(action, origin, context) {
             return;
         }
-        if matches!(
-            action,
-            ShortcutAction::LatexDiff
-                | ShortcutAction::TexDocumentation
-                | ShortcutAction::ImportCitation
-        ) {
+        let child = match action {
+            ShortcutAction::LatexDiff => Some(latexdiff::SALT),
+            ShortcutAction::TexDocumentation => Some(tex_documentation::SALT),
+            ShortcutAction::ImportCitation => Some(citation::SALT),
+            ShortcutAction::NewTable | ShortcutAction::EditTable => Some("tiptoptyp-table-editor"),
+            ShortcutAction::NewFromTemplate => Some("tiptoptyp-templates"),
+            _ => None,
+        };
+        if child.is_some() {
             // Preserve the source selection for the tool, but let its new child
             // activate. Returning native focus to the owner here races that
             // activation and leaves the modal's focused field without input.
@@ -419,6 +423,20 @@ impl EditorApp {
         {
             if !self.route_edit_command_to_focused_widget(spec.command, context, origin.viewport) {
                 self.execute_app_command(spec.command, context, frame);
+            }
+            if let Some(child) = child {
+                let open = match child {
+                    "tiptoptyp-table-editor" => self.table_editor.is_some(),
+                    "tiptoptyp-templates" => self.template_picker.is_some(),
+                    _ => self.tool_dialog_salt() == Some(child),
+                };
+                if open {
+                    ChildViewHost::request_focus_on_show(context, child);
+                } else {
+                    // A refused command (for example New Table inside math)
+                    // has no child to receive input; return to its source.
+                    self.restore_palette_origin(context, origin);
+                }
             }
             return;
         }

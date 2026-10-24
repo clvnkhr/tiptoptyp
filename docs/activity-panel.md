@@ -23,7 +23,7 @@ red because it could not produce the requested artifact.
 | --- | --- |
 | Save | Autosave debounce, explicit saves, write conflicts and durability failures |
 | Typst | CLI PDF builds, independently of the live preview |
-| Tectonic | TeX PDF builds, including automatic recompilation |
+| Selected TeX compiler | TeX PDF builds, including bibliography orchestration and automatic recompilation |
 | Tinymist | Startup, current diagnostics, hover, completion and formatting requests |
 | Live preview | Tinymist interactive compilation |
 | Typst diagnostics | Freshness of the active document's editor errors/warnings |
@@ -43,11 +43,23 @@ red because it could not produce the requested artifact.
 | File watcher | Filesystem notification service health, independent of scans |
 | Project index | Debounced project symbols/references/outline work |
 | Harper | English spelling/grammar checks |
+| LTeX+ | Local LanguageTool startup, document checks and failures |
 | Unicode | Suspicious-character checks (shares the writing-check worker) |
 | Fonts | Workspace font scans |
 | Packages | Package catalog loading, including registry failures |
 | Package removal | Package deletion operations |
-| File import | Queued/running file imports |
+| File operations | Queued/running file creation, duplication and imports |
+| Overleaf | Connection preparation, sign-in, connection loss and failures |
+| Overleaf sync | Initial file hydration, queued working-copy writes and synchronization failures |
+| Overleaf save | Unsaved drafts, server acknowledgement, confirmed local writes and conflicts |
+| Liquid | Explicit selection checks, cancellation and model/inference failures |
+| LaTeXdiff | Diff generation, file selection and failures |
+| TeXdoc | Local manual lookup and tool availability |
+| Citation import | Metadata lookup and reviewed bibliography writes |
+| Local versions | Revision listing, comparison, backup before restore and PDF generation |
+| Table values | Sampling computed cells for the grid editor |
+| Biber cache | Explicit cache-clearing requests and retained failures |
+| Component downloads | LTeX+/Liquid recovery downloads and retained failures |
 | Terminal | Shell startup, connection, exit and failure |
 
 This is work/freshness telemetry, not a CPU sampler. Terminal green means a
@@ -55,8 +67,9 @@ healthy connected session; the app does not infer whether an arbitrary shell
 command is busy. Synchronous editor drawing/parsing completes within its frame
 and has no separate persistent busy state. Language-server notifications that
 omit versions follow the existing accepted-notification policy; exact versioned
-results are checked against document ownership, epoch and revision. The future
-standard LaTeX adapter remains unimplemented.
+results are checked against document ownership, epoch and revision. Bibliography
+orchestration runs within the compiler build indicator; it has no separate
+reported substep.
 
 ## Ownership and performance
 
@@ -83,3 +96,10 @@ Validation (2026-09-24): full Rust suite, 1,076 application unit tests,
 15 tooling tests, formatting and strict all-target Clippy passed. The release
 Activity framebuffer was freshly captured and inspected; the maintained
 23-image gallery was regenerated in one session and decoded successfully.
+
+Newer integrations use their owners' existing state without probing executables,
+loading models, checking files or starting work from Activity. Unrequested tools
+are grey, file pickers are waiting, and cancelled work stays busy until its
+worker actually stops. The main Save indicator follows Overleaf acknowledgements
+for remote documents. Component recovery completions retire during normal app
+updates even when Settings is closed.

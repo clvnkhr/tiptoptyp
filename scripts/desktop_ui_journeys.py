@@ -40,6 +40,28 @@ PARTICLE_ACTIONS = ("Typing", "Copy", "Cut", "Paste", "Comment", "Undo", "Redo",
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
 
 
+def document_window_title(document, windows):
+    """AXMain may name a child; identify only the inspected document's root."""
+    from pathlib import Path
+    if (not isinstance(document, dict) or 'path' not in document or type(document.get('dirty')) is not bool
+            or document['path'] is not None and not isinstance(document['path'], str)
+            or not isinstance(windows, list)):
+        raise AssertionError('Document/window identity observation is unavailable')
+    roots = [window['AXTitle'] for window in windows if isinstance(window, dict)
+             and isinstance(window.get('AXTitle'), str) and window['AXTitle'].endswith(' — tiptoptyp')
+             and window.get('AXMinimized') is not True]
+    if document['path'] is not None:
+        expected = Path(document['path']).name + ('*' if document['dirty'] else '') + ' — tiptoptyp'
+        matches = [title for title in roots if title == expected]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise AssertionError('The inspected document window title is ambiguous')
+    if len(roots) == 1:
+        return roots[0]
+    raise AssertionError('The inspected document root is missing or ambiguous')
+
+
 def help_target_visible(state, name):
     target = state["targets"].get(name)
     scroll = state["scrolls"].get("settings.help")
@@ -511,14 +533,12 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
             self.set_math_conversion_formatting(original)
 
     def focus_document_window(self):
-        if self.snapshot()["document"]["focused"]:
+        document = self.snapshot()["document"]
+        if document["focused"]:
             return
-        windows = self.native("windows").get("windows", [])
-        title = next((window.get("AXTitle") for window in windows
-                      if window.get("AXMain") and not window.get("AXMinimized")), None)
+        title = document_window_title(document, self.native("windows").get("windows"))
         self.native("activate")
-        if title:
-            self.native("raise", title)
+        self.native("raise", title)
         self.wait("document window focused", lambda d: d["focused"])
 
     def paste_source(self, text, check=None):
@@ -1186,7 +1206,7 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
         self.wait("Layout picker hides Explorer", lambda d: not d["explorer_visible"])
         self.key(18)
         self.wait("Explorer shortcut still restores the same sections", lambda d: d["explorer_visible"])
-        for section in ("Tags", "Files"):
+        for section in ("Labels", "Files"):
             self.wait_target("explorer.maximize." + section)
             self.click("explorer.maximize." + section)
             self.wait("explorer section maximized", lambda d: d["explorer_maximized"] == section)

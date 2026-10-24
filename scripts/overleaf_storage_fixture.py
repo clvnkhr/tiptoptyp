@@ -16,12 +16,18 @@ ASSET_BYTES = b'overleaf storage fixture asset\x00\xff'
 
 
 class StorageFixture:
-    def __init__(self):
+    def __init__(self, *, connection_events=False):
         self.asset_requested = threading.Event()
         self.release_assets = threading.Event()
         self.document_requested = threading.Event()
+        self.connection_requested = threading.Event()
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._connection_events = connection_events
+        self._connection_generation = 0
+        self._stopping = False
         self._source = SOURCE
+        self._save_count = 0
         self.requests = []
         fixture = self
 
@@ -48,6 +54,20 @@ class StorageFixture:
                                b'<p>Offline Overleaf storage fixture</p><script src="/fixture.js"></script>', 'text/html')
                 elif self.path == '/fixture.js':
                     self.reply(200, fixture.javascript().encode(), 'application/javascript')
+                elif fixture._connection_events and self.path.startswith('/fixture/connection?generation='):
+                    value = self.path.removeprefix('/fixture/connection?generation=')
+                    if not value.isascii() or not value.isdigit() or len(value) > 9:
+                        self.reply(400, b'Invalid connection generation', 'text/plain')
+                        return
+                    generation = int(value)
+                    fixture.connection_requested.set()
+                    with fixture._condition:
+                        fixture._condition.wait_for(lambda:
+                            fixture._stopping or generation != fixture._connection_generation,
+                            timeout=20)
+                        connected = not fixture._stopping and generation == fixture._connection_generation
+                    self.reply(200 if connected else 503, b'Connected' if connected else b'Connection lost',
+                               'text/plain')
                 elif self.path == f'/project/{PROJECT}/doc/{DOCUMENT}/download':
                     fixture.document_requested.set()
                     with fixture._lock:
@@ -70,6 +90,7 @@ class StorageFixture:
                 source = self.rfile.read(length).decode('utf-8')
                 with fixture._lock:
                     fixture._source = source
+                    fixture._save_count += 1
                 self.reply(200, b'OK', 'text/plain')
 
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -85,12 +106,37 @@ class StorageFixture:
         with self._lock:
             return self._source
 
+    @property
+    def save_count(self):
+        """Count only real bridge-originated HTTP writes, not collaborator edits."""
+        with self._lock:
+            return self._save_count
+
+    def replace_remote(self, source):
+        """A collaborator edits the fixture server while this client is offline."""
+        if not isinstance(source, str) or len(source.encode('utf-8')) > 65536:
+            raise ValueError('Fixture source must fit the bounded document endpoint')
+        with self._lock:
+            self._source = source
+
+    def lose_connection(self):
+        """Break the frontend's real loopback transport without a native command."""
+        if not self._connection_events:
+            raise ValueError('Connection-loss transport is not enabled')
+        with self._condition:
+            self._connection_generation += 1
+            self._condition.notify_all()
+            return self._connection_generation
+
     def __enter__(self):
         self.thread.start()
         return self
 
     def __exit__(self, *_args):
         self.release_assets.set()
+        with self._condition:
+            self._stopping = True
+            self._condition.notify_all()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=3)
@@ -101,6 +147,17 @@ class StorageFixture:
                                      fileRefs=[dict(_id=ASSET, name='fixture.bin')], folders=[])])
         # No fixture code calls window.ipc or tiptoptypOverleaf.command. Native
         # commands arrive only through the real app, bridge, and WebView.
+        with self._lock:
+            generation = self._connection_generation
+        connection_watch = r'''let connected = true;
+function watchConnection() {
+  fetch('/fixture/connection?generation=%s').then(response => {
+    if (!connected) return;
+    if (!response.ok) { connected = false; emitServer('disconnect'); return; }
+    watchConnection();
+  }).catch(() => { if (connected) { connected = false; emitServer('disconnect'); } });
+}
+watchConnection();''' % generation if self._connection_events else ''
         return r'''(() => {
 'use strict';
 const MAIN = %s, TREE = %s;
@@ -143,10 +200,11 @@ window.overleaf = {unstable: {store: {
 window.io = {};
 window.io.connect = () => socket;
 window.io.connect();
+%s
 setTimeout(() => {
   emitServer('joinProjectResponse', {project: TREE, permissionsLevel: 'owner', protocolVersion: 2, publicId: socket.publicId});
   socket.emit('clientTracking.getConnectedUsers', () => {});
   socket.emit('joinDoc', MAIN, () => {});
 }, 0);
 })();
-''' % (json.dumps(DOCUMENT), json.dumps(tree), json.dumps(self.source))
+''' % (json.dumps(DOCUMENT), json.dumps(tree), json.dumps(self.source), connection_watch)

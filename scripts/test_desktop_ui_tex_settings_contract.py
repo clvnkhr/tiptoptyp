@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from desktop_ui_tex_journeys import TexJourneys, settings_json_query_selected
+from desktop_ui_tex_journeys import (
+    TexJourneys, settings_json_query_selected, tex_parity_index_ready,
+    tex_source_owner_preserved,
+)
 
 
 def selected_query(query='earlier query'):
@@ -99,6 +102,105 @@ class SettingsSelectionContracts(unittest.TestCase):
             self.assertEqual(recorder.events.count('selection.acknowledged'), expected)
             self.assertEqual([event for event in recorder.events if isinstance(event, tuple)
                               and event[0] == 'text'], [('text', 'first'), ('text', 'second')])
+
+
+
+
+class TexSourceOwnershipContracts(unittest.TestCase):
+    def fixture(self):
+        return {'path': '/private/tmp/parity.tex', 'active_tab_id': 1,
+                'document_kind': 'Tex', 'source_fingerprint': '0123456789abcdef',
+                'source_bytes': 123, 'cursor': [8, 4], 'dirty': True,
+                'revision': '37'}
+
+    def test_reactivation_rekey_does_not_mean_visible_source_changed(self):
+        before = self.fixture()
+        after = deepcopy(before)
+        after['revision'] = '40'
+        self.assertTrue(tex_source_owner_preserved(after, before))
+        self.assertEqual(before, self.fixture())
+
+    def test_each_visible_source_or_owner_mismatch_is_rejected(self):
+        before = self.fixture()
+        for field, value in (('path', '/private/tmp/other.tex'), ('active_tab_id', 2),
+                             ('document_kind', 'Typst'), ('source_fingerprint', 'fedcba9876543210'),
+                             ('source_bytes', 124), ('cursor', [4, 8]), ('dirty', False)):
+            after = deepcopy(before)
+            after[field] = value
+            with self.subTest(field=field):
+                self.assertFalse(tex_source_owner_preserved(after, before))
+
+    def test_missing_or_malformed_source_observation_cannot_pass(self):
+        before = self.fixture()
+        for field in before.keys() - {'revision'}:
+            after = deepcopy(before)
+            del after[field]
+            with self.subTest(missing=field), self.assertRaises(AssertionError):
+                tex_source_owner_preserved(after, before)
+        for field, value in (('active_tab_id', True), ('source_bytes', True), ('dirty', 1),
+                             ('cursor', None), ('cursor', [False, 0]),
+                             ('source_fingerprint', 'unavailable')):
+            after = deepcopy(before)
+            after[field] = value
+            with self.subTest(malformed=field, value=value), self.assertRaises(AssertionError):
+                tex_source_owner_preserved(after, before)
+
+
+class TexParityIndexContracts(unittest.TestCase):
+    def fixture(self):
+        from desktop_ui_journeys import fingerprint
+        main = Path('/private/tmp/tex-parity-main.tex')
+        child = main.with_name('parity-child.tex')
+        def row(name, path, line, **extra):
+            return {'name': fingerprint(name), 'path': fingerprint(str(path.resolve())),
+                    'line': line, **extra}
+        return main, child, {'project_index': {
+            'pending': False, 'warning': None,
+            'outline': [row('Native parity section', main, 5, level=1),
+                        row('Included parity section', child, 1, level=2)],
+            'symbols': [row('\\parityname', main, 3)],
+            'labels': [row('sec:parity', main, 6), row('sec:child', child, 2)],
+            'references': [row('sec:parity', main, 8), row('sec:child', main, 8)],
+            'packages': [fingerprint('amsmath')],
+            'subfiles': [fingerprint(str(child.resolve()))],
+        }}
+
+    def test_completed_graph_requires_expected_macros_sections_and_included_source(self):
+        main, child, document = self.fixture()
+        self.assertTrue(tex_parity_index_ready(document, main, child))
+        self.assertFalse(tex_parity_index_ready(document, main.with_name('other.tex'), child))
+        self.assertFalse(tex_parity_index_ready(document, main, child.with_name('other-child.tex')))
+        for field in ('outline', 'symbols', 'labels', 'references', 'packages', 'subfiles'):
+            changed = deepcopy(document)
+            changed['project_index'][field].clear()
+            with self.subTest(field=field):
+                self.assertFalse(tex_parity_index_ready(changed, main, child))
+        document['project_index']['pending'] = True
+        self.assertFalse(tex_parity_index_ready(document, main, child))
+
+    def test_stale_or_malformed_index_evidence_cannot_count_as_native_parity(self):
+        from desktop_ui_journeys import fingerprint
+        main, child, document = self.fixture()
+        for change in ({}, {'project_index': None}, {'project_index': {}},
+                       {'project_index': {**document['project_index'], 'pending': 0}},
+                       {'project_index': {**document['project_index'], 'packages': ['raw package name']}}):
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                tex_parity_index_ready(change, main, child)
+        for field in ('outline', 'symbols', 'labels', 'references'):
+            changed = deepcopy(document)
+            changed['project_index'][field][0]['line'] = True
+            with self.subTest(field=field), self.assertRaises(AssertionError):
+                tex_parity_index_ready(changed, main, child)
+        for field in ('name', 'path'):
+            changed = deepcopy(document)
+            changed['project_index']['outline'][0][field] = fingerprint('unrelated')
+            with self.subTest(field=field):
+                self.assertFalse(tex_parity_index_ready(changed, main, child))
+        changed = deepcopy(document)
+        changed['project_index']['outline'][0]['level'] = 3
+        self.assertFalse(tex_parity_index_ready(changed, main, child))
+        document['project_index']['warning'] = fingerprint('Unreadable included source')
+        self.assertFalse(tex_parity_index_ready(document, main, child))
 
 
 if __name__ == '__main__': unittest.main()

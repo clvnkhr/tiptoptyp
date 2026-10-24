@@ -28,6 +28,18 @@ pub(crate) enum DocumentDialogTarget {
     SaveAs { kind: DocumentKind },
 }
 
+pub(crate) fn document_save_defaults(
+    document: &crate::document::DocumentSession,
+) -> (DocumentKind, String) {
+    let kind = document.kind();
+    let name = if document.path().is_none() && kind == DocumentKind::Text {
+        "Untitled".into()
+    } else {
+        document.name()
+    };
+    (kind, name)
+}
+
 pub(crate) fn source_save_path(mut path: PathBuf, kind: DocumentKind) -> PathBuf {
     if path.extension().is_none()
         && let Some(language) = kind.typesetting_language()

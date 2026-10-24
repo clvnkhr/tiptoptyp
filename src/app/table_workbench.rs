@@ -91,6 +91,34 @@ impl TableEditorDialog {
     }
 }
 impl EditorApp {
+    pub(super) fn begin_new_tex_table(&mut self, context: &egui::Context) {
+        if self.overleaf_source_locked()
+            || self.table_editor.is_some()
+            || self.tabs.is_empty()
+            || self.document().kind() != DocumentKind::Tex
+        {
+            return;
+        }
+        let cursor = self.editor_snapshot(context).cursor.primary.index.0;
+        let dialog =
+            match new_tex_table_draft(self.document().source(), cursor, self.document().key()) {
+                Ok(dialog) => dialog,
+                Err(message) => {
+                    self.notice = Some(Notice {
+                        message,
+                        kind: NoticeKind::Info,
+                    });
+                    return;
+                }
+            };
+        self.table_samples.reset();
+        self.table_edit_events.clear();
+        self.table_editor = Some(TableEditorDialog::Tex(Box::new(dialog)));
+        self.editor_completion = None;
+        self.format_request_key = None;
+        self.manual_format_revision = None;
+    }
+
     pub(super) fn cancel_table_editor(&mut self, context: &egui::Context) {
         self.table_editor = None;
         self.table_samples.reset();
@@ -137,6 +165,280 @@ impl EditorApp {
         self.format_request_key = None;
         self.manual_format_revision = None;
     }
+}
+
+const EMPTY_TEX_TABLE: &str = r"\begin{tabular}{ll}
+  & \\
+  & \\
+\end{tabular}";
+
+fn new_tex_table_draft(source: &str, cursor: usize, key: DocumentKey) -> Result<TexDialog, String> {
+    let byte =
+        char_index_to_byte(source, cursor).ok_or("The insertion position is no longer valid")?;
+    if !tex_table_text_context(source, byte) {
+        return Err("Place the cursor in document text, outside comments, literal text, math, and command arguments, to insert a table".into());
+    }
+    let mut table = crate::editor_features::tex_table_at(EMPTY_TEX_TABLE, 1)
+        .expect("the empty TeX table is a valid grid");
+    table.source_range = cursor..cursor;
+    Ok(TexDialog {
+        original: String::new(),
+        column_spec: table.column_spec.clone(),
+        validation: table.grid_source_edit().err(),
+        table,
+        key,
+        error: None,
+    })
+}
+
+/// Conservative block admission: never split a command, group, comment or
+/// literal payload. The shared context reader owns TeX math/environment rules.
+fn tex_table_text_context(source: &str, byte: usize) -> bool {
+    let Some(prefix) = source.get(..byte) else {
+        return false;
+    };
+    let bytes = prefix.as_bytes();
+    let mut context_source = std::borrow::Cow::Borrowed(prefix);
+    let mut depth = 0usize;
+    let mut brackets = 0usize;
+    let mut pending_arguments = None;
+    let mut pending_control = false;
+    let mut at = 0;
+    while at < prefix.len() {
+        match bytes[at] {
+            b'%' => {
+                let Some(end) = prefix[at..].find('\n') else {
+                    return false;
+                };
+                at += end + 1;
+            }
+            b'[' if depth == 0 => {
+                brackets += 1;
+                at += 1;
+            }
+            b']' if depth == 0 => {
+                brackets = brackets.saturating_sub(1);
+                at += 1;
+            }
+            b'{' => {
+                if depth == 0 && brackets == 0 {
+                    let unknown_control = pending_arguments.is_none() && pending_control;
+                    pending_arguments = pending_arguments
+                        .and_then(|count: usize| count.checked_sub(1))
+                        .filter(|&count| count > 0);
+                    pending_control = unknown_control || pending_arguments.is_some();
+                }
+                depth += 1;
+                at += 1;
+            }
+            b'}' => {
+                let Some(next) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = next;
+                at += 1;
+            }
+            b'\\' => {
+                if let Some(literal) = crate::editor_math_guides::tex_inline_literal(prefix, at) {
+                    if !literal.closed {
+                        return false;
+                    }
+                    at = literal.end;
+                    if depth == 0 && brackets == 0 {
+                        pending_arguments = None;
+                        pending_control = false;
+                    }
+                    continue;
+                }
+                let start = at;
+                at += 1;
+                let name_start = at;
+                while bytes.get(at).is_some_and(u8::is_ascii_alphabetic) {
+                    at += 1;
+                }
+                if at == name_start {
+                    let Some(ch) = prefix[at..].chars().next() else {
+                        return false;
+                    };
+                    at += ch.len_utf8();
+                    if depth == 0 && brackets == 0 {
+                        pending_arguments = None;
+                        pending_control = false;
+                    }
+                    continue;
+                }
+                let name = &prefix[name_start..at];
+                if depth == 0 && brackets == 0 {
+                    let arguments = tex_table_command_arguments(name);
+                    pending_arguments = arguments.filter(|&count| count > 0);
+                    pending_control = arguments != Some(0);
+                }
+                if name == "Verb" {
+                    let normalized = format!("\\verb{}", &prefix[at..]);
+                    let Some(literal) =
+                        crate::editor_math_guides::tex_inline_literal(&normalized, 0)
+                    else {
+                        return false;
+                    };
+                    if !literal.closed {
+                        return false;
+                    }
+                    at = start + literal.end;
+                    // The shared math reader recognises the lowercase spelling.
+                    context_source
+                        .to_mut()
+                        .replace_range(start + 1..start + 2, "v");
+                    if depth == 0 && brackets == 0 {
+                        pending_arguments = None;
+                        pending_control = false;
+                    }
+                } else if matches!(name, "begin" | "end") {
+                    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+                        at += 1;
+                    }
+                    if bytes.get(at) != Some(&b'{') {
+                        return false;
+                    }
+                    let Some(close) = prefix[at + 1..].find('}') else {
+                        return false;
+                    };
+                    let environment = &prefix[at + 1..at + 1 + close];
+                    at += close + 2;
+                    if depth == 0 && brackets == 0 {
+                        pending_arguments = None;
+                        pending_control = name == "begin";
+                    }
+                    if name == "begin"
+                        && matches!(
+                            environment,
+                            "verbatim"
+                                | "verbatim*"
+                                | "Verbatim"
+                                | "Verbatim*"
+                                | "BVerbatim"
+                                | "LVerbatim"
+                                | "SaveVerbatim"
+                                | "lstlisting"
+                                | "minted"
+                                | "comment"
+                                | "filecontents"
+                                | "filecontents*"
+                        )
+                    {
+                        let closing = format!("\\end{{{environment}}}");
+                        let mut closed = false;
+                        for line in prefix[at..].split_inclusive('\n') {
+                            at += line.len();
+                            if line.trim() == closing {
+                                closed = true;
+                                break;
+                            }
+                        }
+                        if !closed {
+                            return false;
+                        }
+                        // Preserve offsets while hiding every literal payload
+                        // from the shared reader, including fake inline closers.
+                        context_source
+                            .to_mut()
+                            .replace_range(start..at, &" ".repeat(at - start));
+                    }
+                } else if at == prefix.len()
+                    && source[byte..].starts_with(|ch: char| ch.is_ascii_alphabetic())
+                {
+                    return false;
+                }
+            }
+            _ => {
+                let ch = prefix[at..].chars().next().unwrap();
+                if depth == 0 && brackets == 0 && !ch.is_whitespace() && ch != '*' {
+                    pending_arguments = None;
+                    pending_control = false;
+                }
+                at += ch.len_utf8();
+            }
+        }
+    }
+    let mut following = &source[byte..];
+    loop {
+        following = following.trim_start();
+        if following.starts_with('%') {
+            let Some(end) = following.find('\n') else {
+                break;
+            };
+            following = &following[end + 1..];
+        } else {
+            break;
+        }
+    }
+    let following = following
+        .strip_prefix('*')
+        .unwrap_or(following)
+        .trim_start();
+    depth == 0
+        && brackets == 0
+        && pending_arguments.is_none()
+        && !(pending_control && following.starts_with(['{', '[']))
+        && crate::snippets::tex_context(&context_source, byte) == Some(crate::snippets::Scope::Text)
+}
+
+// This is block-insertion admission, not macro expansion. Known multi-argument
+// commands must finish their arguments; unknown commands are guarded when an
+// explicit next group would otherwise receive the generated \begin token.
+fn tex_table_command_arguments(name: &str) -> Option<usize> {
+    match name {
+        "noindent" | "par" | "centering" | "raggedright" | "raggedleft" | "smallskip"
+        | "medskip" | "bigskip" | "newline" | "clearpage" | "newpage" => Some(0),
+        "part" | "chapter" | "section" | "subsection" | "subsubsection" | "paragraph"
+        | "subparagraph" | "emph" | "textbf" | "textit" | "texttt" | "textrm" | "textsf"
+        | "textsc" | "textsl" | "textnormal" | "url" | "nolinkurl" | "footnote" | "caption"
+        | "label" | "ref" | "eqref" => Some(1),
+        "textcolor" | "colorbox" | "href" => Some(2),
+        "fcolorbox" | "resizebox" => Some(3),
+        _ => None,
+    }
+}
+
+fn tex_table_insertion(source: &str, cursor: usize, table: &str) -> Result<String, String> {
+    let byte = char_index_to_byte(source, cursor).ok_or("The table range is no longer valid")?;
+    if !tex_table_text_context(source, byte) {
+        return Err("The table insertion position is no longer document text".into());
+    }
+    let start = source[..byte].rfind('\n').map_or(0, |at| at + 1);
+    let end = source[byte..]
+        .find('\n')
+        .map_or(source.len(), |at| byte + at);
+    let before = &source[start..byte];
+    let after = &source[byte..end];
+    let indentation = &source[start..end][..source[start..end]
+        .bytes()
+        .take_while(|ch| matches!(ch, b' ' | b'\t'))
+        .count()];
+    let indent = if before.bytes().all(|ch| matches!(ch, b' ' | b'\t')) {
+        before
+    } else {
+        indentation
+    };
+    let newline = if source[..end].ends_with('\r') || source[..start].ends_with("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut replacement = String::new();
+    if !before.trim().is_empty() {
+        replacement.push_str(newline);
+        replacement.push_str(indent);
+    }
+    replacement.push_str(
+        &table
+            .replace("\r\n", "\n")
+            .replace('\n', &format!("{newline}{indent}")),
+    );
+    if !after.trim().is_empty() {
+        replacement.push_str(newline);
+        replacement.push_str(indent);
+    }
+    Ok(replacement)
 }
 
 pub(super) fn prepare_child_keyboard(
@@ -202,13 +504,14 @@ pub(super) fn prepare_source_edit(
         let table = crate::editor_features::tex_table_at(&edit.replacement, 1)
             .ok_or("Finish the table source before applying it")?;
         let required = crate::tex::imports::Requirements::table(&table, &edit.replacement);
-        let edit = crate::tex::imports::prepare_edit(
-            source,
-            byte_range,
-            &edit.replacement,
-            cursor,
-            &required,
-        )?;
+        let replacement = if original.is_empty() && edit.range.is_empty() {
+            tex_table_insertion(source, edit.range.start, &edit.replacement)?
+        } else {
+            edit.replacement
+        };
+        let cursor = edit.range.start + replacement.chars().count();
+        let edit =
+            crate::tex::imports::prepare_edit(source, byte_range, &replacement, cursor, &required)?;
         return Ok(PreparedTableSourceEdit {
             cursor: edit.cursor,
             byte_range: edit.byte_range,
@@ -1121,6 +1424,301 @@ mod tests {
             revision: 2,
         }
     }
+    #[test]
+    fn new_tex_table_is_an_empty_unicode_safe_grid_at_the_caret() {
+        let source =
+            "\\documentclass{article}\n\\begin{document}\nPréface α🙂\n  \nFin\n\\end{document}\n";
+        let cursor = source[..source.find("  \n").unwrap() + 2].chars().count();
+        let draft = new_tex_table_draft(source, cursor, key()).unwrap();
+        assert!(draft.original.is_empty());
+        assert_eq!(draft.table.source_range, cursor..cursor);
+        assert_eq!(draft.table.environment.name(), "tabular");
+        assert_eq!(draft.table.columns(), Some(2));
+        assert_eq!(
+            draft.table.cells.as_ref().unwrap(),
+            &vec![vec![String::new(), String::new()]; 2]
+        );
+        assert!(draft.validation.is_none());
+        let dialog = TableEditorDialog::Tex(Box::new(draft));
+        let edit = prepare_source_edit(source, key(), &dialog).unwrap();
+        let byte = char_index_to_byte(source, cursor).unwrap();
+        assert_eq!(edit.byte_range, byte..byte);
+        assert!(edit.replacement.starts_with("\\begin{tabular}{ll}\n  "));
+        assert!(edit.replacement.ends_with("\n  \\end{tabular}"));
+        assert!(!edit.replacement.contains("\\usepackage"));
+        let mut applied = source.to_owned();
+        applied.replace_range(edit.byte_range, &edit.replacement);
+        assert_eq!(&applied[..byte], &source[..byte]);
+        assert!(applied.ends_with(&source[byte..]));
+        let table = crate::editor_features::tex_table_at(&applied, cursor + 1).unwrap();
+        assert_eq!(table.cells.as_ref().unwrap().len(), 2);
+        assert_eq!(table.columns(), Some(2));
+        let mut stale = key();
+        stale.revision += 1;
+        assert!(prepare_source_edit(source, stale, &dialog).is_err());
+    }
+
+    #[test]
+    fn new_tex_table_preserves_crlf_tabs_and_separates_surrounding_prose() {
+        let source = "\\begin{document}\r\n\tPréface α🙂 suffix\r\n\\end{document}\r\n";
+        let cursor = source[..source.find(" suffix").unwrap()].chars().count();
+        let draft = new_tex_table_draft(source, cursor, key()).unwrap();
+        let edit =
+            prepare_source_edit(source, key(), &TableEditorDialog::Tex(Box::new(draft))).unwrap();
+        assert!(
+            edit.replacement
+                .starts_with("\r\n\t\\begin{tabular}{ll}\r\n\t")
+        );
+        assert!(edit.replacement.ends_with("\\end{tabular}\r\n\t"));
+        assert!(!edit.replacement.replace("\r\n", "").contains('\n'));
+        let mut applied = source.to_owned();
+        applied.replace_range(edit.byte_range, &edit.replacement);
+        assert!(applied.starts_with("\\begin{document}\r\n\tPréface α🙂\r\n"));
+        assert!(applied.ends_with("\r\n\t suffix\r\n\\end{document}\r\n"));
+    }
+
+    #[test]
+    fn new_tex_table_rejects_math_comments_literals_and_command_arguments() {
+        for marked in [
+            "% a comm§ent\nText",
+            r"\verb|a § b|",
+            r"\Verb|a § b|",
+            r"\lstinline[language=TeX]{a § b}",
+            r"\mintinline{tex}|a § b|",
+            r"\begin{verbatim}a § b\end{verbatim}",
+            r"\begin{Verbatim}a § b\end{Verbatim}",
+            r"\begin{comment}a § b\end{comment}",
+            r"\begin{minted}{tex}a § b\end{minted}",
+            r"\begin{filecontents}{data.txt}a § b\end{filecontents}",
+            r"\begin{filecontents*}{data.txt}a § b\end{filecontents*}",
+            "\\begin{comment}\nexample \\end{comment} inline\n§literal\n\\end{comment}",
+            r"$a § b$",
+            r"\[a § b\]",
+            r"\begin{equation}a § b\end{equation}",
+            r"\begin{align*}a & § b\end{align*}",
+            r"$x + \text{a § b}$",
+            r"\section{a § b}",
+            r"\section §{Title}",
+            r"\section*§{Title}",
+            "\\section* \n§{Title}",
+            r"\textcolor{red} §{Text}",
+            r"\href{url} §{Label}",
+            r"\unknown §{Argument}",
+            r"\unknown§*{Argument}",
+            r"\includegraphics§*{figure}",
+            r"\rotatebox{90} §{Text}",
+            r"\begin{tabular}§{ll}",
+            r"\begin{minipage} §{.5\linewidth}",
+            r"\section[short § title]{Long title}",
+            r"\section[short {nested ] § title}]{Long title}",
+            r"\documentclass[twocolumn,§draft]{article}",
+            r"\sect§ion{Title}",
+            r"\begin{doc§ument}",
+            r"{Grouped § text}",
+            r"\§text{Title}",
+        ] {
+            let cursor = marked[..marked.find('§').unwrap()].chars().count();
+            let source = marked.replace('§', "");
+            assert!(
+                new_tex_table_draft(&source, cursor, key()).is_err(),
+                "{marked}"
+            );
+        }
+        for marked in [
+            "§",
+            "Plain §text",
+            r"\begin{document} §text\end{document}",
+            r"\section{Title} plain §text",
+            r"\section{Title}§",
+            "\\section{Title}\n§Body",
+            r"\textcolor{red}{Text} §body",
+            r"\href{url}{Label} §body",
+            r"\noindent§",
+            r"\noindent§{Grouped paragraph}",
+            "\\par§\nBody",
+            r"\centering§ \begin{table}",
+            r"\section[short {nested ] title}]{Long title} §text",
+            r"Escaped \% and \{ brace §text",
+            r"\verb|% $ { literal| §text",
+            r"\Verb|% $ { literal| §text",
+            "\\begin{Verbatim}\n% $ { literal\n\\end{Verbatim}\n§text",
+            "\\begin{filecontents}{data.txt}\n% $ { literal\n\\end{filecontents}\n§text",
+            "$x$ §text",
+            "\\begin{equation}x\\end{equation}\n§Text",
+            "% comment with { brace\n§Text",
+        ] {
+            let cursor = marked[..marked.find('§').unwrap()].chars().count();
+            let source = marked.replace('§', "");
+            assert!(
+                new_tex_table_draft(&source, cursor, key()).is_ok(),
+                "{marked}"
+            );
+        }
+    }
+
+    #[test]
+    fn new_tex_table_cancel_and_apply_keep_one_undo_including_imports() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let source =
+            "\\documentclass{article}\n\\begin{document}\nPréface α🙂\n  \nFin\n\\end{document}\n";
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("new-table.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        let cursor = source[..source.find("  \n").unwrap() + 2].chars().count();
+        app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(cursor)));
+        let initial_key = app.document().key();
+        let initial_history = app.document().history_availability();
+        let initial_dirty = app.is_dirty();
+        app.begin_new_tex_table(&context);
+        assert!(matches!(app.table_editor, Some(TableEditorDialog::Tex(_))));
+        assert_eq!(app.document().source(), source);
+        assert_eq!(app.document().key(), initial_key);
+        app.cancel_table_editor(&context);
+        assert_eq!(app.document().source(), source);
+        assert_eq!(app.document().key(), initial_key);
+        assert_eq!(app.document().history_availability(), initial_history);
+        assert_eq!(app.is_dirty(), initial_dirty);
+
+        app.begin_new_tex_table(&context);
+        let mut dialog = app.table_editor.take().unwrap();
+        let TableEditorDialog::Tex(draft) = &mut dialog else {
+            unreachable!()
+        };
+        draft.table.cells.as_mut().unwrap()[0][0] = r"\textcolor{red}{Été}".into();
+        let edit = prepare_source_edit(source, initial_key, &dialog).unwrap();
+        app.document_mut()
+            .edit(CCursorRange::one(CCursor::new(cursor)), |source| {
+                source.replace_range(edit.byte_range, &edit.replacement)
+            });
+        let applied = app.document().source().clone();
+        assert_eq!(applied.matches("\\usepackage{xcolor}").count(), 1);
+        assert!(applied.contains(r"\textcolor{red}{Été}"));
+        assert!(applied.contains("Préface α🙂\n  \\begin{tabular}"));
+        app.undo_editor(&context, false);
+        assert_eq!(app.document().source(), source);
+        app.undo_editor(&context, true);
+        assert_eq!(app.document().source(), &applied);
+    }
+
+    #[test]
+    fn new_tex_table_rejected_context_does_not_open_a_draft_or_edit_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let source = "$x + y$";
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("math.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(3)));
+        let key = app.document().key();
+        app.begin_new_tex_table(&context);
+        assert!(app.table_editor.is_none());
+        assert_eq!(app.document().source(), source);
+        assert_eq!(app.document().key(), key);
+        assert!(
+            app.notice
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("outside comments")
+        );
+    }
+
+    #[test]
+    fn new_tex_table_grid_typing_apply_and_cancel_use_the_normal_controls() {
+        struct State {
+            dialog: TableEditorDialog,
+            source: String,
+            action: Option<TableEditorUiAction>,
+        }
+        for apply in [false, true] {
+            let source = "Préface α🙂\n\nFin";
+            let cursor = source[..source.find("\n\n").unwrap() + 1].chars().count();
+            let dialog = TableEditorDialog::Tex(Box::new(
+                new_tex_table_draft(source, cursor, key()).unwrap(),
+            ));
+            let mut configured = false;
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(620.0, 420.0))
+                .build_ui_state(
+                    move |ui, state: &mut State| {
+                        if !configured {
+                            theme::configure_test_fonts(ui.ctx());
+                            configured = true;
+                            return;
+                        }
+                        if let Some(action) =
+                            show(ui, &mut state.dialog, 600.0, 380.0, &AppSettings::default())
+                        {
+                            if action == TableEditorUiAction::Apply {
+                                let edit = prepare_source_edit(&state.source, key(), &state.dialog)
+                                    .unwrap();
+                                state
+                                    .source
+                                    .replace_range(edit.byte_range, &edit.replacement);
+                            }
+                            state.action = Some(action);
+                        }
+                    },
+                    State {
+                        dialog,
+                        source: source.into(),
+                        action: None,
+                    },
+                );
+            harness.run();
+            assert_eq!(
+                harness
+                    .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
+                    .count(),
+                4
+            );
+            harness
+                .query_all(by().role(egui::accesskit::Role::MultilineTextInput))
+                .next()
+                .unwrap()
+                .click();
+            harness.run();
+            harness.event(egui::Event::Text("Été".into()));
+            harness.run();
+            assert_eq!(
+                harness.state().source,
+                source,
+                "typing only changes the draft"
+            );
+            assert!(harness.query_by_label("Source").is_none());
+            harness
+                .get_by_label(if apply { "Apply" } else { "Cancel" })
+                .click();
+            harness.run();
+            let state = harness.state();
+            assert_eq!(
+                state.action,
+                Some(if apply {
+                    TableEditorUiAction::Apply
+                } else {
+                    TableEditorUiAction::Cancel
+                })
+            );
+            if apply {
+                assert!(state.source.contains("Été"));
+                let table =
+                    crate::editor_features::tex_table_at(&state.source, cursor + 1).unwrap();
+                assert_eq!(table.cells.as_ref().unwrap().len(), 2);
+            } else {
+                assert_eq!(state.source, source);
+            }
+        }
+    }
+
     #[test]
     fn tex_grid_apply_is_lossless_and_rejects_stale_source() {
         let source =

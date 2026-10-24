@@ -203,7 +203,7 @@ impl EditorApp {
         let mut browser_action = PackageBrowserAction::default();
         let spec = ChildViewSpec::persistent(
             "tiptoptyp-packages",
-            "tiptoptyp Packages",
+            "Typst Packages",
             [760.0, 620.0],
             [520.0, 360.0],
             "packages",
@@ -542,6 +542,30 @@ impl EditorApp {
         }
     }
 
+    pub(super) fn switch_workspace_chooser(
+        &mut self,
+        context: &egui::Context,
+        destination: WorkspaceChooser,
+    ) {
+        match destination {
+            WorkspaceChooser::Local => {
+                // Switching choosers keeps the connected model, pending saves,
+                // browser, and every local draft alive.
+                self.overleaf.visible = false;
+                if let Some(browser) = &self.overleaf.browser {
+                    let _ = browser.set_visible(false);
+                }
+                ChildViewHost::hide(context, overleaf::SALT);
+                self.open_workspace_chooser();
+            }
+            WorkspaceChooser::Overleaf => {
+                self.workspace_chooser_visible = false;
+                self.begin_overleaf(context);
+            }
+        }
+        context.request_repaint();
+    }
+
     pub(super) fn show_workspace_chooser(&mut self, context: &egui::Context) {
         if !self.workspace_chooser_visible || self.document_workflow.modal().is_some() {
             return;
@@ -574,6 +598,7 @@ impl EditorApp {
                 .map(|url| (url.clone(), self.overleaf_project_label(url)))
                 .collect::<Vec<_>>()
         };
+        let mut switch_overleaf = false;
         let mut selected_project = None;
         let mut selected = None;
         let mut removed = None;
@@ -607,7 +632,7 @@ impl EditorApp {
                             theme::apply_compact_tool_spacing(ui);
                             ui.set_width(card_width);
                             let content_top = ui.next_widget_position().y;
-                            ui.label(RichText::new("Change workspace root").strong());
+                            switch_overleaf |= show_workspace_chooser_header(ui);
                             if !recent_workspaces.is_empty() || !recent_projects.is_empty() {
                                 ui.add_space(theme::SPACE.small);
                                 ui.label(
@@ -646,7 +671,23 @@ impl EditorApp {
                                             }
                                         }
                                         for path in &recent_workspaces {
-                                            match show_recent_workspace_row(ui, path, card_width) {
+                                            let row = ui.scope(|ui| {
+                                                show_recent_workspace_row(ui, path, card_width)
+                                            });
+                                            #[cfg(all(
+                                                feature = "desktop-ui-tests",
+                                                target_os = "macos"
+                                            ))]
+                                            crate::desktop_test::observe(
+                                                &format!(
+                                                    "chooser.workspace.{}",
+                                                    crate::desktop_test::fingerprint(
+                                                        &path.to_string_lossy()
+                                                    )
+                                                ),
+                                                &row.response,
+                                            );
+                                            match row.inner {
                                                 Some(RecentWorkspaceAction::Open(path)) => {
                                                     selected = Some(path);
                                                 }
@@ -670,7 +711,9 @@ impl EditorApp {
             },
         );
 
-        if let Some(url) = selected_project {
+        if switch_overleaf {
+            self.switch_workspace_chooser(context, WorkspaceChooser::Overleaf);
+        } else if let Some(url) = selected_project {
             self.workspace_chooser_visible = false;
             crate::window_host::return_focus(context);
             if let Err(error) = self.open_overleaf_project_url(&url, None, context) {
@@ -1964,6 +2007,38 @@ impl EditorApp {
     pub(super) fn hide_webview(&mut self) {}
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WorkspaceChooser {
+    Local,
+    Overleaf,
+}
+
+pub(super) fn workspace_chooser_button(
+    ui: &mut egui::Ui,
+    destination: WorkspaceChooser,
+) -> egui::Response {
+    let (label, target) = match destination {
+        WorkspaceChooser::Local => ("Local folders", "chooser.local"),
+        WorkspaceChooser::Overleaf => ("Overleaf", "chooser.overleaf"),
+    };
+    let response = ui.button(label);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe(target, &response);
+    let _ = target;
+    response
+}
+
+fn show_workspace_chooser_header(ui: &mut egui::Ui) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Change workspace root").strong());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            workspace_chooser_button(ui, WorkspaceChooser::Overleaf).clicked()
+        })
+        .inner
+    })
+    .inner
+}
+
 fn dialog_scroll_height(owner_height: f32, reserved: f32) -> f32 {
     (owner_height - reserved).clamp(0.0, METRICS.popup.modal_message_max_height)
 }
@@ -2055,6 +2130,93 @@ fn dialog_footer(
 #[cfg(test)]
 mod property_tests {
     use super::*;
+
+    #[test]
+    fn workspace_chooser_switch_stays_in_the_existing_compact_header_row() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for width in [340.0, 520.0] {
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(width, 100.0))
+                .build_ui_state(
+                    |ui, selected| {
+                        theme::apply_compact_tool_spacing(ui);
+                        *selected |= show_workspace_chooser_header(ui);
+                    },
+                    false,
+                );
+            harness.run();
+            let title = harness.get_by_label("Change workspace root").rect();
+            let button = harness.get_by_label("Overleaf").rect();
+            assert!(
+                button.left() >= title.right(),
+                "{width}: {title:?} {button:?}"
+            );
+            assert!(
+                (button.center().y - title.center().y).abs() < 1.0,
+                "{width}: title and switch must share one row"
+            );
+            assert!(
+                button.right() <= width && button.bottom() < 45.0,
+                "{width}: {button:?}"
+            );
+            harness.get_by_label("Overleaf").click();
+            harness.run();
+            assert!(*harness.state());
+        }
+    }
+
+    #[test]
+    fn chooser_switch_buttons_preserve_the_document_and_only_change_chooser_visibility() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut()
+            .replace_unprojected_untitled("Unsaved mathematical draft α");
+        app.document_mut()
+            .edit(CCursorRange::default(), |source| source.push_str(" edited"));
+        app.workspace_chooser_visible = true;
+        let source = app.document().source().clone();
+        let key = app.document().key();
+        let tabs = app.tabs.ids().collect::<Vec<_>>();
+        let root = app.workspace_root.clone();
+        let history = app.document().history_availability();
+        let dirty = app.is_dirty();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(520.0, 100.0))
+            .build_ui_state(
+                |ui, app: &mut EditorApp| {
+                    if app.workspace_chooser_visible {
+                        if show_workspace_chooser_header(ui) {
+                            app.switch_workspace_chooser(ui.ctx(), WorkspaceChooser::Overleaf);
+                        }
+                    } else if app.overleaf.visible
+                        && workspace_chooser_button(ui, WorkspaceChooser::Local).clicked()
+                    {
+                        app.switch_workspace_chooser(ui.ctx(), WorkspaceChooser::Local);
+                    }
+                },
+                app,
+            );
+        for _ in 0..2 {
+            harness.run();
+            harness.get_by_label("Overleaf").click();
+            harness.run();
+            assert!(harness.state().overleaf.visible);
+            assert!(!harness.state().workspace_chooser_visible);
+            harness.get_by_label("Local folders").click();
+            harness.run();
+            let app = harness.state();
+            assert!(!app.overleaf.visible);
+            assert!(app.workspace_chooser_visible);
+            assert_eq!(app.document().source(), &source);
+            assert_eq!(app.document().key(), key);
+            assert_eq!(app.tabs.ids().collect::<Vec<_>>(), tabs);
+            assert_eq!(app.workspace_root, root);
+            assert_eq!(app.document().history_availability(), history);
+            assert_eq!(app.is_dirty(), dirty);
+        }
+    }
 
     #[test]
     fn dialog_scroll_body_reserves_title_and_footer_space_inside_short_owners() {

@@ -473,7 +473,7 @@ impl ExplorerSection {
             Self::Subfiles => "Subfiles",
             Self::Symbols => "Symbols",
             Self::Packages => "Packages",
-            Self::Tags => "Tags",
+            Self::Tags => "Labels",
             Self::References => "References",
             Self::DrawSymbol => "Draw symbol",
         }

@@ -6,6 +6,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct BiberCache {
     job: LatestJob<PathBuf>,
     cancel: Arc<AtomicBool>,
+    attempted: bool,
+}
+impl BiberCache {
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        if self.attempted {
+            self.job.activity()
+        } else {
+            crate::activity::Activity::Inactive("Not requested")
+        }
+    }
 }
 impl Drop for BiberCache {
     fn drop(&mut self) {
@@ -28,6 +38,7 @@ impl EditorApp {
         let cancel = self.biber_cache.cancel.clone();
         let root = self.project_root();
         let environment = self.settings.tex.system_command.environment.clone();
+        self.biber_cache.attempted = true;
         let result =
             self.biber_cache
                 .job
@@ -67,5 +78,53 @@ impl EditorApp {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::activity::Activity;
+
+    #[test]
+    fn biber_cache_is_not_reported_ready_before_any_request() {
+        let cache = BiberCache::default();
+        assert_eq!(cache.activity(), Activity::Inactive("Not requested"));
+        assert!(!cache.attempted);
+        assert!(!cache.job.is_running());
+    }
+
+    #[test]
+    fn biber_cache_observation_preserves_failures_and_never_retires_work() {
+        let mut cache = BiberCache {
+            attempted: true,
+            job: Default::default(),
+            cancel: Arc::default(),
+        };
+        cache
+            .job
+            .start("test-biber-failure", || Err("cache is locked".into()))
+            .unwrap();
+        cache.job.wait_until_ready_for_test().unwrap();
+        assert_eq!(cache.activity(), Activity::Running);
+        assert!(
+            cache.job.is_running(),
+            "observation consumed a completed worker result"
+        );
+        assert_eq!(
+            cache.job.poll(),
+            LatestJobPoll::Failed("cache is locked".into())
+        );
+        for _ in 0..2 {
+            assert_eq!(cache.activity(), Activity::Failed("cache is locked".into()));
+        }
+        cache
+            .job
+            .start("test-biber-retry", || Ok(PathBuf::new()))
+            .unwrap();
+        cache.job.wait_until_ready_for_test().unwrap();
+        assert_eq!(cache.activity(), Activity::Running);
+        assert_eq!(cache.job.poll(), LatestJobPoll::Ready(PathBuf::new()));
+        assert_eq!(cache.activity(), Activity::Idle);
     }
 }

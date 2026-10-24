@@ -343,12 +343,46 @@ impl ChildPaint {
             escape_pressed: input.key_pressed(egui::Key::Escape),
         });
         body(ui, input);
+        // The destination now has a live viewport and native binding. A focus
+        // intent sent before this paint would be lost, or race popup closure.
+        let focus = ui
+            .ctx()
+            .data_mut(|data| data.remove_temp::<bool>(focus_on_show_id(self.token.id)))
+            .unwrap_or(false);
+        if focus {
+            let active = crate::native_window::application_active(ui.ctx()).unwrap_or_else(|| {
+                ui.ctx().input(|input| {
+                    input.raw.viewports.values().any(|viewport| {
+                        viewport.focused == Some(true) && viewport.visible() != Some(false)
+                    })
+                })
+            });
+            if active {
+                crate::window_host::focus(
+                    ui.ctx(),
+                    self.token.id,
+                    crate::window_host::FocusCause::UserAction,
+                );
+            }
+        }
         self.captures
             .end_glow_viewport(ui, self.spec.capture_target);
     }
 }
 
+fn focus_on_show_id(id: egui::ViewportId) -> egui::Id {
+    egui::Id::new(("child-focus-on-show", id))
+}
+
 impl ChildViewHost {
+    /// Hand a completed user command to its child once that exact child paints.
+    /// This does not activate the owner or poll while a child is being created.
+    pub(crate) fn request_focus_on_show(context: &egui::Context, salt: &'static str) {
+        let id = scoped_child_viewport_id(context, salt);
+        context.data_mut(|data| data.insert_temp(focus_on_show_id(id), true));
+        context.request_repaint();
+    }
+
     /// Independent child painting avoids an editor paint and a nested GL
     /// buffer swap for every child event. The caller owns input invalidation
     /// and returns application actions separately from viewport-local state.
@@ -429,6 +463,7 @@ impl ChildViewHost {
 
     pub(crate) fn hide(context: &egui::Context, salt: &'static str) {
         let id = scoped_child_viewport_id(context, salt);
+        context.data_mut(|data| data.remove::<bool>(focus_on_show_id(id)));
         if crate::window_host::transition(context, id, ChildViewLifecycle::TemporarilyHidden) {
             context.send_viewport_cmd_to(id, egui::ViewportCommand::Visible(false));
         }
@@ -439,6 +474,7 @@ impl ChildViewHost {
     }
 
     pub(crate) fn close_viewport(context: &egui::Context, id: egui::ViewportId) {
+        context.data_mut(|data| data.remove::<bool>(focus_on_show_id(id)));
         if crate::window_host::transition(context, id, ChildViewLifecycle::DurablyClosed) {
             context.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
             crate::font_preview::dispose_viewport(context, id);
@@ -449,6 +485,7 @@ impl ChildViewHost {
         let owner = context.viewport_id();
         let closed = crate::window_host::retire_owner(context, owner);
         for id in closed {
+            context.data_mut(|data| data.remove::<bool>(focus_on_show_id(id)));
             context.send_viewport_cmd_to(id, egui::ViewportCommand::Close);
             crate::font_preview::dispose_viewport(context, id);
         }
@@ -687,6 +724,161 @@ mod tests {
             count,
             "editor frames must not render the child"
         );
+    }
+
+    #[test]
+    fn requested_child_focus_waits_for_its_live_paint_and_is_consumed_once() {
+        let context = egui::Context::default();
+        context.set_embed_viewports(false);
+        let captures = CaptureController::disabled_for_tests();
+        let target = scoped_child_viewport_id(&context, "destination");
+        let other = scoped_child_viewport_id(&context, "unrelated");
+        let register = || {
+            context.run_ui(egui::RawInput::default(), |ui| {
+                for salt in ["destination", "unrelated"] {
+                    ChildViewHost::show_deferred(
+                        ui.ctx(),
+                        &captures,
+                        ChildViewSpec::persistent(
+                            salt,
+                            "Tool",
+                            [500.0, 400.0],
+                            [300.0, 200.0],
+                            "settings",
+                        ),
+                        egui::Theme::Dark,
+                        &ui.ctx().style_of(egui::Theme::Dark),
+                        |ui, _| {
+                            ui.label("Tool body");
+                        },
+                    );
+                }
+            })
+        };
+        let request = context.run_ui(egui::RawInput::default(), |ui| {
+            ChildViewHost::request_focus_on_show(ui.ctx(), "destination")
+        });
+        assert!(
+            !request
+                .viewport_output
+                .values()
+                .any(|output| output.commands.contains(&egui::ViewportCommand::Focus))
+        );
+        request.drop_without_applying_deltas();
+        let output = register();
+        let target_callback = output.viewport_output[&target]
+            .viewport_ui_cb
+            .clone()
+            .unwrap();
+        let other_callback = output.viewport_output[&other]
+            .viewport_ui_cb
+            .clone()
+            .unwrap();
+        output.drop_without_applying_deltas();
+        let paint = |id, callback: &egui::DeferredViewportUiCallback| {
+            let mut input = egui::RawInput {
+                viewport_id: id,
+                ..Default::default()
+            };
+            input
+                .viewports
+                .entry(egui::ViewportId::ROOT)
+                .or_default()
+                .focused = Some(true);
+            input.viewports.insert(
+                id,
+                egui::ViewportInfo {
+                    parent: Some(egui::ViewportId::ROOT),
+                    focused: Some(false),
+                    ..Default::default()
+                },
+            );
+            context.run_ui(input, |ui| callback(ui))
+        };
+        let output = paint(other, &*other_callback);
+        assert!(
+            !output
+                .viewport_output
+                .values()
+                .any(|output| output.commands.contains(&egui::ViewportCommand::Focus)),
+            "unrelated child cannot consume the destination's intent"
+        );
+        output.drop_without_applying_deltas();
+        for first in [true, false] {
+            let output = paint(target, &*target_callback);
+            let focus = output
+                .viewport_output
+                .iter()
+                .flat_map(|(id, output)| {
+                    output.commands.iter().filter_map(move |command| {
+                        (*command == egui::ViewportCommand::Focus).then_some(*id)
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(focus, if first { vec![target] } else { Vec::new() });
+            output.drop_without_applying_deltas();
+        }
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                ChildViewHost::request_focus_on_show(ui.ctx(), "destination");
+                ChildViewHost::close(ui.ctx(), "destination");
+            })
+            .drop_without_applying_deltas();
+        let output = register();
+        let reopened = output.viewport_output[&target]
+            .viewport_ui_cb
+            .clone()
+            .unwrap();
+        output.drop_without_applying_deltas();
+        let output = paint(target, &*reopened);
+        assert!(
+            !output
+                .viewport_output
+                .values()
+                .any(|output| output.commands.contains(&egui::ViewportCommand::Focus)),
+            "closing clears a queued handoff before reopening"
+        );
+        output.drop_without_applying_deltas();
+        context
+            .run_ui(egui::RawInput::default(), |ui| {
+                ChildViewHost::request_focus_on_show(ui.ctx(), "destination")
+            })
+            .drop_without_applying_deltas();
+        let mut background = egui::RawInput {
+            viewport_id: target,
+            ..Default::default()
+        };
+        background
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .focused = Some(false);
+        background.viewports.insert(
+            target,
+            egui::ViewportInfo {
+                parent: Some(egui::ViewportId::ROOT),
+                focused: Some(false),
+                ..Default::default()
+            },
+        );
+        let output = context.run_ui(background, |ui| reopened(ui));
+        assert!(
+            !output
+                .viewport_output
+                .values()
+                .any(|output| output.commands.contains(&egui::ViewportCommand::Focus)),
+            "switching apps cancels the handoff without stealing focus"
+        );
+        output.drop_without_applying_deltas();
+        let output = paint(target, &*reopened);
+        assert!(
+            !output
+                .viewport_output
+                .values()
+                .any(|output| output.commands.contains(&egui::ViewportCommand::Focus)),
+            "cancelled handoff cannot raise the child later"
+        );
+        output.drop_without_applying_deltas();
     }
 
     #[test]

@@ -80,11 +80,16 @@ impl EditorApp {
             .snapshot(crate::capabilities::CapabilityInputs {
                 document,
                 preview_document,
-                build_tool: if preview_document == DocumentKind::Tex {
-                    self.tex_tools.tectonic.clone()
-                } else {
-                    self.typst_tool.clone()
-                },
+                build_requirement: crate::capabilities::build_requirement(
+                    preview_document,
+                    &self.typst_tool,
+                    &self.settings.tex,
+                    &self.tex_tools.tectonic,
+                    self.tex_tools
+                        .distribution(self.settings.tex.build_engine)
+                        .is_some(),
+                    self.tex_tools.latexmk.is_some(),
+                ),
                 editor_tool: if document == DocumentKind::Tex {
                     self.tex_tools.texlab.clone()
                 } else {
@@ -609,6 +614,76 @@ impl EditorApp {
                 SettingsAction::ClearBiberCache => self.clear_biber_cache(context),
                 SettingsAction::Update(edited) => self.queue_settings(*edited, context),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        capabilities::{CapabilityCache, CapabilityInputs, build_requirement},
+        tex::settings::{BuildDriver, BuildEngine, TexSettings},
+        toolchain::{ToolKind, ToolOrigin},
+    };
+    use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn pdf_service_chip_tracks_cached_system_engine_and_driver_without_tectonic() {
+        let missing = |kind: ToolKind| ToolResolution {
+            bundled_program: None,
+            command: Default::default(),
+            kind,
+            program: PathBuf::from("/not-discovered-by-this-test").join(kind.binary_name()),
+            origin: ToolOrigin::Missing,
+            fallback_reason: Some(format!("{} is missing", kind.label())),
+        };
+        let mut cache = CapabilityCache::discover();
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(300.0, 100.0))
+            .build_ui_state(
+                |ui, state: &mut ServiceState| {
+                    super::super::settings_controls::show_service_status_chip(ui, "PDF", state);
+                },
+                ServiceState::Ready("Preview ready".into()),
+            );
+        for (engine_available, driver_available, driver, enabled, expected) in [
+            (true, true, BuildDriver::Latexmk, true, "Ready"),
+            (true, false, BuildDriver::Latexmk, true, "Failed"),
+            (true, false, BuildDriver::Direct, true, "Ready"),
+            (false, true, BuildDriver::Direct, true, "Failed"),
+            (false, false, BuildDriver::Latexmk, false, "Disabled"),
+        ] {
+            let tex = TexSettings {
+                build_engine: BuildEngine::XeLatex,
+                build_driver: driver,
+                build_enabled: enabled,
+                ..Default::default()
+            };
+            let ready = || ServiceState::Ready("Preview ready".into());
+            let snapshot = cache.snapshot(CapabilityInputs {
+                document: DocumentKind::Tex,
+                preview_document: DocumentKind::Tex,
+                build_requirement: build_requirement(
+                    DocumentKind::Tex,
+                    &missing(ToolKind::Typst),
+                    &tex,
+                    &missing(ToolKind::Tectonic),
+                    engine_available,
+                    driver_available,
+                ),
+                editor_tool: missing(ToolKind::Texlab),
+                interactive_tool: missing(ToolKind::Tinymist),
+                lsp: ready(),
+                interactive_preview: ready(),
+                pdf_generation: ready(),
+                pdf_rendering: ready(),
+                interactive_preview_supported: true,
+            });
+            *harness.state_mut() = snapshot.pdf_generation;
+            harness.run();
+            harness.get_by_label("PDF");
+            harness.get_by_label(expected);
         }
     }
 }

@@ -8,7 +8,7 @@ mod presence;
 mod storage;
 
 pub(crate) use mirror::Mirror;
-pub(crate) use model::{Model, ModelChange};
+pub(crate) use model::{ConflictReview, Model, ModelChange};
 pub(crate) use presence::{Collaborator, PresenceSnapshot, RemoteCursor, SourceIndex};
 use serde::{Deserialize, Serialize};
 use std::{
