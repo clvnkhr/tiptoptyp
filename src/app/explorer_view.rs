@@ -493,6 +493,7 @@ fn add_workspace_nodes_with_access(
                 NodeBuilder::dir(node.path.clone())
                     .drop_allowed(!read_only)
                     .default_open(active.is_some_and(|path| path.starts_with(&node.path)))
+                    .closer(|ui, state| paint_tree_disclosure(ui, node, state))
                     .icon(|ui| paint_tree_icon(ui, true))
                     .label_ui(move |ui| {
                         let color = workspace_entry_resolved_color(
@@ -502,6 +503,11 @@ fn add_workspace_nodes_with_access(
                         );
                         let text = RichText::new(&label).color(color);
                         let response = ui.add(workspace_entry_label(text, is_active));
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe(
+                            &format!("explorer.folder.{}", node.relative_path.display()),
+                            &response,
+                        );
                         if !read_only {
                             offer_folder_row_drop(ui, response.rect, &drop_directory);
                         }
@@ -544,6 +550,11 @@ fn add_workspace_nodes_with_access(
                                 );
                             }
                         });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe(
+                            &format!("explorer.file.{}", node.relative_path.display()),
+                            &row.response,
+                        );
                         if !read_only && let Some(parent) = hover_path.parent() {
                             offer_folder_row_drop(ui, row.response.rect, parent);
                         }
@@ -1815,6 +1826,52 @@ pub(super) fn explorer_index_row(
     response
 }
 
+fn paint_tree_disclosure(
+    ui: &mut egui::Ui,
+    node: &WorkspaceNode,
+    state: egui_ltreeview::CloserState,
+) {
+    let (small, _) = ui.spacing().icon_rectangles(ui.max_rect());
+    let visuals = if state.is_hovered {
+        ui.visuals().widgets.hovered
+    } else {
+        ui.visuals().widgets.inactive
+    };
+    let rect =
+        Rect::from_center_size(small.center(), small.size() * 0.75).expand(visuals.expansion);
+    let openness = ui.ctx().animate_bool(
+        egui::Id::new((ui.ctx().viewport_id(), "workspace-disclosure", &node.path)),
+        state.is_open,
+    );
+    let rotation = egui::emath::Rot2::from_angle((openness - 1.0) * std::f32::consts::FRAC_PI_2);
+    let mut points = vec![rect.left_top(), rect.right_top(), rect.center_bottom()];
+    for point in &mut points {
+        *point = rect.center() + rotation * (*point - rect.center());
+    }
+    // Borderless selection deliberately has no stroke. The tree copies that
+    // stroke into its row foreground, so read the untouched theme as icons do.
+    let style = ui.ctx().style_of(ui.ctx().theme());
+    let color = if state.is_hovered {
+        style.visuals.widgets.hovered.fg_stroke.color
+    } else {
+        style.visuals.text_color()
+    };
+    ui.painter()
+        .add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    {
+        let response = ui.interact(
+            ui.max_rect(),
+            ui.id().with(("disclosure-observation", &node.path)),
+            Sense::hover(),
+        );
+        crate::desktop_test::observe(
+            &format!("explorer.disclosure.{}", node.relative_path.display()),
+            &response,
+        );
+    }
+}
+
 pub(super) fn paint_tree_icon(ui: &mut egui::Ui, folder: bool) {
     let rect = ui.available_rect_before_wrap().shrink(theme::SPACE.tight);
     let size = METRICS.explorer.tree_icon_size.min(rect.size());
@@ -1998,5 +2055,71 @@ mod read_only_tests {
         harness.get_by_label("Overleaf project").click();
         harness.step();
         assert!(harness.state().change_root);
+    }
+}
+
+#[cfg(test)]
+mod disclosure_tests {
+    use super::add_workspace_nodes;
+    use crate::{theme, workspace::WorkspaceNode};
+    use eframe::egui::{self, Pos2, Vec2};
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    use egui_ltreeview::{TreeView, TreeViewState};
+    use std::path::PathBuf;
+
+    #[test]
+    fn selected_focused_folder_keeps_visible_disclosure_after_pointer_leaves() {
+        for appearance in [egui::Theme::Light, egui::Theme::Dark] {
+            let root = PathBuf::from("/workspace");
+            let folder = root.join("chapters");
+            let nodes = vec![WorkspaceNode {
+                name: "chapters".into(),
+                path: folder.clone(),
+                relative_path: "chapters".into(),
+                kind: crate::workspace::WorkspaceNodeKind::Directory,
+                children: Vec::new(),
+            }];
+            let mut state = TreeViewState::default();
+            state.set_one_selected(folder.clone());
+            state.set_openness(folder, false);
+            let mut harness = Harness::builder()
+                .with_size(Vec2::new(400.0, 200.0))
+                .build_ui_state(
+                    move |ui, state: &mut TreeViewState<PathBuf>| {
+                        ui.ctx().set_theme(appearance);
+                        theme::apply_active_row_selection(ui);
+                        let id = egui::Id::new("selected-folder-disclosure");
+                        ui.memory_mut(|memory| memory.request_focus(id));
+                        let context = ui.ctx().clone();
+                        TreeView::new(id).allow_drag_and_drop(false).show_state(
+                            ui,
+                            state,
+                            |builder| {
+                                add_workspace_nodes(
+                                    builder,
+                                    &nodes,
+                                    None,
+                                    None,
+                                    &context,
+                                    None,
+                                    &crate::git::editor::FileStatuses::default(),
+                                );
+                            },
+                        );
+                    },
+                    state,
+                );
+            harness.run();
+            harness.get_by_label("chapters");
+            harness.hover_at(Pos2::new(350.0, 150.0));
+            harness.run();
+            assert!(
+                harness.output().shapes.iter().any(|clipped| {
+                    matches!(&clipped.shape, egui::Shape::Path(path)
+                    if path.points.len() == 3 && path.fill.a() > 0)
+                }),
+                "selected folder disclosure disappeared in {appearance:?}"
+            );
+        }
     }
 }
