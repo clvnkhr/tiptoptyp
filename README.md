@@ -3,6 +3,29 @@
 `tiptoptyp` is a native Typst editor written in Rust. It uses Tinymist for an
 interactive vector preview, Typst for canonical PDF output, PDFium for PDF viewing, and a built-in Rust renderer for hover thumbnails.
 
+## License
+
+The first-party code and documentation are **source available** under
+[PolyForm Perimeter 1.0.1](LICENSE), rather than an open-source license.
+You may use and modify the app, including at work, and redistribute it for
+permitted purposes. You may not provide a competing product made from the
+software. The full license controls these permissions and restrictions.
+
+Calvin Khor retains the right to offer separate commercial licenses, sell the
+app through the App Store or other channels, and accept donations. This source
+license does not require the author's builds to be free of charge.
+Documents and other output you create with the editor are not covered by the
+editor's source license.
+
+Third-party code, dependencies, bundled tools, fonts, themes, models, data,
+quotations and externally sourced fixtures retain their own licenses. See
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES), the notices in their files and
+directories, and the license files shipped in app resources. A commercial
+release must also satisfy those separate distribution obligations.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution terms that preserve the
+project's ability to offer commercial releases.
+
 ## MVP features
 
 - Official `typst-syntax` parsing and incremental syntax highlighting

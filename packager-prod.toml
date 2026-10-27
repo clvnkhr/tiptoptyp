@@ -24,6 +24,7 @@ resources = [
     { src = "toolchain/shared-assets", target = "assets" },
     { src = "toolchain/ltex", target = "ltex" },
     { src = "assets/liquid/SACREMOSES-LICENSE", target = "licenses/Sacremoses-MIT.txt" },
+    { src = "LICENSE", target = "LICENSE" },
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
     { src = "assets/fonts/notosans/OFL.txt", target = "licenses/NotoSans-OFL.txt" },

@@ -39,6 +39,12 @@ fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resource
         cargo, production,
         "production and Cargo resource lists diverged"
     );
+    assert_eq!(
+        production.get("LICENSE").map(String::as_str),
+        Some("LICENSE"),
+        "packaged apps must include the first-party license"
+    );
+    assert!(root.join("LICENSE").is_file());
     assert!(
         production
             .values()
@@ -66,6 +72,34 @@ fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resource
         .filter(|source| source.starts_with("assets/"))
     {
         assert!(root.join(source).exists(), "missing resource: {source}");
+    }
+}
+
+#[test]
+fn first_party_packages_resolve_to_the_project_license() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let license = root.join("LICENSE").canonicalize().unwrap();
+    for manifest in [
+        "Cargo.toml",
+        "core/Cargo.toml",
+        "xtask/Cargo.toml",
+        "scripts/liquid-native-probe/Cargo.toml",
+    ] {
+        let path = root.join(manifest);
+        let value: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let relative = value["package"]["license-file"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{manifest} omits its license"));
+        assert_eq!(
+            path.parent()
+                .unwrap()
+                .join(relative)
+                .canonicalize()
+                .unwrap(),
+            license,
+            "{manifest} must use the first-party license"
+        );
+        assert!(value["package"].get("license").is_none());
     }
 }
 

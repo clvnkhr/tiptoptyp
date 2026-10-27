@@ -3,6 +3,7 @@ name = "tiptoptyp-liquid-native-probe"
 version = "0.1.0"
 edition = "2024"
 publish = false
+license-file = "../../LICENSE"
 
 # This measures the actual production modules without constructing the editor or
 # linking its GUI dependencies. Keep inference/tokenizer versions in sync with

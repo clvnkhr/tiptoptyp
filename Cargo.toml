@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.98"
 description = "A fast, native Typst and LaTeX editor with live PDF preview"
 publish = false
+license-file = "LICENSE"
 repository = "https://github.com/calvinkhor/tiptoptyp"
 
 [features]
@@ -140,6 +141,7 @@ resources = [
     { src = "toolchain/payloads", target = "toolchain" },
     { src = "toolchain/shared-assets", target = "assets" },
     { src = "toolchain/ltex", target = "ltex" },
+    { src = "LICENSE", target = "LICENSE" },
     { src = "THIRD_PARTY_NOTICES", target = "THIRD_PARTY_NOTICES" },
     { src = "toolchain/licenses", target = "licenses" },
     { src = "assets/fonts/notosans/OFL.txt", target = "licenses/NotoSans-OFL.txt" },

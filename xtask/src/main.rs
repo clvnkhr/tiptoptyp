@@ -349,6 +349,7 @@ fn verify_package(target: &str) -> Result<(), String> {
     require_file(&executable_dir.join("tiptoptyp"))?;
     require_file(&resources.join(MACOS_APP_ICON))?;
     verify_bundle_icon_reference(&app.join("Contents/Info.plist"), MACOS_APP_ICON)?;
+    verify_hash(&resources.join("LICENSE"), &sha256(&root.join("LICENSE"))?)?;
     macos::verify_architectures(&executable_dir.join("tiptoptyp"), target)?;
     payloads::verify(&resources, target)?;
     verify_liquid_is_on_demand(&resources)?;
