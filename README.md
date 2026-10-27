@@ -1,7 +1,335 @@
 # tiptoptyp
 
-`tiptoptyp` is a native Typst editor written in Rust. It uses Tinymist for an
-interactive vector preview, Typst for canonical PDF output, PDFium for PDF viewing, and a built-in Rust renderer for hover thumbnails.
+A native desktop editor for **Typst and LaTeX**, written in Rust. Source editing,
+interactive previews, local spelling and grammar checks, Git comparisons and an
+optional Overleaf connection share one workspace. macOS is the primary tested
+platform.
+
+## What it does
+
+- **Write:** syntax highlighting, completions, folding, indentation guides,
+  word wrap, rainbow brackets, local-definition-use highlights and custom text
+  highlights. Edit snippets as Typst or TeX with linked fields such as
+  `{{1:x}}`; each snippet can use its own placeholder delimiters.
+- **Preview:** buffered Tinymist partial rendering for Typst, with full Tinymist
+  and PDFium available in Settings. TeX output and opened PDFs use PDFium.
+  Navigate between source and preview, search PDFs and choose the previewed
+  document independently of the active editor tab.
+- **Check prose:** optional Harper and LTeX+ spelling and grammar checks, with
+  mathematical vocabulary and editable settings. Filter Problems by provider,
+  severity and text. Optionally check selected prose with Liquid and review
+  the complete before/after comparison before applying corrections.
+- **Edit tables and mathematics:** a grid workbench for Typst tables/grids,
+  TeX tabular-family environments, arrays, matrices, cases and aligned formulas.
+  Supported computed cells show locked compiler samples; literal cells remain
+  editable. Supported table actions insert missing TeX package imports. See
+  [table support and limits](docs/table-editor.md).
+- **Work with projects:** Explorer files, contents, subfiles, symbols, packages,
+  labels and references; multi-file entry points; Git status, staging, commits,
+  history and remote operations. The [Git diff editor](docs/git-diff-editor.md)
+  shows the whole document, with an editable right column and an overview of
+  changes. On macOS, [local file versions](docs/local-file-versions.md) provide
+  native save history, comparisons and restore.
+- **Use TeX tools:** Tectonic or a system TeX engine, latexmk/BibTeX/Biber
+  orchestration, formatting, TeXdoc manuals, DOI/arXiv citation import and a
+  cancellable LaTeXdiff wizard.
+- **Stay in the workspace:** a command palette, a Ghostty-based terminal with
+  multiple panes, clickable links and scrollback search, plus Problems and
+  Activity panels. Connect an Overleaf project for native source editing.
+- **Customize:** searchable Settings, validated JSON editing, configurable
+  shortcuts, editable snippets/templates, bundled and imported themes, font
+  previews and optional editor effects. macOS also supports background
+  transparency and directional blur; fullscreen disables both.
+
+The built-in **Settings → Help** covers shortcuts, preview controls, snippets,
+tool configuration and suppression comments. Shortcuts in that help reflect
+custom bindings.
+
+## Run from source
+
+### Requirements
+
+- The Rust **1.98.1** toolchain selected by `rust-toolchain.toml`, including
+  rustfmt and Clippy. Install Rust through rustup if it is not already available.
+- Zig **0.15.2** on `PATH`, and Git, for the pinned libghostty-vt terminal build.
+  The first build fetches its source dependencies. Installing the Ghostty app
+  does not supply Zig.
+- A native compiler/SDK; on macOS, install Apple's Command Line Tools.
+- `curl` and `tar` for preparing bundled tools.
+
+With [mise](https://mise.jdx.dev/), the checked-in `mise.toml` selects Zig
+without changing your global version:
+
+```sh
+mise trust mise.toml
+mise install
+mise exec -- zig version                 # must print 0.15.2
+```
+
+Use `mise exec --` before Cargo commands if mise is not activated in your shell.
+Alternatively, on macOS:
+
+```sh
+brew install zig@0.15
+export PATH="$(brew --prefix zig@0.15)/bin:$PATH"
+zig version                             # must print 0.15.2
+```
+
+On other platforms, install the matching
+[Zig archive](https://ziglang.org/download/#release-0.15.2). A missing or wrong
+Zig version must be fixed before rebuilding; `cargo clean` will not supply it.
+See [terminal build details](docs/terminal.md#native-dependency-and-build).
+
+### Prepare tools and launch
+
+From the repository root, fetch the pinned typesetting tools and PDF renderer:
+
+```sh
+cargo xtask fetch-sidecars
+cargo xtask fetch-pdfium
+cargo run --release
+```
+
+For a macOS source build, prepare the optional LTeX+ checker and its matching
+Java runtime with `cargo xtask fetch-ltex`, then enable it in Settings. Downloads
+and generated payloads live under the Git-ignored parts of `toolchain/`.
+
+Open a document or workspace directly:
+
+```sh
+cargo run --release -- path/to/document.typ
+cargo run --release -- path/to/document.tex
+cargo run --release -- path/to/project
+```
+
+Direct Cargo launches are named **tiptoptyp Dev**. Packaged production builds
+use **tiptoptyp**. Settings → Status and `tiptoptyp --version` identify the
+compiled version and build ID.
+
+Settings → Tools lets you select custom executables, arguments, environment
+variables and working directories. Development builds can also resolve tools
+from `PATH` or `TIPTOPTYP_TYPST`, `TIPTOPTYP_TINYMIST`, `TIPTOPTYP_TECTONIC`,
+`TIPTOPTYP_TEXLAB`, `TIPTOPTYP_BADNESS` and `TIPTOPTYP_TEX_FMT`. The app reports
+which executable it selected. PDFium is prepared separately and is required
+for PDF viewing; Poppler is not required.
+
+## Preview and compilation
+
+| Document/viewer | Live preview | Save a PDF beside the source |
+| --- | --- | --- |
+| Typst + Tinymist | Buffered partial renderer by default; full renderer selectable | **PDF** button or Compile PDF shortcut |
+| Typst + PDFium | Compiled PDF | Compiler button or Compile PDF shortcut |
+| TeX + PDFium | Compiled PDF | Compiler button or Compile PDF shortcut |
+
+Automatic preview updates use private build files. They do **not** mean a PDF
+has been saved beside the source. Explicit compilation saves it there; unsaved
+documents ask for a destination. **Export PDF** chooses another output path.
+The separate PDF button appears only for Typst with Tinymist.
+
+**Settings → Preview** selects the Typst viewer, navigation gestures and smooth
+Tinymist zoom. TeX and opened PDFs always use PDFium. A Tinymist failure does
+not silently switch renderers. macOS and Windows have native Tinymist webviews;
+Linux currently requires the PDFium choice for Typst.
+
+For TeX, **Settings → Tools → TeX tools** groups the compiler, build driver,
+bibliography options, Biber cache clearing and formatter settings:
+
+- **Tectonic** is bundled and selected by default. It manages its own TeX/BibTeX
+  reruns and downloads missing TeX packages. **Use cached TeX packages only**
+  enables offline builds once the required packages are cached.
+- **pdfLaTeX, XeLaTeX and LuaLaTeX** use an installed TeX distribution. They
+  default to finite latexmk builds; bibliography orchestration can be disabled.
+  The direct-engine alternative runs basic passes without BibTeX/Biber automation.
+- **TexLab** supplies completions, hover and diagnostics. **Badness** supplies
+  formatting/linting; **tex-fmt** is an alternative formatter. Configure each
+  independently. TexLab's own builds are disabled to avoid duplicate work.
+
+TeX builds run in a private project mirror and can be cancelled. Included files
+are read from disk, so save them before rebuilding. SyncTeX navigation requires
+`synctex` from a TeX distribution, including when Tectonic is the compiler.
+Private build paths are mapped back to the original source. See the
+[TeX service architecture](docs/architecture/0007-tex-services.md).
+
+## Spelling and grammar
+
+**Settings → Grammar & spelling** groups the independent checkers and their
+configuration. Harper and LTeX+ run locally and exclude technical source
+constructs rather than checking raw TeX/Typst commands as prose. Both can be
+configured or disabled independently; enabling both may produce overlapping
+suggestions. Normal and verbose diagnostic presets expose different levels of
+advice, with their actual configuration available to edit.
+
+LTeX+ and its matching Temurin Java runtime ship in macOS packages; enable the
+checker in Settings. No system Java installation is needed for that bundled
+configuration.
+
+**Liquid** is optional and runs only on selected text. Right-click a selection
+and choose **Check selection with Liquid**. The first use downloads its model
+and native ONNX Runtime for this Mac; later checks run offline without Python.
+Long selections are checked in chunks, with suggestions shown as they arrive.
+Settings controls which prose and formatting bodies reach the model, and how
+math and other protected content are represented. Review the exact input and
+before/after diff before applying a correction.
+
+Liquid currently supports Intel Macs on macOS 12+ and Apple Silicon Macs on
+macOS 14+. Model/export research is documented in
+[grammar comparisons](docs/grammar-comparison.md); Python is used there only
+for developer experiments and model preparation.
+
+## Overleaf
+
+Choose **File → Connect to Overleaf**, also available in the command palette,
+and open a project in the app's browser. Sign in there once; Safari's session
+is separate. Hide the browser to keep the connection running while you edit
+source in the native editor.
+
+Overleaf remains the saved source of truth. With Auto-save enabled, edits are
+sent after a typing pause; saving completes only after server acknowledgement.
+The local workspace supplies the compiler copy. Choose whether to keep that
+copy and where it lives in the connection window. Temporary copies are removed
+when no longer in use. Reopening a project requires a successful sync before
+editing; offline drafts and conflicts require review rather than silently
+overwriting the server.
+
+This integration is experimental and depends on Overleaf's internal frontend
+interfaces. Upstream changes or authentication requirements can interrupt it.
+It is not an official Overleaf client. See the
+[connection and synchronization design](docs/overleaf-protocol.md).
+
+## Useful default shortcuts
+
+Bindings can be changed in Settings. **Cmd/Ctrl** means Command on macOS and
+Control elsewhere; **Option/Alt** follows the platform convention.
+
+| Action | Shortcut |
+| --- | --- |
+| Command palette | Cmd/Ctrl-Shift-P |
+| Open / Save | Cmd/Ctrl-O / Cmd/Ctrl-S |
+| Open workspace | Cmd/Ctrl-Shift-O |
+| Find in the focused editor, Explorer section or terminal | Cmd/Ctrl-F |
+| Find and replace | Cmd-Option-F on macOS; Ctrl-H elsewhere |
+| Compile and save PDF | Cmd/Ctrl-R |
+| Export PDF | Cmd/Ctrl-Shift-E |
+| Format document | Option/Alt-Shift-F |
+| Toggle comment | Cmd/Ctrl-/ |
+| Reveal in preview | Cmd/Ctrl-Shift-J |
+| Complete | Control-Space |
+| Explorer | Cmd/Ctrl-1 |
+| Code / Split / Preview layout | Cmd/Ctrl-2 / 3 / 4 |
+| Bottom panel | Cmd/Ctrl-5 |
+| Terminal | Control-` |
+| Settings | Cmd/Ctrl-, |
+
+Preview-only shortcuts require preview focus; its border indicates focus.
+**Escape** returns to the source editor. **Settings → Help** lists the current
+preview bindings and other editing tips.
+
+## Build and install on macOS
+
+The installer produces a **universal app for Apple Silicon and Intel**, requiring
+macOS 12 or newer. It fetches pinned resources, builds both architectures,
+verifies the bundle and copies it to `/Applications/tiptoptyp.app`:
+
+```sh
+cargo install cargo-packager cargo-about --locked
+./scripts/install-macos-app.sh
+```
+
+Quit an existing app before replacing it. The script does not quit or relaunch
+it for you. Set `TIPTOPTYP_APPLICATIONS_DIR="$HOME/Applications"` to use your
+own Applications folder. You can copy the complete universal `.app` to either
+kind of Mac; optional features retain their platform requirements above.
+
+For a smaller single-architecture app:
+
+```sh
+./scripts/install-macos-app.sh --target aarch64-apple-darwin
+./scripts/install-macos-app.sh --target x86_64-apple-darwin
+```
+
+To package and verify without installing, use the same production config and
+explicit target as the installer:
+
+```sh
+cargo packager --config packager-prod.toml --target universal-apple-darwin
+cargo xtask verify-package --target universal-apple-darwin
+```
+
+### What is bundled
+
+| Component | Pinned version / distribution |
+| --- | --- |
+| Typst | 0.15.1 |
+| Tinymist | 0.15.2 |
+| Tectonic | 0.17.0 |
+| TexLab | 5.26.0 |
+| Badness | 0.24.0 |
+| tex-fmt | 0.5.7 |
+| LTeX+ | 18.7.0 |
+| Java for LTeX+ | Temurin 21.0.10+7 |
+| PDFium | Platform-specific, hash-pinned builds |
+| Liquid model + native runtime | Optional download, excluded from the app bundle |
+
+Tool and renderer binaries ship compressed. The app verifies and extracts the
+current architecture into its cache when needed; later launches reuse it.
+Fonts and handwriting models share a compressed, architecture-independent
+payload. Licenses and provenance remain readable in the bundle, including the
+project's `LICENSE` and `THIRD_PARTY_NOTICES`. Artifact versions and hashes are
+recorded in the [toolchain manifests](toolchain/).
+
+Local bundles use ad-hoc signing. Public macOS distribution requires the
+appropriate signing/notarization or App Store setup and compliance with every
+bundled component's license. The source license alone does not settle those
+third-party obligations.
+
+## Development and testing
+
+Run the required checks from the repository root:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --no-fail-fast
+cargo test --manifest-path xtask/Cargo.toml
+```
+
+Use focused deterministic tests while iterating. Native interaction journeys
+and framebuffer captures cover behavior and appearance that headless tests
+cannot prove. Some integration tests are ignored by default because they need
+native input, a real service or external tools. See
+[the working agreement](AGENTS.md), [test coverage](docs/testing-coverage.md),
+[desktop journeys](docs/desktop-ui-journeys.md) and
+[screenshot contracts](docs/ui-qa-screenshots.md).
+
+Profiling is opt-in and saves its metadata under `.tiptoptyp/profiles`:
+
+```sh
+cargo xtask profile --scenario settings
+cargo xtask profile --scenario large --sampler none
+cargo bench -p tiptoptyp-core --bench document
+```
+
+See [performance guidance](docs/performance.md) for comparable workloads and
+platform limitations. The source editor still uses egui text editing with
+whole-buffer layout; large-document performance remains active work.
+
+`cargo clean` removes build artifacts, not documents, preferences or installed
+apps. The task runner has its own target directory; clean it separately with
+`cargo clean --manifest-path xtask/Cargo.toml` when needed. On macOS, ordinary
+`cargo run` also prunes old incremental sessions after the process exits;
+`TIPTOPTYP_KEEP_CARGO_CACHE=1` disables that cleanup.
+
+## Further reading
+
+- [Editor and preview architecture](docs/architecture/0002-interactive-editor.md)
+- [Bundled toolchain and packaging](docs/architecture/0003-bundled-toolchain.md)
+- [PDFium preview](docs/pdfium-preview.md)
+- [TeX completions](docs/tex-completion.md)
+- [Table and mathematical grid editor](docs/table-editor.md)
+- [Git diff editor](docs/git-diff-editor.md)
+- [Local file versions](docs/local-file-versions.md)
+- [Terminal](docs/terminal.md)
+- [Theme provenance](docs/theme-sources.md)
 
 ## License
 
@@ -25,470 +353,3 @@ release must also satisfy those separate distribution obligations.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution terms that preserve the
 project's ability to offer commercial releases.
-
-## MVP features
-
-- Official `typst-syntax` parsing and incremental syntax highlighting
-- Debounced canonical PDF compilation with project-local private artifacts
-- Tinymist SVG preview on macOS and Windows, including hover feedback and
-  bidirectional preview/source navigation
-- PDFium preview for TeX and opened PDFs: continuous scrolling, zoom, within-page
-  text selection, page-based search, outlines and links. Recompiles retain the
-  previous page until replacement pixels are ready. Typst defaults to buffered
-  Tinymist partial preview;
-  **Settings → Typst preview backend → PDFium** selects compiled-PDF preview.
-- Editable UTF-8 text files with Syntect highlighting, direct image previews,
-  and direct native PDF viewing
-- A resizable [table workbench](docs/table-editor.md) with spans, keyboard
-  selection, appearance controls and Markdown import. Use **Edit → New Table…**
-  or **Edit → Edit Table…**; source stays read-only but scrollable while editing.
-- Inline error/warning line decoration, virtual diagnostic text, and full
-  hover tooltips
-- Explorer sections for files, document contents, subfiles, symbols, and packages
-- A per-project Typst preview entry point for multi-file documents
-- Navigable Problems rows and compact, normalized diagnostic hover cards
-- A libghostty terminal sharing the bottom panel with Problems; open it from
-  View → Terminal or Ctrl+` (see [terminal notes](docs/terminal.md))
-- Code, Split, and Preview workspace modes
-- Sorted, symlink-safe multi-file project tree
-- UTF-8-safe literal find/replace with wraparound navigation
-- New, Open, Save, Save As, undo/redo, formatting, auto-save, drag-and-drop,
-  dirty-file guards, and atomic writes
-- Drop files onto an Explorer folder to copy them into the project, or onto
-  the code editor to open them. Explorer also supports confirmed file deletion.
-- Fuzzy completion filtering while typing, code-first reference suggestions,
-  and font completion after `text(font: ` or an opening quote
-- Font samples rendered in the selected font in completion and on hover in
-  Settings font pickers; fuzzy font search in Settings and document font menus
-- Installed package removal with a confirmation for the selected version
-- An Explorer Git panel for status, diffs, staging, unstaging, commits, recent history,
-  fetch, fast-forward pull, and push
-- Pause/resume control for automatic preview updates. Compile writes the
-  current canonical PDF beside its saved Typst entry; unsaved documents ask
-  for a destination. Export PDF remains available for choosing another path.
-- Thirty-two bundled interface themes, with independent light and dark choices:
-  Tiptop, Paper, Ocean, Forest, Catppuccin, Solarized, Gruvbox, GitHub,
-  Rosé Pine, Tokyo Night, Kanagawa, Everforest, Ayu, Flexoki, and Dracula
-- Whole-theme inversion followed by a configurable hue rotation, applied in
-  lockstep to chrome, diagnostics, controls, and both syntax highlighters
-- TextMate `.tmTheme` and modern `.sublime-color-scheme` import for either the
-  light or dark slot, with each inferred palette shared by app chrome,
-  diagnostics, and syntax highlighting
-- A separate compact Settings window for appearance, preview backend, editor
-  options, hover timing, binary selection, and toolchain health
-- App-window-only UI QA screenshots under `.tiptoptyp/screenshots`, plus a
-  reproducible checked-in light/dark gallery under `docs/ui-snapshots/latest`
-- Line wrapping and line numbers enabled by default, independently toggleable
-  without changing the source buffer
-- Native TeX editing and PDF builds: Tectonic compilation, TexLab completion/hover,
-  and Badness formatting/linting; tex-fmt is an alternative formatter. Each feature
-  can be disabled independently in Settings → Tools → TeX tools.
-- Pinned Typst, Tinymist, Tectonic, TexLab, Badness and tex-fmt sidecars in packaged
-  builds, with per-tool custom executable paths
-
-The decisions behind the dual preview pipeline are recorded in
-[`docs/architecture/0002-interactive-editor.md`](docs/architecture/0002-interactive-editor.md)
-and
-[`docs/architecture/0003-bundled-toolchain.md`](docs/architecture/0003-bundled-toolchain.md).
-The PDFium backend and its validation are described in
-[`docs/pdfium-preview.md`](docs/pdfium-preview.md).
-
-## Requirements
-
-- Rust 1.98 or newer
-- Zig **0.15.2** on `PATH` and Git for the pinned libghostty-vt 0.2.1 build.
-  The first build fetches Ghostty and its Zig dependencies; packaged apps
-  statically include the terminal library and need no Zig or Ghostty install.
-- `curl` and `tar` when fetching the pinned sidecars for a development build
-- PDF inspection, links and thumbnails are built into the application; no Poppler installation is needed.
-
-### Set up Zig for source builds
-
-The embedded terminal needs Zig **0.15.2**, not the latest release. With
-[mise](https://mise.jdx.dev/lang/zig.html), the checked-in `mise.toml` selects
-the correct version for this repository without changing your global tools:
-
-```sh
-mise trust mise.toml
-mise install
-mise exec -- zig version                 # must print 0.15.2
-mise exec -- cargo run --release
-```
-
-If mise is activated in your shell, plain `cargo run --release` works in this
-directory after installation (open a new prompt to refresh `PATH`). Without
-mise, macOS users can install the
-[versioned Homebrew formula](https://formulae.brew.sh/formula/zig@0.15):
-
-```sh
-brew install zig@0.15
-export PATH="$(brew --prefix zig@0.15)/bin:$PATH"
-zig version                             # must print 0.15.2
-cargo run --release
-```
-
-Keep that `PATH` export in your shell startup file if using Homebrew; its
-versioned formula is keg-only. On other platforms, install the matching
-[Zig 0.15.2 archive](https://ziglang.org/download/#release-0.15.2) and put its
-directory on `PATH`.
-
-**Build error: `failed to execute zig build: No such file or directory`:**
-`libghostty-vt-sys` could not find the `zig` executable. Follow the setup above
-and retry; `cargo clean` is unnecessary. Installing the Ghostty application
-does not supply this compiler. See [terminal build details](docs/terminal.md#native-dependency-and-build).
-
-### Typesetting sidecars
-
-Packaged releases include Typst 0.15.1, Tinymist 0.15.2, Tectonic 0.17.0,
-TexLab 5.26.0, Badness 0.24.0 and tex-fmt 0.5.7. For a source-tree run, fetch
-those exact, hash-verified binaries once:
-
-```sh
-cargo run --manifest-path xtask/Cargo.toml -- fetch-sidecars
-```
-
-The downloaded archives, staged executables, licenses, and provenance records
-are generated under `toolchain/` and ignored by Git. If they are absent during
-development, tiptoptyp checks `PATH`. `TIPTOPTYP_TYPST` and
-`TIPTOPTYP_TINYMIST` can override that development fallback. The TeX equivalents
-are `TIPTOPTYP_TECTONIC`, `TIPTOPTYP_TEXLAB`, `TIPTOPTYP_BADNESS` and
-`TIPTOPTYP_TEX_FMT`. Every fallback is
-labelled in the fixed bottom status bar and Settings.
-
-Each binary can instead be set to **Custom path** in Settings. This persisted
-choice has priority over the bundled sidecar. An invalid custom path falls back
-without losing the selected path, and the reason remains visible. Environment
-overrides are retained for automation:
-
-```sh
-TIPTOPTYP_TYPST=/absolute/path/to/typst \
-TIPTOPTYP_TINYMIST=/absolute/path/to/tinymist \
-cargo run --release
-```
-
-Buffered Tinymist partial is the default Typst preview on supported platforms.
-The complete Tinymist renderer remains selectable in Settings. TeX output and
-opened PDFs always use PDFium. Tinymist may retry its own service, but failure
-never activates another renderer. Select PDFium explicitly for Typst on platforms
-without native Tinymist webviews. The bundled PDFium library is required. Startup checks its resource manifest; the
-existing PDF worker verifies, extracts and loads it on first use. The explicit
-`--check-runtime` probe fully loads it without opening the editor. Source builds
-prepare it with `cargo xtask fetch-pdfium`.
-
-### Native TeX
-
-Open a `.tex` document, edit it, and use the existing preview and PDF export
-commands. Tectonic (the default), pdfLaTeX, XeLaTeX or LuaLaTeX builds the current
-main buffer in a private project mirror;
-included files are read from disk. Save an included file or build explicitly to
-refresh its PDF. Build output never replaces a user PDF until Compile/Export is
-requested. PDFium displays canonical output.
-
-In **Settings → Tools → TeX tools**, choose the build engine, toggle TexLab
-completion/hover/diagnostics, select Badness or tex-fmt formatting, and toggle
-Badness linting independently. Disabling TexLab leaves Badness available.
-TexLab's own automatic builds, ChkTeX and formatters are disabled to prevent
-duplicate work. Installed system engines are detected on PATH and at MacTeX's
-`/Library/TeX/texbin`. These controls concern native TeX, separately from Typst's
-miTeX mode.
-
-Tectonic downloads missing packages by default; first use can take several
-minutes. Enable **Use cached TeX packages only** for offline builds. Shell escape
-is disabled. The service cancels replaced builds and bounds a stalled build to
-ten minutes. Standard engines run two passes, with a third when references need it.
-SyncTeX supports source-to-PDF navigation through Sync Preview and PDF-to-source
-navigation with Command-click (Control-click on other platforms). The `synctex`
-command from a TeX distribution is required even with Tectonic. Maps travel with
-their PDF, and private build paths are translated back to source paths.
-Dependency watching outside the app and additional LSP commands remain future work. See
-[the service architecture](docs/architecture/0007-tex-services.md).
-
-## Run
-
-```sh
-cargo run --release
-```
-
-Open a document directly:
-
-```sh
-cargo run --release -- path/to/document.typ
-```
-
-Open a workspace directly:
-
-```sh
-cargo run --release -- path/to/project
-```
-
-Direct `cargo run --release` launches the visibly marked `tiptoptyp Dev` build.
-Use the packaging commands below, or `scripts/install-macos-app.sh`, for the
-production `tiptoptyp.app` bundle.
-
-On macOS, the repository Cargo config routes `cargo run` through a small
-post-run cleanup wrapper. After the launched process exits, it removes older
-incremental sessions that Cargo no longer uses while keeping the newest session
-for each crate. Dependency artifacts and the current build outputs remain
-available for the next run. Set `TIPTOPTYP_KEEP_CARGO_CACHE=1` to skip this
-cleanup, or set `TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS` to retain more sessions.
-
-Launching the packaged `tiptoptyp.app` without a path restores the newest recent
-workspace that still exists, falling back to the current folder on first run.
-The bundle registers the text, Typst, PDF, and image formats supported by the
-editor, so Finder's **Open With** and dropping a file on the app icon open that
-file and infer its workspace. **File → Change Workspace Root**,
-Cmd/Ctrl-Shift-O, or double-clicking the Explorer path opens the workspace
-chooser with recent folders and an option to select another folder.
-
-Choose **System**, **Light**, or **Dark** under **Settings → Appearance**, then
-pick independent Light theme and Dark theme palettes. System appearance swaps
-between those two choices with the OS. Either slot can instead import a Sublime
-color scheme. The importer infers editor colors, selection and cursor colors,
-semantic status colors, and cohesive panel/control surfaces from the same file.
-**Invert** is applied first and the selected hue rotation second, across the
-complete interface and syntax theme. Bundled palette provenance is documented
-in [`docs/theme-sources.md`](docs/theme-sources.md).
-
-To use only Typst's bundled fonts during development:
-
-```sh
-TIPTOPTYP_IGNORE_SYSTEM_FONTS=1 cargo run --release
-```
-
-Open **View → Git** for repository operations. Git must be on `PATH`;
-remote operations use the repository's configured remotes, upstream branch,
-and credentials. Save editor changes before staging or committing. Pull only
-fast-forwards, so divergent branches require resolution outside this panel.
-**Diff** shows unstaged edits against the staging area; **Staged diff** shows
-changes included in the next commit. Both open a selectable, color-coded viewer
-from the Git panel. **Unstage all** clears the staging area and keeps working
-files intact. Staging excludes `.tiptoptyp` temporary files; any already staged
-temporary files remain visible so you can unstage them.
-
-The Explorer shows Git badges (`A` added, `M` modified, `D` deleted, `?`
-untracked, `U` conflicted); hover for staged/unstaged details. Beside the line
-numbers, green marks additions, blue marks modifications, and red marks
-deletions compared with the last commit, including unsaved editor changes.
-Click a marker to open that chunk's diff. Each document window keeps its own
-Git state and selected diff, including when two windows edit the same file.
-Git decorations refresh automatically and after refreshing the Explorer.
-
-## Package
-
-### Identify or replace a development build
-
-Settings → Status and `./target/release/tiptoptyp --version` show the package
-version and compiled build ID (Git revision, dirty marker, Unix build timestamp).
-The timestamp refreshes when Cargo reruns the build script; an unchanged cached
-build keeps its ID. This identifies builds, rather than preventing old copies
-from launching. The executable does not invoke Git at runtime.
-
-Quit the running app before replacing it. For a completely clean local build:
-
-```sh
-cargo clean
-cargo build --release
-./target/release/tiptoptyp --version
-./target/release/tiptoptyp
-```
-
-`cargo clean` removes Cargo artifacts, not installed/copied `.app` bundles or
-running processes. The standalone runner has a separate build directory:
-`cargo clean --manifest-path xtask/Cargo.toml` cleans that too, if needed.
-Neither command removes your documents or preferences. Usually `cargo build
---release` alone is sufficient; cleaning forces all dependencies to rebuild.
-
-### Build an app package
-
-Install the official cargo-packager CLI, then build a package. On macOS this
-produces a universal app for both Apple Silicon and Intel by default, requiring
-macOS 12 or newer (the minimum supported by the bundled PDF renderer):
-
-```sh
-cargo install cargo-packager --locked
-cargo packager --release
-cargo run --manifest-path xtask/Cargo.toml -- verify-package
-```
-
-The installer builds, verifies and installs the production `tiptoptyp.app` bundle. The
-default direct Cargo build remains the visibly marked development app with its
-amber `DEV` icon badge.
-
-The package hook downloads and verifies the pinned platform archives and builds
-the release executable. On macOS it builds both Rust targets, verifies the
-architecture of each executable, and combines them with `lipo`. Missing Rust
-standard-library targets are installed for the repository's pinned toolchain.
-The universal app includes both architectures of Typst, Tinymist, Tectonic,
-TexLab, Badness, tex-fmt and PDFium. Helpers and PDFium ship Zstandard-compressed in
-resources; the app verifies and extracts only its current architecture into a
-private cache when needed. A later launch reuses verified cached files. Upstream
-licenses and per-artifact provenance remain readable in the bundle.
-
-The 11 bundled fonts and two handwriting models also ship as Zstandard resources,
-with one shared copy for both architectures. Fonts are verified and loaded once
-before the first interface frame; recognizers load their model on the existing
-handwriting worker when first used. They share a content-addressed cache at
-`~/Library/Caches/dev.tiptoptyp.editor/payloads/shared/`, so changing CPU slices
-does not duplicate font/model files. Development builds keep their embedded
-assets and require no packaged resource directory.
-
-The canonical `ttt` application mark is embedded in direct executable launches
-and supplied as native ICNS/ICO/PNG artwork to packaged builds.
-The committed target/URL/hash matrix is
-[`toolchain/manifest.tsv`](toolchain/manifest.tsv).
-
-To produce a smaller single-architecture macOS package, give the same target to
-cargo-packager and its hook; cargo-packager does not otherwise expose its
-`--target` value to hook commands. Both thin variants use the same
-`target/release/tiptoptyp.app` output location as the universal app:
-
-```sh
-TIPTOPTYP_PACKAGE_TARGET=x86_64-apple-darwin \
-  cargo packager --release --target x86_64-apple-darwin
-```
-
-macOS packages are ad-hoc signed by default so the app, sidecars, and sealed
-resources form a valid local bundle. Local ad-hoc builds use
-`packaging/macos-local.entitlements.plist` to allow the bundled PDFium library
-under hardened runtime; ad-hoc signatures have no Team ID. Package verification
-runs `tiptoptyp --check-runtime` to validate shared assets and load PDFium without
-opening a window, in addition to checking signatures, payload checksums and versions.
-Architecture checks cover both slices; executing the Intel app on Apple Silicon
-requires Rosetta, and native Intel hardware remains a separate smoke test.
-For a headless first-use/cache-hit check of the finished universal bundle:
-
-```sh
-python3 scripts/test-packaged-runtime.py --output /tmp/tiptoptyp-packaged-runtime.json
-python3 scripts/test_packaged_runtime_contract.py
-```
-
-The probe uses temporary homes, checks native payload selection and shared-cache
-reuse, and requires handwriting models to remain unexpanded. Intel execution on
-Apple Silicon is reported as unavailable when Rosetta is absent. These checks do
-not measure GUI startup or interaction latency.
-The measured bundle sizes and ARM/Rosetta results are retained in the
-[2026-10-17 package receipt](docs/performance-results/package-size-universal-2026-10-17.json).
-
-Public distribution should sign the app and library with the same Developer ID Application identity, omit
-the local library-validation entitlement, and provide notarization credentials.
-
-For a local macOS build that installs the verified bundle into `/Applications`, run:
-
-```sh
-scripts/install-macos-app.sh
-```
-
-The installer does not quit an existing app or open the installed app. Launch it
-manually when ready. Set `TIPTOPTYP_APPLICATIONS_DIR="$HOME/Applications"` to install
-into a user-owned Applications directory instead.
-
-Use `scripts/install-macos-app.sh --target x86_64-apple-darwin` for an Intel-only
-app, or `--target aarch64-apple-darwin` for Apple Silicon only. Without an option,
-the installer always builds and verifies the universal app before copying it.
-You can copy that complete `.app` to either kind of Mac.
-
-For an Intel compilation check without packaging or installation, run
-`scripts/build-intel-mac.sh` (`--release` for an optimized binary). It verifies
-the executable architecture and smoke-tests it under Rosetta when available.
-
-## Keyboard shortcuts
-
-| Action | Shortcut |
-| --- | --- |
-| New | Cmd/Ctrl-N |
-| Open | Cmd/Ctrl-O |
-| Open folder | Cmd/Ctrl-Shift-O |
-| Save | Cmd/Ctrl-S |
-| Save As | Cmd/Ctrl-Shift-S |
-| Export PDF | Cmd/Ctrl-Shift-E |
-| Undo / Redo | Cmd/Ctrl-Z / Cmd/Ctrl-Shift-Z |
-| Find | Cmd/Ctrl-F |
-| Find and replace | Cmd-Option-F on macOS, Ctrl-H elsewhere |
-| Format Typst | Option/Alt-Shift-F |
-| Toggle tooltip under mouse | Cmd/Ctrl-Shift-Space |
-| Toggle tooltip at caret | Cmd/Ctrl-Shift-K |
-| Dismiss focused tooltip | Escape |
-| Settings | Cmd/Ctrl-Comma |
-| Compile PDF beside source | Cmd/Ctrl-R |
-| Interface scale | Cmd/Ctrl-Plus or Minus |
-| PDF/image preview zoom | Cmd/Ctrl-Option/Alt-Plus, Minus, or 0 |
-| App-only UI screenshot | Cmd/Ctrl-Shift-F12 |
-
-## Preview architecture
-
-The editor mirrors the in-memory preview entry into
-`<project>/.tiptoptyp/typst-*`, preserving the project's relative layout with
-private links/copies. The nearest ancestor with `typst.toml` or `.git` is used
-as the project root. Successful builds provide the exact PDF bytes used by
-Export PDF. On macOS a fresh watcher is started for editor-buffer changes
-because native notifications suppress changes below dot-directories; Tinymist
-still supplies the low-latency interactive preview.
-
-Tinymist runs as a separate LSP sidecar. tiptoptyp sends `didOpen` and full-buffer
-`didChange` notifications, starts the selected full or buffered partial preview, and
-embeds the localhost frontend it returns. Tinymist therefore owns incremental
-SVG rendering, source spans, hover behavior, and click mapping. tiptoptyp handles
-`window/showDocument` to reveal and select the corresponding native editor
-range.
-
-PDFium owns PDF viewing through a retained native worker and egui textures.
-Updates stage visible pages before replacing the displayed batch. PDFium does
-not provide Typst source spans; select Tinymist for that interaction. Exported
-PDF bytes are never rasterized or colour-modified. Backend errors are reported
-without automatic renderer substitution.
-
-The shadow source, formatting backing files, PDF render data, and screenshots
-all live below `.tiptoptyp`; ephemeral sessions remove themselves normally and
-the directory is ignored by Explorer and Git. A forced termination can leave a
-session there that is safe to inspect or remove. The real `.typ` file is only
-changed by Save, Save As, formatting followed by auto-save, or normal editing
-auto-save.
-
-## Development
-
-Use focused deterministic tests for UI behavior and fresh screenshots when
-correctness depends on pixels. Native preview geometry also requires
-`TIPTOPTYP_UI_TRACE=1` bounds output. See [`AGENTS.md`](AGENTS.md) for the workflow and
-[`docs/ui-qa-screenshots.md`](docs/ui-qa-screenshots.md) for the scene contract.
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --no-fail-fast
-cargo test --manifest-path xtask/Cargo.toml
-```
-
-The real watcher integration test is ignored by default because it requires
-Typst and native filesystem notifications:
-
-```sh
-TIPTOPTYP_IGNORE_SYSTEM_FONTS=1 \
-  cargo test persistent_watcher_compiles_errors_and_recovers -- --ignored
-```
-
-Tinymist's process contract is covered by a fake LSP subprocess test, so the
-normal test suite does not require a locally installed Tinymist binary.
-
-### Performance
-
-```sh
-cargo xtask profile --scenario settings
-cargo xtask profile --scenario large --sampler none
-cargo bench -p tiptoptyp-core --bench document
-```
-
-The profiler builds an optimized, symbolized executable with frame pointers,
-uses isolated fixtures, and saves CPU samples, bounded subsystem timings, and
-run metadata under `.tiptoptyp/profiles`. Native sampling defaults to macOS
-`sample`; Linux can select `--sampler perf`. See
-[`docs/performance.md`](docs/performance.md) for setup, workloads, comparison
-rules, and limitations. Performance review is part of the ongoing working
-agreement in `AGENTS.md`.
-
-## Current boundary
-
-The editor still uses `egui::TextEdit<String>` and lays out the whole buffer.
-A rope-backed, virtualized editor is the next performance milestone for very
-large books. Linux interactive webview support is also follow-up work;
-bidirectional Typst source/preview navigation is already implemented on supported
-platforms. TeX navigation uses the installed SyncTeX command.
