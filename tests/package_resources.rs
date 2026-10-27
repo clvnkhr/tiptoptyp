@@ -76,30 +76,22 @@ fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resource
 }
 
 #[test]
-fn first_party_packages_resolve_to_the_project_license() {
+fn first_party_packages_declare_the_mit_spdx_license() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let license = root.join("LICENSE").canonicalize().unwrap();
     for manifest in [
         "Cargo.toml",
         "core/Cargo.toml",
         "xtask/Cargo.toml",
         "scripts/liquid-native-probe/Cargo.toml",
     ] {
-        let path = root.join(manifest);
-        let value: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let relative = value["package"]["license-file"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{manifest} omits its license"));
+        let value: toml::Value =
+            toml::from_str(&std::fs::read_to_string(root.join(manifest)).unwrap()).unwrap();
         assert_eq!(
-            path.parent()
-                .unwrap()
-                .join(relative)
-                .canonicalize()
-                .unwrap(),
-            license,
-            "{manifest} must use the first-party license"
+            value["package"]["license"].as_str(),
+            Some("MIT"),
+            "{manifest} must declare the first-party license"
         );
-        assert!(value["package"].get("license").is_none());
+        assert!(value["package"].get("license-file").is_none());
     }
 }
 

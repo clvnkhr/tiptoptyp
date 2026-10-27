@@ -5,10 +5,13 @@ and follow the checks in [AGENTS.md](AGENTS.md).
 
 ## Rights in contributions
 
-The project is source available under [PolyForm Perimeter 1.0.1](LICENSE).
-Calvin Khor also distributes, or may distribute, the app under separate
-commercial terms, including paid App Store releases. Contributions must allow
-that continued commercial distribution.
+The project is open source under the [MIT License](LICENSE). Contributions
+intentionally submitted for inclusion are offered under MIT unless separately
+agreed in writing.
+
+The additional grants below preserve Calvin Khor's ability to offer the app
+under other terms, including paid App Store and closed-source releases. They
+do not limit anyone else's rights under MIT.
 
 By intentionally submitting code, documentation or other material for inclusion
 in tiptoptyp, you agree to the following for that contribution:

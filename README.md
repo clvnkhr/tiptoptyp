@@ -333,17 +333,17 @@ apps. The task runner has its own target directory; clean it separately with
 
 ## License
 
-The first-party code and documentation are **source available** under
-[PolyForm Perimeter 1.0.1](LICENSE), rather than an open-source license.
-You may use and modify the app, including at work, and redistribute it for
-permitted purposes. You may not provide a competing product made from the
-software. The full license controls these permissions and restrictions.
+The first-party code and documentation are open source under the
+[MIT License](LICENSE). You may use, modify, redistribute, sublicense and sell
+them, including in proprietary applications, provided you preserve the required
+copyright and license notices. Competing products and commercial forks are
+permitted too.
 
-Calvin Khor retains the right to offer separate commercial licenses, sell the
-app through the App Store or other channels, and accept donations. This source
-license does not require the author's builds to be free of charge.
-Documents and other output you create with the editor are not covered by the
-editor's source license.
+Calvin Khor may sell the app, accept donations and release future versions
+under different terms, including closed-source releases, subject to contributor
+permissions and third-party licenses. Previously released MIT versions retain
+their MIT permissions. Documents and other output you create with the editor
+are not covered by the editor's source license.
 
 Third-party code, dependencies, bundled tools, fonts, themes, models, data,
 quotations and externally sourced fixtures retain their own licenses. See
@@ -351,5 +351,4 @@ quotations and externally sourced fixtures retain their own licenses. See
 directories, and the license files shipped in app resources. A commercial
 release must also satisfy those separate distribution obligations.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution terms that preserve the
-project's ability to offer commercial releases.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution terms.
