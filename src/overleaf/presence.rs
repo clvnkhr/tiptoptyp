@@ -295,7 +295,9 @@ impl SourceIndex {
         }
         let line = &self.lines[self.lines.partition_point(|line| line.utf16 <= target) - 1];
         let mut utf16 = line.utf16;
-        for (scalar, ch) in source[line.byte..].chars().enumerate() {
+        // A stale display cache must not panic if its line offset is outside
+        // the supplied text or lands in the middle of a UTF-8 character.
+        for (scalar, ch) in source.get(line.byte..)?.chars().enumerate() {
             if utf16 == target {
                 return Some(line.scalar + scalar);
             }

@@ -13,8 +13,44 @@ struct PendingFollow {
     key: DocumentKey,
     generation: Generation,
     edited_at: Instant,
-    char_index: Option<usize>,
-    compiled: bool,
+    phase: Phase,
+}
+
+#[derive(Clone, Copy)]
+enum Phase {
+    AwaitingCaretAndCompile,
+    AwaitingCaret,
+    AwaitingCompile(usize),
+    Debouncing(usize),
+}
+
+impl PendingFollow {
+    fn captured_caret(&self) -> Option<usize> {
+        match self.phase {
+            Phase::AwaitingCompile(caret) | Phase::Debouncing(caret) => Some(caret),
+            _ => None,
+        }
+    }
+
+    fn capture_caret(&mut self, caret: usize) {
+        self.phase = match self.phase {
+            Phase::AwaitingCaretAndCompile => Phase::AwaitingCompile(caret),
+            Phase::AwaitingCaret => Phase::Debouncing(caret),
+            phase => phase,
+        };
+    }
+
+    fn compiled(&mut self, status: CompileStatus) {
+        self.phase = match (
+            self.captured_caret(),
+            status == CompileStatus::CompileSuccess,
+        ) {
+            (None, false) => Phase::AwaitingCaretAndCompile,
+            (None, true) => Phase::AwaitingCaret,
+            (Some(caret), false) => Phase::AwaitingCompile(caret),
+            (Some(caret), true) => Phase::Debouncing(caret),
+        };
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -25,6 +61,17 @@ enum FollowAction {
 }
 
 impl PreviewFollow {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn phase_name(&self) -> &'static str {
+        match self.pending.as_ref().map(|pending| pending.phase) {
+            None => "idle",
+            Some(Phase::AwaitingCaretAndCompile) => "awaiting_caret_and_compile",
+            Some(Phase::AwaitingCaret) => "awaiting_caret",
+            Some(Phase::AwaitingCompile(_)) => "awaiting_compile",
+            Some(Phase::Debouncing(_)) => "debouncing",
+        }
+    }
+
     pub(super) fn clear(&mut self) {
         self.pending = None;
     }
@@ -34,8 +81,7 @@ impl PreviewFollow {
             key,
             generation,
             edited_at: now,
-            char_index: None,
-            compiled: false,
+            phase: Phase::AwaitingCaretAndCompile,
         });
     }
 
@@ -46,7 +92,7 @@ impl PreviewFollow {
         {
             // Compile reports have no document version. Ignore reports already
             // received before this edit and wait through any subsequent compile.
-            pending.compiled = status == CompileStatus::CompileSuccess;
+            pending.compiled(status);
         }
     }
 
@@ -64,10 +110,10 @@ impl PreviewFollow {
             self.clear();
             return FollowAction::Idle;
         }
-        let Some(char_index) = pending.char_index else {
+        let Phase::Debouncing(char_index) = pending.phase else {
             return FollowAction::Idle;
         };
-        if !ready || !pending.compiled {
+        if !ready {
             // Compilation/readiness events wake the UI. No polling timer.
             return FollowAction::Idle;
         }
@@ -94,7 +140,7 @@ impl EditorApp {
     pub(super) fn queue_preview_follow(&mut self) {
         self.preview_follow.clear();
         if self.preview_follows_edits()
-            && let Some(generation) = self.tinymist_sync.generation
+            && let Some(generation) = self.tinymist_sync.generation()
         {
             self.preview_follow
                 .queue(self.document().key(), generation, Instant::now());
@@ -110,13 +156,13 @@ impl EditorApp {
             return;
         }
         if let Some(pending) = &mut self.preview_follow.pending
-            && pending.char_index.is_none()
+            && pending.captured_caret().is_none()
         {
             // Transactions can update the selection after mark_edited. Capture
             // it at the end of that frame, once, so later cursor-only movement
             // cannot redirect the delayed jump. Dialog/completion edits may
             // still have a selection waiting for the next editor frame.
-            pending.char_index = Some(
+            pending.capture_caret(
                 self.pending_editor_selection
                     .as_ref()
                     .map(|selection| selection.range().start)
@@ -130,7 +176,7 @@ impl EditorApp {
         }
         match self.preview_follow.poll(
             self.document().key(),
-            self.tinymist_sync.generation,
+            self.tinymist_sync.generation(),
             self.interactive_preview_active(),
             Instant::now(),
         ) {
@@ -154,7 +200,7 @@ mod tests {
 
     fn queue(follow: &mut PreviewFollow, key: DocumentKey, at: Instant, cursor: usize) {
         follow.queue(key, Generation(1), at);
-        follow.pending.as_mut().unwrap().char_index = Some(cursor);
+        follow.pending.as_mut().unwrap().capture_caret(cursor);
     }
 
     #[test]
@@ -186,6 +232,34 @@ mod tests {
                 FollowAction::Idle
             );
         }
+    }
+
+    #[test]
+    fn compile_before_caret_is_retained_and_later_compile_failure_revokes_the_jump() {
+        let now = Instant::now();
+        let mut follow = PreviewFollow::default();
+        follow.queue(key(), Generation(1), now);
+        follow.compiled(Generation(1), CompileStatus::CompileSuccess, now);
+        assert_eq!(
+            follow.poll(key(), Some(Generation(1)), true, now + FOLLOW_DEBOUNCE),
+            FollowAction::Idle
+        );
+        follow.pending.as_mut().unwrap().capture_caret(17);
+        follow.pending.as_mut().unwrap().capture_caret(99);
+        follow.compiled(Generation(1), CompileStatus::Compiling, now);
+        assert_eq!(
+            follow.poll(key(), Some(Generation(1)), true, now + FOLLOW_DEBOUNCE),
+            FollowAction::Idle
+        );
+        follow.compiled(Generation(1), CompileStatus::CompileSuccess, now);
+        assert_eq!(
+            follow.poll(key(), Some(Generation(1)), true, now + FOLLOW_DEBOUNCE),
+            FollowAction::Jump(17)
+        );
+        assert_eq!(
+            follow.poll(key(), Some(Generation(1)), true, now + FOLLOW_DEBOUNCE),
+            FollowAction::Idle
+        );
     }
 
     #[test]
@@ -247,7 +321,7 @@ mod tests {
         app.document_mut()
             .replace_unprojected_untitled("one\nα🙂two");
         app.view_mode = ViewMode::Split;
-        app.tinymist_sync.generation = Some(Generation(1));
+        app.tinymist_sync.fixture_session(Generation(1), None, None);
         assert!(app.preview_follows_edits());
         app
     }
@@ -267,7 +341,11 @@ mod tests {
         context.memory_mut(|memory| memory.request_focus(focus));
         app.tick_preview_follow(&context);
         assert_eq!(
-            app.preview_follow.pending.as_ref().unwrap().char_index,
+            app.preview_follow
+                .pending
+                .as_ref()
+                .unwrap()
+                .captured_caret(),
             Some(10)
         );
 
@@ -275,7 +353,11 @@ mod tests {
         app.mark_edited(); // No transaction: cursor movement must not requeue.
         app.tick_preview_follow(&context);
         assert_eq!(
-            app.preview_follow.pending.as_ref().unwrap().char_index,
+            app.preview_follow
+                .pending
+                .as_ref()
+                .unwrap()
+                .captured_caret(),
             Some(10)
         );
         assert_eq!(context.memory(|memory| memory.focused()), Some(focus));
@@ -288,7 +370,11 @@ mod tests {
         app.pending_editor_selection = Some(EditorSelection::Focus(6..8));
         app.tick_preview_follow(&context);
         assert_eq!(
-            app.preview_follow.pending.as_ref().unwrap().char_index,
+            app.preview_follow
+                .pending
+                .as_ref()
+                .unwrap()
+                .captured_caret(),
             Some(6)
         );
     }

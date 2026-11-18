@@ -1,6 +1,77 @@
 //! Blocking filesystem mutations with bounded copying and no-overwrite names.
 use super::*;
 
+/// The stored root/directory are already canonical. Do not resolve them again:
+/// a newly installed symlink must not turn into a new mutation authority.
+pub(super) fn import_file(root: &Path, directory: &Path, source: &Path) -> io::Result<PathBuf> {
+    let name = source
+        .file_name()
+        .ok_or_else(|| io::Error::other("missing file name"))?;
+    validate_entry_name(name)?;
+    let directory = MutationDirectory::workspace(root, directory)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if !fs::symlink_metadata(source)?.file_type().is_file() {
+        return Err(io::Error::other("only regular files can be imported"));
+    }
+    let mut input = options.open(source)?;
+    if !input.metadata()?.is_file() {
+        return Err(io::Error::other("only regular files can be imported"));
+    }
+    let mut output = directory.create_file(name)?;
+    let identity = CreatedIdentity::from_metadata(&output.metadata()?);
+    let result = copy_regular_file(&mut input, &mut output);
+    drop(output);
+    match result {
+        Ok(()) => Ok(directory.path.join(name)),
+        Err(error) => cleanup_failed_copy(&directory, name, &identity, false, error),
+    }
+}
+
+pub(super) fn delete_file(root: &Path, path: &Path) -> io::Result<()> {
+    // Refuse while another window is saving. Otherwise its atomic write could
+    // install a temporary file after deletion returned. Do not wait on the UI.
+    crate::resource_lock::try_with_resource(path, || {
+        let parent = path
+            .parent()
+            .ok_or_else(|| io::Error::other("missing parent"))?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| io::Error::other("missing file name"))?;
+        validate_entry_name(name)?;
+        let directory = MutationDirectory::workspace(root, parent)?;
+        let file = directory.open_file(name)?;
+        #[cfg(unix)]
+        if directory.child_identity(name)? != CreatedIdentity::from_metadata(&file.metadata()?) {
+            return Err(io::Error::other("the file was replaced before deletion"));
+        }
+        drop(file);
+        directory.unlink(name, false)
+    })
+}
+
+/// Create one empty workspace below an existing, user-chosen parent.
+/// Blocking worker operation: never replaces an existing file or folder.
+pub(crate) fn create_workspace(parent: &Path, name: &OsStr) -> io::Result<PathBuf> {
+    validate_entry_name(name)?;
+    if name.to_string_lossy().trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "enter a workspace name",
+        ));
+    }
+    let parent = parent.canonicalize()?;
+    let directory = MutationDirectory::workspace(&parent, &parent)?;
+    let workspace = directory.create_directory(name)?;
+    Ok(workspace.path)
+}
+
 impl WorkspaceDirectory {
     /// Blocking worker operation; never overwrites an existing entry.
     pub(crate) fn create_file(&self, name: &OsStr) -> io::Result<PathBuf> {
@@ -20,6 +91,10 @@ impl WorkspaceDirectory {
 impl WorkspaceRoot {
     /// Rename within the same validated parent without replacing another entry.
     pub(crate) fn rename(&self, path: &Path, name: &OsStr) -> io::Result<PathBuf> {
+        crate::resource_lock::try_with_resource(path, || self.rename_unlocked(path, name))
+    }
+
+    fn rename_unlocked(&self, path: &Path, name: &OsStr) -> io::Result<PathBuf> {
         validate_entry_name(name)?;
         let parent = path
             .parent()

@@ -8,6 +8,15 @@ use super::{METRICS, UiIcon, icon_button, native_hover_text, theme, viewport_sco
 use crate::{document::DocumentKey, search::SearchSession};
 use eframe::egui::{self, RichText};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum FocusPhase {
+    #[default]
+    Inactive,
+    Requested,
+    Engaged,
+    BlurGrace(std::time::Instant),
+}
+
 pub(super) struct FindBarState {
     pub(super) edit_events: Vec<egui::Event>,
     pub(super) visible: bool,
@@ -17,10 +26,9 @@ pub(super) struct FindBarState {
     pub(super) search: SearchSession,
     pub(super) case_sensitive: bool,
     pub(super) regex: bool,
-    pub(super) focus: bool,
+    focus: FocusPhase,
     pub(super) native_height: Option<f32>,
     pub(super) child_focused: bool,
-    pub(super) blur_started: Option<std::time::Instant>,
 }
 
 impl Default for FindBarState {
@@ -34,10 +42,9 @@ impl Default for FindBarState {
             search: SearchSession::default(),
             case_sensitive: true,
             regex: false,
-            focus: false,
+            focus: FocusPhase::Inactive,
             native_height: None,
             child_focused: false,
-            blur_started: None,
         }
     }
 }
@@ -104,12 +111,43 @@ pub(super) fn has_focus(context: &egui::Context) -> bool {
 }
 
 impl FindBarState {
+    pub(super) fn request_focus(&mut self) {
+        self.focus = FocusPhase::Requested;
+    }
+
+    pub(super) fn focus_requested(&self) -> bool {
+        matches!(self.focus, FocusPhase::Requested)
+    }
+
+    pub(super) fn clear_focus_request(&mut self) {
+        if self.focus_requested() {
+            self.focus = FocusPhase::Engaged;
+        }
+    }
+
+    pub(super) fn is_blurring(&self) -> bool {
+        matches!(self.focus, FocusPhase::BlurGrace(_))
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_blurred_since(&mut self, since: std::time::Instant) {
+        self.focus = FocusPhase::BlurGrace(since);
+    }
+
     pub(super) fn present(&mut self, owner_focused: bool, now: std::time::Instant) -> bool {
-        if self.focus || self.child_focused || owner_focused {
-            self.blur_started = None;
+        if self.focus_requested() || self.child_focused || owner_focused {
+            if !self.focus_requested() {
+                self.focus = FocusPhase::Engaged;
+            }
             true
         } else {
-            let since = *self.blur_started.get_or_insert(now);
+            let since = match self.focus {
+                FocusPhase::BlurGrace(since) => since,
+                _ => {
+                    self.focus = FocusPhase::BlurGrace(now);
+                    now
+                }
+            };
             now.saturating_duration_since(since) < std::time::Duration::from_millis(150)
         }
     }
@@ -118,9 +156,8 @@ impl FindBarState {
         self.edit_events.clear();
         self.visible = false;
         self.child_focused = false;
-        self.blur_started = None;
         self.replace_visible = false;
-        self.focus = false;
+        self.focus = FocusPhase::Inactive;
         // Closing changes presentation only. The revision/query-keyed session
         // keeps the selected match until the document or query actually changes.
     }
@@ -214,9 +251,9 @@ pub(super) fn show(
         );
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         crate::desktop_test::observe("find.query", &response);
-        if state.focus {
+        if state.focus_requested() {
             response.request_focus();
-            state.focus = false;
+            state.clear_focus_request();
         }
         if response.changed() {
             state.search.clear();
@@ -343,7 +380,7 @@ mod tests {
                     FindBarState {
                         visible: true,
                         query: "alpha".into(),
-                        focus: true,
+                        focus: FocusPhase::Requested,
                         ..Default::default()
                     },
                     Vec::new(),
@@ -487,6 +524,30 @@ mod tests {
         assert!(!state.present(false, now + std::time::Duration::from_secs(3)));
         assert!(state.visible);
         assert!(state.present(true, now + std::time::Duration::from_secs(4)));
+    }
+
+    #[test]
+    fn a_requested_focus_survives_native_handoff_and_close_clears_the_grace() {
+        let mut state = FindBarState {
+            visible: true,
+            ..Default::default()
+        };
+        let now = std::time::Instant::now();
+        state.request_focus();
+        assert!(state.present(false, now));
+        assert!(state.focus_requested());
+        assert!(!state.is_blurring());
+        state.clear_focus_request();
+        assert!(state.present(false, now));
+        assert!(state.is_blurring());
+        assert!(!state.present(false, now + std::time::Duration::from_millis(150)));
+        state.request_focus();
+        assert!(state.present(false, now + std::time::Duration::from_secs(1)));
+        state.close();
+        assert!(!state.focus_requested());
+        assert!(!state.is_blurring());
+        state.visible = true;
+        assert!(state.present(false, now + std::time::Duration::from_secs(2)));
     }
 
     #[test]

@@ -166,7 +166,7 @@ fn pack_file(source: &Path, directory: &Path, name: &str) -> Result<Entry, Strin
     Ok(Entry {
         name: name.to_owned(),
         bytes,
-        sha256: format!("{:x}", hasher.finalize()),
+        sha256: hex::encode(hasher.finalize()),
     })
 }
 

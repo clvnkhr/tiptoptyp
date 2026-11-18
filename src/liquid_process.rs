@@ -20,6 +20,15 @@ const CLOSED_ERROR: &str = "The grammar worker closed its connection.";
 const INVALID_ERROR: &str = "The grammar worker sent an invalid response.";
 type Reply = Result<Vec<u8>, &'static str>;
 
+/// Worker exchange ownership is distinct from asynchronous pipe health. A
+/// failed/closed pipe can still have one final complete reply queued.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Exchange {
+    Available,
+    AwaitingReply,
+    Stopped,
+}
+
 pub(crate) struct JsonLineProcess {
     child: Option<crate::process::OwnedChild>,
     requests: Option<SyncSender<Vec<u8>>>,
@@ -27,7 +36,7 @@ pub(crate) struct JsonLineProcess {
     reader: Option<JoinHandle<()>>,
     writer: Option<JoinHandle<()>>,
     state: Arc<AtomicU8>,
-    pending: bool,
+    exchange: Exchange,
 }
 
 impl JsonLineProcess {
@@ -61,7 +70,7 @@ impl JsonLineProcess {
             reader: None,
             writer: None,
             state,
-            pending: false,
+            exchange: Exchange::Available,
         };
         let reader_state = Arc::clone(&process.state);
         let writer_state = Arc::clone(&process.state);
@@ -101,7 +110,7 @@ impl JsonLineProcess {
         if body.is_empty() || body.len() >= MAX_FRAME_BYTES - 1 || body.contains(&b'\n') {
             return Err("The grammar worker request is invalid or too large.".into());
         }
-        if self.pending || self.state.load(Ordering::Acquire) != LIVE {
+        if self.exchange != Exchange::Available || self.state.load(Ordering::Acquire) != LIVE {
             self.stop();
             return Err("The grammar worker connection is unavailable.".into());
         }
@@ -116,7 +125,7 @@ impl JsonLineProcess {
             self.stop();
             return Err("The grammar worker connection is unavailable.".into());
         }
-        self.pending = true;
+        self.exchange = Exchange::AwaitingReply;
         Ok(())
     }
 
@@ -130,7 +139,7 @@ impl JsonLineProcess {
         timeout: Duration,
         cancel: &AtomicBool,
     ) -> Result<Vec<u8>, String> {
-        if self.child.is_none() {
+        if self.exchange == Exchange::Stopped {
             return Err(CLOSED_ERROR.into());
         }
         let deadline = Instant::now() + timeout;
@@ -151,7 +160,7 @@ impl JsonLineProcess {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break Err(CLOSED_ERROR),
             }
         };
-        self.pending = false;
+        self.exchange = Exchange::Available;
         let result = match reply {
             Ok(Ok(frame)) if self.state.load(Ordering::Acquire) != INVALID => Ok(frame),
             Ok(Ok(_)) => Err(INVALID_ERROR),
@@ -164,6 +173,7 @@ impl JsonLineProcess {
     }
 
     fn stop(&mut self) {
+        self.exchange = Exchange::Stopped;
         self.requests.take();
         // OwnedChild kills the private Unix process group and reaps the child.
         // Close both pipes before joining, including descendants holding a pipe.

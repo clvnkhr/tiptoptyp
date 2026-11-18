@@ -22,6 +22,7 @@ use tiptoptyp_core::document::TypesettingLanguage;
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(15);
 pub(crate) use tex::TexOptions;
+pub(crate) use tex::magic::MagicContext as TexMagicContext;
 pub(crate) use typst::TypstOptions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,9 +80,16 @@ pub(crate) use tiptoptyp_core::preview::ArtifactKey;
 
 #[derive(Debug)]
 pub(crate) enum CompileEvent {
+    TexResolved(TexBuildInfo),
     Started,
     Failed(DiagnosticReport),
     Artifact(CompileArtifact),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TexBuildInfo {
+    pub(crate) entry: PathBuf,
+    pub(crate) engine: crate::tex::settings::BuildEngine,
 }
 
 #[derive(Debug)]
@@ -202,6 +210,7 @@ struct EngineResult {
     event: EngineEvent,
 }
 enum EngineEvent {
+    TexResolved(TexBuildInfo),
     Started,
     Failed(DiagnosticReport),
     Pdf {
@@ -356,6 +365,7 @@ fn publish_engine_result(
         return;
     }
     let event = match result.event {
+        EngineEvent::TexResolved(info) => CompileEvent::TexResolved(info),
         EngineEvent::Started => CompileEvent::Started,
         EngineEvent::Failed(report) => CompileEvent::Failed(report),
         EngineEvent::Pdf {

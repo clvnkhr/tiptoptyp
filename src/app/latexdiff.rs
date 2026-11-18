@@ -1,43 +1,17 @@
-//! An owned wizard; filesystem reads, comparison and publication stay on its worker.
+//! An owned comparison form; filesystem reads and publication stay on its worker.
 use super::*;
-use crate::tex::diff::{self, Cancellation, Completed, Output, Request};
+use crate::tex::diff::{self, Cancellation, Completed, Request};
 use std::sync::atomic::Ordering;
 
 pub(super) const SALT: &str = "tiptoptyp-latexdiff";
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Step {
-    Files,
-    Output,
-    Review,
-}
-impl Step {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Files => "1 · Files",
-            Self::Output => "2 · Output & options",
-            Self::Review => "3 · Create",
-        }
-    }
-    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-    fn id(self) -> &'static str {
-        match self {
-            Self::Files => "files",
-            Self::Output => "output",
-            Self::Review => "review",
-        }
-    }
-}
+const ERROR_HEIGHT: f32 = 56.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Older,
     Newer,
     Output,
-    Next,
-    Back,
     Generate,
     CancelGeneration,
-    Copy,
-    Open,
     Close,
 }
 pub(super) struct Dialog {
@@ -45,20 +19,51 @@ pub(super) struct Dialog {
     newer: String,
     destination: String,
     destination_edited: bool,
-    step: Step,
     current: Option<(PathBuf, String)>,
     include_edits: bool,
     focus_file: bool,
     settings: diff::Settings,
-    output: Option<Output>,
-    completed_path: Option<PathBuf>,
     validated_directory: Option<String>,
     error: Option<String>,
-    generate: LatestJob<Completed>,
-    picker: Option<PendingDialog<Action>>,
-    cancel: Cancellation,
-    cancelling: bool,
+    operation: Operation,
     pub(super) edit_events: Vec<egui::Event>,
+}
+/// File picking and generation are mutually exclusive. A generation owns both
+/// the worker receipt and its cancellation guard until it is fully drained.
+#[derive(Default)]
+enum Operation {
+    #[default]
+    Idle,
+    Picking(PendingDialog<Action>),
+    Generating(Generation),
+    Cancelling(Generation),
+}
+struct Generation {
+    job: LatestJob<Completed>,
+    cancel: Cancellation,
+}
+impl Operation {
+    fn generating(&self) -> bool {
+        matches!(self, Self::Generating(_) | Self::Cancelling(_))
+    }
+    fn cancelling(&self) -> bool {
+        matches!(self, Self::Cancelling(_))
+    }
+    fn generation_mut(&mut self) -> Option<&mut Generation> {
+        match self {
+            Self::Generating(generation) | Self::Cancelling(generation) => Some(generation),
+            _ => None,
+        }
+    }
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Picking(_) => "picking",
+            Self::Generating(_) => "generating",
+            Self::Cancelling(_) => "cancelling",
+        }
+    }
 }
 impl Dialog {
     fn new(current: Option<(PathBuf, String)>, settings: diff::Settings) -> Self {
@@ -72,41 +77,32 @@ impl Dialog {
             newer,
             destination,
             destination_edited: false,
-            step: Step::Files,
             current,
             include_edits: true,
             focus_file: true,
             settings,
-            output: None,
-            completed_path: None,
             validated_directory: None,
             error: None,
-            generate: LatestJob::default(),
-            picker: None,
-            cancel: Cancellation::default(),
-            cancelling: false,
+            operation: Operation::Idle,
             edit_events: Vec::new(),
         }
     }
     pub(super) fn activity(&self) -> crate::activity::Activity {
         use crate::activity::Activity;
-        if self.generate.is_running() {
-            Activity::Running
-        } else if self.picker.is_some() {
-            Activity::Pending("Choose a file")
-        } else if let Some(error) = &self.error {
-            Activity::Failed(error.clone())
-        } else {
-            self.generate.activity()
+        match &self.operation {
+            Operation::Generating(_) | Operation::Cancelling(_) => Activity::Running,
+            Operation::Picking(_) => Activity::Pending("Choose a file"),
+            Operation::Idle => self
+                .error
+                .as_ref()
+                .map_or(Activity::Idle, |error| Activity::Failed(error.clone())),
         }
     }
 
     fn busy(&self) -> bool {
-        self.generate.is_running() || self.picker.is_some()
+        !matches!(self.operation, Operation::Idle)
     }
     fn invalidate(&mut self) {
-        self.output = None;
-        self.completed_path = None;
         self.error = None;
     }
     fn validate_files(&self) -> Result<(), String> {
@@ -119,6 +115,7 @@ impl Dialog {
     }
     fn request(&self) -> Result<Request, String> {
         self.validate_files()?;
+        self.settings.validate_syntax()?;
         // Validation that touches the filesystem or resolves tools runs in generate().
         Ok(Request {
             older: self.older.trim().into(),
@@ -132,31 +129,8 @@ impl Dialog {
             settings: self.settings.clone(),
         })
     }
-    fn navigate(&mut self, forward: bool) {
-        if self.busy() {
-            return;
-        }
-        let result = match (self.step, forward) {
-            (Step::Files, true) => self.validate_files().map(|()| Step::Output),
-            (Step::Output, true) => self
-                .settings
-                .validate_syntax()
-                .and_then(|()| self.destination().map(|_| Step::Review)),
-            (Step::Output, false) => Ok(Step::Files),
-            (Step::Review, false) => Ok(Step::Output),
-            _ => return,
-        };
-        match result {
-            Ok(step) => {
-                self.step = step;
-                self.focus_file = true;
-                self.error = None;
-            }
-            Err(error) => self.error = Some(error),
-        }
-    }
     fn start(&mut self, context: &egui::Context) {
-        if self.busy() || self.step != Step::Review {
+        if self.busy() {
             return;
         }
         let input = self
@@ -164,64 +138,86 @@ impl Dialog {
             .and_then(|request| Ok((request, self.destination()?)));
         match input {
             Ok((request, destination)) => {
-                self.cancel = Cancellation::default();
-                self.cancelling = false;
                 self.invalidate();
-                let cancel = self.cancel.0.clone();
-                if let Err(error) =
-                    self.generate
-                        .start_and_repaint("Create LaTeX diff", context, move || {
-                            diff::generate_and_save(request, &destination, &cancel)
-                        })
-                {
-                    self.error = Some(error);
+                let cancel = Cancellation::default();
+                let token = cancel.0.clone();
+                let mut job = LatestJob::default();
+                match job.start_and_repaint("Create LaTeX diff", context, move || {
+                    diff::generate_and_save(request, &destination, &token)
+                }) {
+                    Ok(()) => self.operation = Operation::Generating(Generation { job, cancel }),
+                    Err(error) => self.error = Some(error),
                 }
             }
             Err(error) => self.error = Some(error),
         }
     }
     fn cancel_generation(&mut self) {
-        if self.generate.is_running() {
-            self.cancelling = true;
-            self.cancel.0.store(true, Ordering::Release);
-        }
-    }
-    fn poll(&mut self, context: &egui::Context) {
-        if let DialogPoll::Ready {
-            request: action,
-            selection: Some(file),
-        } = crate::workflow::poll_dialog(&mut self.picker, context)
-        {
-            let value = file.path().to_string_lossy().into_owned();
-            match action {
-                Action::Older => self.older = value,
-                Action::Newer => {
-                    self.newer = value;
-                    if !self.destination_edited {
-                        self.destination = suggested_destination(&self.newer);
-                    }
-                }
-                Action::Output => {
-                    self.destination = value;
-                    self.destination_edited = true;
-                }
-                _ => unreachable!(),
+        self.operation = match std::mem::replace(&mut self.operation, Operation::Idle) {
+            Operation::Generating(generation) => {
+                generation.cancel.0.store(true, Ordering::Release);
+                Operation::Cancelling(generation)
             }
-            self.invalidate();
+            other => other,
+        };
+    }
+    fn poll(&mut self, context: &egui::Context) -> Option<Completed> {
+        if matches!(self.operation, Operation::Picking(_)) {
+            let Operation::Picking(picker) =
+                std::mem::replace(&mut self.operation, Operation::Idle)
+            else {
+                unreachable!()
+            };
+            let mut picker = Some(picker);
+            match crate::workflow::poll_dialog(&mut picker, context) {
+                DialogPoll::Pending => {
+                    self.operation =
+                        Operation::Picking(picker.expect("pending picker is retained"));
+                }
+                DialogPoll::Ready {
+                    request: action,
+                    selection: Some(file),
+                } => {
+                    let value = file.path().to_string_lossy().into_owned();
+                    match action {
+                        Action::Older => self.older = value,
+                        Action::Newer => {
+                            self.newer = value;
+                            if !self.destination_edited {
+                                self.destination = suggested_destination(&self.newer);
+                            }
+                        }
+                        Action::Output => {
+                            self.destination = value;
+                            self.destination_edited = true;
+                        }
+                        _ => unreachable!(),
+                    }
+                    self.invalidate();
+                }
+                DialogPoll::Ready {
+                    selection: None, ..
+                } => {}
+                DialogPoll::Idle => unreachable!("an installed picker must be polled"),
+            }
         }
-        match self.generate.poll() {
-            LatestJobPoll::Ready(completed) => {
-                self.output = Some(completed.output);
-                self.completed_path = Some(completed.path);
+        let outcome = self
+            .operation
+            .generation_mut()
+            .map(|generation| generation.job.poll());
+        match outcome {
+            Some(LatestJobPoll::Ready(completed)) => {
+                self.operation = Operation::Idle;
                 self.validated_directory = Some(self.settings.command.directory.clone());
                 self.error = None;
-                self.cancelling = false;
+                Some(completed)
             }
-            LatestJobPoll::Failed(error) => {
+            Some(LatestJobPoll::Failed(error)) => {
+                self.operation = Operation::Idle;
                 self.error = Some(error);
-                self.cancelling = false;
+                None
             }
-            _ => {}
+            _ => None,
         }
     }
 }
@@ -233,11 +229,10 @@ fn validate_tex_path(value: &str, role: &str) -> Result<PathBuf, String> {
     if !path.is_absolute() || value.contains('\0') {
         return Err(format!("Choose an absolute path for the {role}."));
     }
-    if !path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("tex"))
-    {
-        return Err(format!("The {role} must have a .tex extension."));
+    if !crate::document::is_tex_path(&path) {
+        return Err(format!(
+            "The {role} must be a LaTeX source file (.tex, .sty, .cls, .ltx or .latex)."
+        ));
     }
     Ok(path)
 }
@@ -276,8 +271,7 @@ impl EditorApp {
                     .map(|path| (path, self.document().source().to_owned()))
             })
             .flatten();
-        self.format_request_key = None;
-        self.manual_format_revision = None;
+        self.formatting.cancel();
         self.latexdiff = Some(Dialog::new(current, self.settings.latexdiff.clone()));
         self.clear_editor_hover();
         self.clear_asset_hover();
@@ -311,7 +305,16 @@ impl EditorApp {
         let Some(dialog) = &mut self.latexdiff else {
             return;
         };
-        dialog.poll(context);
+        if let Some(completed) = dialog.poll(context) {
+            if !completed.output.warnings.trim().is_empty() {
+                self.push_status_log(
+                    format!("LaTeXdiff messages: {}", completed.output.warnings.trim()),
+                    NoticeKind::Info,
+                );
+            }
+            self.open_created_latexdiff(completed.path, context);
+            return;
+        }
         let Some(owner) = context.input(|input| input.viewport().inner_rect) else {
             return;
         };
@@ -372,26 +375,8 @@ impl EditorApp {
         }
         match action {
             Some(Action::Close) => self.close_latexdiff(context),
-            Some(Action::Next) => self.latexdiff.as_mut().unwrap().navigate(true),
-            Some(Action::Back) => self.latexdiff.as_mut().unwrap().navigate(false),
             Some(Action::Generate) => self.latexdiff.as_mut().unwrap().start(context),
             Some(Action::CancelGeneration) => self.latexdiff.as_mut().unwrap().cancel_generation(),
-            Some(Action::Copy) => {
-                if let Some(output) = &self.latexdiff.as_ref().unwrap().output {
-                    context.copy_text(output.source.clone());
-                }
-            }
-            Some(Action::Open) => {
-                if let Some(path) = self.latexdiff.as_ref().unwrap().completed_path.clone() {
-                    self.close_latexdiff(context);
-                    if self.open_tab_path(path, context) {
-                        self.select_preview_tab(
-                            self.tabs.active_id().expect("opened diff tab"),
-                            context,
-                        );
-                    }
-                }
-            }
             Some(action @ (Action::Older | Action::Newer | Action::Output)) => {
                 self.pick_latexdiff_file(context, frame, action)
             }
@@ -426,8 +411,8 @@ impl EditorApp {
         if let Some(parent) = Path::new(source).parent().filter(|p| p.is_absolute()) {
             picker = picker.set_directory(parent);
         }
-        picker = picker.add_filter("LaTeX source", &["tex"]);
-        dialog.picker = Some(if action == Action::Output {
+        picker = picker.add_filter("LaTeX source", crate::document::TEX_SOURCE_EXTENSIONS);
+        dialog.operation = Operation::Picking(if action == Action::Output {
             if let Some(name) = Path::new(&dialog.destination).file_name() {
                 picker = picker.set_file_name(name.to_string_lossy());
             }
@@ -453,11 +438,11 @@ impl EditorApp {
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn latexdiff_inspection(&self) -> serde_json::Value {
         let Some(dialog) = &self.latexdiff else {
-            return serde_json::json!({"visible":false,"busy":false,"step":null,"error":null,"output_path":null,
+            return serde_json::json!({"visible":false,"busy":false,"phase":"closed","error":null,
                 "older_fingerprint":null,"newer_fingerprint":null,"output_fingerprint":null,"arguments_fingerprint":null});
         };
-        serde_json::json!({"visible":true,"busy":dialog.busy(),"step":dialog.step.id(),"error":dialog.error,
-            "output_path":dialog.completed_path,"older_fingerprint":crate::desktop_test::fingerprint(&dialog.older),
+        serde_json::json!({"visible":true,"busy":dialog.busy(),"phase":dialog.operation.name(),"error":dialog.error,
+            "older_fingerprint":crate::desktop_test::fingerprint(&dialog.older),
             "newer_fingerprint":crate::desktop_test::fingerprint(&dialog.newer),
             "output_fingerprint":crate::desktop_test::fingerprint(&dialog.destination),
             "arguments_fingerprint":crate::desktop_test::fingerprint(&dialog.settings.command.arguments)})
@@ -467,7 +452,7 @@ fn card_width(owner_width: f32) -> f32 {
     (owner_width - 48.0).clamp(1.0, 660.0)
 }
 fn card_height(owner_height: f32) -> f32 {
-    (owner_height - 48.0).clamp(1.0, 330.0)
+    (owner_height - 48.0).clamp(1.0, 480.0)
 }
 fn close_requested(
     context: &egui::Context,
@@ -501,23 +486,10 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
             }
         });
     });
-    ui.horizontal_wrapped(|ui| {
-        for step in [Step::Files, Step::Output, Step::Review] {
-            if step == dialog.step {
-                ui.strong(step.label());
-            } else {
-                ui.weak(step.label());
-            }
-            if step != Step::Review {
-                ui.weak("›");
-            }
-        }
-    });
     ui.separator();
     let busy = dialog.busy();
     let bounds = ui.available_rect_before_wrap();
-    let footer_height = footer_height(ui, dialog);
-    let footer_top = (bounds.bottom() - footer_height).max(bounds.top());
+    let footer_top = (bounds.bottom() - footer_height(ui, dialog)).max(bounds.top());
     let body = Rect::from_min_max(bounds.min, Pos2::new(bounds.right(), footer_top));
     let footer = Rect::from_min_max(Pos2::new(bounds.left(), footer_top), bounds.max);
     ui.scope_builder(
@@ -531,134 +503,53 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     let mut changed = false;
-                    ui.add_enabled_ui(!busy, |ui| match dialog.step {
-                        Step::Files => {
-                            for (label, value, pick, id) in [
-                                ("Older file", &mut dialog.older, Action::Older, "older"),
-                                ("Newer file", &mut dialog.newer, Action::Newer, "newer"),
-                            ] {
-                                let field_label = ui.label(label);
-                                let choose_width =
-                                    text_width(ui, "Choose…") + ui.spacing().button_padding.x * 2.0;
-                                ui.horizontal(|ui| {
-                                    let width = (ui.available_width()
-                                        - choose_width
-                                        - ui.spacing().item_spacing.x)
-                                        .max(1.0);
-                                    let field = ui
-                                        .add_sized(
-                                            [width, ui.spacing().interact_size.y],
-                                            egui::TextEdit::singleline(value)
-                                                .id_salt(("latexdiff-file", id))
-                                                .hint_text("/path/to/document.tex")
-                                                .desired_width(width),
-                                        )
-                                        .labelled_by(field_label.id);
-                                    observe(id, &field);
-                                    if pick == Action::Older && dialog.focus_file {
-                                        field.request_focus();
-                                        dialog.focus_file = false;
-                                    }
-                                    if field.changed() {
-                                        changed = true;
-                                        if pick == Action::Newer && !dialog.destination_edited {
-                                            dialog.destination = suggested_destination(value);
-                                        }
-                                    }
-                                    let choose = ui.button("Choose…");
-                                    observe(&format!("choose_{id}"), &choose);
-                                    if choose.clicked() {
-                                        action = Some(pick);
-                                    }
-                                });
-                            }
-                            if dialog
-                                .current
-                                .as_ref()
-                                .is_some_and(|(path, _)| path == Path::new(dialog.newer.trim()))
-                            {
-                                changed |= ui
-                                    .checkbox(
-                                        &mut dialog.include_edits,
-                                        "Include unsaved editor changes",
-                                    )
-                                    .changed();
-                            }
+                    ui.add_enabled_ui(!busy, |ui| {
+                        let (edited, choose) = path_field(
+                            ui,
+                            "Older file",
+                            &mut dialog.older,
+                            "older",
+                            std::mem::take(&mut dialog.focus_file),
+                        );
+                        changed |= edited;
+                        if choose {
+                            action = Some(Action::Older);
                         }
-                        Step::Output => {
-                            let label = ui.label("Output file");
-                            ui.horizontal(|ui| {
-                                let width = (ui.available_width()
-                                    - text_width(ui, "Choose…")
-                                    - ui.spacing().button_padding.x * 2.0
-                                    - ui.spacing().item_spacing.x)
-                                    .max(1.0);
-                                let field = ui
-                                    .add_sized(
-                                        [width, ui.spacing().interact_size.y],
-                                        egui::TextEdit::singleline(&mut dialog.destination)
-                                            .id_salt("latexdiff-output")
-                                            .hint_text("/path/to/document-diff.tex")
-                                            .desired_width(width),
-                                    )
-                                    .labelled_by(label.id);
-                                observe("output", &field);
-                                if dialog.focus_file {
-                                    field.request_focus();
-                                    dialog.focus_file = false;
-                                }
-                                if field.changed() {
-                                    dialog.destination_edited = true;
-                                    changed = true;
-                                }
-                                let choose = ui.button("Choose…");
-                                observe("choose_output", &choose);
-                                if choose.clicked() {
-                                    action = Some(Action::Output);
-                                }
-                            });
-                            changed |= preferences(ui, &mut dialog.settings);
+                        let (edited, choose) =
+                            path_field(ui, "Newer file", &mut dialog.newer, "newer", false);
+                        changed |= edited;
+                        if edited && !dialog.destination_edited {
+                            dialog.destination = suggested_destination(&dialog.newer);
                         }
-                        Step::Review => {
-                            for (label, value) in [
-                                ("Older", dialog.older.as_str()),
-                                ("Newer", dialog.newer.as_str()),
-                                ("Output", dialog.destination.as_str()),
-                            ] {
-                                ui.weak(label);
-                                ui.label(value);
-                            }
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(dialog.settings.markup.label());
-                                if dialog.settings.flatten {
-                                    ui.weak("· Include subfiles");
-                                }
-                                if dialog.include_edits
-                                    && dialog.current.as_ref().is_some_and(|(path, _)| {
-                                        path == Path::new(dialog.newer.trim())
-                                    })
-                                {
-                                    ui.weak("· Unsaved editor changes");
-                                }
-                            });
-                            if !dialog.settings.command.arguments.trim().is_empty() {
-                                ui.monospace(&dialog.settings.command.arguments);
-                            }
+                        if choose {
+                            action = Some(Action::Newer);
                         }
+                        if dialog
+                            .current
+                            .as_ref()
+                            .is_some_and(|(path, _)| path == Path::new(dialog.newer.trim()))
+                        {
+                            changed |= ui
+                                .checkbox(
+                                    &mut dialog.include_edits,
+                                    "Include unsaved editor changes",
+                                )
+                                .changed();
+                        }
+                        let (edited, choose) =
+                            path_field(ui, "Output file", &mut dialog.destination, "output", false);
+                        changed |= edited;
+                        if edited {
+                            dialog.destination_edited = true;
+                        }
+                        if choose {
+                            action = Some(Action::Output);
+                        }
+                        ui.add_space(4.0);
+                        changed |= preferences(ui, &mut dialog.settings);
                     });
                     if changed {
                         dialog.invalidate();
-                    }
-                    if let Some(error) = &dialog.error {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                    }
-                    if let Some(output) = &dialog.output {
-                        ui.strong(format!("Created diff · {} bytes", output.source.len()));
-                        if !output.warnings.trim().is_empty() {
-                            egui::CollapsingHeader::new("LaTeXdiff messages").show(ui, |ui| {
-                                ui.label(&output.warnings);
-                            });
-                        }
                     }
                 });
         },
@@ -670,19 +561,27 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
         |ui| {
             ui.set_clip_rect(ui.clip_rect().intersect(footer));
             ui.separator();
+            if let Some(error) = &dialog.error {
+                egui::ScrollArea::vertical()
+                    .id_salt("latexdiff-error-scroll")
+                    .max_height(ERROR_HEIGHT)
+                    .show(ui, |ui| {
+                        let status = ui.colored_label(ui.visuals().error_fg_color, error);
+                        observe("status", &status);
+                    });
+                ui.add_space(4.0);
+            }
             ui.allocate_ui_with_layout(
                 Vec2::new(ui.available_width(), ui.spacing().interact_size.y),
                 Layout::right_to_left(Align::Center).with_main_wrap(true),
                 |ui| {
                     for (name, id, clicked) in footer_actions(dialog) {
                         let enabled = match clicked {
-                            Action::Back | Action::Next | Action::Generate => !busy,
-                            Action::CancelGeneration => !dialog.cancelling,
+                            Action::Generate => !busy,
+                            Action::CancelGeneration => !dialog.operation.cancelling(),
                             _ => true,
                         };
-                        let primary =
-                            matches!(clicked, Action::Next | Action::Generate | Action::Open);
-                        let button = if primary {
+                        let button = if clicked == Action::Generate {
                             egui::Button::new(RichText::new(name).strong())
                                 .fill(ui.visuals().selection.bg_fill)
                         } else {
@@ -694,9 +593,9 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
                             action = Some(clicked);
                         }
                     }
-                    if dialog.generate.is_running() {
+                    if dialog.operation.generating() {
                         ui.spinner();
-                        ui.weak(if dialog.cancelling {
+                        ui.weak(if dialog.operation.cancelling() {
                             "Canceling…"
                         } else {
                             "Creating diff…"
@@ -709,25 +608,47 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
     ui.advance_cursor_after_rect(bounds);
     action
 }
-fn footer_actions(dialog: &Dialog) -> Vec<(&'static str, &'static str, Action)> {
-    if dialog.generate.is_running() {
-        vec![("Cancel", "cancel", Action::CancelGeneration)]
-    } else if dialog.step == Step::Review && dialog.completed_path.is_some() {
-        vec![
-            ("Open diff", "open", Action::Open),
-            ("Copy source", "copy", Action::Copy),
-            ("Back", "back", Action::Back),
-        ]
-    } else {
-        let mut actions = vec![match dialog.step {
-            Step::Review => ("Create diff", "generate", Action::Generate),
-            _ => ("Next", "next", Action::Next),
-        }];
-        if dialog.step != Step::Files {
-            actions.push(("Back", "back", Action::Back));
+fn path_field(
+    ui: &mut egui::Ui,
+    name: &str,
+    value: &mut String,
+    id: &str,
+    focus: bool,
+) -> (bool, bool) {
+    let label = ui.label(name);
+    ui.horizontal(|ui| {
+        let width = (ui.available_width()
+            - text_width(ui, "Choose…")
+            - ui.spacing().button_padding.x * 2.0
+            - ui.spacing().item_spacing.x)
+            .max(1.0);
+        let field = ui
+            .add_sized(
+                [width, ui.spacing().interact_size.y],
+                egui::TextEdit::singleline(value)
+                    .id_salt(("latexdiff-file", id))
+                    .hint_text("/path/to/document.tex")
+                    .desired_width(width),
+            )
+            .labelled_by(label.id);
+        observe(id, &field);
+        if focus {
+            field.request_focus();
         }
-        actions.push(("Cancel", "cancel", Action::Close));
-        actions
+        let choose = ui.button("Choose…");
+        observe(&format!("choose_{id}"), &choose);
+        (field.changed(), choose.clicked())
+    })
+    .inner
+}
+fn footer_actions(dialog: &Dialog) -> Vec<(&'static str, &'static str, Action)> {
+    if dialog.operation.generating() {
+        vec![("Cancel", "cancel", Action::CancelGeneration)]
+    } else {
+        vec![
+            ("Create diff", "generate", Action::Generate),
+            ("Cancel", "cancel", Action::Close),
+        ]
     }
 }
 fn text_width(ui: &egui::Ui, text: &str) -> f32 {
@@ -745,7 +666,7 @@ fn footer_height(ui: &egui::Ui, dialog: &Dialog) -> f32 {
         .iter()
         .map(|(label, _, _)| text_width(ui, label) + ui.spacing().button_padding.x * 2.0 + 4.0)
         .collect();
-    if dialog.generate.is_running() {
+    if dialog.operation.generating() {
         widths.push(
             ui.spacing().interact_size.y
                 + ui.spacing().item_spacing.x
@@ -753,7 +674,22 @@ fn footer_height(ui: &egui::Ui, dialog: &Dialog) -> f32 {
         );
     }
     let rows = wrapped_rows(ui.available_width(), &widths, ui.spacing().item_spacing.x);
-    rows as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y + 2.0) + 8.0
+    let error_height = dialog.error.as_ref().map_or(0.0, |error| {
+        ui.painter()
+            .layout(
+                error.clone(),
+                egui::TextStyle::Body.resolve(ui.style()),
+                ui.visuals().error_fg_color,
+                ui.available_width(),
+            )
+            .size()
+            .y
+            .min(ERROR_HEIGHT)
+            + 4.0
+    });
+    rows as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.y + 2.0)
+        + 8.0
+        + error_height
 }
 fn wrapped_rows(width: f32, items: &[f32], gap: f32) -> usize {
     let mut rows = 1;
@@ -859,20 +795,42 @@ mod tests {
             dialog.activity(),
             Activity::Failed("The older file is unavailable".into())
         );
-        dialog.picker = Some(PendingDialog::new(
+        dialog.operation = Operation::Picking(PendingDialog::new(
             Action::Older,
             std::future::poll_fn(|_| panic!("Activity must not poll file dialogs")),
         ));
         assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
         assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
         assert!(
-            dialog.picker.is_some(),
+            matches!(dialog.operation, Operation::Picking(_)),
             "observing must not poll or consume the picker"
         );
-        assert!(!dialog.generate.is_running());
-        dialog.picker = None;
+        assert!(!dialog.operation.generating());
+        dialog.operation = Operation::Idle;
         dialog.error = None;
         assert_eq!(dialog.activity(), Activity::Idle);
+    }
+
+    fn controlled_generation(
+        dialog: &mut Dialog,
+        operation: impl FnOnce() -> Result<Completed, String> + Send + 'static,
+    ) -> Arc<std::sync::atomic::AtomicBool> {
+        assert!(!dialog.busy());
+        let cancel = Cancellation::default();
+        let token = cancel.0.clone();
+        let mut job = LatestJob::default();
+        job.start("controlled generation", operation).unwrap();
+        dialog.operation = Operation::Generating(Generation { job, cancel });
+        token
+    }
+    fn wait_for_generation(dialog: &mut Dialog) {
+        dialog
+            .operation
+            .generation_mut()
+            .unwrap()
+            .job
+            .wait_until_ready_for_test()
+            .unwrap();
     }
 
     fn ui_harness(dialog: Dialog, width: f32) -> Harness<'static, (Dialog, Option<Action>)> {
@@ -881,11 +839,8 @@ mod tests {
             .build_ui_state(
                 |ui, state: &mut (Dialog, Option<Action>)| {
                     if let Some(action) = show(ui, &mut state.0) {
-                        match action {
-                            Action::Next => state.0.navigate(true),
-                            Action::Back => state.0.navigate(false),
-                            Action::CancelGeneration => state.0.cancel_generation(),
-                            _ => {}
+                        if action == Action::CancelGeneration {
+                            state.0.cancel_generation();
                         }
                         state.1 = Some(action);
                     }
@@ -894,35 +849,45 @@ mod tests {
             )
     }
     #[test]
-    fn wizard_validates_steps_without_reading_files_and_keeps_drafts() {
+    fn one_page_validates_all_paths_and_options_before_starting_a_worker() {
+        let context = egui::Context::default();
         let mut dialog = Dialog::new(None, Default::default());
-        dialog.navigate(true);
-        assert_eq!(dialog.step, Step::Files);
+        dialog.start(&context);
         assert!(dialog.error.as_deref().unwrap().contains("older"));
+        assert!(!dialog.operation.generating());
         dialog.older = "/not-on-disk/old.tex".into();
         dialog.newer = "/not-on-disk/new.tex".into();
-        dialog.destination = suggested_destination(&dialog.newer);
-        dialog.navigate(true);
-        assert_eq!(dialog.step, Step::Output);
-        assert_eq!(dialog.destination, "/not-on-disk/new-diff.tex");
         dialog.destination = "/not-on-disk/review.txt".into();
-        dialog.navigate(true);
-        assert_eq!(dialog.step, Step::Output);
+        dialog.start(&context);
         assert!(dialog.error.as_deref().unwrap().contains(".tex"));
+        assert!(!dialog.operation.generating());
         dialog.destination = "/not-on-disk/review.tex".into();
         dialog.settings.command.arguments = "--math-markup=1".into();
-        dialog.navigate(true);
-        assert_eq!(dialog.step, Step::Review);
-        dialog.navigate(false);
-        dialog.navigate(false);
-        assert_eq!(dialog.step, Step::Files);
-        assert_eq!(dialog.settings.command.arguments, "--math-markup=1");
-        assert_eq!(dialog.destination, "/not-on-disk/review.tex");
+        // Preparing the complete request never reads these nonexistent paths.
+        assert!(dialog.request().is_ok());
+        assert_eq!(
+            dialog.destination().unwrap(),
+            Path::new("/not-on-disk/review.tex")
+        );
+        dialog.settings.command.environment = "[]".into();
+        dialog.start(&context);
+        assert!(dialog.error.is_some());
+        assert!(!dialog.operation.generating());
         for value in ["relative.tex", "/tmp/file.pdf", "/tmp/file.tex\0"] {
             assert!(validate_tex_path(value, "input").is_err());
         }
         assert!(validate_tex_path("/tmp/paper.TEX", "input").is_ok());
+        for extension in crate::document::TEX_SOURCE_EXTENSIONS {
+            assert!(
+                validate_tex_path(
+                    &format!("/tmp/source.{}", extension.to_ascii_uppercase()),
+                    "input"
+                )
+                .is_ok()
+            );
+        }
     }
+
     #[test]
     fn editor_snapshot_only_applies_to_the_selected_newer_document() {
         let mut dialog = fixture();
@@ -939,39 +904,49 @@ mod tests {
         assert!(dialog.request().unwrap_err().contains("Choose"));
     }
     #[test]
-    fn keyboard_editing_and_back_next_preserve_path_and_option_drafts() {
+    fn one_page_exposes_every_path_and_option_without_navigation() {
         let mut harness = ui_harness(fixture(), 720.0);
         harness.run();
+        for name in [
+            "Older file",
+            "Newer file",
+            "Output file",
+            "Arguments",
+            "Markup",
+            "Include subfiles",
+            "Create diff",
+        ] {
+            assert!(harness.query_by_label(name).is_some(), "missing {name}");
+        }
+        assert!(harness.query_by_label("Next").is_none());
+        assert!(harness.query_by_label("Back").is_none());
         harness.get_by_label("Older file").click();
         harness.run();
         harness.get_by_label("Older file").type_text("x");
         harness.run();
         assert!(harness.state().0.older.contains('x'));
-        harness.state_mut().0.older = "/tmp/before.tex".into();
-        harness.run();
-        harness.get_by_label("Next").click();
-        harness.run();
-        assert_eq!(harness.state().0.step, Step::Output);
         harness.get_by_label("Arguments").click();
         harness.run();
         harness
             .get_by_label("Arguments")
             .type_text("--math-markup=1");
         harness.run();
-        harness.get_by_label("Next").click();
-        harness.run();
-        assert_eq!(harness.state().0.step, Step::Review);
-        assert!(harness.query_by_label("Create diff").is_some());
-        harness.get_by_label("Back").click();
-        harness.run();
         assert_eq!(
             harness.state().0.settings.command.arguments,
             "--math-markup=1"
         );
-        harness.get_by_label("Back").click();
+        harness.get_by_label("Output file").click();
         harness.run();
-        assert_eq!(harness.state().0.older, "/tmp/before.tex");
+        harness.get_by_label("Output file").type_text("x");
+        harness.run();
+        assert!(harness.state().0.destination_edited);
+        assert!(harness.state().0.older.contains('x'));
+        assert_eq!(
+            harness.state().0.settings.command.arguments,
+            "--math-markup=1"
+        );
     }
+
     #[test]
     fn a_newer_path_updates_default_output_but_preserves_a_custom_output() {
         assert_eq!(
@@ -998,32 +973,47 @@ mod tests {
     #[test]
     fn pending_worker_is_cancellable_without_waiting_or_starting_a_second_job() {
         let mut dialog = fixture();
-        dialog.step = Step::Review;
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        dialog
-            .generate
-            .start("controlled comparison", move || {
-                started_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Err("LaTeXdiff canceled".into())
-            })
-            .unwrap();
+        let token = controlled_generation(&mut dialog, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Err("LaTeXdiff canceled".into())
+        });
         started_rx.recv().unwrap();
-        let token = dialog.cancel.0.clone();
         dialog.start(&egui::Context::default());
         assert!(
-            Arc::ptr_eq(&token, &dialog.cancel.0),
+            Arc::ptr_eq(&token, &dialog.operation.generation_mut().unwrap().cancel.0),
             "busy start must not replace or duplicate the worker"
         );
         let mut harness = ui_harness(dialog, 720.0);
         harness.run_steps(2);
         assert!(harness.query_by_label("Create diff").is_none());
-        assert!(harness.query_by_label("Back").is_none());
+        for name in [
+            "Older file",
+            "Newer file",
+            "Output file",
+            "Arguments",
+            "Include subfiles",
+        ] {
+            assert!(
+                harness.get_by_label(name).accesskit_node().is_disabled(),
+                "generation must protect {name} from edits"
+            );
+        }
         harness.get_by_label("Cancel").click();
         harness.run_steps(2);
         assert!(token.load(Ordering::Acquire));
         assert!(harness.state().0.busy());
+        harness.state_mut().0.cancel_generation();
+        assert!(
+            harness.state().0.busy(),
+            "repeated cancellation must retain the worker until it drains"
+        );
+        assert!(matches!(
+            harness.state().0.operation,
+            Operation::Cancelling(_)
+        ));
         assert!(
             harness
                 .get_by_label("Cancel")
@@ -1031,15 +1021,15 @@ mod tests {
                 .is_disabled()
         );
         release_tx.send(()).unwrap();
-        harness
-            .state_mut()
-            .0
-            .generate
-            .wait_until_ready_for_test()
-            .unwrap();
-        harness.state_mut().0.poll(&egui::Context::default());
+        wait_for_generation(&mut harness.state_mut().0);
+        assert!(
+            harness
+                .state_mut()
+                .0
+                .poll(&egui::Context::default())
+                .is_none()
+        );
         assert!(!harness.state().0.busy());
-        assert!(harness.state().0.completed_path.is_none());
         assert!(
             harness
                 .state()
@@ -1051,139 +1041,118 @@ mod tests {
         );
         harness.run_steps(2);
         assert!(harness.query_by_label("Create diff").is_some());
-        let token = harness.state().0.cancel.0.clone();
+        assert!(matches!(harness.state().0.operation, Operation::Idle));
         drop(harness);
         assert!(token.load(Ordering::Acquire));
     }
+
     #[test]
-    fn completed_results_can_go_back_and_forward_without_editing_or_regenerating() {
+    fn cancelling_a_file_picker_returns_to_the_existing_editable_form() {
+        let context = egui::Context::default();
         let mut dialog = fixture();
-        dialog.step = Step::Review;
-        dialog.completed_path = Some("/tmp/paper-diff.tex".into());
-        let mut harness = ui_harness(dialog, 720.0);
-        harness.run();
-        assert!(harness.query_by_label("Open diff").is_some());
-        harness.get_by_label("Back").click();
-        harness.run();
-        assert_eq!(harness.state().0.step, Step::Output);
-        assert!(harness.query_by_label("Open diff").is_none());
-        harness.get_by_label("Next").click();
-        harness.run();
-        assert_eq!(harness.state().0.step, Step::Review);
-        assert!(harness.query_by_label("Open diff").is_some());
-        assert_eq!(
-            harness.state().0.completed_path.as_deref(),
-            Some(Path::new("/tmp/paper-diff.tex"))
-        );
+        dialog.operation =
+            Operation::Picking(PendingDialog::new(Action::Older, std::future::ready(None)));
+        assert!(dialog.busy());
+        assert!(dialog.poll(&context).is_none());
+        assert!(!dialog.busy());
+        assert_eq!(dialog.older, "/tmp/older.tex");
+        assert_eq!(dialog.newer, "/tmp/paper.tex");
+        assert!(dialog.poll(&context).is_none());
     }
     #[test]
-    fn releasing_cancel_after_completion_cannot_activate_open_diff() {
+    fn successful_creation_is_handed_off_exactly_once_without_another_button() {
+        let context = egui::Context::default();
         let mut dialog = fixture();
-        dialog.step = Step::Review;
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        dialog
-            .generate
-            .start("controlled completion", move || {
-                release_rx.recv().unwrap();
-                Ok(Completed {
-                    path: "/tmp/diff.tex".into(),
-                    output: Output {
-                        source: "generated".into(),
-                        warnings: String::new(),
-                        older: "/tmp/older.tex".into(),
-                        newer: "/tmp/paper.tex".into(),
-                    },
-                })
+        dialog.settings.command.directory = "/tmp/project".into();
+        controlled_generation(&mut dialog, || {
+            Ok(Completed {
+                path: "/tmp/paper-diff.tex".into(),
+                output: diff::Output {
+                    source: "generated".into(),
+                    warnings: "A tool message".into(),
+                    older: "/tmp/older.tex".into(),
+                    newer: "/tmp/paper.tex".into(),
+                },
             })
-            .unwrap();
-        let mut harness = ui_harness(dialog, 720.0);
-        harness.run_steps(2);
-        let pos = harness.get_by_label("Cancel").rect().center();
-        harness.event(egui::Event::PointerMoved(pos));
-        harness.event(egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: egui::Modifiers::NONE,
         });
-        harness.step();
-        release_tx.send(()).unwrap();
-        harness
-            .state_mut()
-            .0
-            .generate
-            .wait_until_ready_for_test()
-            .unwrap();
-        harness.state_mut().0.poll(&egui::Context::default());
-        harness.step();
-        assert!(harness.get_by_label("Open diff").rect().contains(pos));
-        harness.event(egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed: false,
-            modifiers: egui::Modifiers::NONE,
-        });
-        harness.run_steps(2);
-        assert_eq!(harness.state().1, None);
+        wait_for_generation(&mut dialog);
+        let completed = dialog
+            .poll(&context)
+            .expect("creation must trigger its handoff");
+        assert_eq!(completed.path, Path::new("/tmp/paper-diff.tex"));
+        assert_eq!(completed.output.source, "generated");
+        assert_eq!(completed.output.warnings, "A tool message");
+        assert_eq!(dialog.validated_directory.as_deref(), Some("/tmp/project"));
+        assert!(
+            dialog.poll(&context).is_none(),
+            "a receipt opens and compiles only once"
+        );
+        assert_eq!(dialog.older, "/tmp/older.tex");
+        assert_eq!(dialog.newer, "/tmp/paper.tex");
     }
+
     #[test]
-    fn changing_options_invalidates_the_completed_result() {
+    fn failed_generation_keeps_the_same_form_and_drafts_for_correction() {
+        let context = egui::Context::default();
         let mut dialog = fixture();
-        dialog.step = Step::Output;
-        dialog.completed_path = Some("/tmp/paper-diff.tex".into());
-        dialog.output = Some(Output {
-            source: "generated".into(),
-            warnings: String::new(),
-            older: "/tmp/older.tex".into(),
-            newer: "/tmp/paper.tex".into(),
-        });
+        controlled_generation(&mut dialog, || Err("The output file already exists".into()));
+        wait_for_generation(&mut dialog);
+        assert!(dialog.poll(&context).is_none());
+        let mut harness = ui_harness(dialog, 720.0);
+        harness.run();
+        assert!(
+            harness
+                .query_by_label("The output file already exists")
+                .is_some()
+        );
+        assert!(harness.query_by_label("Create diff").is_some());
+        assert_eq!(harness.state().0.older, "/tmp/older.tex");
+        assert_eq!(harness.state().0.newer, "/tmp/paper.tex");
+        assert_eq!(harness.state().0.destination, "/tmp/paper-diff.tex");
+    }
+
+    #[test]
+    fn changing_options_clears_a_previous_error_without_discarding_the_form() {
+        let mut dialog = fixture();
+        dialog.error = Some("An invalid option".into());
         let mut harness = ui_harness(dialog, 720.0);
         harness.run();
         harness.get_by_label("Include subfiles").click();
         harness.run();
-        assert!(harness.state().0.output.is_none());
-        assert!(harness.state().0.completed_path.is_none());
+        assert!(harness.state().0.error.is_none());
+        assert_eq!(harness.state().0.older, "/tmp/older.tex");
+        assert_eq!(harness.state().0.newer, "/tmp/paper.tex");
+        assert_eq!(harness.state().0.destination, "/tmp/paper-diff.tex");
     }
+
     #[test]
-    fn every_step_keeps_actions_visible_and_fields_inside_narrow_cards() {
+    fn single_page_keeps_actions_visible_with_narrow_width_long_errors_and_advanced_options() {
         for width in [320.0, 660.0] {
-            for step in [Step::Files, Step::Output, Step::Review] {
-                let mut dialog = fixture();
-                dialog.step = step;
-                dialog.error = Some("A comparison error. ".repeat(200));
-                let mut harness = ui_harness(dialog, width);
-                harness.run();
-                let action = if step == Step::Review {
-                    "Create diff"
-                } else {
-                    "Next"
-                };
-                let rect = harness.get_by_label(action).rect();
+            let mut dialog = fixture();
+            dialog.error = Some("A comparison error. ".repeat(200));
+            let mut harness = ui_harness(dialog, width);
+            harness.run();
+            let footer = harness.get_by_label("Create diff").rect();
+            assert!(
+                footer.left() >= 0.0 && footer.right() <= width && footer.bottom() <= 440.0,
+                "{width}: {footer:?}"
+            );
+            for name in ["Older file", "Newer file", "Output file", "Arguments"] {
+                let rect = harness.get_by_label(name).rect();
                 assert!(
-                    rect.left() >= 0.0 && rect.right() <= width && rect.bottom() <= 440.0,
-                    "{step:?}: {rect:?}"
+                    rect.width() > 200.0 && rect.left() >= 0.0 && rect.right() <= width,
+                    "{name}: {rect:?}"
                 );
-                if step == Step::Files {
-                    for name in ["Older file", "Newer file"] {
-                        let r = harness.get_by_label(name).rect();
-                        assert!(r.width() > 200.0 && r.right() <= width, "{name}: {r:?}");
-                    }
-                }
-                if step == Step::Output {
-                    let footer = rect;
-                    harness.get_by_label("Advanced").click();
-                    harness.run();
-                    assert_eq!(harness.get_by_label("Next").rect(), footer);
-                    for name in [
-                        "Output file",
-                        "Arguments",
-                        "Environment",
-                        "Working directory",
-                    ] {
-                        let r = harness.get_by_label(name).rect();
-                        assert!(r.left() >= 0.0 && r.right() <= width, "{name}: {r:?}");
-                    }
-                }
+            }
+            harness.get_by_label("Advanced").click();
+            harness.run();
+            assert_eq!(harness.get_by_label("Create diff").rect(), footer);
+            for name in ["Executable", "Environment", "Working directory"] {
+                let rect = harness.get_by_label(name).rect();
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width,
+                    "{name}: {rect:?}"
+                );
             }
         }
         for width in [100.0, 320.0, 1200.0] {
@@ -1193,11 +1162,10 @@ mod tests {
             assert!(card_height(height) + 32.0 <= height);
         }
     }
+
     #[test]
     fn documentation_uses_the_existing_child_safe_link_route() {
-        let mut dialog = fixture();
-        dialog.step = Step::Output;
-        let mut harness = ui_harness(dialog, 720.0);
+        let mut harness = ui_harness(fixture(), 720.0);
         harness.run();
         harness.get_by_label("Advanced").click();
         harness.run();
@@ -1423,11 +1391,11 @@ mod tests {
         assert_eq!(wrapped_rows(240.0, &[70.0, 70.0, 70.0, 20.0], 6.0), 2);
     }
     #[test]
-    #[ignore = "captures fresh offscreen wizard framebuffers for visual review"]
+    #[ignore = "captures fresh offscreen form framebuffers for visual review"]
     #[cfg(target_os = "macos")]
     fn modal_framebuffer_review() {
         for dark in [false, true] {
-            for step in [Step::Files, Step::Output, Step::Review] {
+            {
                 let context = egui::Context::default();
                 theme::configure_test_fonts(&context);
                 let palette = crate::builtin_themes::find(if dark {
@@ -1444,16 +1412,10 @@ mod tests {
                     egui::Theme::Light
                 });
                 let mut dialog = fixture();
-                dialog.step = step;
                 let mut framebuffer = crate::test_framebuffer::Framebuffer::new([820, 600]);
                 let destination = PathBuf::from(format!(
-                    ".tiptoptyp/screenshots/agent-review/latexdiff/{}-{}.png",
+                    ".tiptoptyp/screenshots/agent-review/latexdiff/{}-form.png",
                     if dark { "dark" } else { "light" },
-                    match step {
-                        Step::Files => "files",
-                        Step::Output => "output",
-                        Step::Review => "review",
-                    }
                 ));
                 std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
                 for frame in 0..4 {

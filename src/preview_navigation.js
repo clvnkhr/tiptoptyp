@@ -1,8 +1,10 @@
 // Adapter for the pinned Tinymist SVG frontend. Retain one pending input/frame;
 // viewport demand stays current without the frontend's 500 ms scroll debounce.
 (() => {
-  let frame = 0;
-  let pending = null;
+  // One coalesced input owns one scheduled frame. Resize/zoom/demand are
+  // independent intents in that input, not competing lifecycle states.
+  let inputQueue = { phase: 'idle' };
+  const queuedInput = () => inputQueue.phase === 'idle' ? null : inputQueue.input;
   let lastNativeRequest = null;
   let sourceContextRequest = null;
   const prepared = new WeakSet();
@@ -17,18 +19,71 @@
   // Only an explicit navigation request owns a beacon. Automatic source-follow
   // updates still scroll through the same frontend hook, without a typing pulse.
   const revealWindows = new WeakMap();
-  let reveal = null, revealFrame = 0;
+  let reveal = null;
   const defaultRevealOptions = Object.freeze({enabled:true, style:"Rings", duration_ms:900, size_percent:100});
   let revealOptions = {...defaultRevealOptions};
-  const revealDebug = { intents: 0, explicit: 0, locations: 0, retired: null, last_intent: null, last_location: null };
+  const navigationDiagnosticsEnabled = typeof TIPTOPTYP_NAVIGATION_DIAGNOSTICS !== 'undefined' && TIPTOPTYP_NAVIGATION_DIAGNOSTICS === true;
+  const revealDebug = { intents: 0, explicit: 0, locations: 0, retired: null, last_intent: null, last_location: null, navigation: null };
+  const finiteTrace = value => Number.isFinite(value) ? value : null;
+  const scrollTrace = doc => {
+    const scroll = doc.hookedElem.parentElement, anchor = doc.svgResizeAnchor;
+    return { scroll: [finiteTrace(scroll.scrollLeft), finiteTrace(scroll.scrollTop)],
+      anchor: anchor ? { content_y: finiteTrace(anchor.contentY), scale_ratio: finiteTrace(anchor.scaleRatio),
+        kind: anchor.viewportAnchor?.kind ?? null, page: finiteTrace(anchor.viewportAnchor?.pageNumber),
+        local_y: finiteTrace(anchor.viewportAnchor?.pageLocalY) } : null,
+      last_scale: finiteTrace(doc.lastSvgScale), last_ratio: finiteTrace(doc.lastSvgScaleRatio),
+      ratio: finiteTrace(doc.currentScaleRatio), width: finiteTrace(doc.cachedDOMState?.width),
+      window_size: [finiteTrace(doc.windowElem.clientWidth), finiteTrace(doc.windowElem.clientHeight)],
+      scroll_extent: [finiteTrace(scroll.clientWidth), finiteTrace(scroll.clientHeight), finiteTrace(scroll.scrollHeight)] };
+  };
+  const pendingNavigationTrace = doc => reveal?.doc === doc && reveal.arrival.phase !== 'displaying' && reveal.diagnostics?.received
+    ? reveal.diagnostics : null;
+  const recordRescaleTrace = (trace, before, doc, failed = false) => {
+    if (!trace) return;
+    trace.rescales = Math.min(Number.MAX_SAFE_INTEGER, trace.rescales + 1);
+    if (trace.rescale.length === 16) trace.rescale.splice(1, 1);
+    trace.rescale.push({ sequence: trace.rescales, before, after: scrollTrace(doc), failed });
+  };
+  const observeLocationScroll = (trace, doc, invoke) => {
+    const restores = [];
+    const wrap = (owner, method, receive) => {
+      const original = owner?.[method];
+      if (typeof original !== 'function') return false;
+      const descriptor = Object.getOwnPropertyDescriptor(owner, method);
+      if (descriptor && !descriptor.configurable) return false;
+      const wrapper = function(...args) { receive(args); return original.apply(this, args); };
+      try { Object.defineProperty(owner, method, { configurable: true, writable: true,
+        enumerable: descriptor?.enumerable ?? false, value: wrapper }); }
+      catch (_) { return false; }
+      restores.push(() => {
+        if (Object.getOwnPropertyDescriptor(owner, method)?.value !== wrapper) return;
+        if (descriptor) Object.defineProperty(owner, method, descriptor);
+        else delete owner[method];
+      });
+      return true;
+    };
+    const docHooked = wrap(doc, 'scrollTo', args => {
+      trace.doc_scroll = { arguments: args.slice(0, 4).map(finiteTrace), before: scrollTrace(doc) };
+    });
+    const nativeHooked = wrap(doc.hookedElem.parentElement, 'scrollTo', args => {
+      const options = args[0];
+      trace.native_scroll = { left: finiteTrace(typeof options === 'object' ? options?.left : options),
+        top: finiteTrace(typeof options === 'object' ? options?.top : args[1]),
+        behavior: ['smooth', 'instant', 'auto'].includes(options?.behavior) ? options.behavior : null,
+        before: scrollTrace(doc) };
+    });
+    trace.hooks = { doc: docHooked, native: nativeHooked };
+    try { return invoke(); }
+    finally { for (const restore of restores.reverse()) restore(); }
+  };
   const revealViewport = state => {
     const scroll = state?.doc?.hookedElem.parentElement;
     return [0, 0, window.innerWidth ?? scroll?.clientWidth ?? 0, window.innerHeight ?? scroll?.clientHeight ?? 0];
   };
   const retireReveal = (recapture = true, reason = 'finished') => {
     if (!reveal) return;
-    if (revealFrame) cancelAnimationFrame(revealFrame);
-    revealFrame = 0;
+    if (reveal.frame) cancelAnimationFrame(reveal.frame);
+    reveal.frame = 0;
     reveal.element?.remove();
     revealDebug.retired = reason;
     reveal = null;
@@ -53,13 +108,13 @@
     const svg = state.doc.hookedElem.firstElementChild;
     if (!svg || svg.isConnected === false) return null;
     const cached = partialDocs.get(state.doc);
-    if (cached?.nodeSVG === svg && cached.nodes) return cached.nodes[state.page] ?? null;
+    if (cached?.nodeSVG === svg && cached.nodes) return cached.nodes[state.arrival.page] ?? null;
     if (state.svg !== svg || state.node?.isConnected === false) {
       state.svg = svg;
       // A renderer without a geometry cache is scanned once per replaced SVG,
       // never once per animation frame and never through the document ink.
       state.node = [...svg.children].find(node => node.classList?.contains('typst-page') &&
-        Number(node.getAttribute('data-page-number')) === state.page) ?? null;
+        Number(node.getAttribute('data-page-number')) === state.arrival.page) ?? null;
     }
     return state.node;
   };
@@ -84,37 +139,48 @@
     state.element.style.left = `${state.center[0]}px`;
     state.element.style.top = `${state.center[1]}px`;
   };
-  const revealExpired = (state, now) => now - (state.started ?? state.armed) >= (state.started === null ? 3000 : revealOptions.duration_ms);
+  const revealStarted = state => state.arrival.phase === 'displaying' ? state.arrival.started : null;
+  const revealExpired = (state, now) => now - (revealStarted(state) ?? state.armed) >= (state.arrival.phase === 'displaying' ? revealOptions.duration_ms : 3000);
   const currentReveal = now => reveal && !revealExpired(reveal, now) ? reveal : null;
-  const tickReveal = () => {
-    revealFrame = 0;
-    const state = reveal;
-    if (!state) return;
+  const tickReveal = state => {
+    if (reveal !== state) return;
+    state.frame = 0;
     const now = performance.now();
-    if ((state.doc && (!connected(state.doc) || state.doc.hookedElem.isConnected === false || partialDocs.get(state.doc)?.disposed)) ||
+    if ((state.doc && (!connected(state.doc) || state.doc.hookedElem.isConnected === false || disposed(partialDocs.get(state.doc)))) ||
         revealExpired(state, now)) {
-      retireReveal(true, state.started === null ? 'arrival-timeout-or-disconnected' : 'finished-or-disconnected'); return;
+      retireReveal(true, state.arrival.phase !== 'displaying' ? 'arrival-timeout-or-disconnected' : 'finished-or-disconnected'); return;
     }
-    if (state.page !== null) {
+    if (state.arrival.phase !== 'awaiting-location') {
       const page = revealPage(state), geometry = page && sourcePageGeometry(page);
       if (geometry && page.getAttribute('data-dummy') !== '1') {
         const [, width, height, a, b, c, d, e, f] = geometry;
-        const point = [a * state.x + c * state.y + e, b * state.x + d * state.y + f];
-        if (state.started !== null) state.center = point;
+        const point = [a * state.arrival.x + c * state.arrival.y + e, b * state.arrival.x + d * state.arrival.y + f];
+        if (state.arrival.phase === 'displaying') state.center = point;
         const rect = state.doc.hookedElem.parentElement.getBoundingClientRect();
         const viewport = revealViewport(state);
-        const visible = state.x >= 0 && state.y >= 0 && state.x <= width && state.y <= height &&
+        const visible = state.arrival.x >= 0 && state.arrival.y >= 0 && state.arrival.x <= width && state.arrival.y <= height &&
           point[0] >= Math.max(0, rect.left) && point[0] <= Math.min(viewport[2], rect.right ?? rect.left + state.doc.hookedElem.parentElement.clientWidth) &&
           point[1] >= Math.max(0, rect.top) && point[1] <= Math.min(viewport[3], rect.bottom ?? rect.top + state.doc.hookedElem.parentElement.clientHeight);
         if (visible) {
           state.center = point;
-          state.started ??= now;
+          if (state.arrival.phase !== 'displaying') state.arrival = { ...state.arrival, phase: 'displaying', started: now };
           drawReveal(state);
           state.element.style.visibility = 'visible';
         } else if (state.element) state.element.style.visibility = 'hidden';
       } else if (state.element) state.element.style.visibility = 'hidden';
     }
-    revealFrame = requestAnimationFrame(tickReveal);
+    state.frame = requestAnimationFrame(() => tickReveal(state));
+  };
+  const locationDocument = (windowElem, elem, page, x, y) => {
+    if (!Number.isSafeInteger(page) || page <= 0 || ![x, y].every(Number.isFinite)) return null;
+    const doc = documentRenderer(), svg = doc?.hookedElem.firstElementChild;
+    if (!doc || doc.windowElem !== windowElem || doc.hookedElem.isConnected === false || svg.isConnected === false ||
+        (svg !== elem && !svg.contains?.(elem))) return null;
+    const cached = partialDocs.get(doc);
+    if (disposed(cached)) return null;
+    const node = cached?.nodeSVG === svg && cached.nodes ? cached.nodes[page - 1] :
+      [...svg.children].find(value => value.classList?.contains('typst-page') && Number(value.getAttribute('data-page-number')) === page - 1);
+    return node ? doc : null;
   };
   const installRevealWindow = windowElem => {
     const original = windowElem?.handleTypstLocation;
@@ -123,15 +189,27 @@
       const state = reveal;
       revealDebug.locations = Math.min(Number.MAX_SAFE_INTEGER, revealDebug.locations + 1);
       revealDebug.last_location = performance.now();
-      if (state && state.page === null && Number.isSafeInteger(page) && page > 0 && [x, y].every(Number.isFinite)) {
-        const docs = [...new Set((windowElem.documents ?? []).map(value => value.impl))];
-        const doc = docs.find(value => value.hookedElem.firstElementChild === elem || value.hookedElem.firstElementChild?.contains?.(elem)) ??
-          (docs.length === 1 ? docs[0] : null);
-        if (doc && (!state.doc || state.doc === doc)) {
-          state.doc = doc; state.page = page - 1; state.x = x; state.y = y;
-        }
+      const doc = locationDocument(windowElem, elem, page, x, y);
+      const trace = navigationDiagnosticsEnabled && state?.arrival.phase === 'awaiting-location' ? state.diagnostics : null;
+      if (trace) {
+        const current = documentRenderer(), svg = current?.hookedElem.firstElementChild;
+        trace.received = { page: finiteTrace(page), x: finiteTrace(x), y: finiteTrace(y), admitted: !!doc,
+          same_document: !!current && current === state.doc, same_window: current?.windowElem === windowElem,
+          same_svg: !!svg && (svg === elem || !!svg.contains?.(elem)), connected: !!svg && svg.isConnected !== false,
+          before: current ? scrollTrace(current) : null };
       }
-      try { return original.call(this, elem, page, x, y, ...args); }
+      // A source location owns scrolling now. The pinned resize delegate can
+      // otherwise restore its old anchor during the following cursor patch,
+      // cancelling even an unchanged-scale smooth jump before its first pixel.
+      // This ownership rule also applies to automatic follow and hidden cues.
+      doc?.clearSvgResizeAnchor?.();
+      if (doc && state?.arrival.phase === 'awaiting-location' && (!state.doc || state.doc === doc)) {
+        state.doc = doc; state.arrival = { phase: 'awaiting-visibility', page: page - 1, x, y };
+      }
+      try {
+        const invoke = () => original.call(this, elem, page, x, y, ...args);
+        return trace && doc ? observeLocationScroll(trace, doc, invoke) : invoke();
+      }
       catch (error) { retireReveal(true, 'handler-error'); throw error; }
     };
     revealWindows.set(windowElem, handler);
@@ -147,18 +225,24 @@
     if (!explicit || !revealOptions.enabled) { if (wasActive) window.tiptoptypZoomSnapshot?.settle(); return; }
     const doc = documentRenderer();
     if (doc) installRevealWindow(doc.windowElem);
-    reveal = { doc, page: null, x: 0, y: 0, armed: performance.now(), started: null, center: null, element: null, svg: null, node: null };
+    reveal = { doc, arrival: { phase: 'awaiting-location' }, armed: performance.now(), frame: 0, center: null, element: null, svg: null, node: null };
+    if (navigationDiagnosticsEnabled) {
+      revealDebug.navigation = { received: null, hooks: null, doc_scroll: null, native_scroll: null, rescales: 0, skipped_rescales: 0, rescale: [] };
+      reveal.diagnostics = revealDebug.navigation;
+    }
     window.tiptoptypZoomSnapshot?.invalidate();
-    revealFrame = requestAnimationFrame(tickReveal);
+    const state = reveal;
+    state.frame = requestAnimationFrame(() => tickReveal(state));
   };
   window.tiptoptypPreviewRevealActive = () => currentReveal(performance.now()) !== null;
   window.tiptoptypPreviewRevealState = () => {
     const now = performance.now(), state = currentReveal(now);
     return {
-      active: state !== null, pending: state !== null && state.started === null, page: state?.page ?? null,
+      active: state !== null, pending: state !== null && state.arrival.phase !== 'displaying', page: state?.arrival.page ?? null, phase: state?.arrival.phase ?? 'idle',
       center: state?.center?.slice() ?? null, viewport: revealViewport(state),
-      elapsed_ms: state ? now - (state.started ?? state.armed) : 0, options: {...revealOptions},
+      elapsed_ms: state ? now - (revealStarted(state) ?? state.armed) : 0, options: {...revealOptions},
       debug: { intents: revealDebug.intents, explicit: revealDebug.explicit, locations: revealDebug.locations, retired: revealDebug.retired,
+        navigation: revealDebug.navigation,
         intent_age_ms: revealDebug.last_intent === null ? null : now - revealDebug.last_intent,
         location_age_ms: revealDebug.last_location === null ? null : now - revealDebug.last_location },
     };
@@ -258,7 +342,7 @@
     return { x: rect.left, y: rect.top, sx: fallback, sy: fallback };
   };
   const invalidateFullGeometry = state => {
-    state.fullDirty = true; state.pages = null; state.nodeSVG = null; state.nodes = null;
+    state.geometryPhase = 'invalid'; state.pages = null; state.nodeSVG = null; state.nodes = null;
     state.offsets = null; state.coverage = null; state.ellipses = [];
   };
   const adoptFullGeometry = (doc, state) => {
@@ -285,7 +369,7 @@
     state.coverage = {svg, first: 0, last: nodes.length - 1, scale: state.offsetScale};
     state.cursorPosition = doc.cursorPosition; state.cursorPaths = doc.cursorPaths; state.pageColor = doc.pageColor;
     state.ellipses = doc.cursorPaths ? [...(svg.querySelectorAll?.('.typst-svg-cursor') ?? [])] : [];
-    state.fullDirty = false;
+    state.geometryPhase = 'ready';
     return true;
   };
   const paperLayout = (geometry, scale) => ({
@@ -404,7 +488,7 @@
   };
   const normalizeFullGeometry = (doc, state) => {
     if (!fullMode(doc)) return null;
-    if ((state.fullDirty || state.nodeSVG !== doc.hookedElem.firstElementChild || !state.offsets) && !adoptFullGeometry(doc, state)) return null;
+    if ((state.geometryPhase === 'invalid' || state.nodeSVG !== doc.hookedElem.firstElementChild || !state.offsets) && !adoptFullGeometry(doc, state)) return null;
     const roots = geometryRoots(doc, state);
     if (!roots) { state.offsets = null; return null; }
     const geometry = state.pages, scale = doc.cachedDOMState.width / geometry.width * doc.currentScaleRatio;
@@ -442,20 +526,33 @@
     // Anchoring can cross a page boundary. Refill before paint in that case.
     return samePageRange(pageRange(after, 1), state.coverage) ? after : null;
   };
+  const disposed = state => state?.execution.phase === 'disposed';
+  const running = state => state.execution.phase === 'running';
+  const forced = state => state.demand.phase === 'render';
+  const requestWork = (state, phase, zoomPoint = null) => {
+    if (phase === 'render' || state.demand.phase === 'idle') state.demand.phase = phase;
+    if (zoomPoint) state.demand.zoomPoint = zoomPoint;
+  };
   const cancelPartialFrame = state => {
-    if (state.frame) cancelAnimationFrame(state.frame);
-    state.frame = 0;
+    if (state.execution.phase !== 'scheduled') return;
+    cancelAnimationFrame(state.execution.frame);
+    state.execution = { phase: 'idle' };
   };
   const schedulePartial = (doc, state) => {
-    if (state.frame || state.running) return;
+    if (state.execution.phase !== 'idle') return;
     doc.isRendering = true;
-    state.frame = requestAnimationFrame(() => { state.frame = 0; flushPartial(doc, state); });
+    const frame = requestAnimationFrame(() => {
+      if (state.execution.phase !== 'scheduled' || state.execution.frame !== frame) return;
+      state.execution = { phase: 'idle' };
+      flushPartial(doc, state);
+    });
+    state.execution = { phase: 'scheduled', frame };
   };
   const flushPartial = (doc, state, view = null) => {
     cancelPartialFrame(state);
-    if (!connected(doc) || !partialMode(doc) || state.disposed) { doc.isRendering = false; return; }
-    if (state.running) return;
-    state.running = true;
+    if (!connected(doc) || !partialMode(doc) || disposed(state)) { doc.isRendering = false; return; }
+    if (running(state)) return;
+    state.execution = { phase: 'running' };
     doc.isRendering = true;
     let processed = false, rendered = false;
     const start = performance.now();
@@ -463,9 +560,9 @@
       const layout = view?.layout ?? partialLayout(doc);
       doc.cachedDOMState = layout.domState;
       prepare(doc);
-      const geometryInput = state.geometryInput, zoomPoint = state.zoomPoint;
-      let sourceChanged = false, render = state.force;
-      state.force = false; state.geometryInput = false; state.zoomPoint = null;
+      const geometryInput = state.demand.phase === 'geometry', zoomPoint = state.demand.zoomPoint;
+      let sourceChanged = false, render = forced(state);
+      state.demand.phase = 'idle'; state.demand.zoomPoint = null;
       // Keep the frontend's source FIFO and processQueue merge/reset semantics.
       while (doc.patchQueue.length) {
         const change = doc.patchQueue.shift();
@@ -516,12 +613,12 @@
       console.error(error);
       processed = true;
     } finally {
-      state.running = false;
+      if (!disposed(state)) state.execution = { phase: 'idle' };
       doc.isRendering = false;
       if (processed || rendered) doc.postprocessChanges();
       // Reentrant source messages are real work; viewport-only notifications
       // caused by rescale do not create an empty follow-up frame.
-      if (doc.patchQueue.length || state.force) schedulePartial(doc, state);
+      if (doc.patchQueue.length || forced(state)) schedulePartial(doc, state);
       // A prefetch can become unnecessary before its RAF runs. Its busy flag
       // may have blocked the zoom's paint observation, so publish completion
       // even when there was no patch/postprocessing to notify that observer.
@@ -533,18 +630,17 @@
     if (!state || !partialMode(doc)) return false;
     view ??= partialViewport(doc, state);
     doc.cachedDOMState = view.layout.domState;
-    state.geometryInput ||= geometryInput;
-    if (zoomPoint) state.zoomPoint = zoomPoint;
+    if (geometryInput || zoomPoint) requestWork(state, geometryInput ? 'geometry' : 'idle', zoomPoint);
     if (immediate || doc.patchQueue.length || uncovered(doc, state, 0, view)) flushPartial(doc, state, view);
-    else if (state.force || state.geometryInput || uncovered(doc, state, 0.25, view)) schedulePartial(doc, state);
+    else if (state.demand.phase !== 'idle' || uncovered(doc, state, 0.25, view)) schedulePartial(doc, state);
     return true;
   };
   const installPartialDocument = doc => {
     if (!doc || partialDocs.has(doc) || typeof doc.fetchSvgDataByDocMode !== 'function' ||
         typeof doc.kModule?.retrievePagesInfo !== 'function' || typeof doc.processQueue !== 'function' ||
         typeof doc.triggerUpdate !== 'function' || typeof doc.addChangement !== 'function') return;
-    const state = { frame: 0, running: false, force: false, geometryInput: false, zoomPoint: null, pages: null, coverage: null, requested: null,
-      nodeSVG: null, nodes: null, offsets: null, ellipses: [], offsetScale: 0, renderView: null, disposed: false, fullDirty: true };
+    const state = { execution: { phase: 'idle' }, demand: { phase: 'idle', zoomPoint: null }, pages: null, coverage: null, requested: null,
+      nodeSVG: null, nodes: null, offsets: null, ellipses: [], offsetScale: 0, renderView: null, geometryPhase: 'invalid' };
     partialDocs.set(doc, state);
     const windowElem = doc.windowElem;
     installRevealWindow(windowElem);
@@ -588,7 +684,7 @@
       const result = postprocess.apply(this, args);
       // Full SVG rendering clears isRendering in a later RAF after its final
       // DOM mutation. Observe the frontend's completion, never poll for idle.
-      if (!state.disposed && connected(this)) window.tiptoptypZoomSnapshot?.rendered();
+      if (!disposed(state) && connected(this)) window.tiptoptypZoomSnapshot?.rendered();
       return result;
     };
     const trigger = doc.triggerUpdate;
@@ -611,7 +707,7 @@
         return add.call(this, change, ...args);
       }
       if (this.vpTimeout !== undefined) { clearTimeout(this.vpTimeout); this.vpTimeout = undefined; }
-      if (change[0] === 'viewport-change') state.force = true;
+      if (change[0] === 'viewport-change') requestWork(state, 'render');
       else {
         if (change[0] === 'new') this.patchQueue.length = 0;
         this.patchQueue.push(change);
@@ -631,7 +727,7 @@
       if (sourceContextRequest?.doc === doc) sourceContextRequest = null;
       if (reveal?.doc === doc) retireReveal(false, 'dispose');
       if (!window.tiptoptypZoomSnapshot?.retireDocument?.(doc)) window.tiptoptypZoomSnapshot?.invalidate();
-      state.disposed = true; cancelPartialFrame(state);
+      cancelPartialFrame(state); state.execution = { phase: 'disposed' };
       if (partialMode(doc)) doc.isRendering = false;
     });
   };
@@ -784,30 +880,44 @@
     doc.r.rescale = () => {
       const next = geometry();
       const state = partialDocs.get(doc);
-      if (previous && next.every((value, index) => value === previous[index]) && !(fullMode(doc) && state?.fullDirty)) return;
-      const full = state && fullMode(doc) ? normalizeFullGeometry(doc, state) : null;
-      // Our current layout/point supersedes any delayed frontend resize anchor,
-      // including on cursor-only repaints where navigation owns the scroll.
-      if (full) doc.clearSvgResizeAnchor?.();
-      original();
-      if (full) {
-        state.offsetScale = svgCoordinates(doc.hookedElem.firstElementChild, full.scale).sy;
-        state.coverage.scale = state.offsetScale;
-        restorePartialZoomPoint(doc, state, full.point, state.offsetScale);
+      const trace = navigationDiagnosticsEnabled ? pendingNavigationTrace(doc) : null;
+      if (previous && next.every((value, index) => value === previous[index]) && !(fullMode(doc) && state?.geometryPhase === 'invalid')) {
+        if (trace) trace.skipped_rescales = Math.min(Number.MAX_SAFE_INTEGER, trace.skipped_rescales + 1);
+        return;
       }
-      previous = geometry();
+      const before = trace ? scrollTrace(doc) : null;
+      let failed = true;
+      try {
+        const full = state && fullMode(doc) ? normalizeFullGeometry(doc, state) : null;
+        // Our current layout/point supersedes any delayed frontend resize anchor,
+        // including on cursor-only repaints where navigation owns the scroll.
+        if (full) doc.clearSvgResizeAnchor?.();
+        original();
+        if (full) {
+          state.offsetScale = svgCoordinates(doc.hookedElem.firstElementChild, full.scale).sy;
+          state.coverage.scale = state.offsetScale;
+          restorePartialZoomPoint(doc, state, full.point, state.offsetScale);
+        }
+        previous = geometry();
+        failed = false;
+      } finally { recordRescaleTrace(trace, before, doc, failed); }
     };
   };
   const enqueue = (doc, change) => {
     prepare(doc);
-    if (pending?.doc !== doc) pending = { doc, scale: doc.currentScaleRatio, resize: false, demand: false, zoom: false };
-    change(pending);
-    if (pending.zoom || pending.resize) window.tiptoptypZoomSnapshot?.begin(doc, pending.scale, { x: pending.x, y: pending.y });
-    if (frame) return;
+    if (queuedInput()?.doc !== doc) {
+      const input = { doc, scale: doc.currentScaleRatio, resize: false, demand: false, zoom: false };
+      inputQueue = inputQueue.phase === 'scheduled'
+        ? { phase: 'scheduled', frame: inputQueue.frame, input } : { phase: 'pending', input };
+    }
+    const input = queuedInput();
+    change(input);
+    if (input.zoom || input.resize) window.tiptoptypZoomSnapshot?.begin(doc, input.scale, { x: input.x, y: input.y });
+    if (inputQueue.phase === 'scheduled') return;
     const flush = () => {
-      frame = 0;
-      const input = pending;
-      pending = null;
+      if (inputQueue.phase !== 'scheduled') return;
+      const input = inputQueue.input;
+      inputQueue = { phase: 'idle' };
       const doc = documentRenderer();
       if (!doc || doc !== input.doc) {
         // Acceptance is not completion: a reset/disposal can remove this owner
@@ -850,7 +960,7 @@
             const offsets = paperLayout(geometry, scale).positions.map(p => p.y);
             zoomPoint = { x: input.scroll.left / scale, y: sourcePoint(geometry, offsets, input.scroll.top / scale), clientX: viewport.left, clientY: viewport.top };
           }
-          if (partialMode(doc) && zoomPoint && !doc.patchQueue.length && !partial.force && !partial.running) {
+          if (partialMode(doc) && zoomPoint && !doc.patchQueue.length && !forced(partial) && !running(partial)) {
             deferredView = partialViewport(doc, partial, { domState: doc.cachedDOMState, viewport, paper: rect,
               height: scroll.clientHeight, scrollTop: scroll.scrollTop });
           } else {
@@ -881,7 +991,7 @@
         throw error;
       }
     };
-    frame = requestAnimationFrame(flush);
+    inputQueue = { phase: 'scheduled', input: queuedInput(), frame: requestAnimationFrame(flush) };
   };
   const zoom = (doc, factor, reset = false, point = {}) => {
     if (window.tiptoptypZoomSnapshot?.request?.(factor, reset, point)) return;
@@ -916,7 +1026,7 @@
       // owner once so readiness can release its serial slot for the successor.
       if (request && window.tiptoptypZoomSnapshot.owns?.(request.revision, doc) &&
           (doc.cachedDOMState.width !== scroll.clientWidth || doc.cachedDOMState.height !== scroll.clientHeight) &&
-          !(pending?.doc === doc && pending.nativeRevision === request.revision)) {
+          !(queuedInput()?.doc === doc && queuedInput().nativeRevision === request.revision)) {
         enqueue(doc, input => {
           input.resize = true;
           input.scroll = request.scroll; input.source = request.source;
@@ -1075,7 +1185,7 @@
         pages:piecewise ? state.snapshotPages : [] },
       width: window.innerWidth ?? scroll.clientWidth, height: window.innerHeight ?? scroll.clientHeight,
       fitWidth: doc.cachedDOMState.width, x: 0, y: 0, left: scroll.scrollLeft, top: scroll.scrollTop,
-      ready: doc.moduleInitialized && !doc.isRendering && !doc.patchQueue.length && !pending &&
+      ready: doc.moduleInitialized && !doc.isRendering && !doc.patchQueue.length && !queuedInput() &&
         doc.cachedDOMState.width === scroll.clientWidth &&
         (!partialMode(doc) || (state?.coverage?.svg === svg &&
           Math.abs(state.coverage.scale - doc.cachedDOMState.width / (state.pages?.width || 1) * doc.currentScaleRatio) < 1e-6)) };

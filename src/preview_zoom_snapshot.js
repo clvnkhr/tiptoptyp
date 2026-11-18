@@ -2,8 +2,22 @@
 // transforms belong to the native compositor, never this renderer's JS thread.
 (() => {
   const MAX_PIXELS = 4_000_000;
-  let enabled = false, captureDeferred = false, readFrame, cache = null, capture = null, admission = null, timer = 0;
-  let active = false, epoch = 0, sourceEpoch = 0, serial = 0, nativeRequest = null, nativeOwner = null, expectedScroll = null, handoffEpoch = null, frameEpoch = null;
+  let enabled = false, captureDeferred = false, readFrame, cache = null;
+  // Warming owns exactly one scheduled capture, capture reply or admission.
+  // Native rendering is independent: an in-flight capture may need rejection
+  // after a gesture starts, while retained pixels still belong to that gesture.
+  let warming = { phase: 'idle' }, flight = { phase: 'idle' };
+  let epoch = 0, sourceEpoch = 0, serial = 0, expectedScroll = null, frameEpoch = null;
+  const captureRequest = () => warming.phase === 'capturing' ? warming.request : null;
+  const admissionRequest = () => warming.phase === 'admitting' ? warming.request : null;
+  const warmingBusy = () => warming.phase !== 'idle';
+  const isActive = () => flight.phase !== 'idle';
+  const flightRequest = () => isActive() ? flight.request : null;
+  const flightOwner = () => isActive() ? flight.owner : null;
+  const resumeRendering = () => { if (isActive()) flight = { phase: 'rendering', request: flight.request, owner: flight.owner }; };
+  const cancelWarmTimer = () => {
+    if (warming.phase === 'scheduled') { clearTimeout(warming.timer); warming = { phase: 'idle' }; }
+  };
   const counters = { captures: 0, hits: 0, misses: 0, failures: 0, handoffs: 0 };
   let currentOutline=null;
   const namespace = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -26,28 +40,32 @@
     a.width === b.width && a.height === b.height && a.fitWidth === b.fitWidth && a.left === b.left && a.top === b.top &&
     sameGeometry(a.geometry, b.geometry);
   const invalidate = (abort = false, notify = true) => {
-    epoch++; sourceEpoch++; clearTimeout(timer); timer = 0; cache = null; admission = null; if (abort) { nativeRequest = null; nativeOwner = null; } expectedScroll = null; handoffEpoch = null; frameEpoch = null; active = !!nativeRequest;
+    epoch++; sourceEpoch++; cancelWarmTimer(); cache = null;
+    if (warming.phase === 'admitting') warming = { phase: 'idle' };
+    if (abort) flight = { phase: 'idle' }; else resumeRendering();
+    expectedScroll = null; frameEpoch = null;
     if (notify) post({ op: 'invalidate', abort: !!abort });
   };
   const settle = () => {
-    if (!enabled || active || !readFrame) return;
+    if (!enabled || isActive() || !readFrame) return;
     // Once reported, blocked warming must remain cheap through editor frames.
-    if (frameEpoch === epoch && (captureDeferred || capture || admission || timer)) return;
+    if (frameEpoch === epoch && (captureDeferred || warmingBusy())) return;
     const frame = readFrame();
     if (!usable(frame)) return;
     // Gesture readiness belongs to the live renderer, not optional screenshots.
     // Pixel preparation, editor feedback and reveal beacons may delay warming
     // without leaving the native controller uninitialized on a ready document.
     if (frameEpoch !== epoch) { post({ op: 'frame', scale: frame.scale, width: frame.width, height: frame.height }); frameEpoch = epoch; if (currentOutline) post({op:'outline',...currentOutline}); }
-    if (captureDeferred || capture || admission || timer || !captureReady(frame)) return;
-    if (same(cache?.frame, frame) && !cache.refresh) return;
-    timer = setTimeout(() => {
-      timer = 0;
-      if (!enabled || captureDeferred || active || capture || admission) return;
+    if (captureDeferred || warmingBusy() || !captureReady(frame)) return;
+    if (same(cache?.frame, frame) && cache.phase !== 'refresh-needed') return;
+    const timer = setTimeout(() => {
+      if (warming.phase !== 'scheduled' || warming.timer !== timer) return;
+      warming = { phase: 'idle' };
+      if (!enabled || captureDeferred || isActive() || captureRequest() || admissionRequest()) return;
       const start = readFrame();
       if (!captureReady(start)) return;
       const token = `${namespace}:${++serial}`;
-      capture = { token, frame: start, epoch }; counters.captures++;
+      warming = { phase: 'capturing', request: { token, frame: start, epoch } }; counters.captures++;
       const buffer = window.tiptoptypSnapshotBuffer?.(start) ?? null;
       const width = buffer?.width ?? start.width, height = buffer?.height ?? start.height;
       const density = Math.min((window.devicePixelRatio || 1) * 2, Math.sqrt(MAX_PIXELS / (width * height)));
@@ -55,25 +73,26 @@
         density, buffer, geometry: start.geometry,
         background: buffer?.paperBackground?.slice(0,3) ?? window.tiptoptypSnapshotBackdrop?.(start)?.slice(0,3) ?? start.background });
     }, 150);
+    warming = { phase: 'scheduled', timer };
   };
   const resolve = (token, result) => {
-    if (capture?.token !== token) return;
-    const request = capture; capture = null;
-    if (!enabled || request.epoch !== epoch || active || !captureReady(readFrame()) || !same(request.frame, readFrame())) {
+    if (captureRequest()?.token !== token) return;
+    const request = captureRequest(); warming = { phase: 'idle' };
+    if (!enabled || request.epoch !== epoch || isActive() || !captureReady(readFrame()) || !same(request.frame, readFrame())) {
       post({ op: 'reject', token }); settle(); return;
     }
     if (!result || result.width <= 0 || result.height <= 0 || result.width * result.height > MAX_PIXELS) {
-      counters.failures++; if (cache) cache.refresh = false; post({ op: 'reject', token }); return;
+      counters.failures++; if (cache) cache.phase = 'fresh'; post({ op: 'reject', token }); return;
     }
-    admission = { sourceEpoch, cache: { frame: request.frame, width: result.width, height: result.height, token } };
+    warming = { phase: 'admitting', request: { sourceEpoch, cache: { phase: 'fresh', frame: request.frame, width: result.width, height: result.height, token } } };
     post({ op: 'admit', token, scale: request.frame.scale });
   };
   const admitted = (token, accepted) => {
-    if (admission?.cache.token !== token) {
+    if (admissionRequest()?.cache.token !== token) {
       if (accepted && cache?.token !== token) post({ op: 'reject', token });
       return;
     }
-    const pending = admission; admission = null;
+    const pending = admissionRequest(); warming = { phase: 'idle' };
     if (enabled && accepted && pending.sourceEpoch === sourceEpoch && captureReady(readFrame())) cache = pending.cache;
     else if (accepted) post({ op: 'reject', token });
     settle();
@@ -81,7 +100,7 @@
   const begin = () => {
     // Also cancel capture on a cold-cache zoom. No image decode, upload, DOM
     // transform, extra animation frame, or screenshot is started by input.
-    epoch++; clearTimeout(timer); timer = 0; handoffEpoch = null;
+    epoch++; cancelWarmTimer(); resumeRendering();
     return false;
   };
   // The browser may already fit a newer viewport while an older native request
@@ -89,32 +108,32 @@
   // dispatched request's former width; native retains the mask for pending work.
   const matchesRequest = (frame, request) => usable(frame) && frame.scale === request?.scale;
   const rendered = () => {
-    if (!active) { settle(); return; }
-    const frame = readFrame(), request = nativeRequest;
-    if (frame?.doc && nativeOwner && frame.doc !== nativeOwner) { window.tiptoptypZoomSnapshot.abandon(request.revision); return; }
+    if (!isActive()) { settle(); return; }
+    const frame = readFrame(), request = flightRequest();
+    if (frame?.doc && flightOwner() && frame.doc !== flightOwner()) { window.tiptoptypZoomSnapshot.abandon(request.revision); return; }
     if (!matchesRequest(frame, request)) return;
     const generation = epoch;
-    if (handoffEpoch === generation) return;
-    handoffEpoch = generation;
+    if (flight.phase === 'handoff' && flight.epoch === generation) return;
+    flight = { phase: 'handoff', request, owner: flightOwner(), epoch: generation };
     requestAnimationFrame(() => {
-      if (!active || epoch !== generation) return;
+      if (!isActive() || epoch !== generation) return;
       const painted = readFrame();
-      if (painted?.doc && nativeOwner && painted.doc !== nativeOwner) { window.tiptoptypZoomSnapshot.abandon(request.revision); return; }
-      if (!matchesRequest(painted, request)) { handoffEpoch = null; return; }
+      if (painted?.doc && flightOwner() && painted.doc !== flightOwner()) { window.tiptoptypZoomSnapshot.abandon(request.revision); return; }
+      if (!matchesRequest(painted, request)) { resumeRendering(); return; }
       // RAF runs before paint. Keep the native raster through a paint opportunity,
       // then release only if the latest vector geometry remained unchanged.
       requestAnimationFrame(() => {
-        if (!active || epoch !== generation) return;
-        handoffEpoch = null;
+        if (!isActive() || epoch !== generation) return;
+        resumeRendering();
         const settled = readFrame();
-        if (settled?.doc && nativeOwner && settled.doc !== nativeOwner) { window.tiptoptypZoomSnapshot.abandon(request.revision); return; }
+        if (settled?.doc && flightOwner() && settled.doc !== flightOwner()) { window.tiptoptypZoomSnapshot.abandon(request.revision); return; }
         if (!matchesRequest(settled, request)) return;
         if (!same(painted, settled)) { rendered(); return; }
         // Retain the final anchor so its deferred scroll event cannot retire
         // warmed pixels immediately after the sharp frame is presented.
         expectedScroll = { doc: settled.doc, svg: settled.svg, left: settled.left, top: settled.top };
-        active = false; nativeRequest = null; nativeOwner = null;
-        if (cache?.token === request.token) cache = { ...cache, frame: settled, refresh: true };
+        flight = { phase: 'idle' };
+        if (cache?.token === request.token) cache = { ...cache, frame: settled, phase: 'refresh-needed' };
         // Retained pixels start the next gesture from the actual rounded SVG
         // position, not the previous gesture's predicted scroll position.
         const geometry = settled.geometry;
@@ -128,12 +147,12 @@
   const scrolled = () => {
     const frame = readFrame?.();
     // The native zoom owns scroll anchoring until its sharp frame is ready.
-    if (!active && cache && frame && cache.frame.doc === frame.doc && cache.frame.svg === frame.svg && (cache.frame.width !== frame.width || cache.frame.height !== frame.height)) {
+    if (!isActive() && cache && frame && cache.frame.doc === frame.doc && cache.frame.svg === frame.svg && (cache.frame.width !== frame.width || cache.frame.height !== frame.height)) {
       // A browser clamp can notify scroll before resize. Native layout owns
       // this transition; keep its source point and pixels until its handoff.
       window.tiptoptypZoomSnapshot.resize(); return;
     }
-    if (active || (cache && frame && cache.frame.doc === frame.doc && cache.frame.svg === frame.svg && cache.frame.left === frame.left && cache.frame.top === frame.top) || (expectedScroll && frame && expectedScroll.doc === frame.doc && expectedScroll.svg === frame.svg && Math.abs(expectedScroll.left - frame.left) < 1 && Math.abs(expectedScroll.top - frame.top) < 1)) return;
+    if (isActive() || (cache && frame && cache.frame.doc === frame.doc && cache.frame.svg === frame.svg && cache.frame.left === frame.left && cache.frame.top === frame.top) || (expectedScroll && frame && expectedScroll.doc === frame.doc && expectedScroll.svg === frame.svg && Math.abs(expectedScroll.left - frame.left) < 1 && Math.abs(expectedScroll.top - frame.top) < 1)) return;
     invalidate(); settle();
   };
   window.tiptoptypZoomSnapshot = {
@@ -142,12 +161,12 @@
       const next = !!value;
       if (next === captureDeferred) return;
       captureDeferred = next;
-      clearTimeout(timer); timer = 0;
+      cancelWarmTimer();
       if (!next) settle();
     },
     deferred(token) {
-      if (capture?.token !== token) return;
-      capture = null;
+      if (captureRequest()?.token !== token) return;
+      warming = { phase: 'idle' };
       settle();
     },
     configure(value) {
@@ -164,15 +183,15 @@
       // A cold startup has no native image or acknowledgement to wait for.
       // Let Tinymist size itself; active gestures keep their native owner.
       const frame = readFrame?.();
-      if (!enabled || !frame?.doc || (!cache && !active)) return false;
+      if (!enabled || !frame?.doc || (!cache && !isActive())) return false;
       // A notification for the just-acknowledged viewport requires no work.
       // Native bounds already match it and therefore generate no new request.
-      if (!active && cache?.frame.width === frame.width && cache.frame.height === frame.height) return true;
+      if (!isActive() && cache?.frame.width === frame.width && cache.frame.height === frame.height) return true;
       // AppKit can deliver the DOM resize after the matching native layout
       // request has already rendered. A repeated size notification sends no
       // replacement request; it must not cancel that flight's paint/ready RAF.
       // A genuinely newer native request advances the epoch in native().
-      if (!active) begin();
+      if (!isActive()) begin();
       // Native layout may already have applied this size. Only native(request)
       // can open an active flight; an accepted notification is not an owner.
       post({ op: 'resize' }); return true;
@@ -186,38 +205,38 @@
       if (!enabled || !Number.isFinite(request.scale) || !Number.isSafeInteger(request.revision)) return false;
       // A request using the new token also proves native acceptance if the
       // renderer receives that request before the acknowledgement callback.
-      if (admission?.cache.token === request.token && admission.sourceEpoch === sourceEpoch) {
-        cache = admission.cache; admission = null;
+      if (admissionRequest()?.cache.token === request.token && admissionRequest().sourceEpoch === sourceEpoch) {
+        cache = admissionRequest().cache; warming = { phase: 'idle' };
       }
       if (cache && request.token !== cache.token) cache = null;
-      begin(); nativeRequest = request; nativeOwner = owner; active = true;
+      begin(); flight = { phase: 'rendering', request, owner };
       cache ? counters.hits++ : counters.misses++;
       return true;
     },
     owns(revision, owner) {
-      return active && nativeRequest?.revision === revision && nativeOwner === owner;
+      return isActive() && flightRequest()?.revision === revision && flightOwner() === owner;
     },
     failed(revision, owner) {
       if (!this.owns(revision, owner)) return false;
       // Preserve the live renderer's applied scale, even if its SVG update
       // failed partway through. The next user input can retry; idle does not.
-      post({ op: 'render-failed', revision, owner: nativeRequest.owner, scale: owner.currentScaleRatio });
+      post({ op: 'render-failed', revision, owner: flightRequest().owner, scale: owner.currentScaleRatio });
       invalidate(true, false); settle(); return true;
     },
     failDocument(owner) {
-      return nativeRequest ? this.failed(nativeRequest.revision, owner) : false;
+      return flightRequest() ? this.failed(flightRequest().revision, owner) : false;
     },
     retireDocument(owner) {
-      if (nativeOwner !== owner || !nativeRequest) return false;
-      return this.abandon(nativeRequest.revision);
+      if (flightOwner() !== owner || !flightRequest()) return false;
+      return this.abandon(flightRequest().revision);
     },
     abandon(revision) {
-      if (nativeRequest?.revision !== revision) return false;
+      if (flightRequest()?.revision !== revision) return false;
       post({ op: 'abandon', revision });
       return this.rejected(revision);
     },
     rejected(revision) {
-      if (nativeRequest && nativeRequest.revision !== revision) return false;
+      if (flightRequest() && flightRequest().revision !== revision) return false;
       // Native already retired this exact request. Echoing an unversioned abort
       // could cancel a newer flight whose script is still queued in WebContent.
       invalidate(true, false); settle(); return true;
@@ -227,13 +246,13 @@
       // vector request or echo invalidate: only matching image metadata is old.
       let changed = false;
       if (cache && tokens.includes(cache.token)) { cache = null; changed = true; }
-      if (admission && tokens.includes(admission.cache.token)) { admission = null; changed = true; }
+      if (admissionRequest() && tokens.includes(admissionRequest().cache.token)) { warming = { phase: 'idle' }; changed = true; }
       if (changed) settle();
     },
     begin, rendered, settle, scrolled, invalidate, resolve, admitted,
-    inspect() { const frame = readFrame?.(); return { enabled, capture_deferred: captureDeferred, active, capturing: !!capture, admitting: !!admission, cached: !!cache,
-      pixels: cache ? [cache.width, cache.height] : null, request: nativeRequest ? { revision: nativeRequest.revision, scale: nativeRequest.scale, token: nativeRequest.token } : null,
-      frame_ready: !!usable(frame), frame_scale: frame?.scale ?? null, handoff_pending: handoffEpoch !== null, ...counters }; }
+    inspect() { const frame = readFrame?.(); return { warming_phase: warming.phase, native_phase: flight.phase, cache_phase: cache?.phase ?? 'empty', enabled, capture_deferred: captureDeferred, active: isActive(), capturing: !!captureRequest(), admitting: !!admissionRequest(), cached: !!cache,
+      pixels: cache ? [cache.width, cache.height] : null, request: flightRequest() ? { revision: flightRequest().revision, scale: flightRequest().scale, token: flightRequest().token } : null,
+      frame_ready: !!usable(frame), frame_scale: frame?.scale ?? null, handoff_pending: flight.phase === 'handoff', ...counters }; }
   };
   window.addEventListener('pagehide', () => invalidate(true));
 })();

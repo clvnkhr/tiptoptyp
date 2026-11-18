@@ -757,3 +757,55 @@ fn projection_cache_measurement() {
         document.encodes.get()
     );
 }
+
+#[test]
+fn external_canonical_update_keeps_projection_and_rejects_stale_preflight() {
+    let mut document = loaded();
+    document.enable(Config::default()).unwrap();
+    let key = document.key();
+    let remote = ORIGINAL.replace(" end", " changed");
+    let prepared = document
+        .prepare_external_change(&remote, &remote, 91)
+        .unwrap();
+    assert!(document.commit_external_change(prepared, 0).unwrap());
+    assert_eq!(document.key(), key.after_edit());
+    assert!(document.config().is_some());
+    assert_eq!(document.canonical_snapshot().unwrap().source(), remote);
+    assert_eq!(document.disk_fingerprint(), Some(91));
+    assert!(!document.is_dirty());
+    let prepared = document
+        .prepare_external_change(ORIGINAL, ORIGINAL, 92)
+        .unwrap();
+    document.edit(0usize, |source| source.push_str(" local"));
+    let source = document.source().clone();
+    assert_eq!(
+        document.commit_external_change(prepared, 0),
+        Err(Error::StaleSnapshot)
+    );
+    assert_eq!(document.source(), &source);
+}
+
+#[test]
+fn external_canonical_spelling_change_versions_identical_display_and_new_baseline() {
+    let mut document = loaded();
+    document.enable(Config::default()).unwrap();
+    let key = document.key();
+    let displayed = document.source().clone();
+    let source = ORIGINAL.replace("`\\alpha+😀`", "\"\\\\alpha+😀\"");
+    let update = document
+        .prepare_external_change(&source, &source, 93)
+        .unwrap();
+    assert_eq!(update.source(), displayed);
+    assert!(document.commit_external_change(update, 0).unwrap());
+    assert_eq!(document.source(), &displayed);
+    assert_eq!(document.key(), key.after_edit());
+    assert_eq!(document.canonical_snapshot().unwrap().source(), source);
+    assert!(!document.is_dirty());
+    assert!(document.take_edit().is_some());
+    let key = document.key();
+    let update = document
+        .prepare_external_change(&source, &source, 93)
+        .unwrap();
+    assert!(!document.commit_external_change(update, 0).unwrap());
+    assert_eq!(document.key(), key);
+}

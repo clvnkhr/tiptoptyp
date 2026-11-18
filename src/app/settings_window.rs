@@ -462,7 +462,7 @@ mod tests {
         harness.run();
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
         harness.run();
-        assert!(harness.state().ui.json_mode);
+        assert!(harness.state().ui.shows_json());
         assert!(harness.state().ui.json_search);
         let input = harness.get(by().role(egui::accesskit::Role::TextInput));
         input.type_text("writing");
@@ -472,7 +472,7 @@ mod tests {
             .type_text("_language");
         harness.run();
         assert_eq!(harness.state().ui.json_query, "writing_language");
-        assert!(harness.state().ui.json_mode);
+        assert!(harness.state().ui.shows_json());
         assert!(harness.state().ui.json_match.is_some());
         harness.key_press(egui::Key::Enter);
         harness.run();
@@ -572,7 +572,7 @@ mod tests {
     fn compact_json_toolbar_and_find_keep_controls_inside_the_window_and_leave_editor_space() {
         for width in [360.0, 730.0] {
             let mut harness = settings_harness(SettingsWindow::default());
-            harness.state_mut().ui.json_mode = true;
+            harness.state_mut().ui.mode = super::settings_panel::SettingsMode::Json;
             harness.set_size(Vec2::new(width, 420.0));
             harness.run();
             let mut toolbar_bottom = 0.0_f32;
@@ -626,7 +626,7 @@ mod tests {
                 editor.top() <= query.rect().bottom() + 16.0 && editor.top() < 160.0,
                 "find hides JSON editor: {editor:?}"
             );
-            assert!(harness.state().ui.json_mode);
+            assert!(harness.state().ui.shows_json());
         }
     }
 
@@ -664,7 +664,7 @@ mod tests {
             )
             .click();
         harness.run();
-        assert!(harness.state().ui.help_mode);
+        assert!(harness.state().ui.shows_help());
         harness.get(by().label("10 useful shortcuts"));
         harness.get(by().label("Preview shortcuts"));
         harness.get_by_label_contains(
@@ -705,10 +705,14 @@ mod tests {
         assert!(live.highlight_local_uses);
         assert!(!live.line_wrap);
         harness.get(
-            by().label("Typst sticky context rows")
+            by().label("Sticky context rows")
                 .role(egui::accesskit::Role::CheckBox),
         );
-        assert!(harness.query_by_label("Sticky context rows").is_none());
+        assert!(
+            harness
+                .query_by_label("Typst sticky context rows")
+                .is_none()
+        );
         harness.get(by().label("Custom text highlights")).click();
         harness.run();
         let first = harness
@@ -935,6 +939,101 @@ mod tests {
                 "invalid unsaved drafts must never alter live preferences"
             );
         }
+    }
+
+    #[test]
+    fn incomplete_form_values_stay_local_until_the_user_completes_them() {
+        use crate::settings::ToolMode;
+        let mut window = SettingsWindow::default();
+        window.ui.category = SettingsSection::Tools;
+        let mut harness = settings_harness(window);
+        let mut active = harness.state().input.as_ref().unwrap().settings.clone();
+        harness
+            .query_all(by().label("Custom path"))
+            .next()
+            .unwrap()
+            .click();
+        harness.run_steps(2);
+        assert_eq!(harness.state().input.as_ref().unwrap().settings, active);
+        assert!(!harness.state().has_actions());
+        assert_eq!(
+            harness
+                .state()
+                .ui
+                .form_draft
+                .as_ref()
+                .unwrap()
+                .edited
+                .typst
+                .mode,
+            ToolMode::Custom
+        );
+        harness.get_by_label("typst: custom path cannot be empty");
+        let custom_path = by()
+            .role(egui::accesskit::Role::TextInput)
+            .predicate(|node| node.placeholder() == Some("/absolute/path/to/executable"));
+        // This exercises settings publication, independently of the hovered
+        // button's tooltip timer and its requests for subsequent frames.
+        harness.input_mut().events.push(egui::Event::PointerGone);
+        harness.get(custom_path.clone()).focus();
+        harness.run_steps(2);
+        assert!(harness.get(custom_path.clone()).is_focused());
+        harness.get(custom_path).type_text("/test/typst");
+        harness.run_steps(2);
+        assert!(harness.state().ui.form_draft.is_none());
+        harness.state_mut().take_actions(&mut active);
+        assert_eq!(active.typst.mode, ToolMode::Custom);
+        assert_eq!(active.typst.custom_path, "/test/typst");
+        harness.run_steps(2);
+        assert!(
+            !harness.state().has_actions(),
+            "idle frames must not republish the edit"
+        );
+
+        harness.state_mut().ui.category = SettingsSection::Grammar;
+        harness.run_steps(2);
+        let folder = by()
+            .role(egui::accesskit::Role::TextInput)
+            .predicate(|node| node.placeholder() == Some("Default app data folder"));
+        harness.get(folder.clone()).focus();
+        harness.run_steps(2);
+        assert!(harness.get(folder.clone()).is_focused());
+        harness.get(folder.clone()).type_text("unfinished");
+        harness.run_steps(2);
+        let saved = active.clone();
+        harness.state_mut().take_actions(&mut active);
+        assert_eq!(
+            active, saved,
+            "a relative folder must not reach active settings"
+        );
+        assert_eq!(
+            harness
+                .state()
+                .ui
+                .form_draft
+                .as_ref()
+                .unwrap()
+                .edited
+                .liquid_cache_directory,
+            "unfinished"
+        );
+        harness.state_mut().ui.category = SettingsSection::Editor;
+        harness.run_steps(2);
+        harness.state_mut().ui.category = SettingsSection::Grammar;
+        harness.run_steps(2);
+        // egui omits the placeholder once the field contains text.
+        let unfinished_folder = by()
+            .role(egui::accesskit::Role::TextInput)
+            .value("unfinished");
+        harness.get(unfinished_folder.clone()).focus();
+        harness.run_steps(2);
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.get(unfinished_folder).type_text("/test/models");
+        harness.run_steps(2);
+        assert!(harness.state().ui.form_draft.is_none());
+        harness.state_mut().take_actions(&mut active);
+        assert_eq!(active.liquid_cache_directory, "/test/models");
+        assert_eq!(active.typst, saved.typst);
     }
 
     fn settings_harness(mut window: SettingsWindow) -> Harness<'static, SettingsWindow> {
@@ -1258,7 +1357,7 @@ impl SettingsWindow {
         self.menu_commands.push(AppCommand::Find);
     }
     fn focus_search(&mut self) {
-        self.ui.help_mode = false;
+        self.ui.hide_help();
         self.ui.focus_search = true;
     }
     pub(super) fn has_actions(&self) -> bool {
@@ -1491,7 +1590,7 @@ impl SettingsWindow {
                         owner_changed = true;
                     }
                     Some(ShortcutAction::Find | ShortcutAction::FindReplace) => {
-                        self.ui.help_mode = false;
+                        self.ui.hide_help();
                         focus_search = true;
                     }
                     Some(ShortcutAction::KeyboardShortcuts) => {
@@ -1681,24 +1780,24 @@ impl SettingsWindow {
                                 ));
                             }
                         }
-                        let help = ui.add(egui::Button::new("?").selected(self.ui.help_mode));
+                        let help = ui.add(egui::Button::new("?").selected(self.ui.shows_help()));
                         help.widget_info(|| {
                             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Help & tips")
                         });
                         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                         crate::desktop_test::observe("settings.help", &help);
                         if help.clicked() {
-                            self.ui.help_mode = !self.ui.help_mode;
-                            self.ui.json_mode = false;
+                            self.ui
+                                .toggle_mode(super::settings_panel::SettingsMode::Help);
                         }
-                        let label = if self.ui.json_mode {
+                        let label = if self.ui.shows_json() {
                             "Show settings form"
                         } else {
                             "Edit settings as JSON"
                         };
                         let json = ui.add(
                             egui::Button::new(RichText::new("{}").monospace())
-                                .selected(self.ui.json_mode),
+                                .selected(self.ui.shows_json()),
                         );
                         json.widget_info(|| {
                             egui::WidgetInfo::labeled(
@@ -1710,8 +1809,8 @@ impl SettingsWindow {
                         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                         crate::desktop_test::observe("settings.json.mode", &json);
                         if json.clicked() {
-                            self.ui.json_mode = !self.ui.json_mode;
-                            self.ui.help_mode = false;
+                            self.ui
+                                .toggle_mode(super::settings_panel::SettingsMode::Json);
                         }
                     });
                 });

@@ -3,10 +3,23 @@ use std::sync::{
     Arc, Condvar, Mutex,
     mpsc::{RecvError, SendError, TryRecvError},
 };
-struct State<T> {
-    pending: Option<T>,
-    sender_alive: bool,
-    receiver_alive: bool,
+/// Closing the sender drains its final request. Closing the receiver discards
+/// it and permanently rejects sends; there is no closed receiver with queued
+/// work left alive by a mismatched flag.
+enum State<T> {
+    Open { pending: Option<T> },
+    SenderClosed { pending: Option<T> },
+    ReceiverClosed,
+}
+
+impl<T> State<T> {
+    fn take(&mut self) -> Result<T, TryRecvError> {
+        match self {
+            Self::Open { pending } => pending.take().ok_or(TryRecvError::Empty),
+            Self::SenderClosed { pending } => pending.take().ok_or(TryRecvError::Disconnected),
+            Self::ReceiverClosed => Err(TryRecvError::Disconnected),
+        }
+    }
 }
 struct Shared<T> {
     state: Mutex<State<T>>,
@@ -17,11 +30,7 @@ pub(crate) struct LatestReceiver<T>(Arc<Shared<T>>);
 
 pub(crate) fn latest_channel<T>() -> (LatestSender<T>, LatestReceiver<T>) {
     let shared = Arc::new(Shared {
-        state: Mutex::new(State {
-            pending: None,
-            sender_alive: true,
-            receiver_alive: true,
-        }),
+        state: Mutex::new(State::Open { pending: None }),
         changed: Condvar::new(),
     });
     (LatestSender(shared.clone()), LatestReceiver(shared))
@@ -33,10 +42,10 @@ impl<T> LatestSender<T> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if !state.receiver_alive {
+        let State::Open { pending } = &mut *state else {
             return Err(SendError(request));
-        }
-        state.pending = Some(request);
+        };
+        *pending = Some(request);
         self.0.changed.notify_one();
         Ok(())
     }
@@ -54,11 +63,10 @@ impl<T> LatestReceiver<T> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         loop {
-            if let Some(request) = state.pending.take() {
-                return Ok(request);
-            }
-            if !state.sender_alive {
-                return Err(RecvTimeoutError::Disconnected);
+            match state.take() {
+                Ok(request) => return Ok(request),
+                Err(TryRecvError::Disconnected) => return Err(RecvTimeoutError::Disconnected),
+                Err(TryRecvError::Empty) => {}
             }
             let Some(remaining) = timeout
                 .checked_sub(started.elapsed())
@@ -81,11 +89,10 @@ impl<T> LatestReceiver<T> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         loop {
-            if let Some(request) = state.pending.take() {
-                return Ok(request);
-            }
-            if !state.sender_alive {
-                return Err(RecvError);
+            match state.take() {
+                Ok(request) => return Ok(request),
+                Err(TryRecvError::Disconnected) => return Err(RecvError),
+                Err(TryRecvError::Empty) => {}
             }
             state = self
                 .0
@@ -100,20 +107,22 @@ impl<T> LatestReceiver<T> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        state.pending.take().ok_or(if state.sender_alive {
-            TryRecvError::Empty
-        } else {
-            TryRecvError::Disconnected
-        })
+        state.take()
     }
 }
 impl<T> Drop for LatestSender<T> {
     fn drop(&mut self) {
-        self.0
+        let mut state = self
+            .0
             .state
             .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .sender_alive = false;
+            .unwrap_or_else(|error| error.into_inner());
+        if let State::Open { pending } = &mut *state {
+            *state = State::SenderClosed {
+                pending: pending.take(),
+            };
+        }
+        drop(state);
         self.0.changed.notify_one();
     }
 }
@@ -124,8 +133,7 @@ impl<T> Drop for LatestReceiver<T> {
             .state
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        state.receiver_alive = false;
-        state.pending = None;
+        *state = State::ReceiverClosed;
     }
 }
 #[cfg(test)]
@@ -159,5 +167,40 @@ mod tests {
         let worker = std::thread::spawn(move || receiver.recv());
         drop(sender);
         assert_eq!(worker.join().unwrap(), Err(RecvError));
+    }
+
+    #[test]
+    fn sender_close_drains_only_its_final_request_before_disconnect() {
+        let (sender, receiver) = latest_channel();
+        sender.send("superseded").unwrap();
+        sender.send("final").unwrap();
+        drop(sender);
+        assert_eq!(receiver.try_recv(), Ok("final"));
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Disconnected));
+        assert_eq!(receiver.recv(), Err(RecvError));
+        assert_eq!(
+            receiver.recv_timeout(std::time::Duration::ZERO),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        );
+    }
+
+    #[test]
+    fn receiver_close_drops_the_pending_payload_and_rejects_later_payloads() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Payload(Arc<AtomicUsize>);
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = latest_channel();
+        assert!(sender.send(Payload(dropped.clone())).is_ok());
+        drop(receiver);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        let rejected = sender.send(Payload(dropped.clone()));
+        assert!(rejected.is_err());
+        drop(rejected);
+        assert_eq!(dropped.load(Ordering::Relaxed), 2);
     }
 }

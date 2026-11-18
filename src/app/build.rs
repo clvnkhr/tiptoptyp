@@ -15,31 +15,15 @@ impl EditorApp {
                 executable: self.typst_tool.program.clone(),
                 font_paths: self.font_catalog.workspace_directories().to_vec(),
             }),
-            BuildEngineKind::Tex => EngineConfig::Tex(TexOptions {
-                command: if self.settings.tex.build_engine
-                    == crate::tex::settings::BuildEngine::Tectonic
-                {
-                    self.tex_tools.tectonic.command.clone()
-                } else {
-                    self.settings.tex.system_command.clone()
-                }
-                .into(),
-                engine: self.settings.tex.build_engine,
-                executable: if self.settings.tex.build_engine
-                    == crate::tex::settings::BuildEngine::Tectonic
-                {
-                    self.tex_tools.tectonic.program.clone()
-                } else {
-                    self.tex_tools
-                        .distribution(self.settings.tex.build_engine)
-                        .unwrap_or_else(|| Path::new(self.settings.tex.build_engine.executable()))
-                        .to_owned()
-                },
-                only_cached: self.settings.tex.only_cached,
-                synctex: self.settings.tex.synctex,
-                show_underfull_box_warnings: self.settings.tex.show_underfull_box_warnings,
-                system: self.tex_tools.build_options(&self.settings.tex),
-            }),
+            BuildEngineKind::Tex => {
+                let mut options = TexOptions::configured(&self.settings.tex, &self.tex_tools);
+                options.magic = Some(Arc::new(crate::compiler::TexMagicContext {
+                    settings: self.settings.tex.clone(),
+                    tools: self.tex_tools.clone(),
+                    overlays: self.tex_magic_overlays(),
+                }));
+                EngineConfig::Tex(options)
+            }
         }
     }
     pub(super) fn request_compile(&mut self) {
@@ -70,7 +54,22 @@ impl EditorApp {
             self.set_compile_error("TeX builds are disabled in Settings".into());
             return;
         }
-        let engine = self.configured_build_engine(engine);
+        let mut engine = self.configured_build_engine(engine);
+        // The diff wizard explicitly compiles its generated document with the
+        // selected compiler; inherited root comments must not redirect it.
+        if self
+            .document_workflow
+            .pending_export
+            .as_ref()
+            .is_some_and(|pending| pending.intent == PdfWriteIntent::CompileNew)
+            && let EngineConfig::Tex(options) = &mut engine
+        {
+            options.magic = None;
+        }
+        self.tex_magic.build = None;
+        self.capture_tex_dependencies(
+            matches!(&engine, EngineConfig::Tex(options) if options.magic.is_some()),
+        );
         let request = CompileRequest {
             revision: self.preview_document_revision(),
             input: CompileInput {
@@ -141,7 +140,12 @@ impl EditorApp {
                 continue;
             }
 
+            if self.reject_stale_tex_dependencies() {
+                continue;
+            }
+
             match result.event {
+                CompileEvent::TexResolved(info) => self.accept_tex_build_info(info),
                 CompileEvent::Started => {
                     // Keep the previous artifact and pages until their
                     // independently versioned replacements arrive.

@@ -2,6 +2,7 @@
 use super::*;
 impl EditorApp {
     pub(super) fn publish_desktop_inspection(&self, context: &egui::Context) {
+        crate::desktop_test::observe_wheel_input(context);
         let viewport = format!("{:?}", context.viewport_id());
         if !crate::desktop_test::requested_for(&viewport) {
             return;
@@ -46,7 +47,7 @@ impl EditorApp {
             (
                 crate::desktop_test::fingerprint(&settings_window.ui.query),
                 settings_window.text_input_focused,
-                serde_json::json!({"fingerprint": settings_window.ui.json_draft.as_ref().map(|draft| crate::desktop_test::fingerprint(&draft.text)), "visible": settings_window.ui.json_mode, "query": settings_window.ui.json_query, "valid": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.validation.is_ok()), "saved": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.saved)}),
+                serde_json::json!({"fingerprint": settings_window.ui.json_draft.as_ref().map(|draft| crate::desktop_test::fingerprint(&draft.text)), "visible": settings_window.ui.shows_json(), "query": settings_window.ui.json_query, "valid": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.validation.is_ok()), "saved": settings_window.ui.json_draft.as_ref().is_some_and(|draft| draft.saved)}),
                 settings_window.ui.category.title(),
             )
         };
@@ -89,11 +90,16 @@ impl EditorApp {
             "replace_visible": self.find_bar.replace_visible,
             "settings_visible": self.settings_visible,
             "table_editor_open": self.table_editor.is_some(),
-            "settings_help_visible": self.settings_window.lock().unwrap().ui.help_mode,
+            "settings_help_visible": self.settings_window.lock().unwrap().ui.shows_help(),
             "settings_json": settings_json,
             "writing_language": self.settings.writing_language,
             "settings_query_fingerprint": settings_query_fingerprint,
             "settings_text_input_focused": settings_text_input_focused,
+        });
+        observation["comfy_background"] = self.settings.comfy_background.into();
+        observation["comfy_text"] = self.settings.comfy_text.into();
+        observation["read_only_rejection"] = serde_json::json!({
+            "visible": editor_read_only::visible(context, source_editor_id(context), self.document().key())
         });
         observation["file_dialog"] =
             self.rename_dialog
@@ -107,6 +113,16 @@ impl EditorApp {
                     })
                 });
         observation["auto_pair_delimiters"] = serde_json::json!(self.settings.auto_pair_delimiters);
+        observation["rainbow_brackets"] = self.settings.rainbow_brackets.enabled.into();
+        observation["highlight_syntax"] = self.generic_highlighter.inspected_syntax().into();
+        observation["matching_delimiters"] = cursor
+            .filter(|range| range[0] == range[1])
+            .and_then(|range| {
+                self.editor_data
+                    .inspected_matching_delimiters(self.document().key(), range[0])
+            })
+            .map(|pair| pair.each_ref().map(|range| [range.start, range.end]))
+            .into();
         observation["auto_save"] = serde_json::json!(self.settings.auto_save);
         observation["indent_spaces"] = serde_json::json!(self.settings.indent_spaces);
         observation["harper_enabled"] = serde_json::json!(self.settings.english_grammar);
@@ -144,11 +160,15 @@ impl EditorApp {
         observation["latexdiff"] = self.latexdiff_inspection();
         observation["tex_documentation"] = self.tex_documentation_inspection();
         observation["citation"] = self.citation_inspection();
+        observation["git_setup"] = self.git_setup_inspection(context);
+        observation["git"] = self.git.desktop_inspection();
         observation["overleaf"] = self.overleaf_inspection();
         observation["palette_query_fingerprint"] =
             crate::desktop_test::fingerprint(&self.command_palette.query).into();
         observation["tex_formatter"] = serde_json::to_value(self.settings.tex.formatter).unwrap();
         observation["document_kind"] = format!("{:?}", self.document().kind()).into();
+        observation["demo_file"] = self.demo.inspection();
+        observation["workspace_creation"] = self.workspace_creation_inspection();
         observation["workspace_chooser_visible"] = self.workspace_chooser_visible.into();
         observation["workspace_root_fingerprint"] =
             crate::desktop_test::fingerprint(&self.workspace_root.to_string_lossy()).into();
@@ -304,6 +324,7 @@ impl EditorApp {
                 serde_json::json!({
                     "index": index,
                     "provider": diagnostic.provider,
+                    "message_fingerprint": crate::desktop_test::fingerprint(&diagnostic.message),
                     "line": diagnostic.location.map(|location| location.line),
                     "column": diagnostic.location.map(|location| location.column),
                     "suppressed": self.diagnostic_regions.is_suppressed(index),
@@ -375,8 +396,11 @@ impl EditorApp {
         );
         interaction.as_object_mut().unwrap().extend(
             serde_json::json!({
-            "texlab_ready": self.tex_service.texlab_ready,
-            "badness_ready": self.tex_service.badness_ready,
+            "texlab_ready": self.tex_service.ready(crate::tex::Provider::Texlab),
+            "tex_settings_fingerprint": crate::desktop_test::fingerprint(&serde_json::to_string(&self.settings.tex).unwrap_or_default()),
+            "tex_build_engine": self.settings.tex.build_engine.label(),
+            "tex_magic": self.current_tex_build().map(|info| serde_json::json!({"entry":info.entry,"engine":info.engine.label()})),
+            "badness_ready": self.tex_service.ready(crate::tex::Provider::Badness),
             "tex_diagnostic_counts": self.tex_diagnostics.iter().map(|diagnostics| diagnostics.len()).collect::<Vec<_>>(),
             "badness_visible_codes": self.preview.editor_diagnostics.iter().enumerate().filter(|(index, diagnostic)| !self.diagnostic_regions.is_suppressed(self.preview.diagnostics.len() + index) && diagnostic.provider.as_deref() == Some("Badness")).filter_map(|(_,d)|diagnostic_code(d)).collect::<Vec<_>>(),
             "tex_diagnostics_current": self.activity.diagnostics[1..].iter().map(|key| *key == Some(self.document().key())).collect::<Vec<_>>(),
@@ -400,7 +424,7 @@ impl EditorApp {
             "pdf_output_pending": self.document_workflow.pending_export.is_some(),
             "pdf_output_revision": self.pdf_output_key().revision,
             "compile_indicator_spinning": self.compile_indicator_spinning(),
-            "preview_generation": format!("{:?}", self.tinymist_sync.generation),
+            "preview_generation": format!("{:?}", self.tinymist_sync.generation()),
             }).as_object().unwrap().clone(),
         );
         interaction["version_history"] = self
@@ -414,6 +438,18 @@ impl EditorApp {
                 })
             });
         interaction["liquid"] = self.liquid_inspection();
+        interaction["diagnostic_fix"] = self.diagnostic_fix_inspection();
+        let marker_pair = |markers: &crate::comment_controls::Markers| {
+            serde_json::json!({
+                "off_fingerprint": crate::desktop_test::fingerprint(&markers.off),
+                "on_fingerprint": crate::desktop_test::fingerprint(&markers.on),
+            })
+        };
+        interaction["comment_controls"] = serde_json::json!({
+            "both": marker_pair(&self.settings.comment_controls.both),
+            "formatting": marker_pair(&self.settings.comment_controls.formatting),
+            "diagnostics": marker_pair(&self.settings.comment_controls.diagnostics),
+        });
         interaction["harper_dictionary_fingerprint"] = serde_json::json!(
             crate::desktop_test::fingerprint(&self.settings.harper_dictionary)
         );
@@ -435,7 +471,7 @@ impl EditorApp {
             !self.tabs.is_empty()
                 && self.writing.current(
                     self.document().key(),
-                    self.settings.english_grammar,
+                    self.settings.english_grammar && !self.tex_spellcheck_disabled(),
                     self.settings.unicode_warnings,
                     self.settings.writing_language
                 )
@@ -459,6 +495,35 @@ impl EditorApp {
                 })
                 .collect::<Vec<_>>()
         );
+        interaction["formatting_phase"] = serde_json::json!(self.formatting.phase());
+        interaction["hover_phase"] =
+            serde_json::json!(self.editor_hover.as_ref().map(|hover| match &hover.phase {
+                HoverPhase::Unrequested => "unrequested",
+                HoverPhase::Pending => "pending",
+                HoverPhase::Complete(_) => "complete",
+                HoverPhase::Unavailable => "unavailable",
+            }));
+        interaction["preview_follow_phase"] = serde_json::json!(self.preview_follow.phase_name());
+        interaction["process_close_owner"] =
+            serde_json::json!(self.process_close.map(|key| serde_json::json!({
+                "owner": format!("{:?}", key.owner), "epoch": key.epoch, "revision": key.revision,
+            })));
+        interaction["save_operation"] =
+            self.document_workflow
+                .current_save()
+                .map_or(serde_json::Value::Null, |operation| {
+                    serde_json::json!({
+                        "id": operation.id.value(),
+                        "domain": match operation.domain {
+                            crate::workflow::SaveDomain::Local => "local",
+                            crate::workflow::SaveDomain::Overleaf => "overleaf",
+                            crate::workflow::SaveDomain::Offline => "offline",
+                        },
+                        "document_owner": format!("{:?}", operation.key.owner),
+                        "document_epoch": operation.key.epoch,
+                        "document_revision": operation.key.revision,
+                    })
+                });
         interaction["format_after_math_conversion"] =
             serde_json::json!(self.settings.format_after_math_conversion);
         interaction["explorer_panel_width"] = serde_json::json!(

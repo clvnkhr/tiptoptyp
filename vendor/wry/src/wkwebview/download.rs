@@ -1,7 +1,7 @@
 use std::{env::current_dir, ptr::null_mut};
 
-use objc2::{rc::Retained, runtime::ProtocolObject, DeclaredClass};
-use objc2_foundation::{NSData, NSError, NSString, NSURLResponse, NSURL};
+use objc2::{DeclaredClass, rc::Retained, runtime::ProtocolObject};
+use objc2_foundation::{NSData, NSError, NSString, NSURL, NSURLResponse};
 use objc2_web_kit::{WKDownload, WKNavigationAction, WKNavigationResponse};
 
 #[cfg(target_os = "ios")]
@@ -103,13 +103,13 @@ pub(crate) fn download_did_finish(this: &WryDownloadDelegate, download: &WKDownl
 pub(crate) fn download_did_fail(
   this: &WryDownloadDelegate,
   download: &WKDownload,
-  error: &NSError,
+  _error: &NSError,
   _resume_data: &NSData,
 ) {
   unsafe {
     #[cfg(debug_assertions)]
     {
-      let description = error.localizedDescription().to_string();
+      let description = _error.localizedDescription().to_string();
       eprintln!("Download failed with error: {description}");
     }
 

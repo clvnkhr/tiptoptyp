@@ -3,6 +3,18 @@ use std::path::Path;
 pub(crate) use tiptoptyp_core::document::{DocumentKey, DocumentKind, DocumentSnapshot};
 pub(crate) type DocumentSession = tiptoptyp::mitex_document::Document<CCursorRange>;
 pub(crate) type EditorSnapshot = tiptoptyp_core::document::EditorSnapshot<CCursorRange>;
+pub(crate) const TEX_SOURCE_EXTENSIONS: &[&str] = &["tex", "sty", "cls", "ltx", "latex"];
+
+pub(crate) fn is_tex_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            TEX_SOURCE_EXTENSIONS
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
+        })
+}
+
 pub(crate) fn detect_document(path: &Path, bytes: &[u8]) -> Result<DocumentKind, String> {
     // Content signatures take precedence over a misleading extension. In
     // particular, renaming an already-open PDF/image must never turn its
@@ -45,7 +57,7 @@ fn extension_kind(path: &Path) -> Option<DocumentKind> {
     let extension = path.extension()?.to_str()?;
     if extension.eq_ignore_ascii_case("typ") {
         Some(DocumentKind::Typst)
-    } else if extension.eq_ignore_ascii_case("tex") {
+    } else if is_tex_path(path) {
         Some(DocumentKind::Tex)
     } else if extension.eq_ignore_ascii_case("pdf") {
         Some(DocumentKind::Pdf)
@@ -168,5 +180,29 @@ mod tests {
             detect_document(Path::new("renamed.tex"), b"%PDF-1.7").unwrap(),
             DocumentKind::Pdf
         );
+    }
+
+    #[test]
+    fn class_style_and_alternate_tex_sources_share_editor_language_detection() {
+        for extension in TEX_SOURCE_EXTENSIONS {
+            for extension in [extension.to_string(), extension.to_ascii_uppercase()] {
+                let name = format!("source.{extension}");
+                let path = Path::new(&name);
+                assert!(supports_path(path));
+                assert!(is_tex_path(path));
+                assert_eq!(
+                    detect_document(path, b"\\newcommand{\\name}{x}").unwrap(),
+                    DocumentKind::Tex
+                );
+                assert!(detect_document(path, b"\xff\xfe").is_err());
+                assert_eq!(preview_kind_for_path(path), None);
+                assert_eq!(
+                    detect_document(path, b"%PDF-1.7").unwrap(),
+                    DocumentKind::Pdf
+                );
+            }
+        }
+        assert!(!is_tex_path(Path::new("style.css")));
+        assert!(!is_tex_path(Path::new("tex")));
     }
 }

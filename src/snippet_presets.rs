@@ -219,6 +219,44 @@ const TEX: &[Preset] = &[
     ),
 ];
 
+const TEX_MAGIC: &[Preset] = &[
+    (
+        "texroot",
+        "TeX magic header: root document",
+        Scope::Text,
+        true,
+        "% !TeX root = {{1:main.tex}}{{0}}",
+    ),
+    (
+        "texprogram",
+        "TeX magic header: compiler (tectonic, pdflatex, xelatex, lualatex)",
+        Scope::Text,
+        true,
+        "% !TeX program = {{1:pdflatex}}{{0}}",
+    ),
+    (
+        "texencoding",
+        "TeX magic header: UTF-8 encoding",
+        Scope::Text,
+        true,
+        "% !TeX encoding = {{1:UTF-8}}{{0}}",
+    ),
+    (
+        "texspellcheck",
+        "TeX magic header: spelling language (en-US, en-GB, de-DE, or none)",
+        Scope::Text,
+        true,
+        "% !TeX spellcheck = {{1:en-US}}{{0}}",
+    ),
+    (
+        "texbibprogram",
+        "TeX magic header: bibliography tool (bibtex or biber)",
+        Scope::Text,
+        true,
+        "% !BIB program = {{1:biber}}{{0}}",
+    ),
+];
+
 const TYPST: &[Preset] = &[
     (
         "mk",
@@ -450,24 +488,44 @@ $
 ];
 
 pub(crate) fn defaults() -> Vec<Snippet> {
-    [(Language::Tex, TEX), (Language::Typst, TYPST)]
-        .into_iter()
-        .flat_map(|(language, presets)| {
-            presets.iter().map(
-                move |&(prefix, description, scope, line_start, body)| Snippet {
-                    prefix: prefix.into(),
-                    description: description.into(),
-                    language,
-                    body: body.into(),
-                    enabled: true,
-                    placeholder_open: crate::snippets::default_placeholder_open(),
-                    placeholder_close: crate::snippets::default_placeholder_close(),
-                    scope,
-                    line_start,
-                },
-            )
+    [
+        (Language::Tex, TEX),
+        (Language::Tex, TEX_MAGIC),
+        (Language::Typst, TYPST),
+    ]
+    .into_iter()
+    .flat_map(|(language, presets)| {
+        presets.iter().map(
+            move |&(prefix, description, scope, line_start, body)| Snippet {
+                prefix: prefix.into(),
+                description: description.into(),
+                language,
+                body: body.into(),
+                enabled: true,
+                placeholder_open: crate::snippets::default_placeholder_open(),
+                placeholder_close: crate::snippets::default_placeholder_close(),
+                scope,
+                line_start,
+            },
+        )
+    })
+    .collect()
+}
+
+pub(crate) fn tex_magic_defaults() -> impl Iterator<Item = Snippet> {
+    TEX_MAGIC
+        .iter()
+        .map(|&(prefix, description, scope, line_start, body)| Snippet {
+            prefix: prefix.into(),
+            description: description.into(),
+            language: Language::Tex,
+            body: body.into(),
+            enabled: true,
+            placeholder_open: crate::snippets::default_placeholder_open(),
+            placeholder_close: crate::snippets::default_placeholder_close(),
+            scope,
+            line_start,
         })
-        .collect()
 }
 
 #[cfg(test)]
@@ -491,8 +549,8 @@ mod tests {
     #[test]
     fn catalogue_is_balanced_and_has_unique_language_prefixes() {
         let snippets = defaults();
-        assert_eq!(snippets.len(), 54);
-        for (language, count) in [(Language::Tex, 25), (Language::Typst, 29)] {
+        assert_eq!(snippets.len(), 59);
+        for (language, count) in [(Language::Tex, 30), (Language::Typst, 29)] {
             assert_eq!(
                 snippets
                     .iter()
@@ -543,6 +601,72 @@ mod tests {
                 "nested or coincident fields: {:?}/{}",
                 snippet.language,
                 snippet.prefix
+            );
+        }
+    }
+
+    #[test]
+    fn tex_magic_presets_expand_to_supported_editable_headers() {
+        let snippets = tex_magic_defaults().collect::<Vec<_>>();
+        assert_eq!(snippets.len(), 5);
+        for (prefix, expected, value) in [
+            ("texroot", "% !TeX root = main.tex", "main.tex"),
+            ("texprogram", "% !TeX program = pdflatex", "pdflatex"),
+            ("texencoding", "% !TeX encoding = UTF-8", "UTF-8"),
+            ("texspellcheck", "% !TeX spellcheck = en-US", "en-US"),
+            ("texbibprogram", "% !BIB program = biber", "biber"),
+        ] {
+            let snippet = preset(Language::Tex, prefix);
+            assert!(snippets.contains(&snippet));
+            assert!(snippet.line_start);
+            assert_eq!(snippet.scope, Scope::Text);
+            let expansion = expand(&snippet);
+            assert_eq!(expansion.text, expected);
+            let directives = crate::tex::magic::parse(&expansion.text).unwrap();
+            assert!(directives.unsupported.is_empty());
+            match prefix {
+                "texroot" => assert_eq!(directives.root.as_deref(), Some("main.tex")),
+                "texprogram" => assert_eq!(
+                    directives.engine,
+                    Some(crate::tex::settings::BuildEngine::PdfLatex)
+                ),
+                "texencoding" => {
+                    assert_eq!(directives.encoding, Some(crate::tex::magic::Encoding::Utf8))
+                }
+                "texspellcheck" => assert_eq!(
+                    directives.spellcheck,
+                    Some(crate::tex::magic::Spellcheck::Language("en-US".into()))
+                ),
+                "texbibprogram" => assert_eq!(
+                    directives.bibliography,
+                    Some(crate::tex::magic::Bibliography::Biber)
+                ),
+                _ => unreachable!(),
+            }
+            let range = expansion
+                .fields
+                .iter()
+                .find(|(id, _)| *id == 1)
+                .unwrap()
+                .1
+                .clone();
+            assert_eq!(
+                expansion
+                    .text
+                    .chars()
+                    .skip(range.start)
+                    .take(range.len())
+                    .collect::<String>(),
+                value
+            );
+            assert!(
+                crate::snippets::items(
+                    &snippets,
+                    crate::document::DocumentKind::Typst,
+                    prefix,
+                    prefix.len()
+                )
+                .is_none()
             );
         }
     }

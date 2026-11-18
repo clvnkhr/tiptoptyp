@@ -20,6 +20,85 @@ const MAX_PENDING: usize = 16;
 const PIPE_LIMIT: usize = 8;
 const TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Protocol readiness owns its negotiated synchronization mode and the exact
+/// opened source. A document cannot be represented as open before initialize.
+#[derive(Debug)]
+enum SessionPhase {
+    Initializing {
+        started: Instant,
+    },
+    Ready {
+        synchronization: Synchronization,
+        document: Option<OpenDocument>,
+    },
+}
+#[derive(Clone, Copy, Debug)]
+enum Synchronization {
+    Full,
+    Incremental,
+}
+#[derive(Debug)]
+struct OpenDocument {
+    identity: super::Identity,
+    source: std::sync::Arc<str>,
+}
+impl SessionPhase {
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+    fn timed_out(&self) -> bool {
+        matches!(self, Self::Initializing { started } if started.elapsed() > TIMEOUT)
+    }
+    fn opened(&self) -> Option<&OpenDocument> {
+        match self {
+            Self::Ready { document, .. } => document.as_ref(),
+            Self::Initializing { .. } => None,
+        }
+    }
+    fn initialized(&mut self, incremental: bool) {
+        let synchronization = if incremental {
+            Synchronization::Incremental
+        } else {
+            Synchronization::Full
+        };
+        match self {
+            Self::Initializing { .. } => {
+                *self = Self::Ready {
+                    synchronization,
+                    document: None,
+                };
+            }
+            Self::Ready {
+                synchronization: mode,
+                ..
+            } => *mode = synchronization,
+        }
+    }
+    fn close_document(&mut self) {
+        if let Self::Ready { document, .. } = self {
+            *document = None;
+        }
+    }
+    fn open_document(&mut self, snapshot: &Snapshot) {
+        let Self::Ready { document, .. } = self else {
+            panic!("TeX document synchronization requires an initialized session");
+        };
+        *document = Some(OpenDocument {
+            identity: snapshot.identity(),
+            source: snapshot.source.clone(),
+        });
+    }
+    fn change<'a>(&'a self, source: &'a str) -> protocol::ContentChange<'a> {
+        match self {
+            Self::Ready {
+                synchronization: Synchronization::Incremental,
+                document: Some(previous),
+            } => protocol::ContentChange::between(&previous.source, source),
+            _ => protocol::ContentChange::full(source),
+        }
+    }
+}
+
 pub(super) struct Session {
     child: OwnedChild,
     outgoing: Option<SyncSender<Value>>,
@@ -28,10 +107,8 @@ pub(super) struct Session {
     _directory: tempfile::TempDir,
     log: std::path::PathBuf,
     provider: Provider,
-    initialized: bool,
-    created: Instant,
+    phase: SessionPhase,
     last_health_check: Instant,
-    opened: Option<super::Identity>,
     next_id: u64,
     pending: HashMap<u64, (Request, Instant)>,
     snapshot: Snapshot,
@@ -100,10 +177,10 @@ impl Session {
             _directory: directory,
             log,
             provider,
-            initialized: false,
-            created: Instant::now(),
+            phase: SessionPhase::Initializing {
+                started: Instant::now(),
+            },
             last_health_check: Instant::now(),
-            opened: None,
             next_id: 2,
             pending: HashMap::new(),
             snapshot: snapshot.clone(),
@@ -145,11 +222,15 @@ impl Session {
             Vec::new()
         };
         self.snapshot = snapshot.clone();
-        if !self.initialized {
+        if !self.phase.is_ready() {
             return Ok(events);
         }
         let version = snapshot.version();
-        if self.opened.as_ref() == Some(&snapshot.identity()) {
+        if self
+            .phase
+            .opened()
+            .is_some_and(|opened| opened.identity == snapshot.identity())
+        {
             return Ok(events);
         }
         // Old interactive replies must not accumulate while the source changes.
@@ -157,23 +238,24 @@ impl Session {
             self.notify("$/cancelRequest", json!({"id":id}))?;
         }
         self.pending.clear();
-        if let Some(old) = &self.opened
-            && (old.uri != snapshot.uri
-                || old.key.owner != snapshot.key.owner
-                || old.key.epoch != snapshot.key.epoch)
+        if let Some(old) = self.phase.opened()
+            && (old.identity.uri != snapshot.uri
+                || old.identity.key.owner != snapshot.key.owner
+                || old.identity.key.epoch != snapshot.key.epoch)
         {
             self.notify(
                 "textDocument/didClose",
-                json!({"textDocument":{"uri":old.uri}}),
+                json!({"textDocument":{"uri":old.identity.uri}}),
             )?;
-            self.opened = None;
+            self.phase.close_document();
         }
-        if self.opened.is_none() {
+        if self.phase.opened().is_none() {
             self.notify("textDocument/didOpen", json!({"textDocument":{"uri":snapshot.uri,"languageId":"latex","version":version,"text":snapshot.source}}))?;
         } else {
-            self.notify("textDocument/didChange", json!({"textDocument":{"uri":snapshot.uri,"version":version},"contentChanges":[{"text":snapshot.source}]}))?;
+            let change = self.phase.change(&snapshot.source);
+            self.notify("textDocument/didChange", json!({"textDocument":{"uri":snapshot.uri,"version":version},"contentChanges":[change]}))?;
         }
-        self.opened = Some(snapshot.identity());
+        self.phase.open_document(snapshot);
         // Readiness belongs to this reusable server session, rather than its
         // previous document. After didOpen/didChange succeeds, a just-initialized
         // session is ready for the new tab too. Source-bound replies stay old.
@@ -188,7 +270,7 @@ impl Session {
         Ok(events)
     }
     pub(super) fn request(&mut self, request: Request) -> Result<(), String> {
-        if !self.initialized {
+        if !self.phase.is_ready() {
             return Err(format!("{} is still starting", self.provider.label()));
         }
         if !request.matches(&self.snapshot) {
@@ -211,7 +293,7 @@ impl Session {
             return Err("Too many outstanding TeX requests".into());
         }
         let (method, params) = match request.kind {
-            RequestKind::Format => (
+            RequestKind::Format { .. } => (
                 "textDocument/formatting",
                 formatting_params(self.provider, &self.snapshot.uri, &self.snapshot.settings),
             ),
@@ -232,7 +314,7 @@ impl Session {
     }
     pub(super) fn poll(&mut self) -> Result<Vec<Event>, String> {
         let mut events = Vec::new();
-        if !self.initialized && self.created.elapsed() > TIMEOUT {
+        if self.phase.timed_out() {
             return Err(format!(
                 "{} initialization timed out",
                 self.provider.label()
@@ -282,7 +364,7 @@ impl Session {
                             Provider::Badness => self.snapshot.settings.lint,
                         };
                         if enabled {
-                            let diagnostics = params["diagnostics"]
+                            let mut diagnostics = params["diagnostics"]
                                 .as_array()
                                 .map(|array| {
                                     array
@@ -291,6 +373,12 @@ impl Session {
                                         .collect()
                                 })
                                 .unwrap_or_default();
+                            if self.provider == Provider::Badness {
+                                super::diagnostics::normalize_badness(
+                                    &self.snapshot.source,
+                                    &mut diagnostics,
+                                );
+                            }
                             events.push(Event::Diagnostics {
                                 snapshot: self.snapshot.identity(),
                                 provider: self.provider,
@@ -308,13 +396,10 @@ impl Session {
                 if let Some(error) = message.get("error") {
                     return Err(protocol::rpc_error_message(error));
                 }
-                if message["result"]["capabilities"]["positionEncoding"]
-                    .as_str()
-                    .is_some_and(|s| s != "utf-16")
-                {
-                    return Err("TeX language server selected unsupported position encoding".into());
-                }
-                self.initialized = true;
+                protocol::validate_position_encoding(&message["result"]["capabilities"])?;
+                self.phase.initialized(protocol::incremental_sync(
+                    &message["result"]["capabilities"],
+                ));
                 self.notify("initialized", json!({}))?;
                 self.notify(
                     "workspace/didChangeConfiguration",
@@ -338,12 +423,14 @@ impl Session {
                 }
                 let result = &message["result"];
                 let event = match request.kind {
-                    RequestKind::Format => protocol::parse_format_document_result(result.clone())
-                        .map_err(|e| e.to_string())
-                        .map(|edits| Event::Formatted {
-                            request: request.clone(),
-                            edits,
-                        }),
+                    RequestKind::Format { .. } => {
+                        protocol::parse_format_document_result(result.clone())
+                            .map_err(|e| e.to_string())
+                            .map(|edits| Event::Formatted {
+                                request: request.clone(),
+                                edits,
+                            })
+                    }
                     RequestKind::Completion { .. } => protocol::parse_completion_result(result)
                         .map(|(is_incomplete, items)| Event::Completed {
                             request: request.clone(),
@@ -447,6 +534,125 @@ fn configuration_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initialization_keeps_open_source_and_sync_mode_in_the_ready_phase() {
+        let mut phase = SessionPhase::Initializing {
+            started: Instant::now(),
+        };
+        assert!(!phase.is_ready());
+        assert!(phase.opened().is_none());
+        assert!(phase.change("α").range.is_none());
+        phase.initialized(true);
+        let identity = super::super::Identity {
+            generation: crate::lsp::Generation(1),
+            key: tiptoptyp_core::document::DocumentKey::new(
+                tiptoptyp_core::document::WindowSessionId::new(1),
+                2,
+                3,
+            ),
+            uri: "file:///paper.tex".into(),
+        };
+        if let SessionPhase::Ready { document, .. } = &mut phase {
+            *document = Some(OpenDocument {
+                identity: identity.clone(),
+                source: std::sync::Arc::from("α before"),
+            });
+        }
+        assert!(phase.change("α after").range.is_some());
+        phase.initialized(false);
+        assert_eq!(phase.opened().unwrap().identity, identity);
+        assert!(phase.change("α after").range.is_none());
+        phase.close_document();
+        assert!(phase.opened().is_none());
+        assert!(phase.is_ready());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn negotiated_incremental_changes_use_the_last_sent_source_and_keep_the_session() {
+        use std::{os::unix::fs::PermissionsExt, sync::Arc};
+        use tiptoptyp_core::{
+            document::{DocumentKey, WindowSessionId},
+            text::{LspTextEdit, ScalarOffset, apply_text_edits},
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("fake-lsp");
+        let wire = directory.path().join("initialize.lsp");
+        fs::write(
+            &program,
+            "#!/bin/sh\n/bin/cat \"$TTT_TEST_MESSAGES\"\nexec /bin/cat >/dev/null\n",
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        for incremental in [false, true] {
+            let settings = crate::tex::settings::TexSettings::default();
+            let mut snapshot = Snapshot {
+                generation: crate::lsp::Generation(1),
+                key: DocumentKey::new(WindowSessionId::new(1), 2, 0),
+                uri: url::Url::from_file_path(directory.path().join("main.tex"))
+                    .unwrap()
+                    .into(),
+                source: Arc::from("文😀 old"),
+                root: directory.path().into(),
+                tools: crate::tex::tools::TexTools::resolve(&settings),
+                settings,
+            };
+            snapshot.tools.texlab.program = program.clone();
+            snapshot.tools.texlab.origin = crate::toolchain::ToolOrigin::Custom;
+            snapshot.tools.texlab.command.environment =
+                json!({"TTT_TEST_MESSAGES":wire}).to_string();
+            let mut bytes = Vec::new();
+            transport::write_lsp_message(&mut bytes, &json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":{"change":if incremental { 2 } else { 1 }}}}})).unwrap();
+            fs::write(&wire, bytes).unwrap();
+            let mut session = Session::start(Provider::Texlab, &snapshot).unwrap();
+            let incoming = session.incoming.take().unwrap();
+            let (queued, receiver) = mpsc::sync_channel(PIPE_LIMIT);
+            queued
+                .send(incoming.recv_timeout(Duration::from_secs(5)).unwrap())
+                .unwrap();
+            session.incoming = Some(receiver);
+            let (capture, sent) = mpsc::sync_channel(PIPE_LIMIT);
+            session.outgoing = Some(capture);
+            session.poll().unwrap();
+            let startup: Vec<_> = sent.try_iter().collect();
+            assert_eq!(
+                startup
+                    .iter()
+                    .filter(|message| message["method"] == "textDocument/didOpen")
+                    .count(),
+                1
+            );
+            for source in ["文😀 new", "文😀 next"] {
+                let previous = snapshot.source.clone();
+                snapshot.key = snapshot.key.after_edit();
+                snapshot.source = Arc::from(source);
+                session.sync(&snapshot).unwrap();
+                let messages: Vec<_> = sent.try_iter().collect();
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0]["method"], "textDocument/didChange");
+                let change = &messages[0]["params"]["contentChanges"][0];
+                assert_eq!(change.get("range").is_some(), incremental);
+                if incremental {
+                    let edit = LspTextEdit {
+                        range: serde_json::from_value(change["range"].clone()).unwrap(),
+                        new_text: change["text"].as_str().unwrap().into(),
+                    };
+                    assert_eq!(
+                        apply_text_edits(&previous, &[edit], [ScalarOffset::new(0); 2])
+                            .unwrap()
+                            .text,
+                        source
+                    );
+                    assert!(change["text"].as_str().unwrap().len() < source.len());
+                } else {
+                    assert_eq!(change["text"], source);
+                }
+            }
+            assert!(session.phase.is_ready());
+            assert_eq!(session.phase.opened().unwrap().identity.key.epoch, 2);
+        }
+    }
 
     #[cfg(unix)]
     #[test]

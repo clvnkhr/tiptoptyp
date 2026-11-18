@@ -77,6 +77,29 @@ impl OwnedChild {
     pub(crate) fn child_mut(&mut self) -> &mut Child {
         &mut self.0
     }
+
+    /// Terminate the owning process group and reap the direct child on every
+    /// exit, including helpers still running after the direct child exited.
+    pub(crate) fn wait(
+        mut self,
+        timeout: Duration,
+        mut monitor: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<ExitStatus> {
+        let started = Instant::now();
+        loop {
+            monitor()?;
+            if let Some(status) = self.try_wait()? {
+                return Ok(status);
+            }
+            if started.elapsed() >= timeout {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "child process timed out",
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 impl Drop for OwnedChild {
     fn drop(&mut self) {
@@ -98,6 +121,49 @@ impl Drop for OwnedChild {
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
+
+    #[test]
+    fn owned_wait_closes_descendant_pipes_after_timeout_or_cancellation() {
+        use std::{io::BufRead as _, sync::mpsc};
+        for cancel in [false, true] {
+            let mut command = Command::new("sh");
+            command
+                .args(["-c", "sleep 30 & printf 'ready\\n'; wait"])
+                .stdout(Stdio::piped());
+            let mut child = OwnedChild::spawn(&mut command).unwrap();
+            let stdout = child.child_mut().stdout.take().unwrap();
+            let (sender, receiver) = mpsc::channel();
+            let reader = thread::spawn(move || {
+                let mut stdout = io::BufReader::new(stdout);
+                let mut line = String::new();
+                stdout.read_line(&mut line).unwrap();
+                sender.send(line == "ready\n").unwrap();
+                line.clear();
+                // A surviving descendant would retain this pipe for 30 seconds.
+                sender.send(stdout.read_line(&mut line).unwrap() == 0).ok();
+            });
+            assert_eq!(receiver.recv_timeout(Duration::from_secs(5)), Ok(true));
+            let error = child
+                .wait(Duration::ZERO, || {
+                    if cancel {
+                        Err(io::Error::new(io::ErrorKind::Interrupted, "cancelled"))
+                    } else {
+                        Ok(())
+                    }
+                })
+                .unwrap_err();
+            assert_eq!(
+                error.kind(),
+                if cancel {
+                    io::ErrorKind::Interrupted
+                } else {
+                    io::ErrorKind::TimedOut
+                }
+            );
+            assert_eq!(receiver.recv_timeout(Duration::from_secs(5)), Ok(true));
+            reader.join().unwrap();
+        }
+    }
     #[test]
     fn status_timeout_and_cancellation_are_distinct() {
         let child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();

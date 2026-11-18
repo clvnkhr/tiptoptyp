@@ -56,7 +56,7 @@ pub(crate) fn decode_bounded(
             "Packaged payload has trailing data or extra frames",
         ));
     }
-    if actual != bytes || format!("{:x}", hasher.finalize()) != sha256 {
+    if actual != bytes || hex::encode(hasher.finalize()) != sha256 {
         return Err(invalid(
             "Packaged payload failed size or SHA256 verification",
         ));
@@ -85,7 +85,7 @@ mod tests {
         decode(
             archive,
             bytes.len() as u64,
-            &format!("{:x}", Sha256::digest(bytes)),
+            &hex::encode(Sha256::digest(bytes)),
             &mut output,
         )?;
         Ok(output)
@@ -95,7 +95,7 @@ mod tests {
     fn caller_size_limit_does_not_relax_frame_or_integrity_checks() {
         let bytes = b"bounded native model";
         let archive = encode_fixture(bytes);
-        let hash = format!("{:x}", Sha256::digest(bytes));
+        let hash = hex::encode(Sha256::digest(bytes));
         let mut output = Vec::new();
         assert!(decode_bounded(&archive[..], bytes.len() as u64, &hash, &mut output, 3).is_err());
         assert!(output.is_empty());
@@ -162,7 +162,7 @@ mod tests {
         }
         let bytes = b"a resource read in tiny pieces";
         let archive = encode_fixture(bytes);
-        let hash = format!("{:x}", Sha256::digest(bytes));
+        let hash = hex::encode(Sha256::digest(bytes));
         let mut output = Vec::new();
         decode(ShortReads(&archive), bytes.len() as u64, &hash, &mut output).unwrap();
         assert_eq!(output, bytes);
@@ -192,7 +192,7 @@ mod tests {
     fn output_size_hash_and_decoder_window_are_bounded() {
         let bytes = vec![b'x'; 200_000];
         let archive = encode_fixture(&bytes);
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let hash = hex::encode(Sha256::digest(&bytes));
         let mut output = Vec::new();
         assert!(decode(archive.as_slice(), 1, &hash, &mut output).is_err());
         assert!(output.len() <= 1);

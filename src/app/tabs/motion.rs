@@ -2,61 +2,120 @@
 //! these positions. Drop slots stay fixed; controls follow the visible tabs.
 const DURATION: f64 = 0.14;
 
-pub(super) struct Motion {
-    x: f32,
-    from: f32,
-    target: f32,
-    started: f64,
-    grabbed: bool,
-    lifted: bool,
+/// Foreground ownership belongs only to pointer dragging and its landing. A
+/// settled tab has no obsolete animation clock, and a neighbor slide is never
+/// mistaken for a grabbed tab.
+#[derive(Clone, Copy)]
+pub(super) enum Motion {
+    Settled {
+        x: f32,
+    },
+    Sliding {
+        x: f32,
+        from: f32,
+        target: f32,
+        started: f64,
+    },
+    Grabbed {
+        x: f32,
+        target: f32,
+    },
+    Landing {
+        x: f32,
+        from: f32,
+        target: f32,
+        started: f64,
+    },
 }
 impl Motion {
     pub(super) fn new(x: f32) -> Self {
-        Self {
-            x,
-            from: x,
-            target: x,
-            started: 0.0,
-            grabbed: false,
-            lifted: false,
-        }
+        Self::Settled { x }
     }
+
     pub(super) fn update(&mut self, target: f32, grabbed: Option<f32>, now: f64) -> f32 {
         if let Some(x) = grabbed {
-            self.x = x;
-            self.grabbed = true;
-            self.lifted = true;
-            self.target = target;
+            *self = Self::Grabbed { x, target };
             return x;
         }
-        if self.grabbed || target != self.target {
-            self.from = self.x;
-            self.started = now;
-            self.target = target;
-            self.grabbed = false;
-        }
-        let t = ((now - self.started) / DURATION).clamp(0.0, 1.0) as f32;
-        self.x = if t >= 1.0 {
+        let (x, from, previous_target, started, lifted, was_grabbed) = match *self {
+            Self::Settled { x } => (x, x, x, 0.0, false, false),
+            Self::Sliding {
+                x,
+                from,
+                target,
+                started,
+            } => (x, from, target, started, false, false),
+            Self::Grabbed { x, target } => (x, x, target, now, true, true),
+            Self::Landing {
+                x,
+                from,
+                target,
+                started,
+            } => (x, from, target, started, true, false),
+        };
+        let (from, started) = if was_grabbed || target != previous_target {
+            (x, now)
+        } else {
+            (from, started)
+        };
+        let t = ((now - started) / DURATION).clamp(0.0, 1.0) as f32;
+        let x = if t >= 1.0 {
             target
         } else {
-            self.from + (target - self.from) * (1.0 - (1.0 - t).powi(3))
+            from + (target - from) * (1.0 - (1.0 - t).powi(3))
         };
-        if self.x == self.target {
-            self.lifted = false;
-        }
-        self.x
+        *self = if x == target {
+            Self::Settled { x }
+        } else if lifted {
+            Self::Landing {
+                x,
+                from,
+                target,
+                started,
+            }
+        } else {
+            Self::Sliding {
+                x,
+                from,
+                target,
+                started,
+            }
+        };
+        x
     }
+
     pub(super) fn lifted(&self) -> bool {
-        self.lifted
+        matches!(self, Self::Grabbed { .. } | Self::Landing { .. })
     }
     pub(super) fn moving(&self) -> bool {
-        !self.grabbed && self.x != self.target
+        matches!(self, Self::Sliding { .. } | Self::Landing { .. })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retargeted_landings_keep_foreground_ownership_until_the_final_slot_settles() {
+        let mut motion = Motion::new(0.0);
+        assert!(matches!(motion, Motion::Settled { .. }));
+        motion.update(120.0, Some(80.0), 1.0);
+        assert!(matches!(motion, Motion::Grabbed { .. }));
+        motion.update(120.0, None, 1.02);
+        assert!(matches!(motion, Motion::Landing { .. }));
+        let current = motion.update(120.0, None, 1.05);
+        assert_eq!(motion.update(240.0, None, 1.05), current);
+        assert!(motion.lifted());
+        assert!(motion.moving());
+        assert_eq!(motion.update(240.0, None, 1.20), 240.0);
+        assert!(matches!(motion, Motion::Settled { .. }));
+        assert!(!motion.lifted());
+        assert!(!motion.moving());
+        motion.update(0.0, None, 1.21);
+        assert!(matches!(motion, Motion::Sliding { .. }));
+        assert!(!motion.lifted());
+    }
     #[test]
     fn neighbors_slide_without_overshoot_then_stop_requesting_frames() {
         let mut motion = Motion::new(100.0);

@@ -173,10 +173,31 @@ impl Names {
     }
 }
 
+/// The first admitted prose word of each sentence, using Harper's already
+/// fixed-up tokens. In particular, an abbreviation or ellipsis must not become
+/// a false sentence boundary. Quotes, layout, and opaque math/code do not use
+/// up the first-word position. Call once per linted paragraph, not per issue.
+pub(super) fn sentence_initial_words(tokens: &[Token]) -> Vec<(usize, usize)> {
+    use harper_core::TokenStringExt;
+    let mut spans: Vec<_> = tokens
+        .iter_sentences()
+        .filter_map(|sentence| sentence.iter().find(|token| token.kind.is_word()))
+        .map(|token| (token.span.start, token.span.end))
+        .collect();
+    // Adapters normally emit source order; retain a safe lookup for tolerant
+    // parsers with overlapping or reordered structural tokens as well.
+    if spans.windows(2).any(|pair| pair[0] > pair[1]) {
+        spans.sort_unstable();
+    }
+    spans.dedup();
+    spans
+}
+
 /// An optional capitalization exemption, evaluated only for spelling lints.
 /// Require the entire word to be alphabetic, begin in uppercase, and contain
 /// lowercase letters: titles/PascalCase qualify; acronyms, digits and fragments
 /// of identifiers do not. Possessive suffixes retain their original spans.
+/// The caller excludes sentence-initial words before applying this heuristic.
 pub(super) fn capitalized_name_span(source: &[char], start: usize, end: usize) -> bool {
     let Some(word) = source.get(start..end) else {
         return false;

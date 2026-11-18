@@ -71,6 +71,13 @@ pub(crate) fn liquid_prose_tokens(
     tokens
 }
 
+/// LTeX receives rendered prose/content blocks, never Typst code string values.
+pub(crate) fn ltex_prose_tokens(source: &[char]) -> Vec<harper_core::Token> {
+    let mut tokens = typst_prose::TypstProse::parse_for_ltex(source);
+    normalize_tokens(source, &mut tokens);
+    tokens
+}
+
 mod tex_prose;
 mod typst_prose;
 use crate::{
@@ -97,6 +104,9 @@ use std::{
 struct NamedLint {
     rule: String,
     lint: harper_core::linting::Lint,
+    // Derived from Harper's final sentence tokens, before raw lints enter the
+    // paragraph cache. Relative span remapping does not change this property.
+    sentence_initial: bool,
 }
 impl std::ops::Deref for NamedLint {
     type Target = harper_core::linting::Lint;
@@ -120,11 +130,17 @@ fn configured_linter(
 }
 
 fn named_lints(linter: &mut LintGroup, document: &Document) -> Vec<NamedLint> {
+    let first_words = spelling::sentence_initial_words(document.get_tokens());
     linter
         .organized_lints(document)
         .into_iter()
         .flat_map(|(rule, lints)| {
+            let first_words = &first_words;
             lints.into_iter().map(move |lint| NamedLint {
+                sentence_initial: lint.lint_kind == harper_core::linting::LintKind::Spelling
+                    && first_words
+                        .binary_search(&(lint.span.start, lint.span.end))
+                        .is_ok(),
                 rule: rule.clone(),
                 lint,
             })
@@ -226,6 +242,7 @@ fn diagnostics(
             lint.lint_kind != harper_core::linting::LintKind::Spelling
                 || !(names.contains(lint.span.start, lint.span.end)
                     || (ignore_capitalized_names
+                        && !lint.sentence_initial
                         && spelling::capitalized_name_span(
                             characters,
                             lint.span.start,
@@ -403,6 +420,19 @@ fn writing_dialect(
     language: crate::settings::WritingLanguage,
 ) -> Option<Dialect> {
     use crate::settings::WritingLanguage;
+    if kind == DocumentKind::Tex
+        && let Ok(directives) = crate::tex::magic::parse(source)
+        && let Some(spellcheck) = directives.spellcheck
+    {
+        return match spellcheck {
+            crate::tex::magic::Spellcheck::Disabled => None,
+            crate::tex::magic::Spellcheck::Language(language) => resolve_dialect(
+                WritingLanguage::Auto,
+                Some(&language.to_ascii_lowercase().replace('_', "-")),
+                None,
+            ),
+        };
+    }
     match language {
         WritingLanguage::British => return Some(Dialect::British),
         WritingLanguage::American => return Some(Dialect::American),
@@ -412,7 +442,57 @@ fn writing_dialect(
     resolve_dialect(language, lang.as_deref(), region.as_deref())
 }
 
-/// Literal unconditional top-level Typst text language; no dictionary or lint work.
+#[cfg(test)]
+#[test]
+fn tex_magic_spellcheck_overrides_default_dialect_and_can_disable_writing_checks() {
+    use crate::settings::WritingLanguage;
+    assert!(matches!(
+        writing_dialect(
+            "% !TeX spellcheck = en_US\nText",
+            DocumentKind::Tex,
+            WritingLanguage::British
+        ),
+        Some(Dialect::American)
+    ));
+    assert!(matches!(
+        writing_dialect(
+            "% !TeX spellcheck = en-GB\nText",
+            DocumentKind::Tex,
+            WritingLanguage::American
+        ),
+        Some(Dialect::British)
+    ));
+    assert!(
+        writing_dialect(
+            "% !TeX spellcheck = none\nText",
+            DocumentKind::Tex,
+            WritingLanguage::British
+        )
+        .is_none()
+    );
+    assert!(
+        writing_dialect(
+            "% !TeX spellcheck = de-DE\nText",
+            DocumentKind::Tex,
+            WritingLanguage::Auto
+        )
+        .is_none()
+    );
+    assert_eq!(
+        document_language("% !TeX spellcheck = fr_FR\nTexte", DocumentKind::Tex),
+        (Some("fr-fr".into()), None)
+    );
+    assert!(matches!(
+        writing_dialect(
+            "// !TeX spellcheck = none\nText",
+            DocumentKind::Typst,
+            WritingLanguage::British
+        ),
+        Some(Dialect::British)
+    ));
+}
+
+/// Literal document language declarations; no dictionary or lint work.
 pub(crate) fn document_language(
     source: &str,
     kind: DocumentKind,
@@ -420,6 +500,14 @@ pub(crate) fn document_language(
     use typst_syntax::ast::{Arg, Expr, SetRule};
     let mut lang = None;
     let mut region = None;
+    if kind == DocumentKind::Tex {
+        if let Ok(directives) = crate::tex::magic::parse(source)
+            && let Some(crate::tex::magic::Spellcheck::Language(language)) = directives.spellcheck
+        {
+            lang = Some(language.to_ascii_lowercase().replace('_', "-"));
+        }
+        return (lang, region);
+    }
     if kind == DocumentKind::Typst {
         let syntax = typst_syntax::parse(source);
         for node in syntax.children() {
@@ -469,7 +557,72 @@ fn resolve_dialect(
     }
 }
 
+/// A blank line may contain indentation. Harper only joins adjacent newline
+/// tokens, so newline/space/newline otherwise stays inside one sentence. Join
+/// admitted original whitespace only: omitted inline syntax and opaque math
+/// must never manufacture a paragraph break.
+fn normalize_paragraph_breaks(source: &[char], tokens: &mut Vec<harper_core::Token>) {
+    use harper_core::{Span, Token, TokenKind};
+    let layout = |token: &Token| {
+        // PlainEnglish lexes the CR half of CRLF as one Unlintable scalar.
+        // Admit only this exact newline prefix, never an opaque syntax range.
+        let carriage = token.kind.is_unlintable()
+            && token.span.len() == 1
+            && source.get(token.span.start) == Some(&'\r')
+            && source.get(token.span.end) == Some(&'\n');
+        (matches!(token.kind, TokenKind::Space(_) | TokenKind::Newline(_)) || carriage)
+            && source
+                .get(token.span.start..token.span.end)
+                .is_some_and(|content| content.iter().all(|ch| ch.is_whitespace()))
+    };
+    let mut read = 0;
+    let mut write = 0;
+    while read < tokens.len() {
+        if !layout(&tokens[read]) {
+            if write != read {
+                tokens[write] = tokens[read].clone();
+            }
+            write += 1;
+            read += 1;
+            continue;
+        }
+        let start = tokens[read].span.start;
+        let mut end = tokens[read].span.end;
+        let mut next = read + 1;
+        while next < tokens.len()
+            && tokens[next].span.start >= end
+            && layout(&tokens[next])
+            && source
+                .get(end..tokens[next].span.start)
+                .is_some_and(|gap| gap.iter().all(|ch| ch.is_whitespace()))
+        {
+            end = tokens[next].span.end;
+            next += 1;
+        }
+        let blank_line = source[start..end]
+            .iter()
+            .filter(|&&ch| ch == '\n')
+            .take(2)
+            .count()
+            == 2;
+        if blank_line {
+            tokens[write] = Token::new(Span::new(start, end), TokenKind::ParagraphBreak);
+            write += 1;
+        } else {
+            for index in read..next {
+                if write != index {
+                    tokens[write] = tokens[index].clone();
+                }
+                write += 1;
+            }
+        }
+        read = next;
+    }
+    tokens.truncate(write);
+}
+
 fn normalize_tokens(source: &[char], tokens: &mut Vec<harper_core::Token>) {
+    normalize_paragraph_breaks(source, tokens);
     spelling::merge_apostrophes(source, tokens);
     spelling::merge_reviewed_compounds(source, tokens);
 }
@@ -492,6 +645,54 @@ impl harper_core::parsers::Parser for Prose {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admitted_blank_layout_lines_split_paragraphs_but_omitted_syntax_and_math_do_not() {
+        use harper_core::{TokenKind, parsers::Parser};
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            for source in [
+                "A correct result\n  \nMisspelld follows.",
+                "A correct result\r\n \t\r\nMisspelld follows.",
+            ] {
+                let chars: Vec<_> = source.chars().collect();
+                let tokens = Prose(kind).parse(&chars);
+                let boundary = tokens
+                    .iter()
+                    .find(|token| token.kind == TokenKind::ParagraphBreak)
+                    .unwrap_or_else(|| panic!("real blank line: {kind:?}: {source:?}: {tokens:?}"));
+                let content = boundary.span.get_content(&chars);
+                assert!(content.iter().all(|ch| ch.is_whitespace()));
+                assert_eq!(content.iter().filter(|&&ch| ch == '\n').count(), 2);
+            }
+        }
+        for (kind, source) in [
+            (
+                DocumentKind::Typst,
+                "A sentence continues\n#emph[\nwith prose] afterward.",
+            ),
+            (
+                DocumentKind::Tex,
+                "A sentence continues\n\\emph{\nwith prose} afterward.",
+            ),
+            (
+                DocumentKind::Typst,
+                "We obtain\n$ x = 1,\n  \n y = 2 $\nwhere the bound holds.",
+            ),
+            (
+                DocumentKind::Tex,
+                "We obtain\n\\[x=1,\n  \n y=2\\]\nwhere the bound holds.",
+            ),
+        ] {
+            let chars: Vec<_> = source.chars().collect();
+            let tokens = Prose(kind).parse(&chars);
+            assert!(
+                tokens
+                    .iter()
+                    .all(|token| token.kind != TokenKind::ParagraphBreak),
+                "layout/opaque math must stay in one prose paragraph: {kind:?}: {source:?}: {tokens:?}"
+            );
+        }
+    }
 
     #[test]
     fn harper_retains_rule_ranges_categories_and_replacements_on_cache_hits() {
@@ -547,6 +748,7 @@ mod tests {
             ];
             let lints = vec![NamedLint {
                 rule: "RepeatedWords".into(),
+                sentence_initial: false,
                 lint: Lint {
                     span: Span::new(0, characters.len()),
                     lint_kind: LintKind::Repetition,
@@ -575,6 +777,7 @@ mod tests {
         let tokens = vec![Token::new(Span::new(0, 4), TokenKind::Word(None))];
         let lints = vec![NamedLint {
             rule: "Test".into(),
+            sentence_initial: false,
             lint: Lint {
                 span: Span::new(0, 4),
                 suggestions: vec![Suggestion::InsertAfter(vec![',']), Suggestion::Remove],

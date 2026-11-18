@@ -81,23 +81,67 @@ fn retain_completion<T: OperationSummary>(
         .unwrap_or_else(|e| e.into_inner())
         .push(message);
 }
-struct Completion<T> {
-    owner_open: bool,
-    result: Option<Result<T, String>>,
+/// Owner closure and completion race under one lock. A finished result is
+/// either delivered to the owner or retained by the shell, exactly once.
+enum Completion<T> {
+    Working,
+    Ready(Result<T, String>),
+    Detached,
 }
+
+impl<T> Completion<T> {
+    fn finish(&mut self, result: Result<T, String>) -> Option<Result<T, String>> {
+        match self {
+            Self::Working => {
+                *self = Self::Ready(result);
+                None
+            }
+            Self::Detached => Some(result),
+            Self::Ready(_) => unreachable!("an exclusive worker completes exactly once"),
+        }
+    }
+
+    fn take_ready(&mut self) -> Option<Result<T, String>> {
+        if !matches!(self, Self::Ready(_)) {
+            return None;
+        }
+        let Self::Ready(result) = std::mem::replace(self, Self::Detached) else {
+            unreachable!()
+        };
+        Some(result)
+    }
+
+    fn detach(&mut self) -> Option<Result<T, String>> {
+        let previous = std::mem::replace(self, Self::Detached);
+        if let Self::Ready(result) = previous {
+            Some(result)
+        } else {
+            None
+        }
+    }
+}
+
 pub(crate) struct ExclusiveJob<T: OperationSummary> {
-    active: Option<Arc<Mutex<Completion<T>>>>,
+    state: ExclusiveJobState<T>,
+}
+
+enum ExclusiveJobState<T> {
+    Idle,
+    Running(RunningOperation<T>),
+    Failed(String),
+}
+
+/// Metadata required to retain an operation's outcome cannot outlive or be
+/// installed separately from the operation it describes.
+struct RunningOperation<T> {
+    completion: Arc<Mutex<Completion<T>>>,
     name: String,
-    last_error: Option<String>,
-    shell: Option<RepaintTarget>,
+    shell: RepaintTarget,
 }
 impl<T: OperationSummary> Default for ExclusiveJob<T> {
     fn default() -> Self {
         Self {
-            active: None,
-            name: String::new(),
-            last_error: None,
-            shell: None,
+            state: ExclusiveJobState::Idle,
         }
     }
 }
@@ -111,17 +155,14 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
         if self.is_running() {
             return Err("An operation is already in progress".to_owned());
         }
-        self.last_error = None;
-        self.name = name.into();
-        let name = self.name.clone();
+        self.state = ExclusiveJobState::Idle;
+        let name = name.into();
         let owner = RepaintTarget::current(context);
         let shell = RepaintTarget::new(context, egui::ViewportId::ROOT);
-        self.shell = Some(shell.clone());
-        let completion = Arc::new(Mutex::new(Completion {
-            owner_open: true,
-            result: None,
-        }));
+        let completion = Arc::new(Mutex::new(Completion::Working));
         let worker_completion = completion.clone();
+        let worker_name = name.clone();
+        let worker_shell = shell.clone();
         // The lease is created before spawn and is dropped on spawn failure,
         // worker unwind, or completion. Closing a window cannot release it.
         let active = ActiveOperation::new(shell.clone());
@@ -132,64 +173,68 @@ impl<T: OperationSummary + Send + 'static> ExclusiveJob<T> {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
                     .unwrap_or_else(|_| Err("background worker panicked".to_owned()));
                 let mut completion = worker_completion.lock().unwrap_or_else(|e| e.into_inner());
-                if completion.owner_open {
-                    completion.result = Some(result);
+                if let Some(result) = completion.finish(result) {
+                    retain_completion(&worker_shell.context, &worker_name, result);
+                    drop(completion);
+                    worker_shell.request_repaint();
+                } else {
                     drop(completion);
                     owner.request_repaint();
-                } else {
-                    retain_completion(&shell.context, &name, result);
-                    drop(completion);
-                    shell.request_repaint();
                 }
             })
             .map_err(|error| {
                 let message = format!("could not start background operation: {error}");
-                self.last_error = Some(message.clone());
+                self.state = ExclusiveJobState::Failed(message.clone());
                 message
             })?;
-        self.active = Some(completion);
+        self.state = ExclusiveJobState::Running(RunningOperation {
+            completion,
+            name,
+            shell,
+        });
         Ok(())
     }
     pub(crate) fn poll(&mut self) -> LatestJobPoll<T> {
-        let Some(active) = &self.active else {
+        let ExclusiveJobState::Running(active) = &self.state else {
             return LatestJobPoll::Idle;
         };
         let result = active
+            .completion
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .result
-            .take();
+            .take_ready();
         match result {
             None => LatestJobPoll::Pending,
-            Some(result) => {
-                self.active = None;
-                match result {
-                    Ok(value) => LatestJobPoll::Ready(value),
-                    Err(error) => {
-                        self.last_error = Some(error.clone());
-                        LatestJobPoll::Failed(error)
-                    }
+            Some(result) => match result {
+                Ok(value) => {
+                    self.state = ExclusiveJobState::Idle;
+                    LatestJobPoll::Ready(value)
                 }
-            }
+                Err(error) => {
+                    self.state = ExclusiveJobState::Failed(error.clone());
+                    LatestJobPoll::Failed(error)
+                }
+            },
         }
     }
     pub(crate) fn activity(&self) -> crate::activity::Activity {
-        crate::activity::Activity::work(self.is_running(), false, self.last_error.as_deref())
+        match &self.state {
+            ExclusiveJobState::Idle => crate::activity::Activity::Idle,
+            ExclusiveJobState::Running(_) => crate::activity::Activity::Running,
+            ExclusiveJobState::Failed(error) => crate::activity::Activity::Failed(error.clone()),
+        }
     }
     pub(crate) fn is_running(&self) -> bool {
-        self.active.is_some()
+        matches!(self.state, ExclusiveJobState::Running(_))
     }
 }
 impl<T: OperationSummary> Drop for ExclusiveJob<T> {
     fn drop(&mut self) {
-        if let Some(active) = self.active.take() {
-            let mut completion = active.lock().unwrap_or_else(|e| e.into_inner());
-            completion.owner_open = false;
-            if let Some(result) = completion.result.take()
-                && let Some(shell) = &self.shell
-            {
-                retain_completion(&shell.context, &self.name, result);
-                shell.request_repaint();
+        if let ExclusiveJobState::Running(active) = &self.state {
+            let mut completion = active.completion.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(result) = completion.detach() {
+                retain_completion(&active.shell.context, &active.name, result);
+                active.shell.request_repaint();
             }
         }
     }
@@ -198,6 +243,74 @@ impl<T: OperationSummary> Drop for ExclusiveJob<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn poll_until_settled<T: OperationSummary + Send + 'static>(
+        job: &mut ExclusiveJob<T>,
+    ) -> LatestJobPoll<T> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match job.poll() {
+                LatestJobPoll::Pending => {
+                    assert!(std::time::Instant::now() < deadline);
+                    thread::yield_now();
+                }
+                result => return result,
+            }
+        }
+    }
+
+    #[test]
+    fn completion_and_owner_close_have_exactly_one_delivery_in_either_order() {
+        let mut completion = Completion::Working;
+        assert!(completion.take_ready().is_none());
+        assert_eq!(completion.finish(Ok(42)), None);
+        assert_eq!(completion.take_ready(), Some(Ok(42)));
+        assert_eq!(completion.take_ready(), None);
+        assert_eq!(completion.detach(), None);
+
+        let mut completion = Completion::<usize>::Working;
+        assert_eq!(completion.detach(), None);
+        assert_eq!(
+            completion.finish(Err("detached failure".into())),
+            Some(Err("detached failure".into()))
+        );
+        assert_eq!(completion.take_ready(), None);
+        assert_eq!(completion.detach(), None);
+
+        let mut completion = Completion::Working;
+        assert_eq!(completion.finish(Ok(42)), None);
+        assert_eq!(completion.detach(), Some(Ok(42)));
+        assert_eq!(completion.take_ready(), None);
+        assert_eq!(completion.detach(), None);
+    }
+
+    #[test]
+    fn exclusive_failure_is_terminal_and_new_admission_clears_the_old_outcome() {
+        let context = egui::Context::default();
+        let mut job = ExclusiveJob::<String>::default();
+        job.start_and_repaint("exclusive-failure-state", &context, || Err("failed".into()))
+            .unwrap();
+        assert_eq!(
+            poll_until_settled(&mut job),
+            LatestJobPoll::Failed("failed".into())
+        );
+        assert!(!job.is_running());
+        assert_eq!(job.poll(), LatestJobPoll::Idle);
+        assert_eq!(
+            job.activity(),
+            crate::activity::Activity::Failed("failed".into())
+        );
+        job.start_and_repaint("exclusive-recovery-state", &context, || {
+            Ok("recovered".into())
+        })
+        .unwrap();
+        assert_eq!(job.activity(), crate::activity::Activity::Running);
+        assert_eq!(
+            poll_until_settled(&mut job),
+            LatestJobPoll::Ready("recovered".into())
+        );
+        assert_eq!(job.activity(), crate::activity::Activity::Idle);
+    }
     #[test]
     fn detached_completions_belong_to_their_application_context() {
         let first = egui::Context::default();

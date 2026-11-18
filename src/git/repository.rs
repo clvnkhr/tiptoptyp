@@ -11,6 +11,7 @@ use std::{
 };
 pub(crate) mod diff;
 pub(crate) mod hunks;
+pub(crate) mod setup;
 
 #[cfg(test)]
 mod tests;
@@ -73,8 +74,11 @@ impl std::ops::Deref for ChangeList {
 }
 
 pub(super) fn private_artifact(path: &Path) -> bool {
-    path.components()
-        .any(|part| part.as_os_str() == ".tiptoptyp")
+    path.components().any(|part| {
+        part.as_os_str()
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(b".tiptoptyp")
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,11 +116,13 @@ pub(super) struct Snapshot {
     pub(super) entries: ChangeList,
     pub(super) history: String,
     pub(super) initialized: bool,
+    pub(super) managed_overleaf: bool,
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum Operation {
     Refresh,
+    #[cfg(test)]
     Init,
     Stage(PathBuf),
     Unstage(PathBuf),
@@ -275,7 +281,21 @@ pub(super) fn run_command(
         .ok_or_else(|| "Could not start Git: no Git executable was found".to_owned())?;
     let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
     let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
-    let child = Command::new(program)
+    let mut command = Command::new(program);
+    // Finder/launcher environments must not redirect a workspace operation to
+    // another repository, index, object store or namespace.
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(variable);
+    }
+    command
         .arg("--no-pager")
         .arg("--literal-pathspecs")
         .args(args)
@@ -286,25 +306,26 @@ pub(super) fn run_command(
         .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(stdout.try_clone().map_err(|e| e.to_string())?)
-        .stderr(stderr.try_clone().map_err(|e| e.to_string())?)
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound && !root.is_dir() {
-                format!("Git workspace is unavailable: {}", root.display())
-            } else {
-                format!("Could not start Git: {error}")
-            }
-        })?;
-    let status = crate::process::wait(child, Duration::from_secs(60), || {
-        if stdout.metadata()?.len() > 4 * 1024 * 1024 || stderr.metadata()?.len() > 4 * 1024 * 1024
-        {
-            return Err(std::io::Error::other(
-                "Git output exceeds 4 MiB; narrow the operation in a terminal",
-            ));
+        .stderr(stderr.try_clone().map_err(|e| e.to_string())?);
+    let child = crate::process::OwnedChild::spawn(&mut command).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound && !root.is_dir() {
+            format!("Git workspace is unavailable: {}", root.display())
+        } else {
+            format!("Could not start Git: {error}")
         }
-        Ok(())
-    })
-    .map_err(|error| format!("Git: {error}"))?;
+    })?;
+    let status = child
+        .wait(Duration::from_secs(60), || {
+            if stdout.metadata()?.len() > 4 * 1024 * 1024
+                || stderr.metadata()?.len() > 4 * 1024 * 1024
+            {
+                return Err(std::io::Error::other(
+                    "Git output exceeds 4 MiB; narrow the operation in a terminal",
+                ));
+            }
+            Ok(())
+        })
+        .map_err(|error| format!("Git: {error}"))?;
     let read = |file: &mut fs::File| -> Result<Vec<u8>, String> {
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
@@ -405,7 +426,32 @@ pub(super) fn status_snapshot(workspace: &Path) -> Result<Snapshot, String> {
             ..Default::default()
         });
     };
-    status_at_root(root)
+    let mut snapshot = status_at_root(root)?;
+    snapshot.managed_overleaf = managed_overleaf(workspace)?;
+    Ok(snapshot)
+}
+
+fn managed_overleaf(path: &Path) -> Result<bool, String> {
+    // Existing discovery is bounded and validates private metadata without
+    // following links. This query runs only on the Git worker.
+    #[cfg(unix)]
+    {
+        let path = if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir()) {
+            path.canonicalize().map_err(|e| e.to_string())?
+        } else {
+            path.parent()
+                .ok_or("Git path has no parent")?
+                .canonicalize()
+                .map_err(|e| e.to_string())?
+                .join(path.file_name().ok_or("Git path has no file name")?)
+        };
+        crate::overleaf::StoredProject::from_path(&path).map(|stored| stored.is_some())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(false)
+    }
 }
 
 fn repository_root(workspace: &Path) -> Result<Option<PathBuf>, String> {
@@ -444,6 +490,7 @@ pub(super) fn status_at_root(root: PathBuf) -> Result<Snapshot, String> {
         entries: entries.into(),
         history: String::new(),
         initialized: true,
+        managed_overleaf: false,
     })
 }
 
@@ -451,7 +498,23 @@ pub(super) fn perform(workspace: &Path, operation: Operation) -> Result<ResultDa
     if matches!(operation, Operation::Refresh | Operation::Diff(..)) {
         return perform_locked(workspace, operation);
     }
-    with_repository_transaction(workspace, |root| perform_locked(root, operation))
+    with_repository_transaction(workspace, |root| {
+        let managed = managed_overleaf(workspace)?;
+        if matches!(&operation, Operation::Pull) && managed {
+            return Err("Overleaf owns these project files. Pull into a separate local workspace; use this working copy for Git commits and pushes.".into());
+        }
+        if let Operation::Revert(paths) = &operation
+            && (managed
+                || paths.iter().try_fold(false, |found, path| {
+                    managed_overleaf(&root.join(path)).map(|managed| found || managed)
+                })?)
+        {
+            return Err("Restore Overleaf project files through Overleaf or its conflict review, so the local working copy stays synchronized.".into());
+        }
+        let mut result = perform_locked(root, operation)?;
+        result.snapshot.managed_overleaf = managed;
+        Ok(result)
+    })
 }
 
 /// All app-owned index/repository mutations share this lease. Resolve identity
@@ -476,10 +539,16 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
         operation,
         Operation::Commit(_) | Operation::StageAllAndCommit(_)
     );
+    #[cfg(test)]
+    let initialized = matches!(&operation, Operation::Init);
+    if committed && before.entries.staged_private {
+        return Err("Unstage .tiptoptyp editor data before committing. Only project files belong in the backup.".into());
+    }
     // Keep the NUL-delimited pathspec alive until Git has consumed it.
     let mut pathspec = None;
     let command = match operation {
         Operation::Refresh => Vec::new(),
+        #[cfg(test)]
         Operation::Init => args(&["init"]),
         Operation::Stage(path) => {
             if private_artifact(&path) {
@@ -625,7 +694,7 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
         }
         Operation::Fetch => args(&["fetch"]),
         Operation::Pull => args(&["pull", "--ff-only"]),
-        Operation::Push => args(&["push"]),
+        Operation::Push => push_command(root)?,
     };
     let output = if command.is_empty() {
         "Status refreshed".into()
@@ -638,6 +707,10 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
         }
     };
     drop(pathspec);
+    #[cfg(test)]
+    if initialized {
+        setup::ensure_private_excluded(root)?;
+    }
     Ok(ResultData {
         workspace: workspace.to_path_buf(),
         snapshot: if command.is_empty() {
@@ -650,6 +723,62 @@ pub(super) fn perform_locked(workspace: &Path, operation: Operation) -> Result<R
         failed: false,
         diff: None,
     })
+}
+
+fn push_command(root: &Path) -> Result<Vec<OsString>, String> {
+    let branch = text_run(root, &["symbolic-ref", "--quiet", "HEAD"]).map_err(|_| {
+        "Choose a local branch before pushing; this checkout has a detached HEAD.".to_owned()
+    })?;
+    text_run(root, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|_| "Create the first commit before pushing this repository.".to_owned())?;
+    let upstream = text_run(root, &["for-each-ref", "--format=%(upstream)", &branch])?;
+    if !upstream.is_empty() {
+        return Ok(args(&["push"]));
+    }
+    let short_branch = branch
+        .strip_prefix("refs/heads/")
+        .ok_or("Choose a local branch before pushing.")?;
+    let setting = |key: &str| -> Result<String, String> {
+        String::from_utf8(setup::config_value(root, key)?)
+            .map_err(|_| "Git push configuration contains an invalid text value.".into())
+    };
+    let mut remote = String::new();
+    for key in [
+        format!("branch.{short_branch}.pushRemote"),
+        "remote.pushDefault".into(),
+        format!("branch.{short_branch}.remote"),
+    ] {
+        remote = setting(&key)?;
+        if !remote.is_empty() {
+            break;
+        }
+    }
+    if remote.is_empty() {
+        remote = "origin".into();
+    }
+    if remote == "." {
+        return Ok(args(&["push"]));
+    }
+    if remote.starts_with('-') || remote.len() > 256 || remote.chars().any(char::is_control) {
+        return Err("Review the configured Git push remote before pushing.".into());
+    }
+    let destination = text_run(root, &["remote", "get-url", "--", &remote])
+        .map_err(|_| "Add a remote URL in Configure Git, or review the configured push remote, before pushing.".to_owned())?;
+    if destination.trim().is_empty() {
+        return Err("Add a remote URL in Configure Git before pushing.".into());
+    }
+    if !setting(&format!("remote.{remote}.push"))?.is_empty()
+        || setting(&format!("remote.{remote}.mirror"))? == "true"
+        || matches!(setting("push.default")?.as_str(), "matching" | "nothing")
+    {
+        // Explicit push rules can target another branch or several refs. Let
+        // Git honor them instead of silently replacing their refspec.
+        return Ok(args(&["push"]));
+    }
+    // Fully qualified references keep literal branch names unambiguous. A
+    // user's first explicit Push establishes tracking; setup never contacts it.
+    let reference = format!("{branch}:{branch}");
+    Ok(args(&["push", "--set-upstream", "--", &remote, &reference]))
 }
 
 fn stage_all_command(

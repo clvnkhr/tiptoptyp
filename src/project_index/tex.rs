@@ -1,12 +1,19 @@
 //! Literal TeX structure, without executing macros or searching installed packages.
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) enum LocalDependency {
+    Input,
+    Subfile,
+    Bibliography,
+}
+
 pub(super) fn visit(
     path: &Path,
     source: &str,
     index: &mut ProjectIndex,
     packages: &mut BTreeSet<String>,
-    mut local_file: impl FnMut(&str, bool) -> bool,
+    mut local_file: impl FnMut(&str, LocalDependency) -> bool,
     cancelled: &mut impl FnMut() -> bool,
 ) -> bool {
     let lines = LineIndex::new(source);
@@ -176,6 +183,38 @@ pub(super) fn visit(
                         );
                     }
                     scan.group(b'['); // optional package release date
+                } else if matches!(name, "addbibresource" | "bibliography") {
+                    if name == "addbibresource" {
+                        scan.group(b'[');
+                    }
+                    let complete = scan.group(b'{').is_some_and(|names| {
+                        let mut record = |target: &str| {
+                            let target = target.trim();
+                            literal_path(target)
+                                && local_file(target, LocalDependency::Bibliography)
+                        };
+                        if name == "bibliography" {
+                            let mut complete = true;
+                            for (item, target) in names.split(',').enumerate() {
+                                if item.is_multiple_of(256) && (scan.cancelled)() {
+                                    scan.aborted = true;
+                                    return false;
+                                }
+                                complete &= record(target);
+                            }
+                            complete
+                        } else {
+                            record(&names)
+                        }
+                    });
+                    if !complete {
+                        index.unresolved_dependencies.push(UnresolvedDependency {
+                            path: path.into(),
+                            line: lines.line_at(start),
+                            kind: DependencyKind::Bibliography,
+                            expression: source[start..scan.at.max(start + 1)].trim().into(),
+                        });
+                    }
                 } else if matches!(
                     name,
                     "label"
@@ -220,7 +259,14 @@ pub(super) fn visit(
                     };
                     if target.as_deref().map(str::trim).is_none_or(|target| {
                         !literal_path(target)
-                            || !local_file(target, matches!(name, "subfile" | "subfileinclude"))
+                            || !local_file(
+                                target,
+                                if matches!(name, "subfile" | "subfileinclude") {
+                                    LocalDependency::Subfile
+                                } else {
+                                    LocalDependency::Input
+                                },
+                            )
                     }) {
                         index.unresolved_dependencies.push(UnresolvedDependency {
                             path: path.into(),
@@ -273,6 +319,28 @@ pub(super) fn resolve(
     // Ordinary inputs inherit the current TeX import context.
     let candidate = paths.normalize(&root.join(relative));
     candidate.starts_with(root).then_some(candidate)
+}
+
+pub(super) fn resolve_bibliography(
+    root: &Path,
+    context: &Path,
+    target: &str,
+    paths: &mut PathNormalizer,
+) -> Option<PathBuf> {
+    if target.contains("://") {
+        return None;
+    }
+    let mut target = PathBuf::from(target.trim().trim_matches('"'));
+    if target.extension().is_none() {
+        target.set_extension("bib");
+    }
+    if target
+        .extension()
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case("bib"))
+    {
+        return None;
+    }
+    resolve(root, context, target.to_str()?, paths)
 }
 
 struct Scanner<'a, C> {

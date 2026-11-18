@@ -69,15 +69,21 @@ pub(crate) enum LatestJobPoll<T> {
 /// longer replace newer state. A disconnected worker is reported as a failure
 /// rather than being mistaken for an indefinitely pending job.
 pub(crate) struct LatestJob<T> {
-    receiver: Option<Receiver<Result<T, String>>>,
-    last_error: Option<String>,
+    state: LatestJobState<T>,
+}
+
+/// A result receiver belongs only to a running request. A terminal failure is
+/// retained for Activity without pretending that there is still work to poll.
+enum LatestJobState<T> {
+    Idle,
+    Running(Receiver<Result<T, String>>),
+    Failed(String),
 }
 
 impl<T> Default for LatestJob<T> {
     fn default() -> Self {
         Self {
-            receiver: None,
-            last_error: None,
+            state: LatestJobState::Idle,
         }
     }
 }
@@ -97,15 +103,15 @@ impl<T: Send + 'static> LatestJob<T> {
     /// not an assertion about how quickly cold dependencies initialize.
     #[cfg(test)]
     pub(crate) fn wait_until_ready_for_test(&mut self) -> Result<(), String> {
-        let result = self
-            .receiver
-            .as_ref()
-            .ok_or("No test worker is running")?
+        let LatestJobState::Running(receiver) = &self.state else {
+            return Err("No test worker is running".into());
+        };
+        let result = receiver
             .recv_timeout(std::time::Duration::from_secs(30))
             .map_err(|error| format!("Test worker did not complete: {error}"))?;
         let (sender, receiver) = mpsc::channel();
         sender.send(result).map_err(|error| error.to_string())?;
-        self.receiver = Some(receiver);
+        self.state = LatestJobState::Running(receiver);
         Ok(())
     }
 
@@ -128,8 +134,7 @@ impl<T: Send + 'static> LatestJob<T> {
         // window before leaving the UI thread instead of consulting it later.
         // Replacing the receiver first makes a failed spawn terminal too: the
         // caller never remains stuck polling an obsolete request.
-        self.receiver = None;
-        self.last_error = None;
+        self.state = LatestJobState::Idle;
         let (sender, receiver) = mpsc::channel();
         let spawned = thread::Builder::new().name(name.into()).spawn(move || {
             let _span = crate::performance::span("worker.job");
@@ -151,54 +156,54 @@ impl<T: Send + 'static> LatestJob<T> {
     ) -> Result<(), String> {
         match spawned {
             Ok(_worker) => {
-                self.receiver = Some(receiver);
+                self.state = LatestJobState::Running(receiver);
                 Ok(())
             }
             Err(error) => {
-                self.receiver = None;
                 let message = format!("could not start background job: {error}");
-                self.last_error = Some(message.clone());
+                self.state = LatestJobState::Failed(message.clone());
                 Err(message)
             }
         }
     }
 
     pub(crate) fn poll(&mut self) -> LatestJobPoll<T> {
-        let Some(receiver) = self.receiver.as_ref() else {
+        let LatestJobState::Running(receiver) = &self.state else {
             return LatestJobPoll::Idle;
         };
         match receiver.try_recv() {
             Ok(Ok(value)) => {
-                self.receiver = None;
+                self.state = LatestJobState::Idle;
                 LatestJobPoll::Ready(value)
             }
             Ok(Err(error)) => {
-                self.receiver = None;
-                self.last_error = Some(error.clone());
+                self.state = LatestJobState::Failed(error.clone());
                 LatestJobPoll::Failed(error)
             }
             Err(TryRecvError::Empty) => LatestJobPoll::Pending,
             Err(TryRecvError::Disconnected) => {
-                self.receiver = None;
                 let error = "background worker stopped unexpectedly".to_owned();
-                self.last_error = Some(error.clone());
+                self.state = LatestJobState::Failed(error.clone());
                 LatestJobPoll::Failed(error)
             }
         }
     }
 
     pub(crate) fn activity(&self) -> crate::activity::Activity {
-        crate::activity::Activity::work(self.is_running(), false, self.last_error.as_deref())
+        match &self.state {
+            LatestJobState::Idle => crate::activity::Activity::Idle,
+            LatestJobState::Running(_) => crate::activity::Activity::Running,
+            LatestJobState::Failed(error) => crate::activity::Activity::Failed(error.clone()),
+        }
     }
 
     pub(crate) fn is_running(&self) -> bool {
-        self.receiver.is_some()
+        matches!(self.state, LatestJobState::Running(_))
     }
 
     /// Supersede acceptance; this does not promise to interrupt running code.
     pub(crate) fn supersede(&mut self) {
-        self.last_error = None;
-        self.receiver = None;
+        self.state = LatestJobState::Idle;
     }
 }
 
@@ -341,8 +346,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         drop(sender);
         let mut job = LatestJob::<()> {
-            receiver: Some(receiver),
-            last_error: None,
+            state: LatestJobState::Running(receiver),
         };
         assert_eq!(
             job.poll(),
@@ -359,8 +363,7 @@ mod tests {
     fn injected_spawn_failure_does_not_leave_an_old_job_pending() {
         let (_old_sender, old_receiver) = mpsc::channel();
         let mut job = LatestJob::<()> {
-            receiver: Some(old_receiver),
-            last_error: None,
+            state: LatestJobState::Running(old_receiver),
         };
         let (_sender, receiver) = mpsc::channel();
         let error = job
@@ -379,5 +382,29 @@ mod tests {
         job.start("latest-job-stale", || Ok(1)).unwrap();
         job.start("latest-job-current", || Ok(2)).unwrap();
         assert_eq!(poll_until_settled(&mut job), LatestJobPoll::Ready(2));
+    }
+
+    #[test]
+    fn superseding_retires_both_pending_acceptance_and_retained_failure() {
+        let mut job = LatestJob::<()>::default();
+        let (release, blocked) = mpsc::channel();
+        job.start("superseded-pending", move || {
+            blocked.recv().unwrap();
+            Ok(())
+        })
+        .unwrap();
+        job.supersede();
+        assert!(!job.is_running());
+        assert_eq!(job.poll(), LatestJobPoll::Idle);
+        release.send(()).unwrap();
+        job.start("superseded-failure", || Err("obsolete".into()))
+            .unwrap();
+        assert_eq!(
+            poll_until_settled(&mut job),
+            LatestJobPoll::Failed("obsolete".into())
+        );
+        job.supersede();
+        assert_eq!(job.activity(), crate::activity::Activity::Idle);
+        assert_eq!(job.poll(), LatestJobPoll::Idle);
     }
 }

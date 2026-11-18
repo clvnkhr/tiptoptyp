@@ -738,7 +738,7 @@ fn command_docs(kind: crate::toolchain::ToolKind) -> &'static str {
         Tinymist => "https://myriad-dreamin.github.io/tinymist/feature/cli.html#servers",
         Tectonic => "https://tectonic-typesetting.github.io/book/latest/v2cli/compile.html",
         Texlab => "https://github.com/latex-lsp/texlab/blob/v5.26.0/crates/texlab/src/main.rs",
-        Badness => "https://github.com/jolars/badness/blob/v0.24.0/docs/src/reference/cli.md",
+        Badness => "https://github.com/jolars/badness/blob/v0.29.0/docs/src/reference/cli.md",
         TexFmt => "https://github.com/WGUNDERWOOD/tex-fmt#command-line-options",
     }
 }
@@ -778,7 +778,7 @@ fn command_help(response: egui::Response, kind: crate::toolchain::ToolKind, fiel
                 let (example, reason, docs) = match kind {
                     Typst | Tinymist => (r#"{"TYPST_FONT_PATHS":"/Users/me/fonts"}"#, "Search an extra font directory.", "https://github.com/typst/typst/blob/v0.15.1/crates/typst-cli/src/args.rs"),
                     Tectonic => (r#"{"TECTONIC_CACHE_DIR":"/Users/me/tectonic-cache"}"#, "Store downloaded TeX resources in this directory.", "https://tectonic-typesetting.github.io/book/latest/getting-started/first-document.html#cache"),
-                    Badness => (r#"{"BADNESS_CONFIG":"/Users/me/paper/badness.toml"}"#, "Use this configuration if no project badness.toml is found. Project configuration wins.", "https://github.com/jolars/badness/blob/v0.24.0/docs/src/reference/configuration.md"),
+                    Badness => (r#"{"BADNESS_CONFIG":"/Users/me/paper/badness.toml"}"#, "Use this configuration if no project badness.toml is found. Project configuration wins.", "https://github.com/jolars/badness/blob/v0.29.0/docs/src/reference/configuration.md"),
                     Texlab | TexFmt => (r#"{"RUST_BACKTRACE":"1"}"#, "Include a stack trace if the Rust tool crashes. Normal operation is unchanged.", "https://doc.rust-lang.org/std/backtrace/index.html#environment-variables"),
                 };
                 ui.label(reason); ui.monospace(example);

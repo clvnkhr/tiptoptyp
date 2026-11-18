@@ -1,6 +1,264 @@
 use super::*;
 
 #[test]
+fn first_push_respects_configured_destination_precedence_and_custom_push_refspecs() {
+    for preference in [
+        "remote.pushDefault",
+        "branch-push-remote",
+        "branch-remote",
+        "custom-refspec",
+    ] {
+        let workspace = tempfile::tempdir().unwrap();
+        let origin = tempfile::tempdir().unwrap();
+        let backup = tempfile::tempdir().unwrap();
+        initialize(workspace.path(), "source");
+        for remote in [origin.path(), backup.path()] {
+            text_run(remote, &["init", "--bare"]).unwrap();
+        }
+        let root = workspace.path();
+        text_run(
+            root,
+            &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        )
+        .unwrap();
+        text_run(
+            root,
+            &["remote", "add", "backup", backup.path().to_str().unwrap()],
+        )
+        .unwrap();
+        let branch = text_run(root, &["symbolic-ref", "--short", "HEAD"]).unwrap();
+        let chosen = match preference {
+            "remote.pushDefault" => {
+                text_run(root, &["config", "remote.pushDefault", "backup"]).unwrap();
+                backup.path()
+            }
+            "branch-push-remote" => {
+                text_run(root, &["config", "remote.pushDefault", "origin"]).unwrap();
+                text_run(
+                    root,
+                    &["config", &format!("branch.{branch}.pushRemote"), "backup"],
+                )
+                .unwrap();
+                backup.path()
+            }
+            "branch-remote" => {
+                text_run(
+                    root,
+                    &["config", &format!("branch.{branch}.remote"), "backup"],
+                )
+                .unwrap();
+                backup.path()
+            }
+            _ => {
+                text_run(
+                    root,
+                    &[
+                        "config",
+                        "remote.origin.push",
+                        "HEAD:refs/heads/custom-backup",
+                    ],
+                )
+                .unwrap();
+                origin.path()
+            }
+        };
+        perform(root, Operation::Push).unwrap();
+        let target = if preference == "custom-refspec" {
+            "custom-backup"
+        } else {
+            &branch
+        };
+        assert_eq!(
+            text_run(chosen, &["show", &format!("{target}:main.typ")]).unwrap(),
+            "source",
+            "{preference}"
+        );
+        let untouched = if chosen == origin.path() {
+            backup.path()
+        } else {
+            origin.path()
+        };
+        assert!(
+            text_run(untouched, &["show-ref"]).is_err(),
+            "{preference} pushed to an unintended remote"
+        );
+        if preference == "custom-refspec" {
+            assert!(
+                text_run(
+                    chosen,
+                    &["rev-parse", "--verify", &format!("refs/heads/{branch}")]
+                )
+                .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn private_artifact_guards_cover_case_aliases_without_excluding_similar_names() {
+    for path in [
+        ".tiptoptyp/session.json",
+        ".TIPTOPTYP/session.json",
+        "paper/.TipTopTyp/tree.json",
+    ] {
+        assert!(private_artifact(Path::new(path)), "{path}");
+        let entry = Entry {
+            path: path.into(),
+            index: '?',
+            worktree: '?',
+        };
+        assert!(!entry.stageable());
+        assert!(!entry.revertible());
+    }
+    for path in [
+        ".tiptoptyp-notes.tex",
+        "paper/tiptoptyp.txt",
+        "paper/.tiptoptyp-notes/source.tex",
+    ] {
+        assert!(!private_artifact(Path::new(path)), "{path}");
+    }
+}
+
+#[test]
+fn backup_first_explicit_push_sets_upstream_to_origin_without_publishing_during_setup() {
+    let workspace = tempfile::tempdir().unwrap();
+    let bare = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    text_run(bare.path(), &["init", "--bare"]).unwrap();
+    let expected = setup::inspect(root).unwrap();
+    setup::apply(
+        root,
+        setup::SetupRequest {
+            expected,
+            initial_branch: "backup-main".into(),
+            author_name: "Backup Author".into(),
+            author_email: "backup@example.invalid".into(),
+            origin: bare.path().to_string_lossy().into_owned(),
+        },
+    )
+    .unwrap();
+    text_run(root, &["config", "--local", "commit.gpgsign", "false"]).unwrap();
+    fs::create_dir(root.join(".tiptoptyp")).unwrap();
+    fs::write(root.join(".tiptoptyp/session.json"), b"private session").unwrap();
+    fs::write(root.join("main.tex"), b"project source").unwrap();
+    fs::write(root.join("figure.pdf"), b"project PDF asset").unwrap();
+    assert!(text_run(bare.path(), &["show-ref"]).is_err());
+    perform(root, Operation::StageAllAndCommit("First backup".into())).unwrap();
+    assert!(
+        text_run(bare.path(), &["show-ref"]).is_err(),
+        "committing must stay local"
+    );
+    perform(root, Operation::Push).unwrap();
+    assert_eq!(
+        text_run(root, &["rev-parse", "--abbrev-ref", "@{upstream}"]).unwrap(),
+        "origin/backup-main"
+    );
+    assert_eq!(
+        text_run(bare.path(), &["show", "backup-main:main.tex"]).unwrap(),
+        "project source"
+    );
+    assert_eq!(
+        text_run(bare.path(), &["show", "backup-main:figure.pdf"]).unwrap(),
+        "project PDF asset"
+    );
+    assert!(
+        text_run(
+            bare.path(),
+            &["show", "backup-main:.tiptoptyp/session.json"]
+        )
+        .is_err()
+    );
+    assert!(!root.join(".gitignore").exists());
+}
+
+#[test]
+fn pushing_requires_a_commit_an_attached_branch_and_a_remote() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    perform(root, Operation::Init).unwrap();
+    assert!(
+        perform(root, Operation::Push)
+            .unwrap_err()
+            .contains("first commit")
+    );
+    initialize(root, "source");
+    assert!(
+        perform(root, Operation::Push)
+            .unwrap_err()
+            .contains("remote URL")
+    );
+    text_run(root, &["checkout", "--detach"]).unwrap();
+    assert!(
+        perform(root, Operation::Push)
+            .unwrap_err()
+            .contains("detached HEAD")
+    );
+}
+
+#[test]
+fn backend_commit_refuses_externally_staged_editor_data_without_touching_head_or_index() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    initialize(root, "original");
+    fs::create_dir(root.join(".tiptoptyp")).unwrap();
+    fs::write(root.join(".tiptoptyp/session.json"), b"private session").unwrap();
+    text_run(root, &["add", "--force", "--", ".tiptoptyp/session.json"]).unwrap();
+    let head = text_run(root, &["rev-parse", "HEAD"]).unwrap();
+    let index = text_run(root, &["write-tree"]).unwrap();
+    assert!(
+        perform(root, Operation::Commit("Must not leak".into()))
+            .unwrap_err()
+            .contains("Unstage .tiptoptyp")
+    );
+    assert_eq!(text_run(root, &["rev-parse", "HEAD"]).unwrap(), head);
+    assert_eq!(text_run(root, &["write-tree"]).unwrap(), index);
+    assert_eq!(
+        fs::read(root.join(".tiptoptyp/session.json")).unwrap(),
+        b"private session"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn source_mutating_git_operations_cannot_bypass_overleaf_working_copy_ownership() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    initialize(root, "initial");
+    fs::create_dir(root.join("paper")).unwrap();
+    fs::create_dir(root.join("paper/.tiptoptyp")).unwrap();
+    fs::write(root.join("paper/.tiptoptyp/overleaf-project.json"), br#"{"version":1,"project_url":"https://www.overleaf.com/project/0123456789abcdef01234567","persistent":true}"#).unwrap();
+    fs::write(root.join("paper/source.tex"), b"saved source").unwrap();
+    perform(root, Operation::StageAllAndCommit("Add project".into())).unwrap();
+    fs::write(root.join("paper/source.tex"), b"offline edit").unwrap();
+    let paper = root.join("paper");
+    assert!(snapshot(&paper).unwrap().managed_overleaf);
+    assert!(
+        perform(&paper, Operation::Pull)
+            .unwrap_err()
+            .contains("Overleaf owns")
+    );
+    assert!(
+        perform(root, Operation::Revert(vec!["paper/source.tex".into()]))
+            .unwrap_err()
+            .contains("Overleaf")
+    );
+    assert_eq!(
+        fs::read(root.join("paper/source.tex")).unwrap(),
+        b"offline edit"
+    );
+    // Backup operations preserve source ownership and are still available.
+    perform(
+        &paper,
+        Operation::StageAllAndCommit("Offline backup".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        text_run(root, &["show", "HEAD:paper/source.tex"]).unwrap(),
+        "offline edit"
+    );
+}
+
+#[test]
 fn stage_all_and_commit_handles_new_modified_deleted_and_literal_paths() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();

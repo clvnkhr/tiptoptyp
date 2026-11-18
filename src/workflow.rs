@@ -127,27 +127,28 @@ pub(crate) fn poll_dialog<T>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PdfWriteIntent {
     Compile,
+    CompileNew,
     Export,
 }
 
 impl PdfWriteIntent {
     pub(crate) const fn dialog_title(self) -> &'static str {
         match self {
-            Self::Compile => "Compile PDF",
+            Self::Compile | Self::CompileNew => "Compile PDF",
             Self::Export => "Export PDF",
         }
     }
 
     pub(crate) const fn completed_verb(self) -> &'static str {
         match self {
-            Self::Compile => "Compiled",
+            Self::Compile | Self::CompileNew => "Compiled",
             Self::Export => "Exported",
         }
     }
 
     pub(crate) const fn queued_message(self) -> &'static str {
         match self {
-            Self::Compile => "Compile queued for the next successful build",
+            Self::Compile | Self::CompileNew => "Compile queued for the next successful build",
             Self::Export => "Export queued for the next successful build",
         }
     }
@@ -155,6 +156,9 @@ impl PdfWriteIntent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingExport {
+    /// The adjacent Compile destination follows a resolved TeX root. An
+    /// explicitly chosen destination never changes after admission.
+    pub(crate) automatic_destination: bool,
     pub(crate) path: PathBuf,
     pub(crate) source: PdfSource,
     pub(crate) intent: PdfWriteIntent,
@@ -200,6 +204,7 @@ pub(crate) enum DeferredDocumentAction {
     CloseTab,
     LoadPath(PathBuf),
     OpenFolder(PathBuf),
+    ApproveWorkspaceSwitch,
     FollowFileLink {
         path: PathBuf,
         page: Option<usize>,
@@ -265,16 +270,52 @@ pub(crate) enum AppModalChoice {
     Cancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveDomain {
+    Local,
+    Overleaf,
+    Offline,
+}
+
+/// Admission identity, distinct from document revisions and protocol request
+/// numbers. Repeated saves of unchanged text still own different operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SaveOperationId {
+    owner: tiptoptyp_core::document::WindowSessionId,
+    serial: u64,
+}
+
+impl SaveOperationId {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn value(self) -> u64 {
+        self.serial
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SaveOperation {
+    pub(crate) id: SaveOperationId,
+    pub(crate) key: DocumentKey,
+    pub(crate) domain: SaveDomain,
+}
+
+#[derive(Default)]
+enum SaveState {
+    #[default]
+    Idle,
+    Writing(SaveOperation),
+}
+
 /// Owns document replacement, save continuation, modal, and file-dialog
 /// lifecycles. Every asynchronous action carries a `DocumentKey`, preventing
 /// it from applying to a replacement document or a newer revision.
 #[derive(Default)]
 pub(crate) struct DocumentWorkflow {
-    pub(crate) save_in_flight: bool,
+    save: SaveState,
+    next_save: u64,
     flow:
         tiptoptyp_core::workflow::Workflow<PendingDocumentAction, AppModal, PendingDocumentDialog>,
-    pub(crate) modal_had_focus: bool,
-    pub(crate) modal_suspended: bool,
+    pub(crate) modal_focus: crate::child_view::ModalFocus,
     pub(crate) pending_export: Option<PendingExport>,
     pub(crate) pending_export_dialog: Option<PendingDialog<ExportDialogRequest>>,
     close_permit: Option<DocumentKey>,
@@ -282,6 +323,49 @@ pub(crate) struct DocumentWorkflow {
 }
 
 impl DocumentWorkflow {
+    /// The document workflow owns admission; each IO/protocol adapter retains
+    /// this operation token until its own terminal completion or cancellation.
+    pub(crate) fn begin_save(
+        &mut self,
+        key: DocumentKey,
+        domain: SaveDomain,
+    ) -> Result<SaveOperationId, &'static str> {
+        if self.save_in_flight() {
+            return Err("A document save is already in progress");
+        }
+        let next = self
+            .next_save
+            .checked_add(1)
+            .ok_or("Document save identities exhausted")?;
+        let id = SaveOperationId {
+            owner: key.owner,
+            serial: next,
+        };
+        self.next_save = next;
+        self.save = SaveState::Writing(SaveOperation { id, key, domain });
+        Ok(id)
+    }
+
+    /// A late acknowledgement or old writer can never release a newer save.
+    pub(crate) fn end_save(&mut self, id: SaveOperationId) -> bool {
+        if !matches!(self.save, SaveState::Writing(operation) if operation.id == id) {
+            return false;
+        }
+        self.save = SaveState::Idle;
+        true
+    }
+
+    pub(crate) fn current_save(&self) -> Option<SaveOperation> {
+        match self.save {
+            SaveState::Idle => None,
+            SaveState::Writing(operation) => Some(operation),
+        }
+    }
+
+    pub(crate) fn save_in_flight(&self) -> bool {
+        matches!(self.save, SaveState::Writing(_))
+    }
+
     pub(crate) fn complete_save(
         &mut self,
         token: Option<tiptoptyp_core::workflow::SaveContinuationToken>,
@@ -341,7 +425,7 @@ impl DocumentWorkflow {
         let _ = self.flow.choose(dialog);
     }
     pub(crate) fn finish_dispatch(&mut self) {
-        if self.save_in_flight {
+        if self.save_in_flight() {
             return;
         }
         self.flow.finish_dispatch();
@@ -363,8 +447,16 @@ impl DocumentWorkflow {
         result
     }
     pub(crate) fn is_busy(&self, rename_active: bool, tool_picker_active: bool) -> bool {
+        self.save_in_flight() || self.is_transaction_busy(rename_active, tool_picker_active)
+    }
+    /// A background save can pause navigation without cancelling its owner.
+    /// Prompts, dialogs and queued document actions still own the transaction.
+    pub(crate) fn is_transaction_busy(
+        &self,
+        rename_active: bool,
+        tool_picker_active: bool,
+    ) -> bool {
         self.flow.is_busy()
-            || self.save_in_flight
             || rename_active
             || self.pending_export_dialog.is_some()
             || tool_picker_active
@@ -410,8 +502,7 @@ impl DocumentWorkflow {
             ),
             pending,
         });
-        self.modal_had_focus = false;
-        self.modal_suspended = false;
+        self.modal_focus = crate::child_view::ModalFocus::default();
     }
 
     pub(crate) fn present_error(&mut self, message: String) {
@@ -424,14 +515,12 @@ impl DocumentWorkflow {
         if let Err(modal) = self.flow.show_prompt(modal) {
             self.deferred_errors.push_back(modal);
         }
-        self.modal_had_focus = false;
-        self.modal_suspended = false;
+        self.modal_focus = crate::child_view::ModalFocus::default();
     }
 
     pub(crate) fn clear_modal(&mut self) {
         self.flow.clear_prompt();
-        self.modal_had_focus = false;
-        self.modal_suspended = false;
+        self.modal_focus = crate::child_view::ModalFocus::default();
     }
 }
 
@@ -462,6 +551,95 @@ mod tests {
         epoch: 3,
         revision: 8,
     };
+
+    #[test]
+    fn save_admission_is_exclusive_across_domains_and_stale_completion_cannot_release_it() {
+        let mut workflow = DocumentWorkflow::default();
+        assert!(!workflow.save_in_flight());
+        assert_eq!(workflow.current_save(), None);
+        let mut previous = None;
+        for domain in [SaveDomain::Local, SaveDomain::Overleaf, SaveDomain::Offline] {
+            let id = workflow.begin_save(KEY, domain).unwrap();
+            assert_eq!(
+                workflow.current_save(),
+                Some(SaveOperation {
+                    id,
+                    key: KEY,
+                    domain
+                })
+            );
+            assert!(workflow.save_in_flight());
+            assert!(workflow.is_busy(false, false));
+            for rejected in [SaveDomain::Local, SaveDomain::Overleaf, SaveDomain::Offline] {
+                assert!(workflow.begin_save(KEY, rejected).is_err());
+                assert_eq!(workflow.current_save().unwrap().id, id);
+            }
+            if let Some(previous) = previous {
+                assert_ne!(
+                    id, previous,
+                    "unchanged source does not reuse save identity"
+                );
+                assert!(!workflow.end_save(previous));
+                assert_eq!(workflow.current_save().unwrap().id, id);
+            }
+            assert!(workflow.end_save(id));
+            assert!(!workflow.end_save(id));
+            assert!(!workflow.save_in_flight());
+            assert!(!workflow.is_busy(false, false));
+            previous = Some(id);
+        }
+    }
+
+    #[test]
+    fn a_running_save_holds_dispatch_without_cancelling_its_save_continuation() {
+        let mut workflow = DocumentWorkflow::default();
+        workflow.queue_action(PendingDocumentAction {
+            action: DeferredDocumentAction::CloseWindow,
+            key: KEY,
+            allow_discard: false,
+            description: "closing".into(),
+        });
+        workflow.take_action().unwrap();
+        close_after_save(&mut workflow, KEY);
+        let continuation = workflow.continuation_token();
+        let id = workflow.begin_save(KEY, SaveDomain::Local).unwrap();
+        workflow.finish_dispatch();
+        assert_eq!(workflow.continuation_token(), continuation);
+        assert!(workflow.end_save(id));
+        workflow.cancel_continuation();
+        workflow.finish_dispatch();
+        assert!(!workflow.is_busy(false, false));
+    }
+
+    #[test]
+    fn save_operation_id_exhaustion_rejects_admission_without_reusing_an_old_id() {
+        let mut workflow = DocumentWorkflow {
+            next_save: u64::MAX,
+            ..Default::default()
+        };
+        assert!(workflow.begin_save(KEY, SaveDomain::Local).is_err());
+        assert_eq!(workflow.current_save(), None);
+        assert!(!workflow.save_in_flight());
+    }
+
+    #[test]
+    fn equal_sequence_numbers_from_other_windows_cannot_release_save_ownership() {
+        let mut first = DocumentWorkflow::default();
+        let mut second = DocumentWorkflow::default();
+        let other = DocumentKey {
+            owner: tiptoptyp_core::document::WindowSessionId::new(2),
+            ..KEY
+        };
+        let first_id = first.begin_save(KEY, SaveDomain::Local).unwrap();
+        let second_id = second.begin_save(other, SaveDomain::Local).unwrap();
+        assert_ne!(first_id, second_id);
+        assert!(!first.end_save(second_id));
+        assert!(!second.end_save(first_id));
+        assert_eq!(first.current_save().unwrap().id, first_id);
+        assert_eq!(second.current_save().unwrap().id, second_id);
+        assert!(first.end_save(first_id));
+        assert!(second.end_save(second_id));
+    }
 
     fn save_fixture() -> crate::document::DocumentSession {
         let mut document = crate::document::DocumentSession::new(

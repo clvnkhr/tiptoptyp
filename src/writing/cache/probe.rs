@@ -412,7 +412,7 @@ fn export_production_harper_fragments() {
         .iter()
         .map(|document| export(document, input.samples))
         .collect();
-    let output_value = json!({"schema": 1, "harper_version": "2.11.0", "profile": "release",
+    let output_value = json!({"schema": 1, "harper_version": "2.13.0", "profile": "release",
         "os": std::env::consts::OS, "architecture": std::env::consts::ARCH,
         "coordinate_unit": "Unicode scalar, zero-based, half-open",
         "provenance": "Production Checker::check_with_options; cached paragraphs replayed with the production dictionary and Harper Document normalization. Export asserts exact diagnostic equality.",

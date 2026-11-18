@@ -1,6 +1,6 @@
 # Native terminal notices
 
-libghostty-vt-sys 0.2.1 statically builds Ghostty commit
+libghostty-vt-sys 0.2.2 statically builds Ghostty commit
 `a887df42c56f6de86c0fe6da9c4eeca37931e083`. Cargo's Rust license scan does not
 cover its Zig/C++ inputs. `cargo xtask generate-notices` also includes these
 notices in the packaged `THIRD_PARTY_NOTICES`:
@@ -28,3 +28,12 @@ section. Zig's bundled compiler runtime uses the MIT license from the Zig
 word supplement. It is included by `cargo xtask generate-notices`. See
 [`assets/dictionaries/README.md`](../../assets/dictionaries/README.md) for the
 pinned dataset, selection procedure and additions.
+
+## GitHub sign-in helper
+
+GitHub CLI 2.103.3 is downloaded on demand from its official release for GitHub
+sign-in and repository creation. Its MIT licence is retained in
+[`resources/github-cli/LICENSE`](../../resources/github-cli/LICENSE), included by
+`cargo xtask generate-notices`, and installed beside the verified helper.
+[`resources/github-cli/manifest.json`](../../resources/github-cli/manifest.json)
+pins each supported release archive and executable by SHA-256.

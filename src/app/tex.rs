@@ -104,19 +104,19 @@ impl EditorApp {
                 .unwrap_or_default()
         } else {
             (
-                self.tinymist_sync.generation,
-                self.tinymist_sync.current_uri.as_deref(),
+                self.tinymist_sync.generation(),
+                self.tinymist_sync.current_uri(),
             )
         }
     }
     pub(super) fn editor_lsp_ready(&self) -> bool {
         if self.document().kind() == DocumentKind::Tex {
-            self.settings.tex.texlab_enabled && self.tex_service.texlab_ready
+            self.settings.tex.texlab_enabled && self.tex_service.ready(crate::tex::Provider::Texlab)
         } else {
             tinymist_language_features_ready(
                 self.document().kind(),
                 self.preview.connection.is_ready(),
-                self.tinymist_sync.current_open,
+                self.tinymist_sync.current_open(),
             )
         }
     }
@@ -153,8 +153,8 @@ impl EditorApp {
                     let key = self.document().key();
                     let ready = self.settings.tex.formatter
                         != crate::tex::settings::Formatter::Badness
-                        || self.tex_service.badness_ready;
-                    if take_ready_format_handoff(&mut self.format_when_service_ready, key, ready) {
+                        || self.tex_service.ready(crate::tex::Provider::Badness);
+                    if self.formatting.take_ready_saved_document(key, ready) {
                         self.request_format_after_manual_save();
                     }
                 }
@@ -165,8 +165,11 @@ impl EditorApp {
                         self.activity.completion = None;
                         self.activity.hover = None;
                     }
-                    if provider == Provider::Badness && self.format_request_key.is_some() {
-                        self.format_request_key = None;
+                    if provider == Provider::Badness
+                        && self.settings.tex.formatter == crate::tex::settings::Formatter::Badness
+                        && self.formatting.request_key().is_some()
+                    {
+                        self.formatting.cancel();
                         self.activity.format_error = Some(message.clone());
                     }
                     // A provider failure is not a successful empty diagnostic response.
@@ -220,16 +223,23 @@ impl EditorApp {
                         .collect();
                     self.update_tex_diagnostics();
                 }
-                Event::Formatted { request, edits } if self.embedded_tex.is_some() => {
-                    self.receive_embedded_format(context, request.identity.key, edits);
+                Event::Formatted { request, edits } => {
+                    let RequestKind::Format { token } = request.kind else {
+                        continue;
+                    };
+                    if self.embedded_tex.is_some() {
+                        self.receive_embedded_format(context, request.identity.key, token, edits);
+                    } else {
+                        self.receive_formatted_document(
+                            context,
+                            request.identity.generation,
+                            &request.identity.uri,
+                            revision_as_i32(request.identity.key.revision),
+                            token,
+                            edits,
+                        );
+                    }
                 }
-                Event::Formatted { request, edits } => self.receive_formatted_document(
-                    context,
-                    request.identity.generation,
-                    &request.identity.uri,
-                    revision_as_i32(request.identity.key.revision),
-                    edits,
-                ),
                 Event::Completed {
                     request,
                     is_incomplete,
@@ -265,13 +275,33 @@ impl EditorApp {
                             token,
                         )
                     {
-                        hover.detail = contents.map(Arc::from);
+                        hover.complete_response(
+                            &request.identity.uri,
+                            revision_as_i32(request.identity.key.revision),
+                            token,
+                            contents.map(Arc::from),
+                        );
                     }
                 }
                 Event::RequestFailed { request, message } => {
+                    if let RequestKind::Format { token } = request.kind {
+                        // The loop already validated the TeX service's exact
+                        // identity, including for embedded TeX in a Typst tab.
+                        self.finish_formatting_failure(request.identity.key, token, message);
+                        continue;
+                    }
                     match request.kind {
                         RequestKind::Hover { token, .. } if self.activity.hover == Some(token) => {
                             self.activity.hover = None;
+                            if let Some(hover) = &mut self.editor_hover
+                                && hover.accepts_response(
+                                    &request.identity.uri,
+                                    revision_as_i32(request.identity.key.revision),
+                                    token,
+                                )
+                            {
+                                hover.phase = HoverPhase::Unavailable;
+                            }
                             self.activity.intelligence_error = Some(message.clone());
                         }
                         RequestKind::Completion { token, .. }
@@ -281,11 +311,6 @@ impl EditorApp {
                             self.activity.intelligence_error = Some(message.clone());
                         }
                         _ => {}
-                    }
-                    if matches!(request.kind, RequestKind::Format) {
-                        self.activity.format_error = Some(message.clone());
-                        self.format_request_key = None;
-                        self.manual_format_revision = None;
                     }
                     if matches!(request.kind, RequestKind::Completion { .. }) {
                         self.editor_completion = None;
@@ -301,11 +326,13 @@ impl EditorApp {
         let ready = (self.document().kind() == DocumentKind::Tex || self.embedded_tex.is_some())
             && self.tex_service.identity().is_some_and(|s| s.key == key)
             && match self.settings.tex.formatter {
-                crate::tex::settings::Formatter::Badness => self.tex_service.badness_ready,
+                crate::tex::settings::Formatter::Badness => {
+                    self.tex_service.ready(crate::tex::Provider::Badness)
+                }
                 crate::tex::settings::Formatter::TexFmt => self.tex_tools.tex_fmt.is_available(),
                 crate::tex::settings::Formatter::Disabled => true,
             };
-        if take_ready_format_handoff(&mut self.format_when_service_ready, key, ready) {
+        if self.formatting.take_ready_saved_document(key, ready) {
             self.request_format_after_manual_save();
         }
     }
@@ -335,27 +362,33 @@ impl EditorApp {
         &mut self,
         context: &egui::Context,
         key: DocumentKey,
-        edits: Option<Vec<LspTextEdit>>,
+        request_token: u64,
+        edits: Vec<LspTextEdit>,
     ) {
-        if self.overleaf_source_locked() {
-            self.format_request_key = None;
-            self.manual_format_revision = None;
+        if self.formatting.request_key_for(request_token) != Some(key)
+            || self.document().key() != key
+        {
             return;
         }
-        if self.format_request_key != Some(key) || self.document().key() != key {
+        let save_after_format =
+            self.formatting.complete(key, request_token) == Some(formatting::Intent::Save);
+        if self.source_edit_blocked() {
             return;
         }
-        self.format_request_key = None;
-        let save_after_format = self.manual_format_revision == Some(key.revision);
         let result = (|| -> Result<(), String> {
             let projection = self.embedded_tex.as_ref().ok_or("Math source changed")?;
-            let edits = edits.unwrap_or_default();
             let formatted = tiptoptyp_core::text::apply_text_edits(
                 &projection.source,
                 &edits,
                 [tiptoptyp_core::text::ScalarOffset::new(0); 2],
             )?;
             let edits = projection.formatted_edits(self.document().source(), &formatted.text)?;
+            let edits = super::format_regions::protect(
+                self.document().source(),
+                self.document().kind(),
+                &self.settings.comment_controls,
+                &edits,
+            )?;
             let snapshot = self.editor_snapshot(context);
             let applied = tiptoptyp_core::text::apply_text_edits(
                 self.document().source(),
@@ -366,6 +399,9 @@ impl EditorApp {
                 ]
                 .map(tiptoptyp_core::text::ScalarOffset::new),
             )?;
+            if applied.text == *self.document().source() {
+                return Ok(());
+            }
             self.document_mut()
                 .edit(snapshot.cursor, |source| *source = applied.text);
             self.pending_editor_selection = Some(EditorSelection::Focus(
@@ -377,15 +413,14 @@ impl EditorApp {
             }
             Ok(())
         })();
-        self.manual_format_revision = None;
         if let Err(error) = result {
             self.activity.format_error = Some(error.clone());
             self.show_file_error(error);
         }
     }
 
-    pub(super) fn request_tex_format(&mut self) {
-        if self.overleaf_source_locked() {
+    pub(super) fn request_tex_format(&mut self, intent: formatting::Intent) {
+        if self.source_edit_blocked() {
             return;
         }
         self.activity.format_error = None;
@@ -399,12 +434,12 @@ impl EditorApp {
                 message: "TeX source is still synchronizing; try formatting again".into(),
                 kind: NoticeKind::Info,
             });
-            self.manual_format_revision = None;
             return;
         }
-        match self.tex_service.request(RequestKind::Format) {
+        let key = self.document().key();
+        let token = self.formatting.request(key, intent);
+        match self.tex_service.request(RequestKind::Format { token }) {
             Ok(()) => {
-                self.format_request_key = Some(self.document().key());
                 self.notice = Some(Notice {
                     message: format!("Formatting with {}…", self.settings.tex.formatter.label()),
                     kind: NoticeKind::Info,
@@ -412,8 +447,7 @@ impl EditorApp {
             }
             Err(message) => {
                 self.activity.format_error = Some(message.clone());
-                self.format_request_key = None;
-                self.manual_format_revision = None;
+                self.formatting.complete(key, token);
                 self.notice = Some(Notice {
                     message,
                     kind: NoticeKind::Error,
@@ -426,5 +460,68 @@ fn provider_index(provider: Provider) -> usize {
     match provider {
         Provider::Texlab => 0,
         Provider::Badness => 1,
+    }
+}
+
+#[cfg(test)]
+mod formatting_region_tests {
+    use super::*;
+
+    #[test]
+    fn embedded_math_replies_preserve_disabled_payloads_and_apply_enabled_payloads_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let source = "//fmt: off\n$\\alpha+ x$\n//fmt: on\n$\\beta+ y$\n";
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.settings.auto_save = false;
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("main.typ"),
+            DocumentKind::Typst,
+            None,
+        );
+        app.document_mut().set_history_reset(false);
+        let projection = crate::embedded_tex::Projection::new(source);
+        let formatted = projection
+            .source
+            .replace("\\alpha+ x", "\\alpha + x")
+            .replace("\\beta+ y", "\\beta + y");
+        let edit = LspTextEdit {
+            range: LspRange {
+                start: LspPosition::new(0, 0),
+                end: lsp_position_at_scalar(
+                    &projection.source,
+                    ScalarOffset::new(projection.source.chars().count()),
+                ),
+            },
+            new_text: formatted,
+        };
+        app.embedded_tex = Some(projection);
+        let key = app.document().key();
+        app.formatting.request(key, formatting::Intent::Edit);
+        app.receive_embedded_format(
+            &context,
+            key,
+            app.formatting.request_token().unwrap_or(0),
+            vec![edit.clone()],
+        );
+        assert_eq!(
+            app.document().source(),
+            &source.replace("\\beta+ y", "\\beta + y")
+        );
+        assert!(app.local_save.pending().is_none());
+        let current = app.document().key();
+        app.formatting.request(key, formatting::Intent::Edit);
+        app.receive_embedded_format(
+            &context,
+            key,
+            app.formatting.request_token().unwrap_or(0),
+            vec![edit],
+        );
+        assert_eq!(app.document().key(), current);
+        app.document_mut()
+            .history_step(false, CCursorRange::default())
+            .unwrap();
+        assert_eq!(app.document().source(), source);
     }
 }

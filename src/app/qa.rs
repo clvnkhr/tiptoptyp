@@ -669,7 +669,7 @@ impl QaSession {
                     app.prepare_editor_source_data();
                 }
                 app.view_mode = ViewMode::Code;
-                let cursor = SOURCE.find('{').unwrap();
+                let cursor = SOURCE.find("2, 3").unwrap() + 3;
                 app.pending_editor_selection = Some(EditorSelection::Focus(cursor..cursor));
             }
             UiSnapshotScene::StickyContext | UiSnapshotScene::FindStickyContext => {
@@ -1069,7 +1069,7 @@ impl QaSession {
         app.find_bar.replace_visible = false;
         app.view_mode = ViewMode::Split;
         app.find_bar.search.clear();
-        app.find_bar.focus = false;
+        app.find_bar.clear_focus_request();
         app.pending_editor_selection = None;
         app.diagnostic_tooltip = None;
         app.close_app_popup();
@@ -1082,8 +1082,7 @@ impl QaSession {
             context,
             scoped_child_viewport_id(context, "tiptoptyp-table-editor"),
         );
-        app.rename_overlay_had_focus = false;
-        app.rename_overlay_suspended = false;
+        app.rename_overlay_focus = ModalFocus::default();
         // Each capture step starts from the canonical Settings page, rather
         // than inheriting a category, search, or JSON mode from an earlier step.
         app.settings_window.lock().unwrap().ui = settings_panel::SettingsUiState::default();
@@ -1156,6 +1155,32 @@ fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPan
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn delimiter_scene_keeps_the_caret_inside_the_innermost_pair() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.snapshot_scene = Some(UiSnapshotScene::DelimiterMatch);
+        let mut qa = QaSession::default();
+        qa.prepare(&mut app, &context);
+        let source = app.document().source();
+        let open = source.find("(2, 3)").unwrap();
+        let close = open + "(2, 3".len();
+        let cursor = open + 4;
+        assert!(matches!(
+            app.pending_editor_selection.as_ref(),
+            Some(EditorSelection::Focus(range)) if range == &(cursor..cursor)
+        ));
+        assert_eq!(
+            app.editor_data.matching_delimiters(cursor),
+            Some([open..open + 1, close..close + 1])
+        );
+        let key = app.document().key();
+        qa.prepare(&mut app, &context);
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.view_mode, ViewMode::Code);
+    }
 
     #[test]
     fn pdf_backed_capture_steps_request_a_new_artifact_after_source_restoration() {
@@ -1372,7 +1397,7 @@ mod tests {
                 let mut window = app.settings_window.lock().unwrap();
                 window.ui.category = SettingsSection::Tools;
                 window.ui.query = "prior scene".into();
-                window.ui.json_mode = true;
+                window.ui.mode = super::settings_panel::SettingsMode::Json;
                 window.ui.scroll_target = Some(SettingsTarget::TypstCompiler);
             }
             qa.set_step(
@@ -1393,7 +1418,7 @@ mod tests {
             let window = app.settings_window.lock().unwrap();
             assert_eq!(window.ui.category, SettingsSection::Appearance);
             assert!(window.ui.query.is_empty());
-            assert!(!window.ui.json_mode);
+            assert!(!window.ui.shows_json());
             assert!(window.ui.scroll_target.is_none());
         }
         app.document_mut()

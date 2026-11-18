@@ -20,7 +20,7 @@ use process::JsonLineProcess;
 #[path = "liquid_notices.rs"]
 mod notices;
 #[path = "liquid_resources.rs"]
-mod resources;
+pub(crate) mod resources;
 
 #[path = "../build_support/liquid_manifest.rs"]
 pub(crate) mod manifest;
@@ -183,7 +183,7 @@ impl Client {
             .collect();
         // Retain a healthy helper after an input-length/tokenizer error. A
         // failed IPC exchange is dropped here on the application worker.
-        if loaded.inference.failed {
+        if !loaded.inference.is_reusable() {
             self.model = None;
         }
         result
@@ -290,10 +290,15 @@ fn check_platform() -> Result<(), String> {
     #[cfg(not(target_os = "macos"))]
     Err("Liquid currently supports macOS only.".into())
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModelHealth {
+    Ready,
+    Invalidated,
+}
 struct NativeModel {
     process: JsonLineProcess,
     next_id: u64,
-    failed: bool,
+    health: ModelHealth,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -313,6 +318,9 @@ struct Reply {
     error: Option<String>,
 }
 impl NativeModel {
+    fn is_reusable(&self) -> bool {
+        self.health == ModelHealth::Ready
+    }
     fn load(
         root: &Path,
         threads: u8,
@@ -349,7 +357,7 @@ impl NativeModel {
         Ok(Self {
             process,
             next_id: 0,
-            failed: false,
+            health: ModelHealth::Ready,
         })
     }
     #[cfg(test)]
@@ -370,7 +378,7 @@ impl NativeModel {
         }
         let result = self.predict_validated(ids, cancel);
         if result.is_err() {
-            self.failed = true;
+            self.health = ModelHealth::Invalidated;
         }
         result
     }
@@ -558,7 +566,7 @@ fn verify_contents(
         hasher.update(&buffer[..count]);
     }
     check_cancelled(cancel)?;
-    if actual != bytes || format!("{:x}", hasher.finalize()) != expected {
+    if actual != bytes || hex::encode(hasher.finalize()) != expected {
         return Err("Liquid file checksum does not match".into());
     }
     Ok(())
@@ -808,9 +816,9 @@ mod tests {
                     name: name.into(),
                     target: target.map(str::to_owned),
                     bytes: bytes.len() as u64,
-                    sha256: format!("{:x}", Sha256::digest(&bytes)),
+                    sha256: hex::encode(Sha256::digest(&bytes)),
                     compressed_bytes: archive.len() as u64,
-                    compressed_sha256: format!("{:x}", Sha256::digest(&archive)),
+                    compressed_sha256: hex::encode(Sha256::digest(&archive)),
                 };
                 let path = directory.join(file.archive_relative_path());
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1193,7 +1201,7 @@ mod tests {
     #[test]
     fn cancellation_during_hashing_is_reported_as_cancelled_without_retrying_or_finishing() {
         let bytes = vec![b'x'; 128 * 1024];
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let hash = hex::encode(Sha256::digest(&bytes));
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let input = CancelDuringRead {
             inner: &bytes[..],
@@ -1259,7 +1267,7 @@ mod tests {
         }
         let bytes = b"decoded but not published";
         let archive = codec::encode_fixture(bytes);
-        let hash = format!("{:x}", Sha256::digest(bytes));
+        let hash = hex::encode(Sha256::digest(bytes));
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let mut output = CancelDuringWrite {
             bytes: Vec::new(),
@@ -1345,7 +1353,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("asset");
         fs::write(&path, b"correct").unwrap();
-        let hash = format!("{:x}", Sha256::digest(b"correct"));
+        let hash = hex::encode(Sha256::digest(b"correct"));
         verify_file(&path, 7, &hash).unwrap();
         fs::write(&path, b"changed").unwrap();
         assert!(verify_file(&path, 7, &hash).is_err());
@@ -1454,7 +1462,7 @@ mod tests {
         let path = config.model_directory().join(file.relative_path());
         let changed = vec![b'x'; file.bytes as usize];
         fs::write(path, &changed).unwrap();
-        file.sha256 = format!("{:x}", Sha256::digest(&changed));
+        file.sha256 = hex::encode(Sha256::digest(&changed));
         fs::write(
             config.model_directory().join(manifest::MANIFEST_NAME),
             serde_json::to_vec(&forged).unwrap(),
@@ -1476,15 +1484,18 @@ mod tests {
         let mut model = NativeModel {
             process: JsonLineProcess::spawn(&mut command).unwrap(),
             next_id: 0,
-            failed: false,
+            health: ModelHealth::Ready,
         };
         assert!(model.predict(&[]).is_err());
         assert!(model.predict(&[64_400]).is_err());
         assert!(
-            !model.failed,
+            model.is_reusable(),
             "invalid input must not discard a healthy model"
         );
         assert!(model.predict(&[1]).is_err());
-        assert!(model.failed, "a stale reply must invalidate the process");
+        assert!(
+            !model.is_reusable(),
+            "a stale reply must invalidate the process"
+        );
     }
 }

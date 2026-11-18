@@ -502,6 +502,104 @@ fn snippet_position(source: &str, scalar: usize) -> LspPosition {
     lsp_position_at_scalar(source, ScalarOffset::new(scalar))
 }
 
+/// Magic comments are meaningful only in the bounded, comment-only header.
+/// This check is shared by all matching candidates, rather than scanning the
+/// document once for every suggestion. It also excludes verbatim and math.
+struct TexMagicTrigger<'a> {
+    start_byte: usize,
+    directive: Option<(&'a str, &'a str)>,
+}
+
+fn tex_magic_trigger(source: &str, start: usize, end: usize) -> Option<TexMagicTrigger<'_>> {
+    let bom = usize::from(source.starts_with('\u{feff}')) * '\u{feff}'.len_utf8();
+    if end.saturating_sub(bom) > crate::tex::magic::MAX_HEADER_BYTES {
+        return None;
+    }
+    let line_start = source[..start].rfind('\n').map_or(0, |at| at + 1);
+    let line = source[line_start..end].trim_start_matches([' ', '\t', '\r', '\u{feff}']);
+    let trigger = if let Some(comment) = line.strip_prefix('%') {
+        let comment = comment.trim_start();
+        let directive = if let Some(command) = comment.strip_prefix('!') {
+            let command = command.trim_start();
+            let marker_end = command.find(char::is_whitespace).unwrap_or(command.len());
+            let marker = &command[..marker_end];
+            if !marker.eq_ignore_ascii_case("tex") && !marker.eq_ignore_ascii_case("bib") {
+                return None;
+            }
+            let query = command[marker_end..].trim_start();
+            if !query.chars().all(|c| c.is_ascii_alphabetic() || c == '-') {
+                return None;
+            }
+            Some((marker, query))
+        } else {
+            if comment != &source[start..end] {
+                return None;
+            }
+            None
+        };
+        TexMagicTrigger {
+            start_byte: end - line.len(),
+            directive,
+        }
+    } else {
+        if source[line_start..start]
+            .chars()
+            .any(|c| !matches!(c, ' ' | '\t' | '\r' | '\u{feff}'))
+        {
+            return None;
+        }
+        TexMagicTrigger {
+            start_byte: start,
+            directive: None,
+        }
+    };
+    Some(trigger)
+}
+
+fn tex_magic_header(source: &str, start_byte: usize) -> bool {
+    let line_start = source[..start_byte].rfind('\n').map_or(0, |at| at + 1);
+    for (index, line) in source[..line_start].split_inclusive('\n').enumerate() {
+        if index + 1 >= crate::tex::magic::MAX_HEADER_LINES {
+            return false;
+        }
+        let line = line.trim_start_matches([' ', '\t', '\r', '\u{feff}']);
+        if !line.trim().is_empty() && !line.starts_with('%') {
+            return false;
+        }
+    }
+    true
+}
+
+fn tex_magic_body(snippet: &Snippet) -> Option<(&str, &str)> {
+    if snippet.language != Language::Tex || !snippet.line_start || snippet.scope != Scope::Text {
+        return None;
+    }
+    let body = snippet
+        .body
+        .strip_prefix('%')?
+        .trim_start()
+        .strip_prefix('!')?
+        .trim_start();
+    let (header, _) = body.split_once('=')?;
+    let mut words = header.split_whitespace();
+    let marker = words.next()?;
+    let directive = words.next()?;
+    if words.next().is_some() {
+        return None;
+    }
+    let supported = if marker.eq_ignore_ascii_case("tex") {
+        ["root", "program", "ts-program", "encoding", "spellcheck"]
+            .iter()
+            .any(|name| directive.eq_ignore_ascii_case(name))
+    } else {
+        marker.eq_ignore_ascii_case("bib")
+            && ["program", "ts-program"]
+                .iter()
+                .any(|name| directive.eq_ignore_ascii_case(name))
+    };
+    supported.then_some((marker, directive))
+}
+
 pub(crate) fn items_from(
     presets: &[Snippet],
     custom: &[Snippet],
@@ -510,16 +608,40 @@ pub(crate) fn items_from(
     cursor: usize,
     context: Option<Scope>,
 ) -> Option<Vec<CompletionItem>> {
-    let context = context?;
     let (start_byte, query) = prefix(source, cursor);
-    if query.is_empty() {
+    let magic = (kind == DocumentKind::Tex)
+        .then(|| tex_magic_trigger(source, start_byte, start_byte + query.len()))
+        .flatten();
+    let magic_header = std::cell::OnceCell::new();
+    if query.is_empty()
+        && magic
+            .as_ref()
+            .is_none_or(|trigger| trigger.directive.is_none())
+    {
         return None;
     }
     let eligible = |s: &&Snippet| {
-        s.enabled
-            && s.language.accepts(kind)
+        if !s.enabled || !s.language.accepts(kind) {
+            return false;
+        }
+        if let Some((marker, directive)) = tex_magic_body(s) {
+            return magic.as_ref().is_some_and(|trigger| {
+                let matches = trigger.directive.map_or_else(
+                    || !query.is_empty() && s.prefix.starts_with(query),
+                    |(wanted_marker, wanted_directive)| {
+                        marker.eq_ignore_ascii_case(wanted_marker)
+                            && directive
+                                .get(..wanted_directive.len())
+                                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(wanted_directive))
+                    },
+                );
+                matches
+                    && *magic_header.get_or_init(|| tex_magic_header(source, trigger.start_byte))
+            });
+        }
+        !query.is_empty()
             && s.prefix.starts_with(query)
-            && (s.scope == Scope::Anywhere || s.scope == context)
+            && context.is_some_and(|context| s.scope == Scope::Anywhere || s.scope == context)
             && (!s.line_start || {
                 let before = source[..start_byte].rsplit('\n').next().unwrap_or_default();
                 let before = if kind == DocumentKind::Typst && s.scope == Scope::Code {
@@ -540,7 +662,7 @@ pub(crate) fn items_from(
     // Surviving candidates share one trigger. Compute its coordinates lazily;
     // TeX bodies may optionally own one preceding command slash.
     let mut scalar_start = None;
-    let mut starts = [None, None];
+    let mut starts = [None, None, None];
     let mut end = None;
     let items: Vec<_> = custom
         .iter()
@@ -558,16 +680,30 @@ pub(crate) fn items_from(
                 && source[..start_byte].ends_with('\\')
                 && !source[..start_byte - 1].ends_with('\\');
             let slash = usize::from(consume_slash);
-            let scalar = *scalar_start.get_or_insert_with(|| source[..start_byte].chars().count());
-            let start =
-                *starts[slash].get_or_insert_with(|| snippet_position(source, scalar - slash));
+            let magic = tex_magic_body(s).and(magic.as_ref());
+            let coordinate = if magic.is_some() { 2 } else { slash };
+            let start = *starts[coordinate].get_or_insert_with(|| {
+                let scalar = if let Some(trigger) = magic {
+                    source[..trigger.start_byte].chars().count()
+                } else {
+                    *scalar_start.get_or_insert_with(|| source[..start_byte].chars().count())
+                        - slash
+                };
+                snippet_position(source, scalar)
+            });
             let end = *end.get_or_insert_with(|| snippet_position(source, cursor));
+            let filter_text = if magic.is_some_and(|trigger| trigger.directive.is_some()) {
+                let (marker, directive) = tex_magic_body(s)?;
+                format!("{marker} {directive}")
+            } else {
+                s.prefix.clone()
+            };
             Some(CompletionItem {
                 origin: crate::lsp::protocol::CompletionOrigin::Snippet,
                 label: s.prefix.clone(),
                 detail: Some(s.description.clone()),
                 documentation: Some(s.body.clone()),
-                filter_text: Some(s.prefix.clone()),
+                filter_text: Some(filter_text),
                 sort_text: None,
                 insert_text: wire.clone(),
                 insert_text_is_snippet: true,
@@ -1265,6 +1401,124 @@ mod context_tests {
             line_start,
         }
     }
+    #[test]
+    fn tex_magic_header_completion_accepts_word_and_directive_prefixes_without_duplicate_comments()
+    {
+        let snippets = crate::snippet_presets::tex_magic_defaults().collect::<Vec<_>>();
+        for (source, label, expected) in [
+            ("texroot", "texroot", "% !TeX root = main.tex"),
+            ("% texroot", "texroot", "% !TeX root = main.tex"),
+            ("  %texroot", "texroot", "  % !TeX root = main.tex"),
+            ("% !TeX ro", "texroot", "% !TeX root = main.tex"),
+            ("% !TEX", "texroot", "% !TeX root = main.tex"),
+            ("% !tex ", "texprogram", "% !TeX program = pdflatex"),
+            ("% ! BIB pro", "texbibprogram", "% !BIB program = biber"),
+            (
+                "\u{feff}% Ω header\r\n\t%!tex enc",
+                "texencoding",
+                "\u{feff}% Ω header\r\n\t% !TeX encoding = UTF-8",
+            ),
+        ] {
+            let cursor = source.chars().count();
+            let candidates = items(&snippets, DocumentKind::Tex, source, cursor).unwrap();
+            let filtered = crate::completion::filtered_for_source(&candidates, source, cursor);
+            let item = filtered
+                .iter()
+                .find(|item| item.label == label)
+                .unwrap_or_else(|| panic!("{source}: {filtered:?}"));
+            let edit = crate::completion_edit::prepare_completion_application(source, cursor, item)
+                .unwrap();
+            assert_eq!(edit.source, expected, "{source}");
+            assert_eq!(edit.fields.iter().filter(|(id, _)| *id == 1).count(), 1);
+        }
+    }
+
+    #[test]
+    fn tex_magic_header_completion_excludes_body_verbatim_other_languages_and_finished_values() {
+        let snippets = crate::snippet_presets::defaults();
+        for source in [
+            "text texroot",
+            "text\ntexroot",
+            "\\documentclass{article}\n% !TeX ro",
+            "\\begin{verbatim}\n% texroot",
+            "\\verb|% texroot",
+            "$\n% texroot",
+            "% prose texroot",
+            "% !TeX root = texroot",
+            "% !BIB root",
+            "% frac",
+            "% !TeX unsupported",
+            "% !BIB encoding",
+            "% !TeX root. ",
+        ] {
+            let cursor = source.chars().count();
+            assert!(
+                items(&snippets, DocumentKind::Tex, source, cursor).is_none(),
+                "{source}"
+            );
+        }
+        for kind in [
+            DocumentKind::Typst,
+            DocumentKind::Text,
+            DocumentKind::Pdf,
+            DocumentKind::Image,
+        ] {
+            assert!(items(&snippets, kind, "% !TeX ro", 9).is_none(), "{kind:?}");
+        }
+        let after_header = format!("{}% !TeX ro", "%\n".repeat(256));
+        assert!(
+            items(
+                &snippets,
+                DocumentKind::Tex,
+                &after_header,
+                after_header.chars().count()
+            )
+            .is_none()
+        );
+        let after_limit = format!("%{}\n% !TeX ro", " ".repeat(64 * 1024));
+        assert!(
+            items(
+                &snippets,
+                DocumentKind::Tex,
+                &after_limit,
+                after_limit.chars().count()
+            )
+            .is_none()
+        );
+        let final_header_line = format!("{}% !TeX ro", "%\n".repeat(255));
+        assert!(
+            items(
+                &snippets,
+                DocumentKind::Tex,
+                &final_header_line,
+                final_header_line.chars().count()
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn magic_candidates_reuse_one_replacement_range_and_preserve_custom_overrides() {
+        let presets = crate::snippet_presets::tex_magic_defaults().collect::<Vec<_>>();
+        let source = "% !TeX";
+        POSITION_QUERIES.with(|queries| queries.set(0));
+        let candidates =
+            items_from(&presets, &[], DocumentKind::Tex, source, source.len(), None).unwrap();
+        assert_eq!(candidates.len(), 4);
+        assert_eq!(POSITION_QUERIES.with(std::cell::Cell::get), 2);
+        let mut custom = presets[0].clone();
+        custom.body = "% !TeX root = {{1:other.tex}}{{0}}".into();
+        let candidates =
+            items_from(&presets, &[custom], DocumentKind::Tex, "% texroot", 9, None).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            crate::completion_edit::prepare_completion_application("% texroot", 9, &candidates[0])
+                .unwrap()
+                .source,
+            "% !TeX root = other.tex"
+        );
+    }
+
     #[test]
     fn contexts_follow_typst_syntax_and_tolerant_tex_groups() {
         for (marked, expected) in [

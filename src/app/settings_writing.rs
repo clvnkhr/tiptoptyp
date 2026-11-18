@@ -109,6 +109,10 @@ pub(super) fn ltex(
         crate::desktop_test::observe("settings.ltex.follow_language", &follow);
         #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
         let _ = follow;
+        ui.checkbox(
+            &mut draft.oxford_spelling,
+            "Suggest Oxford spelling variants",
+        );
         ui.horizontal_wrapped(|ui| {
             for mode in crate::settings::ToolMode::ALL {
                 let selected = ui.selectable_value(&mut draft.mode, mode, mode.label());

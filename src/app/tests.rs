@@ -249,6 +249,7 @@ fn explorer_view_returns_navigation_without_effects_and_does_not_paint_hidden_gi
                 let output = explorer_view::show(
                     ui,
                     explorer_view::Input {
+                        status: None,
                         root,
                         label: "/workspace",
                         read_only: false,
@@ -406,7 +407,7 @@ fn source_navigation_takes_editor_focus_even_with_find_open() {
     app.document_mut()
         .replace_unprojected_untitled("alpha beta gamma");
     app.find_bar.visible = true;
-    app.find_bar.focus = true;
+    app.find_bar.request_focus();
     context
         .run_ui(Default::default(), |ui| {
             app.show_editor(ui);
@@ -506,7 +507,7 @@ fn navigation_entry_points_focus_only_their_owner_and_keep_mac_arrow_shortcuts()
                 .rename(path.clone(), DocumentKind::Typst)
                 .unwrap();
             app.find_bar.visible = true;
-            app.find_bar.focus = true;
+            app.find_bar.request_focus();
             let raw = || {
                 let mut input = egui::RawInput {
                     viewport_id: owner,
@@ -607,7 +608,7 @@ fn find_selection_preserves_find_focus_and_does_not_activate_native_window() {
     app.document_mut()
         .replace_unprojected_untitled("alpha beta alpha");
     app.find_bar.visible = true;
-    app.find_bar.focus = true;
+    app.find_bar.request_focus();
     app.find_bar.query = "alpha".into();
     context
         .run_ui(Default::default(), |ui| {
@@ -1034,7 +1035,7 @@ fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completio
         assert!(!app.project_index_deadline.is_pending());
         assert!(!app.project_index_job.is_running());
         assert!(!app.workspace_service.is_running());
-        assert!(app.tinymist_sync.generation.is_none());
+        assert!(app.tinymist_sync.generation().is_none());
     }
     app.pending_tool_picker = Some(PendingDialog::new(ToolPickerTarget::UiFont, async { None }));
     app.enqueue_native_menu_command(AppCommand::Settings);
@@ -1062,7 +1063,7 @@ fn dormant_host_rejects_document_jobs_but_delivers_commands_and_dialog_completio
         app.compile_deadline.is_none(),
         "resumption waits for queued replacement"
     );
-    assert!(app.tinymist_sync.generation.is_none());
+    assert!(app.tinymist_sync.generation().is_none());
 }
 
 #[test]
@@ -1083,7 +1084,7 @@ fn dormant_host_does_not_replay_keyboard_input_from_the_closed_document() {
     let mut output = context.run_ui(raw, |ui| app.hidden_host_ui(ui.ctx(), Some(&frame)));
     output.textures_delta.clear();
     assert!(!app.needs_visible_window());
-    assert!(app.tinymist_sync.generation.is_none());
+    assert!(app.tinymist_sync.generation().is_none());
     assert!(app.compile_deadline.is_none());
 }
 
@@ -1339,6 +1340,7 @@ fn context_menu_sizes_include_every_action_and_separator() {
                             show_editor_context_menu_ui(
                                 ui,
                                 EditorContextMenuOptions {
+                                    diagnostic_fix: None,
                                     can_undo: true,
                                     can_redo: true,
                                     has_selection: true,
@@ -2631,19 +2633,29 @@ fn semantic_hover_tracks_identifiers_and_nearby_call_parentheses() {
 
 #[test]
 fn semantic_hover_reply_identity_rejects_dismissed_or_replaced_targets() {
-    let hover = EditorHoverState {
+    let mut hover = EditorHoverState {
         key: DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(4), 2, 9),
         range: 3..8,
         request_token: 17,
         uri: "file:///workspace/main.typ".to_owned(),
         version: 9,
-        requested: true,
-        detail: None,
+        phase: HoverPhase::Pending,
     };
     assert!(hover.accepts_response(&hover.uri, hover.version, hover.request_token));
     assert!(!hover.accepts_response(&hover.uri, hover.version, 18));
     assert!(!hover.accepts_response("file:///workspace/other.typ", hover.version, 17));
     assert!(!hover.accepts_response(&hover.uri, 10, 17));
+    let uri = hover.uri.clone();
+    hover.complete_response(&uri, 9, 18, Some(Arc::from("wrong request")));
+    assert!(hover.accepts_response(&uri, 9, 17));
+    hover.complete_response(&uri, 9, 17, None);
+    assert!(!hover.accepts_response(&uri, 9, 17));
+    hover.complete_response(&uri, 9, 17, Some(Arc::from("late duplicate")));
+    assert!(hover.detail().is_none());
+    for phase in [HoverPhase::Unrequested, HoverPhase::Unavailable] {
+        hover.phase = phase;
+        assert!(!hover.accepts_response(&uri, 9, 17));
+    }
 }
 
 fn hover_test_data(source: &str) -> crate::editor_data::EditorDerivedData {
@@ -2731,7 +2743,7 @@ fn real_tinymist_hover_targets_respect_math_syntax_boundaries() {
     });
     let document = backing.text_document(1, source);
     let uri = document.uri.clone();
-    sidecar.did_open(generation, document).unwrap();
+    sidecar.did_open(generation, document, Vec::new()).unwrap();
     let mut data = hover_test_data(source);
     let mut token = 0;
     for name in ["epsilon", "sigma", "beta", "theta"] {
@@ -2833,6 +2845,7 @@ fn image_texture_rebuild_uses_raster_not_logical_dimensions() {
 #[test]
 fn queued_exports_follow_edits_but_never_cross_documents() {
     let mut pending = Some(PendingExport {
+        automatic_destination: false,
         path: PathBuf::from("old-document.pdf"),
         source: PdfSource {
             tab: Some(0),
@@ -2859,6 +2872,7 @@ fn queued_exports_follow_edits_but_never_cross_documents() {
     assert!(pending.is_none());
 
     let expected = PendingExport {
+        automatic_destination: false,
         path: PathBuf::from("current-document.pdf"),
         source: PdfSource {
             tab: Some(0),
@@ -2888,6 +2902,7 @@ fn queued_exports_follow_edits_but_never_cross_documents() {
 #[test]
 fn queued_export_waits_for_a_strictly_newer_current_artifact() {
     let expected = PendingExport {
+        automatic_destination: false,
         path: PathBuf::from("rebuilt-document.pdf"),
         source: PdfSource {
             tab: Some(0),
@@ -3281,46 +3296,38 @@ fn status_log_popup_hugs_its_bottom_anchor_and_only_grows_for_visible_rows() {
 #[test]
 fn popup_blur_requires_sustained_focus_loss_and_refocus_cancels_it() {
     let now = Instant::now();
-    let mut had_focus = false;
-    let mut blur_started = None;
-    assert!(!popup_focus_should_close(
-        &mut had_focus,
-        &mut blur_started,
-        Some(false),
-        now,
-    ));
-    assert!(!popup_focus_should_close(
-        &mut had_focus,
-        &mut blur_started,
-        Some(true),
-        now,
-    ));
-    assert!(had_focus);
-    assert!(!popup_focus_should_close(
-        &mut had_focus,
-        &mut blur_started,
-        Some(false),
-        now,
-    ));
-    assert!(!popup_focus_should_close(
-        &mut had_focus,
-        &mut blur_started,
-        Some(true),
-        now + POPUP_BLUR_GRACE / 2,
-    ));
-    assert_eq!(blur_started, None);
-    assert!(!popup_focus_should_close(
-        &mut had_focus,
-        &mut blur_started,
-        Some(false),
-        now + POPUP_BLUR_GRACE,
-    ));
-    assert!(popup_focus_should_close(
-        &mut had_focus,
-        &mut blur_started,
-        Some(false),
-        now + POPUP_BLUR_GRACE * 2,
-    ));
+    let mut focus = PopupFocus::default();
+    assert!(!focus.observe(Some(false), now,));
+    assert!(!focus.observe(Some(true), now,));
+    assert_eq!(focus, PopupFocus::Focused);
+    assert!(!focus.observe(Some(false), now,));
+    assert!(!focus.observe(Some(true), now + POPUP_BLUR_GRACE / 2,));
+    assert_eq!(focus.blur_started(), None);
+    assert!(!focus.observe(Some(false), now + POPUP_BLUR_GRACE,));
+    assert!(focus.observe(Some(false), now + POPUP_BLUR_GRACE * 2,));
+}
+
+#[test]
+fn process_close_keeps_its_original_owner_when_the_last_tab_is_retired() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    let initial = app.document_key();
+    assert!(app.begin_process_close());
+    app.tabs = app.tabs.empty_after();
+    assert!(app.process_close_pending());
+    assert_eq!(app.document_key(), initial);
+    assert!(!app.begin_process_close());
+    app.finish_process_close(false);
+    assert!(!app.process_close_pending());
+    assert_eq!(app.document_key(), app.document().key());
+    let current = app.document().key();
+    app.document_workflow.allow_close_for(current);
+    app.finish_process_close(false);
+    assert!(
+        app.close_accepted(),
+        "an unowned completion cannot revoke another close permit"
+    );
 }
 
 #[test]
@@ -3517,6 +3524,7 @@ fn editor_context_menu_exposes_the_link_under_the_pointer() {
                 show_editor_context_menu_ui(
                     ui,
                     EditorContextMenuOptions {
+                        diagnostic_fix: None,
                         can_undo: false,
                         can_redo: false,
                         has_selection: false,
@@ -3681,6 +3689,7 @@ fn typst_math_menu_offers_the_other_form_directly_without_a_flyout() {
                 show_editor_context_menu_ui(
                     ui,
                     EditorContextMenuOptions {
+                        diagnostic_fix: None,
                         can_undo: true,
                         can_redo: true,
                         has_selection: true,
@@ -3725,6 +3734,7 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
                 show_editor_context_menu_ui(
                     ui,
                     EditorContextMenuOptions {
+                        diagnostic_fix: None,
                         can_undo: true,
                         can_redo: true,
                         has_selection: true,
@@ -3782,6 +3792,7 @@ fn reopened_conversion_menu_does_not_inherit_the_previous_flyout() {
                     show_editor_context_menu_ui(
                         ui,
                         EditorContextMenuOptions {
+                            diagnostic_fix: None,
                             can_undo: true,
                             can_redo: true,
                             has_selection: true,
@@ -3851,6 +3862,7 @@ fn rendered_menu_geometry_matches_sized_geometry_exactly() {
                 show_editor_context_menu_ui(
                     ui,
                     EditorContextMenuOptions {
+                        diagnostic_fix: None,
                         can_undo: true,
                         can_redo: true,
                         has_selection: true,
@@ -3998,6 +4010,7 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
                 show_editor_context_menu_ui(
                     ui,
                     EditorContextMenuOptions {
+                        diagnostic_fix: None,
                         can_undo: false,
                         can_redo: false,
                         has_selection: false,
@@ -5108,6 +5121,7 @@ fn hidden_files_skip_query_classification_until_the_section_is_open() {
                 let _ = explorer_view::show(
                     ui,
                     explorer_view::Input {
+                        status: None,
                         root,
                         label: "/workspace",
                         read_only: false,
@@ -5179,6 +5193,7 @@ fn explorer_section_search_sticks_and_does_not_filter_other_sections() {
                 let result = show_explorer_sections(
                     ui,
                     ExplorerSectionsSpec {
+                        files_scroll_owner: egui::Id::new("test-workspace"),
                         order: ExplorerOrder::default(),
                         defaults,
                         open,
@@ -5229,6 +5244,7 @@ fn each_searchable_explorer_section_owns_its_find_field() {
                 show_explorer_sections(
                     ui,
                     ExplorerSectionsSpec {
+                        files_scroll_owner: egui::Id::new("test-workspace"),
                         order: ExplorerOrder::default(),
                         defaults,
                         open: defaults,
@@ -5513,6 +5529,7 @@ fn reordered_explorer_keeps_body_identity_and_collapsed_state() {
                 show_explorer_sections(
                     ui,
                     ExplorerSectionsSpec {
+                        files_scroll_owner: egui::Id::new("test-workspace"),
                         order: state.order,
                         defaults,
                         open,
@@ -5579,6 +5596,7 @@ fn explorer_maximize_hides_siblings_and_restores_collapsed_states_and_sizes() {
                 let result = show_explorer_sections(
                     ui,
                     ExplorerSectionsSpec {
+                        files_scroll_owner: egui::Id::new("test-workspace"),
                         order: ExplorerOrder::default(),
                         defaults,
                         open,
@@ -6248,7 +6266,7 @@ fn tooltip_handoff_blocks_competing_hover_targets_until_focus_changes() {
     ));
 
     let mut focused = TooltipInteractionState::new(7);
-    focused.focused = true;
+    focused.observe_focus(true);
     assert!(tooltip_handoff_is_active(
         Some(Pos2::new(500.0, 500.0)),
         0.0,
@@ -6262,7 +6280,7 @@ fn tooltip_handoff_blocks_competing_hover_targets_until_focus_changes() {
     ));
 
     let mut dismissed = focused;
-    dismissed.dismissed = true;
+    dismissed.dismiss();
     assert!(!tooltip_handoff_is_active(
         Some(Pos2::new(500.0, 500.0)),
         0.0,
@@ -6349,7 +6367,7 @@ fn tooltip_child_pointer_ownership_survives_missing_root_pointer_events() {
     };
     assert!(refresh_tooltip_child_geometry(replacement, 4, true).is_none());
     let mut stale_focus = TooltipInteractionState::new(4);
-    stale_focus.focused = true;
+    stale_focus.observe_focus(true);
     assert!(!tooltip_handoff_is_active(
         None,
         5.0,
@@ -6371,16 +6389,16 @@ fn tooltip_click_requests_focus_and_defocus_dismisses_it() {
     let identity = 7;
     let state = TooltipInteractionState::new(identity);
     let state = update_tooltip_interaction_state(state, identity, true, Some(false));
-    assert!(state.focus_requested);
-    assert!(!state.dismissed);
+    assert!(state.focus_requested());
+    assert!(!state.dismissed());
 
     let state = update_tooltip_interaction_state(state, identity, false, Some(true));
-    assert!(state.focused);
-    assert!(state.had_focus);
+    assert!(state.focused());
+    assert!(state.engaged());
 
     let state = update_tooltip_interaction_state(state, identity, false, Some(false));
-    assert!(state.dismissed);
-    assert!(!state.focus_requested);
+    assert!(state.dismissed());
+    assert!(!state.focus_requested());
 }
 
 #[test]
@@ -6704,9 +6722,9 @@ fn folder_window_starts_empty_even_with_a_remembered_document() {
     assert_eq!(app.workspace_root, root_path);
     assert!(app.tabs.is_empty());
     assert!(app.compile_deadline.is_none());
-    assert!(app.tinymist_sync.generation.is_none());
+    assert!(app.tinymist_sync.generation().is_none());
     app.restart_tinymist();
-    assert!(app.tinymist_sync.generation.is_none());
+    assert!(app.tinymist_sync.generation().is_none());
     app.new_tab(&context);
     assert_eq!(app.tabs.len(), 1);
 }
@@ -6893,8 +6911,10 @@ fn delimiter_highlights_use_character_advances_at_soft_wrap_boundaries() {
                 40.0,
             );
             assert!(galley.rows.len() > 1);
+            let cursor_index = editor_layout::CursorIndex::new(&galley);
             for character in 0..galley.text().chars().count() {
-                let rectangles = editor_view::delimiter_rects(&galley, character..character + 1);
+                let rectangles =
+                    editor_view::delimiter_rects(&galley, &cursor_index, character..character + 1);
                 assert_eq!(rectangles.len(), 1);
                 assert!(
                     rectangles[0].width() > 0.0 && rectangles[0].width() < 20.0,
@@ -6903,7 +6923,7 @@ fn delimiter_highlights_use_character_advances_at_soft_wrap_boundaries() {
                 assert!(rectangles[0].height() < 30.0);
             }
             let len = galley.text().chars().count();
-            let fences = editor_view::delimiter_rects(&galley, len - 3..len);
+            let fences = editor_view::delimiter_rects(&galley, &cursor_index, len - 3..len);
             assert!(!fences.is_empty());
             assert!(
                 fences
@@ -6928,6 +6948,9 @@ fn settings_search_finds_image_appearance_directly() {
 
 #[test]
 fn settings_search_indexes_every_visible_setting_label() {
+    for query in ["%", "//", ": / %", "  "] {
+        assert!(settings_search_results(query).is_empty(), "{query:?}");
+    }
     for target in SettingsTarget::ALL {
         assert!(
             settings_search_results(target.label()).contains(&target),
@@ -7043,11 +7066,10 @@ fn save_as_format_handoff_waits_for_the_matching_ready_document() {
     );
     assert_eq!(save_as_format_handoff(true, DocumentKind::Text, key), None);
 
-    let mut pending = Some(key);
-    assert!(!take_ready_format_handoff(&mut pending, key, false));
-    assert_eq!(pending, Some(key));
-    assert!(!take_ready_format_handoff(
-        &mut pending,
+    let mut pending = formatting::State::WaitingForSavedDocument(key);
+    assert!(!pending.take_ready_saved_document(key, false));
+    assert_eq!(pending.saved_document(), Some(key));
+    assert!(!pending.take_ready_saved_document(
         DocumentKey {
             owner: tiptoptyp_core::document::WindowSessionId::new(1),
             epoch: 4,
@@ -7055,9 +7077,9 @@ fn save_as_format_handoff_waits_for_the_matching_ready_document() {
         },
         true,
     ));
-    assert_eq!(pending, Some(key));
-    assert!(take_ready_format_handoff(&mut pending, key, true));
-    assert_eq!(pending, None);
+    assert_eq!(pending.saved_document(), Some(key));
+    assert!(pending.take_ready_saved_document(key, true));
+    assert_eq!(pending, formatting::State::Idle);
 }
 
 #[test]
@@ -8421,6 +8443,74 @@ fn git_line_change_summary_keeps_all_change_categories_visible() {
 }
 
 #[test]
+fn locked_source_commands_preserve_selection_history_and_clipboard_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    let original = "#table(columns: 2, [A], [B], [C], [D])";
+    app.document_mut().replace_unprojected_untitled(original);
+    app.document_mut().edit(CCursorRange::default(), |source| {
+        source.push_str("\nA draft.")
+    });
+    let table = editable_table_at(app.document().source(), 2).unwrap();
+    app.begin_table_editor(table);
+    assert!(app.table_editor.is_some());
+    let key = app.document().key();
+    let before = app.document().source().clone();
+    let selection = CCursorRange::two(CCursor::new(8), CCursor::new(2));
+    app.store_editor_cursor(&context, selection);
+    let source_id = source_editor_id(&context);
+    context.memory_mut(|memory| memory.request_focus(source_id));
+
+    for command in [
+        AppCommand::Undo,
+        AppCommand::Redo,
+        AppCommand::Cut,
+        AppCommand::Paste,
+        AppCommand::ToggleComment,
+        AppCommand::Format,
+        AppCommand::NewTable,
+        AppCommand::EditTable,
+        AppCommand::ImportCitation,
+    ] {
+        app.execute_app_command(command, &context, None);
+        assert_eq!(app.document().key(), key, "{command:?}");
+        assert_eq!(app.document().source(), &before, "{command:?}");
+        assert_eq!(
+            app.editor_snapshot(&context).cursor,
+            selection,
+            "{command:?}"
+        );
+        assert!(app.pending_widget_paste.is_none(), "{command:?}");
+        assert!(app.table_editor.is_some(), "{command:?}");
+        assert_eq!(
+            context.memory(|memory| memory.focused()),
+            Some(source_editor_id(&context))
+        );
+    }
+
+    // Direct keyboard/context helpers have the same admission rule as the menu.
+    app.undo_editor(&context, false);
+    app.cut_editor_selection(&context);
+    app.request_editor_paste(&context);
+    app.toggle_comments(&context);
+    app.apply_editor_completion(0, &context);
+    assert!(!app.set_tex_mode(true, &context));
+    assert_eq!(app.document().key(), key);
+    assert_eq!(app.document().source(), &before);
+    assert_eq!(app.editor_snapshot(&context).cursor, selection);
+    assert!(app.pending_widget_paste.is_none());
+    assert!(app.document().config().is_none());
+
+    assert!(!source_mutating_command(AppCommand::ComfyPreview));
+
+    // Rejecting an edit must not consume the real document's undo history.
+    app.table_editor = None;
+    app.undo_editor(&context, false);
+    assert_eq!(app.document().source(), original);
+}
+
+#[test]
 fn tex_completion_is_local_and_applies_one_safe_edit() {
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
@@ -8819,6 +8909,7 @@ fn projected_application_compiles_real_inline_and_block_output() {
         .did_open(
             generation,
             TextDocument::from_path(path, 1, &canonical).unwrap(),
+            Vec::new(),
         )
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -8895,15 +8986,61 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
         )
         .unwrap(),
     );
+    let backing = app.tinymist_sync.active_backing.as_ref().unwrap();
+    let backing_path = backing.path().to_owned();
+    #[cfg(unix)]
+    {
+        // Exercise the app adapter, projection and ordered IO worker together.
+        // The fixture is a local LSP stand-in, not an installed Tinymist binary.
+        let (config, _, formatted) =
+            crate::tinymist::backing_tests::server(directory.path(), &backing_path);
+        let generation = app.tinymist.start_workspace(config).unwrap();
+        let version = revision_as_i32(app.document().revision());
+        assert!(version > 0);
+        let uri = backing.uri().to_owned();
+        app.tinymist
+            .did_open(
+                generation,
+                backing.text_document(version - 1, "placeholder"),
+                Vec::new(),
+            )
+            .unwrap();
+        crate::tinymist::backing_tests::await_event(&app.tinymist, |event| {
+            matches!(event, TinymistEvent::Initialized { .. })
+        });
+        app.tinymist_sync
+            .fixture_session(generation, Some(uri.clone()), None);
+        app.tinymist_sync
+            .confirm_open(app.tinymist_sync.current_uri().unwrap().to_owned().as_str());
+        app.sync_tinymist_change().unwrap();
+        app.tinymist
+            .format_document(generation, &uri, version, 17)
+            .unwrap();
+        // The extra notification lets the stand-in's line reader finish the
+        // formatting frame. It copies the real backing bytes at that barrier.
+        app.tinymist
+            .set_preview_refresh(generation, crate::tinymist::PreviewRefresh::OnSave)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while fs::read_to_string(&formatted).ok().as_deref() != Some(canonical.as_str()) {
+            assert!(
+                Instant::now() < deadline,
+                "formatting did not observe projected canonical bytes"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(fs::read_to_string(&backing_path).unwrap(), canonical);
+    }
+    #[cfg(not(unix))]
     app.sync_tinymist_change().unwrap();
-    let backing_path = app
-        .tinymist_sync
-        .active_backing
-        .as_ref()
-        .unwrap()
-        .path()
-        .to_owned();
-    assert_eq!(fs::read_to_string(&backing_path).unwrap(), canonical);
+    // Without a live backing consumer there is deliberately no disk update.
+    // Keep the general save/projection assertions on platforms without /bin/sh.
+    let expected_backing = if cfg!(unix) {
+        canonical.as_str()
+    } else {
+        "placeholder"
+    };
+    assert_eq!(fs::read_to_string(&backing_path).unwrap(), expected_backing);
     app.document_mut().edit(CCursorRange::default(), |source| {
         source.push_str("$unfinished")
     });
@@ -8915,7 +9052,7 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     assert!(app.sync_tinymist_change().is_err());
     assert!(app.preview_document_source().is_err());
     assert_eq!(fs::read_to_string(&path).unwrap(), canonical);
-    assert_eq!(fs::read_to_string(&backing_path).unwrap(), canonical);
+    assert_eq!(fs::read_to_string(&backing_path).unwrap(), expected_backing);
     assert!(app.document().source().ends_with("$unfinished"));
     app.document_mut()
         .history_step(false, CCursorRange::default())
@@ -8926,6 +9063,13 @@ fn projected_application_save_autosave_and_backing_source_use_canonical_bytes() 
     assert!(app.save_to_with_intent(path.clone(), SaveIntent::Auto, &context));
     app.finish_save_for_test(&context);
     assert_eq!(fs::read_to_string(&path).unwrap(), format!("{canonical}!"));
+    app.tinymist_sync.fixture_stop_session();
+    app.sync_tinymist_change().unwrap();
+    assert_eq!(
+        fs::read_to_string(&backing_path).unwrap(),
+        expected_backing,
+        "a retained mirror without a live consumer is not rewritten"
+    );
 }
 
 #[test]
@@ -8996,8 +9140,8 @@ fn projected_application_remote_completion_uses_canonical_payload_and_one_undo_s
         .count()
         + 4;
     let position = |cursor| lsp_position_at_scalar(PROJECTED_SOURCE, ScalarOffset::new(cursor));
-    app.tinymist_sync.generation = Some(Generation(92));
-    app.tinymist_sync.current_uri = Some("file:///completion.typ".into());
+    app.tinymist_sync
+        .fixture_session(Generation(92), Some("file:///completion.typ".into()), None);
     let item = CompletionItem {
         origin: crate::lsp::protocol::CompletionOrigin::LanguageServer,
         label: "longer tail".into(),
@@ -9058,8 +9202,8 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
     let directory = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = projected_test_app(&context, directory.path());
-    app.tinymist_sync.generation = Some(Generation(91));
-    app.tinymist_sync.current_uri = Some("file:///format.typ".into());
+    app.tinymist_sync
+        .fixture_session(Generation(91), Some("file:///format.typ".into()), None);
     let before = app.document().source().clone();
     let cursor = before.chars().count();
     app.store_editor_cursor(&context, CCursorRange::one(CCursor::new(cursor)));
@@ -9074,13 +9218,15 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
         },
         new_text: "longer tail".into(),
     };
-    app.format_request_key = Some(app.document().key());
+    app.formatting
+        .request(app.document().key(), formatting::Intent::Edit);
     app.receive_formatted_document(
         &context,
         Generation(91),
         "file:///format.typ",
         revision_as_i32(app.document().revision()),
-        Some(vec![edit.clone()]),
+        app.formatting.request_token().unwrap_or(0),
+        vec![edit.clone()],
     );
     assert_eq!(
         app.document().source(),
@@ -9100,26 +9246,31 @@ fn projected_application_formatting_maps_source_and_cursor_then_undoes_one_edit(
     assert_eq!(app.document().source(), &before);
     assert!(!app.is_dirty());
     let key = app.document().key();
-    app.format_request_key = Some(key);
+    app.formatting.request(key, formatting::Intent::Edit);
     app.receive_formatted_document(
         &context,
         Generation(91),
         "file:///format.typ",
         revision_as_i32(key.revision - 1),
-        Some(vec![edit.clone()]),
+        app.formatting.request_token().unwrap_or(0),
+        vec![edit.clone()],
     );
     assert_eq!(app.document().key(), key);
 
-    app.format_request_key = Some(DocumentKey {
-        epoch: key.epoch.wrapping_add(1),
-        ..key
-    });
+    app.formatting.request(
+        DocumentKey {
+            epoch: key.epoch.wrapping_add(1),
+            ..key
+        },
+        formatting::Intent::Edit,
+    );
     app.receive_formatted_document(
         &context,
         Generation(91),
         "file:///format.typ",
         revision_as_i32(key.revision),
-        Some(vec![edit]),
+        app.formatting.request_token().unwrap_or(0),
+        vec![edit],
     );
     assert_eq!(app.document().key(), key);
 }
@@ -9130,8 +9281,8 @@ fn projected_application_diagnostics_and_preview_selection_map_canonical_unicode
     let context = egui::Context::default();
     let mut app = projected_test_app(&context, directory.path());
     let uri = "file:///diagnostics.typ";
-    app.tinymist_sync.current_uri = Some(uri.into());
-    app.tinymist_sync.preview_uri = Some(uri.into());
+    app.tinymist_sync
+        .fixture_session(Generation(0), Some(uri.into()), Some(uri.into()));
     let canonical_cursor = PROJECTED_SOURCE[..PROJECTED_SOURCE.find("tail").unwrap()]
         .chars()
         .count();
@@ -9618,7 +9769,9 @@ fn closed_last_document_can_render_hidden_host_and_reopen_settings() {
     );
     assert_eq!(app.explorer.query(ExplorerSection::Files), "main");
     assert!(app.tabs.is_empty());
-    assert_eq!(app.document().kind(), DocumentKind::Typst);
+    assert_eq!(app.document().kind(), DocumentKind::Text);
+    assert!(app.document().source().is_empty());
+    assert!(app.document().path().is_none());
     for visible in [false, true, false] {
         app.settings_visible = visible;
         context
@@ -10042,12 +10195,12 @@ fn workspace_switch_opens_source_first_without_a_pdf_detour() {
     let mut app = EditorApp::dormant_for_tests(&context, old.path().into());
     assert!(app.load_path(pdf));
     app.explorer.select_path(old.path().join("stale.typ"));
-    app.finish_open_folder_selection(new.path().into());
+    app.finish_open_folder_selection(new.path().into(), &context);
     assert!(app.explorer.selected_path().is_none());
-    assert_eq!(
-        app.tabs.current_record().workspace,
-        new.path().canonicalize().unwrap()
-    );
+    assert_eq!(app.workspace_root, new.path().canonicalize().unwrap());
+    assert!(app.tabs.is_empty());
+    assert!(app.tabs.preview_id().is_none());
+    assert!(app.document().path().is_none());
     app.queue_open_path(source.clone());
     app.execute_pending_document_action(&context, None);
     assert_eq!(
@@ -10055,6 +10208,12 @@ fn workspace_switch_opens_source_first_without_a_pdf_detour() {
         Some(source.canonicalize().unwrap().as_path())
     );
     assert!(app.document().kind().is_typst());
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.tabs.preview_id(), app.tabs.active_id());
+    assert_eq!(
+        app.tabs.current_record().workspace,
+        new.path().canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -10191,7 +10350,8 @@ fn native_find_child_routes_query_and_escape_to_its_owner() {
     }
     let paints = seen.borrow().len();
     app.find_bar.child_focused = false;
-    app.find_bar.blur_started = Some(Instant::now() - Duration::from_secs(1));
+    app.find_bar
+        .fixture_blurred_since(Instant::now() - Duration::from_secs(1));
     let mut inactive = egui::RawInput {
         screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 600.0))),
         ..Default::default()
@@ -10765,6 +10925,7 @@ fn math_context_conversion_choices_follow_document_language() {
                 show_editor_context_menu_ui(
                     ui,
                     EditorContextMenuOptions {
+                        diagnostic_fix: None,
                         can_undo: false,
                         can_redo: false,
                         has_selection: false,
@@ -10800,6 +10961,7 @@ fn math_context_conversion_choices_follow_document_language() {
                 show_editor_context_menu_ui(
                     ui,
                     EditorContextMenuOptions {
+                        diagnostic_fix: None,
                         can_undo: false,
                         can_redo: false,
                         has_selection: false,
@@ -11846,8 +12008,8 @@ fn server_completion_batches_keep_local_snippets_and_their_display_coordinates()
     let generation = Generation(7);
     let uri = "file:///fixture.typ".to_owned();
     let version = revision_as_i32(app.document().revision());
-    app.tinymist_sync.generation = Some(generation);
-    app.tinymist_sync.current_uri = Some(uri.clone());
+    app.tinymist_sync
+        .fixture_session(generation, Some(uri.clone()), None);
     let canonical = "different canonical prefix\n#f";
     app.editor_completion = Some(EditorCompletionState {
         key: app.document().key(),
@@ -11962,4 +12124,71 @@ fn projected_application_snippet_language_follows_the_displayed_tex_island() {
         body.starts_with("$\n"),
         "ordinary markup keeps Typst display-math templates"
     );
+}
+#[test]
+fn settings_persistence_errors_are_recorded_once_across_save_and_ui_updates() {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    app.status_log.clear();
+    app.notice = None;
+    app.recorded_notice = None;
+    app.report_settings_persistence_error("Settings exceed 2 MB".into());
+    app.record_notice_transition();
+    app.report_settings_persistence_error("Settings exceed 2 MB".into());
+    app.record_notice_transition();
+    assert_eq!(app.status_log.len(), 1);
+    assert_eq!(app.status_log[0].kind, NoticeKind::Error);
+    assert_eq!(app.recorded_notice, app.notice);
+}
+
+fn assert_invalid_settings_publication_is_atomic(shared: bool) {
+    let directory = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+    let live = app.settings.clone();
+    let mut pending = live.clone();
+    pending.line_wrap = !live.line_wrap;
+    app.queue_settings(pending.clone(), &context);
+    let generation = app.tinymist.current_generation();
+    let mut invalid = pending.clone();
+    invalid.tinymist_configuration["formatterProseWrap"] = serde_json::json!(false);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if shared {
+            app.apply_shared_settings(invalid, &context);
+        } else {
+            app.queue_settings(invalid, &context);
+        }
+    }))
+    .expect_err("invalid settings must stop at their publication boundary");
+    let message = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .expect("configuration failure must explain the invalid field");
+    assert!(message.contains("formatterProseWrap"), "{message}");
+    assert!(
+        message.contains(if shared {
+            "Invalid shared settings"
+        } else {
+            "Invalid settings publication"
+        }),
+        "{message}"
+    );
+    assert_eq!(
+        app.settings, live,
+        "live preferences changed before rejection"
+    );
+    assert_eq!(app.pending_settings.as_ref(), Some(&pending));
+    assert_eq!(app.tinymist.current_generation(), generation);
+}
+
+#[test]
+fn invalid_queued_settings_fail_before_mutating_live_or_pending_preferences() {
+    assert_invalid_settings_publication_is_atomic(false);
+}
+
+#[test]
+fn invalid_shared_settings_fail_before_mutating_live_or_pending_preferences() {
+    assert_invalid_settings_publication_is_atomic(true);
 }

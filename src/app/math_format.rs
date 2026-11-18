@@ -14,42 +14,41 @@ impl EditorApp {
         {
             return;
         }
-        self.manual_format_revision = None;
-        self.format_after_math_conversion = Some(self.document().key());
+        self.formatting = formatting::State::WaitingForMathDocument(self.document().key());
         // One follow-up pass synchronizes TeX even with preview and autosave
         // paused. Service events drive later readiness; no polling loop.
         context.request_repaint();
     }
 
     pub(super) fn tick_math_conversion_format(&mut self) {
-        let Some(key) = self.format_after_math_conversion else {
+        let Some(key) = self.formatting.math_document() else {
             return;
         };
         if key != self.document().key()
             || !self.settings.format_after_math_conversion
             || self.table_editor.is_some()
         {
-            self.format_after_math_conversion = None;
+            self.formatting.cancel();
             return;
         }
         let ready = if self.math_conversion_uses_tex_formatter() {
             use crate::tex::settings::Formatter;
             if self.settings.tex.formatter == Formatter::Disabled {
-                self.format_after_math_conversion = None;
+                self.formatting.cancel();
                 return;
             }
             if self.settings.tex.formatter == Formatter::Badness
-                && let Some(error) = &self.tex_service.badness_error
+                && let Some(error) = self.tex_service.error(crate::tex::Provider::Badness)
             {
-                self.activity.format_error = Some(error.clone());
-                self.format_after_math_conversion = None;
+                self.activity.format_error = Some(error.to_owned());
+                self.formatting.cancel();
                 return;
             }
             self.tex_service
                 .identity()
                 .is_some_and(|snapshot| snapshot.key == key)
                 && match self.settings.tex.formatter {
-                    Formatter::Badness => self.tex_service.badness_ready,
+                    Formatter::Badness => self.tex_service.ready(crate::tex::Provider::Badness),
                     // An unavailable binary is reported by the ordinary
                     // formatter request path, once synchronization completes.
                     Formatter::TexFmt => true,
@@ -60,17 +59,16 @@ impl EditorApp {
                 self.preview.tinymist_state,
                 ServiceState::Failed(_) | ServiceState::Unsupported(_)
             ) {
-                self.format_after_math_conversion = None;
+                self.formatting.cancel();
                 return;
             }
             self.preview.connection.is_ready()
-                && self.tinymist_sync.current_open
-                && self.tinymist_sync.generation.is_some()
-                && self.tinymist_sync.current_uri.is_some()
+                && self.tinymist_sync.current_open()
+                && self.tinymist_sync.generation().is_some()
+                && self.tinymist_sync.current_uri().is_some()
         };
         if ready {
-            self.format_after_math_conversion = None;
-            self.manual_format_revision = None;
+            self.formatting.cancel();
             self.request_format_document();
         }
     }
@@ -113,8 +111,8 @@ mod tests {
             let before = app.document().key();
             convert(&mut app, &context, source, choice);
             assert_ne!(app.document().key(), before);
-            assert_eq!(app.format_after_math_conversion, Some(app.document().key()));
-            assert!(app.manual_format_revision.is_none());
+            assert_eq!(app.formatting.math_document(), Some(app.document().key()));
+            assert!(!app.formatting.saves_after_reply());
         }
     }
 
@@ -144,7 +142,7 @@ mod tests {
         )));
         app.execute_pending_app_popup_action(&context, None);
         assert_eq!(app.document().source(), "$x$");
-        assert!(app.format_after_math_conversion.is_none());
+        assert!(app.formatting.math_document().is_none());
     }
 
     #[test]
@@ -188,8 +186,8 @@ mod tests {
                 },
             );
             assert_ne!(app.document().source(), source);
-            assert!(app.format_after_math_conversion.is_none());
-            assert!(app.format_request_key.is_none());
+            assert!(app.formatting.math_document().is_none());
+            assert!(app.formatting.request_key().is_none());
         }
     }
 
@@ -208,14 +206,14 @@ mod tests {
         let key = app.document().key();
         for _ in 0..8 {
             app.tick_math_conversion_format();
-            assert_eq!(app.format_after_math_conversion, Some(key));
-            assert!(app.format_request_key.is_none());
+            assert_eq!(app.formatting.math_document(), Some(key));
+            assert!(app.formatting.request_key().is_none());
         }
         app.document_mut()
             .edit(CCursorRange::default(), |source| source.push_str(" edit"));
         app.mark_edited();
-        assert!(app.format_after_math_conversion.is_none());
-        app.format_after_math_conversion = Some(app.document().key());
+        assert!(app.formatting.math_document().is_none());
+        app.formatting = formatting::State::WaitingForMathDocument(app.document().key());
         app.document_mut().replace_loaded_unprojected(
             "$x$".into(),
             directory.path().join("b.typ"),
@@ -223,7 +221,7 @@ mod tests {
             None,
         );
         app.tick_math_conversion_format();
-        assert!(app.format_after_math_conversion.is_none());
+        assert!(app.formatting.math_document().is_none());
     }
 
     #[test]
@@ -243,8 +241,8 @@ mod tests {
         convert(&mut app, &context, "$x$", "Display math");
         let key = app.document().key();
         let uri = url::Url::from_file_path(&path).unwrap().to_string();
-        app.tinymist_sync.generation = Some(Generation(7));
-        app.tinymist_sync.current_uri = Some(uri.clone());
+        app.tinymist_sync
+            .fixture_session(Generation(7), Some(uri.clone()), None);
         let edits = vec![LspTextEdit {
             range: LspRange {
                 start: lsp_position_at_scalar(app.document().source(), ScalarOffset::new(0)),
@@ -257,29 +255,31 @@ mod tests {
         }];
         // Delivery from the existing formatter uses the converted version,
         // with no explicit-save intent carried across this user action.
-        app.format_after_math_conversion = None;
-        app.format_request_key = Some(key);
+        app.formatting.cancel();
+        app.formatting.request(key, formatting::Intent::Edit);
         app.receive_formatted_document(
             &context,
             Generation(7),
             &uri,
             revision_as_i32(key.revision),
-            Some(edits.clone()),
+            app.formatting.request_token().unwrap_or(0),
+            edits.clone(),
         );
         assert_eq!(app.document().source(), "$\n  x\n$");
-        assert!(app.pending_save.is_none());
-        assert!(!app.save_job.is_running());
+        assert!(app.local_save.pending().is_none());
+        assert!(!app.local_save.is_running());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "$x$");
-        app.format_request_key = Some(key);
+        app.formatting.request(key, formatting::Intent::Edit);
         app.receive_formatted_document(
             &context,
             Generation(7),
             &uri,
             revision_as_i32(key.revision),
-            Some(edits),
+            app.formatting.request_token().unwrap_or(0),
+            edits,
         );
         assert_eq!(app.document().source(), "$\n  x\n$");
-        assert!(app.pending_save.is_none());
+        assert!(app.local_save.pending().is_none());
     }
 
     #[test]

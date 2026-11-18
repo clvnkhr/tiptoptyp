@@ -6,6 +6,10 @@ use crate::pdfium::{
 };
 use std::collections::BTreeMap;
 
+#[path = "pdfium_state.rs"]
+mod state;
+use state::{Navigation, PositionIntent, Rendering, Scroll, Searching};
+
 const PDF_PAGE_GAP: f32 = 12.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,9 +151,7 @@ pub(super) struct PdfiumView {
     bytes: Option<Arc<[u8]>>,
     revision: u64,
     active_revision: u64,
-    requested: Option<RequestKey>,
-    desired: Option<RequestKey>,
-    pending_reply: Option<Reply>,
+    rendering: Rendering,
     settle: SettleState,
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     render_requests: u64,
@@ -168,21 +170,12 @@ pub(super) struct PdfiumView {
     zoom: f32,
     fit: bool,
     page: usize,
-    goto: Option<usize>,
-    pending_position: Option<(usize, f32)>,
-    automatic_position: bool,
-    position_point: Option<Vec2>,
-    position_pdf: Option<Arc<[u8]>>,
+    navigation: Navigation,
     reveal: Option<PdfReveal>,
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     reveal_observation: Option<serde_json::Value>,
     anchor: (usize, f32),
-    restore_anchor: bool,
-    query: Arc<str>,
-    search_requested: Option<SearchKey>,
-    search_pages: Vec<usize>,
-    search_pending: bool,
-    find_when_ready: bool,
+    search: Searching,
     selection: Option<(usize, usize, usize)>,
     context_location: Option<PageContextLocation>,
     error: Option<String>,
@@ -206,9 +199,7 @@ impl Default for PdfiumView {
             bytes: None,
             revision: 0,
             active_revision: 0,
-            requested: None,
-            desired: None,
-            pending_reply: None,
+            rendering: Rendering::default(),
             settle: SettleState::default(),
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             render_requests: 0,
@@ -227,21 +218,12 @@ impl Default for PdfiumView {
             zoom: 1.0,
             fit: true,
             page: 0,
-            goto: None,
-            pending_position: None,
-            automatic_position: false,
-            position_point: None,
-            position_pdf: None,
+            navigation: Navigation::default(),
             reveal: None,
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             reveal_observation: None,
             anchor: (0, 0.0),
-            restore_anchor: false,
-            query: Arc::from(""),
-            search_requested: None,
-            search_pages: Vec::new(),
-            search_pending: false,
-            find_when_ready: false,
+            search: Searching::default(),
             selection: None,
             context_location: None,
             error: None,
@@ -332,7 +314,7 @@ impl PdfiumView {
             Activity::Failed(error.clone())
         } else if self.bytes.is_none() {
             Activity::Inactive("Not in use")
-        } else if !self.ready() || self.search_pending {
+        } else if !self.ready() || self.search.pending() {
             Activity::Running
         } else {
             Activity::Idle
@@ -358,8 +340,8 @@ impl PdfiumView {
     pub(super) fn ready(&self) -> bool {
         self.bytes.is_some()
             && self
-                .desired
-                .as_ref()
+                .rendering
+                .target()
                 .is_some_and(|key| self.reusable(key) && key.scale == self.active_scale)
     }
 
@@ -382,14 +364,16 @@ impl PdfiumView {
             "source_position": self.source_position.map(|(page, point, revision)| serde_json::json!({
                 "page": page, "point": [point.x, point.y], "revision": revision,
             })),
-            "requested_scale": self.requested.as_ref().map(|key| key.scale),
-            "desired_scale": self.desired.as_ref().map(|key| key.scale),
+            "render_phase": self.rendering.phase(),
+            "search_phase": self.search.phase(),
+            "requested_scale": self.rendering.requested().map(|key| key.scale),
+            "desired_scale": self.rendering.target().map(|key| key.scale),
             "active_scale": self.active_scale,
             "resident_count": self.residents.len(),
             "requests": self.render_requests,
             "admissions": self.render_admissions,
             "settling": self.settling,
-            "search_pending": self.search_pending,
+            "search_pending": self.search.pending(),
             "page_geometry": self.page_geometry.map(|(page, rect, interact, zoom, frame)| serde_json::json!({
                 "page": page, "rect": [rect.left(), rect.top(), rect.width(), rect.height()],
                 "interact": [interact.left(), interact.top(), interact.width(), interact.height()],
@@ -399,7 +383,7 @@ impl PdfiumView {
     }
     #[cfg(test)]
     pub(super) fn requested_page(&self) -> Option<usize> {
-        self.goto
+        self.navigation.page()
     }
 
     pub(super) fn reveal_position(&mut self, page: usize, x: f32, y: f32, explicit: bool) {
@@ -418,12 +402,16 @@ impl PdfiumView {
         if !x.is_finite() || !y.is_finite() {
             return;
         }
-        self.go_to_position(page, y);
-        // Automatic following needs the same visible context as a manual jump.
-        // Only the attention animation depends on whether it was explicit.
-        self.position_point = Some(egui::vec2(x, y));
-        self.automatic_position = !explicit;
-        self.position_pdf = expected_pdf.clone();
+        self.navigation.wait_for_position(
+            page,
+            egui::vec2(x, y),
+            if explicit {
+                PositionIntent::Manual
+            } else {
+                PositionIntent::Automatic
+            },
+            expected_pdf.clone(),
+        );
         if explicit {
             self.reveal = Some(PdfReveal {
                 page,
@@ -443,10 +431,7 @@ impl PdfiumView {
 
     pub(super) fn clear_reveal(&mut self) {
         self.reveal = None;
-        self.pending_position = None;
-        self.automatic_position = false;
-        self.position_pdf = None;
-        self.position_point = None;
+        self.navigation.clear_position();
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         {
             self.reveal_observation = None;
@@ -464,52 +449,39 @@ impl PdfiumView {
     }
 
     pub(super) fn cancel_automatic_follow(&mut self) {
-        if self.automatic_position && self.pending_position.is_some() {
+        if self.navigation.automatic_pending() {
             self.clear_reveal();
         }
     }
 
-    pub(super) fn go_to_position(&mut self, page: usize, y: f32) {
-        self.clear_reveal();
-        // The new map may arrive before its PDF has been inspected. Resolve
-        // point coordinates only against that PDF's admitted page dimensions.
-        self.pending_position = Some((page, y));
-        self.position_point = None;
-        self.position_pdf = None;
-    }
     fn apply_pending_position(&mut self) {
-        if self.active_revision != self.revision
-            || self.position_pdf.as_ref().is_some_and(|expected| {
-                self.bytes
-                    .as_ref()
-                    .is_none_or(|bytes| !Arc::ptr_eq(expected, bytes) && **expected != **bytes)
-            })
-        {
+        let Some(pending) = self
+            .navigation
+            .take_ready_position(self.active_revision == self.revision, self.bytes.as_ref())
+        else {
             return;
-        }
-        if let Some((page, y)) = self.pending_position.take() {
-            self.position_pdf = None;
-            self.automatic_position = false;
-            if let Some(size) = self.catalog.as_ref().and_then(|c| c.sizes.get(page)) {
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                {
-                    self.source_position = self
-                        .position_point
-                        .map(|point| (page, point, self.active_revision));
-                }
-                push_history(&mut self.back, self.anchor);
-                self.forward.clear();
-                self.anchor = (page, (y / size[1]).clamp(0.0, 1.0));
-                self.goto = None;
-                self.restore_anchor = true;
-            } else {
-                self.goto = Some(page);
+        };
+        let page = pending.page;
+        if let Some(size) = self
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.sizes.get(page))
+        {
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            {
+                self.source_position = Some((page, pending.coordinate, self.active_revision));
             }
+            push_history(&mut self.back, self.anchor);
+            self.forward.clear();
+            self.anchor = (page, (pending.coordinate.y / size[1]).clamp(0.0, 1.0));
+            self.navigation.restore_point(Some(pending.coordinate));
+        } else {
+            self.navigation.go_to_page(page);
         }
     }
     pub(super) fn go_to_page(&mut self, page: usize) {
         self.clear_reveal();
-        self.goto = Some(page);
+        self.navigation.go_to_page(page);
     }
 
     pub(super) fn zoom(&mut self, action: PreviewZoomAction) {
@@ -525,7 +497,7 @@ impl PdfiumView {
                 self.fit = false;
             }
         }
-        self.restore_anchor = true;
+        self.navigation.restore();
     }
 
     fn accept(&mut self, batch: Batch, key: &RequestKey, ui: &egui::Ui) {
@@ -535,7 +507,7 @@ impl PdfiumView {
         }
         if changed {
             self.selection = None;
-            self.restore_anchor = true;
+            self.navigation.restore();
             self.layout_zoom = 0.0;
         }
         for page in batch.pages {
@@ -575,20 +547,12 @@ impl PdfiumView {
         if self.bytes.is_some() && self.path != path {
             // A source jump may open a previously hidden preview. Preserve only
             // navigation bound to the incoming PDF; retire the former document.
-            let matches = self
-                .position_pdf
-                .as_ref()
-                .is_some_and(|expected| Arc::ptr_eq(expected, bytes) || **expected == **bytes);
-            let position = matches.then(|| self.pending_position.take()).flatten();
-            let position_pdf = matches.then(|| self.position_pdf.take()).flatten();
+            let matches = self.navigation.expected_matches(bytes);
+            let navigation = self.navigation.transfer_pending(bytes);
             let reveal = matches.then(|| self.reveal.take()).flatten();
-            let position_point = matches.then_some(self.position_point).flatten();
             *self = Self {
-                pending_position: position,
-                automatic_position: matches && self.automatic_position,
-                position_pdf,
+                navigation,
                 reveal,
-                position_point,
                 ..Default::default()
             };
         }
@@ -640,11 +604,9 @@ impl PdfiumView {
         {
             self.revision += 1;
             self.bytes = Some(bytes.clone());
-            self.requested = None;
-            self.desired = None;
-            self.pending_reply = None;
+            self.rendering = Rendering::default();
             self.error = None;
-            self.search_pages.clear();
+            self.search.clear_pages();
             self.context_location = None;
         }
         // Adopt equal-byte Arcs so repeated frames take the pointer fast path.
@@ -655,14 +617,12 @@ impl PdfiumView {
             )));
         }
         let (reply, search) = self.worker.as_ref().unwrap().poll();
-        if let Some(reply) = reply
-            && self.requested.as_ref() == Some(&reply.key)
-        {
-            self.pending_reply = Some(reply);
+        if let Some(reply) = reply {
+            self.rendering.receive(reply);
         }
         // Catalog metadata is small and needed to calculate the current fit
         // scale. Pixels wait until AFTER layout, so an old width never uploads.
-        if let Some(Ok(batch)) = self.pending_reply.as_ref().map(|reply| &reply.result)
+        if let Some(Ok(batch)) = self.rendering.reply().map(|reply| &reply.result)
             && self
                 .catalog
                 .as_ref()
@@ -671,7 +631,7 @@ impl PdfiumView {
             self.catalog = Some(batch.catalog.clone());
             self.layout_zoom = 0.0;
             self.zoom_origin = Default::default();
-            self.restore_anchor = true;
+            self.navigation.restore();
         }
         self.apply_pending_position();
         if let Some((key, pages)) = search {
@@ -693,7 +653,7 @@ impl PdfiumView {
             if self.fit {
                 self.zoom = fit_width_zoom(available.width(), widest);
                 if self.zoom != old_zoom {
-                    self.restore_anchor = true;
+                    self.navigation.restore();
                 }
             }
             let pinch = ui.ctx().input(|i| i.zoom_delta());
@@ -702,7 +662,7 @@ impl PdfiumView {
             if self.scroll_owner != Some(scroll_id) {
                 self.scroll_owner = Some(scroll_id);
                 self.zoom_origin = Default::default();
-                self.restore_anchor = true;
+                self.navigation.restore();
             }
             if pointer.is_some_and(|p| available.contains(p)) && (pinch - 1.0).abs() > 0.001 {
                 self.fit = false;
@@ -757,7 +717,7 @@ impl PdfiumView {
                 state.store(ui.ctx(), scroll_id);
                 // Pointer anchoring already supplies the new offset; a page
                 // anchor from a prior layout must not overwrite that gesture.
-                self.restore_anchor = false;
+                self.navigation.cancel_restore();
             }
             if self.layout_zoom != self.zoom {
                 self.tops = zoomed_tops.unwrap_or_else(|| page_tops(&catalog.sizes, self.zoom));
@@ -770,26 +730,28 @@ impl PdfiumView {
             let mut scroll = egui::ScrollArea::both()
                 .id_salt("pdfium-scroll")
                 .auto_shrink([false, false]);
-            if let Some(page) = self.goto.take() {
-                scroll = scroll.vertical_scroll_offset(self.tops[page.min(self.tops.len() - 1)]);
-                self.position_point = None;
-                self.restore_anchor = false;
-            } else if self.restore_anchor {
-                let (page, fraction) = self.anchor;
-                let page = page.min(catalog.sizes.len() - 1);
-                let target_y = self.tops[page] + fraction * catalog.sizes[page][1] * self.zoom;
-                let offset = if let Some(point) = self.position_point.take() {
-                    let page_width = catalog.sizes[page][0] * self.zoom;
-                    let target =
-                        Pos2::new((width - page_width) / 2.0 + point.x * self.zoom, target_y);
-                    let offset = reveal_scroll_offset(target, available.size());
-                    scroll = scroll.horizontal_scroll_offset(offset.x);
-                    offset.y
-                } else {
-                    target_y
-                };
-                scroll = scroll.vertical_scroll_offset(offset);
-                self.restore_anchor = false;
+            match self.navigation.take_scroll() {
+                Scroll::Page(page) => {
+                    scroll =
+                        scroll.vertical_scroll_offset(self.tops[page.min(self.tops.len() - 1)]);
+                }
+                Scroll::Anchor(point) => {
+                    let (page, fraction) = self.anchor;
+                    let page = page.min(catalog.sizes.len() - 1);
+                    let target_y = self.tops[page] + fraction * catalog.sizes[page][1] * self.zoom;
+                    let offset = if let Some(point) = point {
+                        let page_width = catalog.sizes[page][0] * self.zoom;
+                        let target =
+                            Pos2::new((width - page_width) / 2.0 + point.x * self.zoom, target_y);
+                        let offset = reveal_scroll_offset(target, available.size());
+                        scroll = scroll.horizontal_scroll_offset(offset.x);
+                        offset.y
+                    } else {
+                        target_y
+                    };
+                    scroll = scroll.vertical_scroll_offset(offset);
+                }
+                Scroll::Idle => {}
             }
             let interaction_bounds =
                 super::panel_handles::preview_interaction_bounds(ui, available);
@@ -914,12 +876,10 @@ impl PdfiumView {
                                     match target {
                                         LinkTarget::Page(page) => {
                                             self.reveal = None;
-                                            self.pending_position = None;
-                                            self.position_pdf = None;
-                                            self.position_point = None;
+                                            self.navigation.clear_position();
                                             push_history(&mut self.back, self.anchor);
                                             self.forward.clear();
-                                            self.goto = Some(*page);
+                                            self.navigation.go_to_page(*page);
                                         }
                                         LinkTarget::Url(url) => link = Some(url.clone()),
                                     }
@@ -927,7 +887,7 @@ impl PdfiumView {
                             }
                         }
                     }
-                    for range in resident.search_matches.for_query(&resident.characters, &self.query) {
+                    for range in resident.search_matches.for_query(&resident.characters, self.search.query()) {
                         for character in &resident.characters[range.clone()] {
                             if character.rect.is_finite() {
                                 ui.painter().rect_filled(
@@ -1070,7 +1030,7 @@ impl PdfiumView {
             if let Some(delay) = self.settle.wake_after(now) {
                 ui.ctx().request_repaint_after(delay);
             }
-        } else if let Some(reply) = self.pending_reply.take()
+        } else if let Some(reply) = self.rendering.take_reply()
             && reply.key == key
         {
             match reply.result {
@@ -1084,46 +1044,36 @@ impl PdfiumView {
                 Err(error) => self.error = Some(error),
             }
         }
-        if !deferred && self.requested.as_ref() != Some(&key) {
+        if !deferred && self.rendering.request(&key) {
             self.worker.as_ref().unwrap().request(Request {
                 key: key.clone(),
                 bytes: self.bytes.as_ref().unwrap().clone(),
             });
-            self.requested = Some(key.clone());
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             {
                 self.render_requests += 1;
             }
         }
-        self.desired = Some(key);
-        let search = SearchKey {
-            revision: self.revision,
-            query: self.query.clone(),
-        };
-        if self.search_requested.as_ref() != Some(&search) {
-            self.worker.as_ref().unwrap().search(search.clone());
-            self.search_requested = Some(search);
-            self.search_pending = !self.query.is_empty();
+        self.rendering.set_target(key);
+        if let Some(search) = self.search.request(self.revision) {
+            self.worker.as_ref().unwrap().search(search);
         }
     }
 
     fn accept_search(&mut self, key: SearchKey, pages: Vec<usize>) {
-        if key.revision == self.revision && key.query == self.query {
-            self.search_pages = pages;
-            self.search_pending = false;
-            if std::mem::take(&mut self.find_when_ready) {
-                self.find_next();
-            }
+        if self.search.accept(key, self.revision, pages) == Some(true) {
+            self.find_next();
         }
     }
 
     fn find_next(&mut self) {
         if let Some(target) = self
-            .search_pages
+            .search
+            .pages()
             .iter()
             .copied()
             .find(|p| *p > self.page)
-            .or_else(|| self.search_pages.first().copied())
+            .or_else(|| self.search.pages().first().copied())
         {
             self.navigate(target);
         }
@@ -1133,7 +1083,7 @@ impl PdfiumView {
         self.clear_reveal();
         push_history(&mut self.back, self.anchor);
         self.forward.clear();
-        self.goto = Some(page);
+        self.navigation.go_to_page(page);
     }
 
     pub(super) fn controls_snapshot(&self) -> super::preview_controls::Snapshot {
@@ -1158,7 +1108,7 @@ impl PdfiumView {
                 if let Some(target) = self.back.pop() {
                     push_history(&mut self.forward, self.anchor);
                     self.anchor = target;
-                    self.restore_anchor = true;
+                    self.navigation.restore();
                 }
             }
             Action::Forward => {
@@ -1166,7 +1116,7 @@ impl PdfiumView {
                 if let Some(target) = self.forward.pop() {
                     push_history(&mut self.back, self.anchor);
                     self.anchor = target;
-                    self.restore_anchor = true;
+                    self.navigation.restore();
                 }
             }
             Action::Page(page) => self.navigate(page),
@@ -1179,14 +1129,7 @@ impl PdfiumView {
                 }
             }
             Action::Find(query) => {
-                if self.query.as_ref() != query {
-                    self.query = query.into();
-                    self.search_pages.clear();
-                    self.search_pending = !self.query.is_empty();
-                    self.find_when_ready = self.search_pending;
-                } else if self.search_pending {
-                    self.find_when_ready = true;
-                } else {
+                if self.search.find(query) {
                     self.find_next();
                 }
             }
@@ -1752,9 +1695,9 @@ mod tests {
             })),
             ..Default::default()
         };
-        view.go_to_position(0, 50.0);
+        view.reveal_position_for_pdf(0, 0.0, 50.0, true, None);
         view.apply_pending_position();
-        assert!(view.pending_position.is_some());
+        assert!(view.navigation.pending_position().is_some());
         assert_eq!(view.anchor, (0, 0.0));
         view.active_revision = 2;
         view.catalog = Some(Arc::new(Catalog {
@@ -1762,9 +1705,9 @@ mod tests {
             outline: vec![],
         }));
         view.apply_pending_position();
-        assert!(view.pending_position.is_none());
+        assert!(view.navigation.pending_position().is_none());
         assert_eq!(view.anchor, (0, 0.25));
-        assert!(view.restore_anchor);
+        assert!(view.navigation.restoring());
     }
 
     #[test]
@@ -1819,7 +1762,7 @@ mod tests {
                 view.reveal.is_none(),
                 "automatic following must stay silent"
             );
-            assert!(view.pending_position.is_none());
+            assert!(view.navigation.pending_position().is_none());
         }
     }
 
@@ -1830,12 +1773,12 @@ mod tests {
         let reveal = view.reveal.as_ref().unwrap();
         assert_eq!(reveal.page, 2);
         assert_eq!(reveal.point, egui::vec2(125.0, 360.0));
-        assert_eq!(view.position_point, Some(reveal.point));
+        assert_eq!(view.navigation.point(), Some(reveal.point));
         assert!(reveal.attention.started.is_none());
         view.reveal_position(2, 200.0, 400.0, false);
         assert!(view.reveal.is_none());
-        assert_eq!(view.position_point, Some(egui::vec2(200.0, 400.0)));
-        assert_eq!(view.pending_position, Some((2, 400.0)));
+        assert_eq!(view.navigation.point(), Some(egui::vec2(200.0, 400.0)));
+        assert_eq!(view.navigation.pending_position(), Some((2, 400.0)));
         view.reveal_position(0, f32::NAN, 10.0, true);
         assert!(view.reveal.is_none());
     }
@@ -1847,9 +1790,9 @@ mod tests {
             let next: Arc<[u8]> = Arc::from([2u8]);
             view.reveal_position_for_pdf(1, 80.0, 400.0, explicit, Some(next));
             view.cancel_automatic_follow();
-            assert_eq!(view.pending_position.is_some(), explicit);
-            assert_eq!(view.position_point.is_some(), explicit);
-            assert_eq!(view.position_pdf.is_some(), explicit);
+            assert_eq!(view.navigation.pending_position().is_some(), explicit);
+            assert_eq!(view.navigation.point().is_some(), explicit);
+            assert_eq!(view.navigation.expected_pdf().is_some(), explicit);
             assert_eq!(view.reveal.is_some(), explicit);
         }
     }
@@ -1870,7 +1813,7 @@ mod tests {
         for explicit in [true, false] {
             view.reveal_position_for_pdf(0, 80.0, 50.0, explicit, Some(expected.clone()));
             view.apply_pending_position();
-            assert_eq!(view.pending_position, Some((0, 50.0)));
+            assert_eq!(view.navigation.pending_position(), Some((0, 50.0)));
             assert_eq!(view.anchor, (0, 0.0));
         }
         view.bytes = Some(expected);
@@ -1880,7 +1823,7 @@ mod tests {
         }));
         view.apply_pending_position();
         assert_eq!(view.anchor, (0, 0.25));
-        assert!(view.position_pdf.is_none());
+        assert!(view.navigation.expected_pdf().is_none());
     }
 
     #[test]
@@ -1949,23 +1892,23 @@ mod tests {
                 ..Default::default()
             };
             view.reveal_position(2, 640.0, 750.0, true);
-            let point = view.position_point.unwrap();
+            let point = view.navigation.point().unwrap();
             let viewport = Vec2::new(400.0, 300.0);
             let expected_offset =
                 reveal_scroll_offset(Pos2::new(point.x, 2000.0 + point.y), viewport);
             view.reveal.as_mut().unwrap().attention.animation = Some(Default::default());
             view.update_reveal_options(&bytes, Instant::now(), animation);
             assert!(view.reveal.is_none());
-            assert_eq!(view.pending_position, Some((2, 750.0)));
-            assert!(view.position_pdf.is_some());
-            assert_eq!(view.position_point, Some(point));
+            assert_eq!(view.navigation.pending_position(), Some((2, 750.0)));
+            assert!(view.navigation.expected_pdf().is_some());
+            assert_eq!(view.navigation.point(), Some(point));
             view.catalog = Some(Arc::new(Catalog {
                 sizes: vec![[800.0, 1000.0]; 3],
                 outline: vec![],
             }));
             view.apply_pending_position();
             assert_eq!(view.anchor, (2, 0.75));
-            let retained = view.position_point.unwrap();
+            let retained = view.navigation.point().unwrap();
             let actual_offset = reveal_scroll_offset(
                 Pos2::new(retained.x, 2000.0 + view.anchor.1 * 1000.0),
                 viewport,
@@ -1993,7 +1936,7 @@ mod tests {
         assert!(view.reveal.is_some());
         view.update_reveal_options(&bytes, now + Duration::from_millis(1500), animation);
         assert!(view.reveal.is_none());
-        assert!(view.pending_position.is_none());
+        assert!(view.navigation.pending_position().is_none());
     }
 
     #[test]
@@ -2007,14 +1950,14 @@ mod tests {
                 view.go_to_page(5);
             }
             assert!(view.reveal.is_none());
-            assert!(view.pending_position.is_none());
-            assert!(view.position_point.is_none());
+            assert!(view.navigation.pending_position().is_none());
+            assert!(view.navigation.point().is_none());
             view.apply_pending_position();
-            assert_eq!(view.goto, Some(5));
+            assert_eq!(view.navigation.page(), Some(5));
         }
         view.reveal_position(2, 30.0, 40.0, true);
         view.clear_reveal();
-        assert!(view.pending_position.is_none());
+        assert!(view.navigation.pending_position().is_none());
     }
 
     #[test]
@@ -2039,9 +1982,9 @@ mod tests {
             );
             view.prepare_path(PathBuf::from("b.pdf"), &next);
             assert_eq!(view.reveal.is_some(), matching);
-            assert_eq!(view.pending_position.is_some(), matching);
+            assert_eq!(view.navigation.pending_position().is_some(), matching);
             assert_eq!(
-                view.position_point,
+                view.navigation.point(),
                 matching.then_some(egui::vec2(40.0, 50.0))
             );
             assert!(view.bytes.is_none());
@@ -2061,7 +2004,7 @@ mod tests {
         };
         view.navigate(6);
         assert_eq!(view.back, vec![(2, 0.4)]);
-        assert_eq!(view.goto, Some(6));
+        assert_eq!(view.navigation.page(), Some(6));
         assert!(view.forward.is_empty());
     }
 
@@ -2207,7 +2150,7 @@ mod tests {
         };
         draw(&mut view, red);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !view.ready() || view.active_scale != view.requested.as_ref().unwrap().scale {
+        while !view.ready() || view.active_scale != view.rendering.requested().unwrap().scale {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(2));
             let bytes = view.bytes.clone().unwrap();

@@ -78,6 +78,7 @@ mod tests {
             flash: true,
             glow: true,
             shake: true,
+            lingering: None,
             particles: None,
         };
         let pulse = super::super::feedback::Pulse::new(Default::default(), effects, birth, 1);

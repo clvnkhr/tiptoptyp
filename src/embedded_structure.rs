@@ -75,8 +75,19 @@ pub(crate) fn decode_literal(source: &str) -> (String, Vec<usize>) {
 pub(crate) fn regions(source: &str, language: EmbeddedLanguage) -> Vec<Region> {
     let mut regions = match language {
         EmbeddedLanguage::Markdown => markdown(source),
-        EmbeddedLanguage::TexMath | EmbeddedLanguage::TexText => tex(source),
+        EmbeddedLanguage::TexMath | EmbeddedLanguage::TexText => {
+            return tex_regions(source, &crate::delimiters::tex_ignored_ranges(source));
+        }
     };
+    regions.retain(|region| source[region.range.clone()].contains('\n'));
+    regions.sort_by_key(|region| (region.range.start, std::cmp::Reverse(region.range.end)));
+    regions
+}
+
+/// Native TeX can share its revision-cached lexical exclusions with the same
+/// structural reader used by embedded TeX.
+pub(crate) fn tex_regions(source: &str, ignored: &[Range<usize>]) -> Vec<Region> {
+    let mut regions = tex(source, ignored);
     regions.retain(|region| source[region.range.clone()].contains('\n'));
     regions.sort_by_key(|region| (region.range.start, std::cmp::Reverse(region.range.end)));
     regions
@@ -151,13 +162,27 @@ fn append_sections(result: &mut Vec<Region>, headings: &[(usize, usize)], end: u
 /// A tolerant lexical reader: comments, escaped control symbols and verbatim
 /// payloads cannot introduce structure. Unclosed groups/environments extend to
 /// EOF so folding remains useful while typing incomplete input.
-fn tex(source: &str) -> Vec<Region> {
+fn tex(source: &str, ignored: &[Range<usize>]) -> Vec<Region> {
     let bytes = source.as_bytes();
     let mut result = Vec::new();
     let mut headings = Vec::new();
     let mut groups: Vec<(usize, &str)> = Vec::new();
     let mut i = 0;
+    let mut literal = 0;
     while i < bytes.len() {
+        while ignored.get(literal).is_some_and(|range| range.end <= i) {
+            literal += 1;
+        }
+        if let Some(range) = ignored.get(literal).filter(|range| range.start <= i) {
+            if i == range.start && source[i..].starts_with("\\begin") {
+                result.push(Region {
+                    range: range.clone(),
+                    heading_level: None,
+                });
+            }
+            i = range.end;
+            continue;
+        }
         match bytes[i] {
             b'%' => {
                 i += source[i..].find('\n').unwrap_or(bytes.len() - i);
@@ -239,7 +264,11 @@ fn tex(source: &str) -> Vec<Region> {
                 .iter()
                 .position(|candidate| *candidate == command)
                 {
-                    headings.push((start, level + 1));
+                    // A section command inside a macro body or another
+                    // braced argument does not establish document ancestry.
+                    if groups.iter().all(|(_, close)| *close != "}") {
+                        headings.push((start, level + 1));
+                    }
                 }
             }
             b'$' if bytes.get(i + 1) == Some(&b'$') => {

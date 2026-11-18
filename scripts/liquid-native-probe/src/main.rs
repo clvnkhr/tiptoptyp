@@ -50,8 +50,8 @@ fn main() -> Result<(), String> {
             serde_json::json!({
                 "schema_version": 1,
                 "target": if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" },
-                "catalog_sha256": format!("{:x}", Sha256::digest(include_bytes!("../../../resources/liquid/manifest.json"))),
-                "notices_catalog_sha256": format!("{:x}", Sha256::digest(include_bytes!("../../../resources/liquid/notices.json"))),
+                "catalog_sha256": hex::encode(Sha256::digest(include_bytes!("../../../resources/liquid/manifest.json"))),
+                "notices_catalog_sha256": hex::encode(Sha256::digest(include_bytes!("../../../resources/liquid/notices.json"))),
             })
         );
         return Ok(());

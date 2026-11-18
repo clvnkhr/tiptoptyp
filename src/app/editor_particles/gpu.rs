@@ -63,8 +63,7 @@ const FRAGMENT: &str = include_str!("particles.frag");
 
 #[derive(Default)]
 struct Backend {
-    pipeline: Option<Pipeline>,
-    error: Option<String>,
+    phase: PipelinePhase,
     draws: u64,
     uploads: u64,
     uploaded_bytes_total: u64,
@@ -73,9 +72,84 @@ struct Backend {
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     timing: timing::Recorder,
 }
+#[derive(Default)]
+enum PipelinePhase {
+    #[default]
+    Cold,
+    Ready(Pipeline),
+    Unavailable(String),
+    Destroyed(Option<String>),
+}
+impl Backend {
+    #[cfg(all(test, target_os = "macos"))]
+    fn pipeline(&self) -> Option<&Pipeline> {
+        if let PipelinePhase::Ready(pipeline) = &self.phase {
+            Some(pipeline)
+        } else {
+            None
+        }
+    }
+    fn pipeline_mut(&mut self) -> Option<&mut Pipeline> {
+        if let PipelinePhase::Ready(pipeline) = &mut self.phase {
+            Some(pipeline)
+        } else {
+            None
+        }
+    }
+    #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
+    fn error(&self) -> Option<&str> {
+        match &self.phase {
+            PipelinePhase::Unavailable(error) => Some(error),
+            PipelinePhase::Destroyed(error) => error.as_deref(),
+            _ => None,
+        }
+    }
+    fn retire(&mut self) -> Option<Pipeline> {
+        match std::mem::replace(&mut self.phase, PipelinePhase::Destroyed(None)) {
+            PipelinePhase::Ready(pipeline) => Some(pipeline),
+            PipelinePhase::Unavailable(error) => {
+                self.phase = PipelinePhase::Destroyed(Some(error));
+                None
+            }
+            PipelinePhase::Destroyed(error) => {
+                self.phase = PipelinePhase::Destroyed(error);
+                None
+            }
+            PipelinePhase::Cold => None,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum Availability {
+    Cold,
+    Ready,
+    Unavailable,
+    Destroyed,
+}
+struct AtomicAvailability(AtomicU8);
+impl Default for AtomicAvailability {
+    fn default() -> Self {
+        Self(AtomicU8::new(Availability::Cold as u8))
+    }
+}
+impl AtomicAvailability {
+    fn load(&self) -> Availability {
+        match self.0.load(Ordering::Acquire) {
+            0 => Availability::Cold,
+            1 => Availability::Ready,
+            2 => Availability::Unavailable,
+            3 => Availability::Destroyed,
+            _ => unreachable!("typed GPU availability cannot contain another value"),
+        }
+    }
+    fn store(&self, phase: Availability) {
+        self.0.store(phase as u8, Ordering::Release);
+    }
+}
 struct Shared {
-    // 0 cold, 1 ready, 2 unavailable, 3 destroyed. Idle warm-up checks need no lock.
-    status: AtomicU8,
+    // A release-published availability cache keeps idle warm-up checks lock-free.
+    status: AtomicAvailability,
     backend: Mutex<Backend>,
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     timing_enabled: bool,
@@ -88,7 +162,7 @@ impl Default for Shared {
             ..Default::default()
         };
         Self {
-            status: AtomicU8::new(0),
+            status: AtomicAvailability::default(),
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             timing_enabled: backend.timing.enabled(),
             backend: Mutex::new(backend),
@@ -112,12 +186,21 @@ impl Renderer {
     }
 
     pub(super) fn is_unavailable(&self) -> bool {
-        self.0.status.load(Ordering::Acquire) >= 2
+        matches!(
+            self.0.status.load(),
+            Availability::Unavailable | Availability::Destroyed
+        )
     }
 
     #[cfg(test)]
     pub(in crate::app) fn simulate_unavailable_for_tests(&self) {
-        self.0.status.store(2, Ordering::Release);
+        let mut backend = self.0.backend.lock().unwrap();
+        assert!(
+            !matches!(backend.phase, PipelinePhase::Ready(_)),
+            "a live GL pipeline must be destroyed with its context"
+        );
+        backend.phase = PipelinePhase::Unavailable("Simulated unavailable renderer".into());
+        self.0.status.store(Availability::Unavailable);
     }
 
     // Compile and exercise the pipeline before the first keystroke. Drivers
@@ -125,7 +208,7 @@ impl Renderer {
     // A discarded layout pass may discard its callback too, so only the actual
     // render callback marks initialization complete. No idle repaint is requested.
     pub(super) fn warm(&self, ui: &Ui, clip: Rect) {
-        if self.0.status.load(Ordering::Acquire) != 0 || !clip.is_positive() {
+        if self.0.status.load() != Availability::Cold || !clip.is_positive() {
             return;
         }
         let renderer = self.clone();
@@ -161,29 +244,29 @@ impl Renderer {
     }
 
     fn initialize(&self, gl: &glow::Context) {
-        if self.0.status.load(Ordering::Acquire) != 0 {
+        if self.0.status.load() != Availability::Cold {
             return;
         }
         let mut backend = self.0.backend.lock().unwrap();
-        if self.0.status.load(Ordering::Acquire) != 0 {
+        if self.0.status.load() != Availability::Cold {
             return;
         }
         match Pipeline::new(gl) {
             Ok(pipeline) => {
-                backend.pipeline = Some(pipeline);
-                self.0.status.store(1, Ordering::Release);
+                backend.phase = PipelinePhase::Ready(pipeline);
+                self.0.status.store(Availability::Ready);
             }
             Err(error) => {
                 eprintln!("Typing particle shader unavailable: {error}");
-                backend.error = Some(error);
-                self.0.status.store(2, Ordering::Release);
+                backend.phase = PipelinePhase::Unavailable(error);
+                self.0.status.store(Availability::Unavailable);
             }
         }
     }
 
     fn prewarm(&self, gl: &glow::Context, clip: Rect) {
         let mut backend = self.0.backend.lock().unwrap();
-        let Some(pipeline) = backend.pipeline.as_mut() else {
+        let Some(pipeline) = backend.pipeline_mut() else {
             return;
         };
         if pipeline.uploaded.is_some() {
@@ -219,7 +302,10 @@ impl Renderer {
             || !clip.is_finite()
             || !clip.is_positive()
             || !time.is_finite()
-            || self.0.status.load(Ordering::Acquire) >= 2
+            || matches!(
+                self.0.status.load(),
+                Availability::Unavailable | Availability::Destroyed
+            )
         {
             return;
         }
@@ -242,11 +328,11 @@ impl Renderer {
                 renderer.initialize(painter.gl());
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 let initialized = callback.map(|_| std::time::Instant::now());
-                if renderer.0.status.load(Ordering::Acquire) != 1 {
+                if renderer.0.status.load() != Availability::Ready {
                     return;
                 }
                 let mut backend = renderer.0.backend.lock().unwrap();
-                let Some(pipeline) = backend.pipeline.as_mut() else {
+                let Some(pipeline) = backend.pipeline_mut() else {
                     return;
                 };
                 if !time.is_finite() {
@@ -308,8 +394,7 @@ impl Renderer {
             .backend
             .lock()
             .unwrap()
-            .pipeline
-            .as_ref()
+            .pipeline()
             .map_or(0, |pipeline| pipeline.uniform_writes)
     }
 
@@ -325,10 +410,11 @@ impl Renderer {
         instances: &Arc<[Instance]>,
         dark: bool,
         iterations: usize,
+        ages: [f32; 2],
     ) -> (std::time::Duration, std::time::Duration) {
         self.initialize(gl);
         let mut backend = self.0.backend.lock().unwrap();
-        let pipeline = backend.pipeline.as_mut().expect("probe GPU unavailable");
+        let pipeline = backend.pipeline_mut().expect("probe GPU unavailable");
         let accent = Color32::from_rgb(136, 57, 239);
         // Both layouts exercise exactly the same warmed, resident batch.
         pipeline.draw(gl, clip, instances, 0.14, accent, dark);
@@ -339,7 +425,7 @@ impl Renderer {
                 gl,
                 clip,
                 instances,
-                0.035 + (frame % 120) as f32 * (0.265 / 120.0),
+                ages[0] + (frame % 120) as f32 * ((ages[1] - ages[0]) / 120.0),
                 accent,
                 dark,
             );
@@ -354,8 +440,8 @@ impl Renderer {
     /// Taking the pipeline makes teardown idempotent and late callbacks inert.
     pub(crate) fn destroy(&self, gl: &glow::Context) {
         let mut backend = self.0.backend.lock().unwrap();
-        self.0.status.store(3, Ordering::Release);
-        if let Some(pipeline) = backend.pipeline.take() {
+        self.0.status.store(Availability::Destroyed);
+        if let Some(pipeline) = backend.retire() {
             pipeline.destroy(gl);
         }
     }
@@ -365,13 +451,14 @@ impl Renderer {
         let backend = self.0.backend.lock().unwrap();
         let inspected = serde_json::json!({
             "backend": "instanced-glow",
-            "ready": self.0.status.load(Ordering::Acquire) == 1,
+            "ready": self.0.status.load() == Availability::Ready,
             "draws": backend.draws,
             "uploads": backend.uploads,
             "uploaded_bytes_total": backend.uploaded_bytes_total,
             "uploaded_instances": backend.uploaded_instances,
             "last_draw_instances": backend.last_draw_instances,
-            "error": backend.error,
+            "error": backend.error(),
+            "phase": match backend.phase { PipelinePhase::Cold => "cold", PipelinePhase::Ready(_) => "ready", PipelinePhase::Unavailable(_) => "unavailable", PipelinePhase::Destroyed(_) => "destroyed" },
         });
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         let inspected = {
@@ -443,8 +530,11 @@ impl Pipeline {
                     gl.shader_source(
                         shader,
                         &format!(
-                            "{prefix}#define PARTICLE_VERTEX_COUNT {VERTICES_PER_INSTANCE}\n#define PARTICLE_LIFETIME {:.9}\n{source}",
-                            super::LIFETIME
+                            "{prefix}#define PARTICLE_VERTEX_COUNT {VERTICES_PER_INSTANCE}\n#define PARTICLE_LIFETIME {:.9}\n#define SMOKE_LIFETIME {:.9}\n#define EMBER_LIFETIME {:.9}\n#define AFTERBURNER_LIFETIME {:.9}\n{source}",
+                            super::LIFETIME,
+                            super::SMOKE_LIFETIME,
+                            super::EMBER_LIFETIME,
+                            super::AFTERBURNER_LIFETIME
                         ),
                     );
                     gl.compile_shader(shader);
@@ -662,6 +752,29 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn availability_is_typed_and_backend_retirement_is_idempotent() {
+        let state = AtomicAvailability::default();
+        for phase in [
+            Availability::Cold,
+            Availability::Ready,
+            Availability::Unavailable,
+            Availability::Destroyed,
+        ] {
+            state.store(phase);
+            assert_eq!(state.load(), phase);
+        }
+        let mut backend = Backend::default();
+        assert!(backend.retire().is_none());
+        assert!(matches!(backend.phase, PipelinePhase::Destroyed(None)));
+        backend.phase = PipelinePhase::Unavailable("shader unavailable".into());
+        assert!(backend.retire().is_none());
+        assert_eq!(backend.error(), Some("shader unavailable"));
+        assert!(backend.retire().is_none());
+        assert_eq!(backend.error(), Some("shader unavailable"));
+        assert!(backend.pipeline_mut().is_none());
+    }
 
     #[test]
     fn live_frame_time_uses_the_delayed_paint_clock_and_retains_the_state_base() {

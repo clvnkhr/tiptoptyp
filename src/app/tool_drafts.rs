@@ -2,7 +2,7 @@
 //!
 //! An external change wins only where its committed value changed. Unrelated
 //! draft fields survive, including partially typed command/environment text.
-use crate::{ltex::LtexSettings, tool_command::CommandCustomization};
+use crate::{ltex::LtexSettings, tex::settings::TexSettings, tool_command::CommandCustomization};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -34,6 +34,9 @@ pub(super) fn rebase_ltex(
     if base.follow_document_language != current.follow_document_language {
         draft.follow_document_language = current.follow_document_language;
     }
+    if base.oxford_spelling != current.oxford_spelling {
+        draft.oxford_spelling = current.oxford_spelling;
+    }
     if base.mode != current.mode {
         draft.mode = current.mode;
     }
@@ -47,6 +50,25 @@ pub(super) fn rebase_ltex(
         &mut draft.configuration,
     );
     draft
+}
+
+/// TeX preferences contain independently editable compiler, formatter and
+/// service objects. Overlay only committed leaves that changed since editing.
+pub(super) fn rebase_tex(
+    base: &TexSettings,
+    current: &TexSettings,
+    draft: TexSettings,
+) -> TexSettings {
+    if base == current {
+        return draft;
+    }
+    let mut draft = serde_json::to_value(draft).expect("TeX settings serialize to JSON");
+    overlay_changed_keys(
+        &serde_json::to_value(base).expect("TeX settings serialize to JSON"),
+        &serde_json::to_value(current).expect("TeX settings serialize to JSON"),
+        &mut draft,
+    );
+    serde_json::from_value(draft).expect("rebased typed TeX settings retain their schema")
 }
 
 /// Keep malformed/oversized JSON exactly as typed. It remains unapplied until

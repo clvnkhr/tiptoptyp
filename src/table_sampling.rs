@@ -49,7 +49,6 @@ pub(crate) struct View {
     pub locked: BTreeMap<CellPosition, String>,
     pub grid: Option<Grid>,
     pub pending: bool,
-    pub error: Option<String>,
 }
 impl View {
     pub(crate) fn locked_value(&self, position: CellPosition) -> Option<&str> {

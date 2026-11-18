@@ -115,11 +115,18 @@ struct WatchSession {
     reader: Option<thread::JoinHandle<()>>,
     pending_revision: u64,
     pending_display_name: String,
-    active_revision: Option<u64>,
+    phase: WatchPhase,
     active_display_name: String,
     active_started: Instant,
     diagnostics: Vec<String>,
-    pending_completion: Option<PendingCompletion>,
+}
+
+/// A compile cannot be active and waiting for its terminal output to settle at
+/// the same time. New starts discard the former terminal result atomically.
+enum WatchPhase {
+    Awaiting,
+    Compiling(u64),
+    Settling(PendingCompletion),
 }
 
 struct PendingCompletion {
@@ -127,6 +134,32 @@ struct PendingCompletion {
     elapsed: Duration,
     succeeded: bool,
     quiet_since: Instant,
+}
+
+impl WatchPhase {
+    fn finish(&mut self, fallback_revision: u64, elapsed: Duration, succeeded: bool, now: Instant) {
+        let revision = match self {
+            Self::Compiling(revision) => *revision,
+            Self::Awaiting | Self::Settling(_) => fallback_revision,
+        };
+        *self = Self::Settling(PendingCompletion {
+            revision,
+            elapsed,
+            succeeded,
+            quiet_since: now,
+        });
+    }
+
+    fn take_settled(&mut self, now: Instant) -> Option<PendingCompletion> {
+        if !matches!(self, Self::Settling(completion) if now.saturating_duration_since(completion.quiet_since) >= WATCH_LOG_QUIET_PERIOD)
+        {
+            return None;
+        }
+        let Self::Settling(completion) = std::mem::replace(self, Self::Awaiting) else {
+            unreachable!()
+        };
+        Some(completion)
+    }
 }
 
 impl WatchSession {
@@ -227,11 +260,10 @@ impl WatchSession {
             reader: Some(reader),
             pending_revision: request.revision,
             pending_display_name: request.input.display_name.clone(),
-            active_revision: None,
+            phase: WatchPhase::Awaiting,
             active_display_name: request.input.display_name.clone(),
             active_started: Instant::now(),
             diagnostics: Vec::new(),
-            pending_completion: None,
         })
     }
 
@@ -392,7 +424,7 @@ fn drain_watch_logs(
             continue;
         }
 
-        if let Some(completion) = &mut current.pending_completion {
+        if let WatchPhase::Settling(completion) = &mut current.phase {
             completion.quiet_since = Instant::now();
         }
 
@@ -400,8 +432,7 @@ fn drain_watch_logs(
             WatchLine::CompileStarted => {
                 // If Typst starts again before a terminal result has settled,
                 // that result no longer represents the live output path.
-                current.pending_completion = None;
-                current.active_revision = Some(current.pending_revision);
+                current.phase = WatchPhase::Compiling(current.pending_revision);
                 current
                     .active_display_name
                     .clone_from(&current.pending_display_name);
@@ -414,28 +445,20 @@ fn drain_watch_logs(
                 });
             }
             WatchLine::CompileSucceeded => {
-                let revision = current
-                    .active_revision
-                    .take()
-                    .unwrap_or(current.pending_revision);
-                current.pending_completion = Some(PendingCompletion {
-                    revision,
-                    elapsed: current.active_started.elapsed(),
-                    succeeded: true,
-                    quiet_since: Instant::now(),
-                });
+                current.phase.finish(
+                    current.pending_revision,
+                    current.active_started.elapsed(),
+                    true,
+                    Instant::now(),
+                );
             }
             WatchLine::CompileFailed => {
-                let revision = current
-                    .active_revision
-                    .take()
-                    .unwrap_or(current.pending_revision);
-                current.pending_completion = Some(PendingCompletion {
-                    revision,
-                    elapsed: current.active_started.elapsed(),
-                    succeeded: false,
-                    quiet_since: Instant::now(),
-                });
+                current.phase.finish(
+                    current.pending_revision,
+                    current.active_started.elapsed(),
+                    false,
+                    Instant::now(),
+                );
             }
             WatchLine::Ignore => {}
             WatchLine::Diagnostic => {
@@ -449,14 +472,9 @@ fn finish_settled_completion(session: &mut Option<WatchSession>, results: &mut V
     let Some(current) = session.as_mut() else {
         return;
     };
-    if !current
-        .pending_completion
-        .as_ref()
-        .is_some_and(|completion| completion.quiet_since.elapsed() >= WATCH_LOG_QUIET_PERIOD)
-    {
+    let Some(completion) = current.phase.take_settled(Instant::now()) else {
         return;
-    }
-    let completion = current.pending_completion.take().unwrap();
+    };
     let raw = current.diagnostics.join("\n");
     let diagnostics = current.diagnostic_report(raw);
     let event = if completion.succeeded {
@@ -535,6 +553,47 @@ fn typst_command_error(program: &Path, error: std::io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_completion_owns_one_revision_until_quiet_or_restarted() {
+        let now = Instant::now();
+        let mut phase = WatchPhase::Compiling(3);
+        phase.finish(4, Duration::from_millis(12), true, now);
+        assert!(
+            phase
+                .take_settled(now + WATCH_LOG_QUIET_PERIOD - Duration::from_nanos(1))
+                .is_none()
+        );
+        let completion = phase.take_settled(now + WATCH_LOG_QUIET_PERIOD).unwrap();
+        assert_eq!(
+            completion.revision, 3,
+            "a newer queued request must not relabel the active build"
+        );
+        assert!(completion.succeeded);
+        assert_eq!(completion.elapsed, Duration::from_millis(12));
+        assert!(phase.take_settled(now + WATCH_LOG_QUIET_PERIOD).is_none());
+
+        phase.finish(4, Duration::from_millis(1), false, now);
+        phase = WatchPhase::Compiling(5);
+        assert!(
+            phase.take_settled(now + WATCH_LOG_QUIET_PERIOD).is_none(),
+            "a restart discards the former terminal output"
+        );
+        phase.finish(6, Duration::from_millis(2), false, now);
+        let WatchPhase::Settling(completion) = &mut phase else {
+            unreachable!()
+        };
+        completion.quiet_since = now + WATCH_LOG_QUIET_PERIOD;
+        assert!(
+            phase.take_settled(now + WATCH_LOG_QUIET_PERIOD).is_none(),
+            "late diagnostic output extends the quiet period"
+        );
+        let completion = phase
+            .take_settled(now + WATCH_LOG_QUIET_PERIOD * 2)
+            .unwrap();
+        assert_eq!(completion.revision, 5);
+        assert!(!completion.succeeded);
+    }
     use tiptoptyp_core::document::TypesettingLanguage;
 
     #[cfg(unix)]
@@ -594,7 +653,7 @@ mod tests {
                 .find_map(|result| match result.event {
                     EngineEvent::Failed(report) => Some(report),
                     EngineEvent::Pdf { .. } => panic!("fixture unexpectedly compiled"),
-                    EngineEvent::Started => None,
+                    EngineEvent::Started | EngineEvent::TexResolved(_) => None,
                 });
             if let Some(report) = ready {
                 break report;
@@ -679,7 +738,7 @@ mod tests {
                         ready = Some(pdf);
                     }
                     EngineEvent::Failed(report) => panic!("unexpected failure: {report:?}"),
-                    EngineEvent::Started => {}
+                    EngineEvent::Started | EngineEvent::TexResolved(_) => {}
                 }
             }
             if let Some(pdf) = ready {
@@ -698,14 +757,10 @@ mod tests {
                 .unwrap();
         }
         assert!(backend.poll().is_empty());
-        assert!(
-            backend
-                .session
-                .as_ref()
-                .unwrap()
-                .pending_completion
-                .is_none()
-        );
+        assert!(!matches!(
+            backend.session.as_ref().unwrap().phase,
+            WatchPhase::Settling(_)
+        ));
         fs::write(pdf_path, b"%PDF-new-output").unwrap();
         drop(backend);
         assert!(

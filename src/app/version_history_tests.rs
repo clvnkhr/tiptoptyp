@@ -398,7 +398,7 @@ fn restore_completion_cannot_overwrite_a_newer_edit_or_different_document() {
         }
         assert_eq!(app.document().key(), key);
         assert_eq!(app.document().source(), &source);
-        assert!(!app.save_job.is_running());
+        assert!(!app.local_save.is_running());
         assert_eq!(fs::read_to_string(path).unwrap(), "current token\n");
         assert!(
             app.version_history

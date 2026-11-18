@@ -81,7 +81,7 @@ impl EditorApp {
     fn palette_admitted(&self, context: &egui::Context) -> bool {
         let focused = focused_input_viewport(context);
         !self.document_flow_busy()
-            && !self.process_close_pending
+            && !self.process_close_pending()
             && !self.typst_overrides_visible
             && !self.workspace_chooser_visible
             && (focused == context.viewport_id()
@@ -283,7 +283,7 @@ impl EditorApp {
         context: &egui::Context,
     ) -> bool {
         use ShortcutAction as A;
-        if self.document_flow_busy() || self.process_close_pending {
+        if self.document_flow_busy() || self.process_close_pending() {
             return false;
         }
         let has_source = !self.tabs.is_empty() && self.document().kind().is_editable();
@@ -358,13 +358,17 @@ impl EditorApp {
                 has_source && self.document().kind().typesetting_language().is_some()
             }
             A::ToggleFold | A::CollapseAll | A::ExpandAll => {
-                source_focus && self.document().kind().is_typst() && self.settings.line_numbers
+                source_focus
+                    && self.document().kind().typesetting_language().is_some()
+                    && self.settings.line_numbers
             }
             A::FindNext | A::FindPrevious => source_focus || origin.terminal,
             A::ReplaceOne | A::ReplaceAll => source_focus && !self.overleaf_source_locked(),
             A::ToggleFindCase | A::ToggleFindRegex => source_focus,
             A::ToggleLineWrap | A::ToggleLineNumbers => has_source,
-            A::ToggleStickyContext => has_source && self.document().kind().is_typst(),
+            A::ToggleStickyContext => {
+                has_source && self.document().kind().typesetting_language().is_some()
+            }
             A::PreviewZoomIn | A::PreviewZoomOut | A::PreviewZoomReset => {
                 !self.tabs.is_empty() && self.preview_visible()
             }

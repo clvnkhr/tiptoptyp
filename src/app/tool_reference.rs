@@ -325,6 +325,7 @@ mod tests {
     fn presets_are_explicit_and_restore_normal_without_enabling_providers() {
         let id = ReferenceId::Ltex;
         let mut harness = harness(egui::vec2(730.0, 560.0), id);
+        harness.state_mut().ltex.enabled = false;
         let before = harness.state().clone();
         let label = |profile| format!("{} {profile} preset", reference(id).title);
         harness.get_by_label(&label("Verbose")).click();

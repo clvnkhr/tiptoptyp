@@ -85,13 +85,13 @@ impl EditorApp {
             self.symbol_drawing.activity(),
         );
         let overleaf_save = self.overleaf_save_activity();
-        let save_state = if self.save_job.is_running() {
+        let save_state = if self.local_save.is_running() {
             Activity::Running
         } else {
-            self.activity
-                .save_error
-                .as_ref()
-                .map_or_else(|| self.save_job.activity(), |e| Activity::Failed(e.clone()))
+            self.activity.save_error.as_ref().map_or_else(
+                || self.local_save.activity(),
+                |e| Activity::Failed(e.clone()),
+            )
         };
         let save = self
             .overleaf_save_for_active(&overleaf_save)
@@ -172,7 +172,7 @@ impl EditorApp {
             "Tinymist",
             "Provides Typst suggestions, hover help, and error checks.",
             if matches!(tinymist, Activity::Idle) {
-                if intelligence_busy || self.format_request_key.is_some() {
+                if intelligence_busy || self.formatting.request_key().is_some() {
                     Activity::Running
                 } else if let Some(error) = &self.activity.intelligence_error {
                     Activity::Failed(error.clone())
@@ -212,15 +212,15 @@ impl EditorApp {
                 1,
                 "TexLab",
                 self.settings.tex.texlab_enabled,
-                self.tex_service.texlab_ready,
-                self.tex_service.texlab_error.as_deref(),
+                self.tex_service.ready(crate::tex::Provider::Texlab),
+                self.tex_service.error(crate::tex::Provider::Texlab),
             ),
             (
                 2,
                 "Badness",
                 self.settings.tex.needs_badness(),
-                self.tex_service.badness_ready,
-                self.tex_service.badness_error.as_deref(),
+                self.tex_service.ready(crate::tex::Provider::Badness),
+                self.tex_service.error(crate::tex::Provider::Badness),
             ),
         ] {
             let checks = if index == 1 {
@@ -243,7 +243,7 @@ impl EditorApp {
                 } else if !ready
                     || (index == 1 && intelligence_busy)
                     || (index == 2
-                        && self.format_request_key.is_some()
+                        && self.formatting.request_key().is_some()
                         && self.settings.tex.formatter == crate::tex::settings::Formatter::Badness)
                 {
                     Activity::Running
@@ -275,8 +275,8 @@ impl EditorApp {
                 inactive.clone()
             } else {
                 Activity::work(
-                    self.format_request_key.is_some(),
-                    self.format_when_service_ready.is_some(),
+                    self.formatting.request_key().is_some(),
+                    self.formatting.saved_document().is_some(),
                     self.activity.format_error.as_deref(),
                 )
             },
@@ -341,6 +341,12 @@ impl EditorApp {
         );
         add(
             Group::Git,
+            "Git setup",
+            "Initializes a repository or saves its local author and remote configuration.",
+            self.git_setup.activity(),
+        );
+        add(
+            Group::Git,
             "Git hunks",
             "Marks changed lines beside your source code.",
             self.git_editor.activity(),
@@ -398,6 +404,12 @@ impl EditorApp {
             },
         );
         add(Group::Checks, "Liquid", "Liquid", self.liquid.activity());
+        add(
+            Group::Checks,
+            "Suggested fix",
+            "Liquid",
+            self.diagnostic_fix.activity(),
+        );
         add(
             Group::Code,
             "Table values",
@@ -586,7 +598,7 @@ fn fixture_group(name: &str) -> Group {
         | "Harper"
         | "Liquid"
         | "Unicode" => Group::Checks,
-        "Git status" | "Git hunks" | "Git mutation" => Group::Git,
+        "Git status" | "Git setup" | "Git hunks" | "Git mutation" => Group::Git,
         "Fonts"
         | "Packages"
         | "Package removal"

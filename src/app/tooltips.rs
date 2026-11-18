@@ -132,20 +132,50 @@ pub(super) struct TooltipGeometry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TooltipInteractionState {
     pub(super) identity: u64,
-    pub(super) focused: bool,
-    pub(super) had_focus: bool,
-    pub(super) focus_requested: bool,
-    pub(super) dismissed: bool,
+    phase: TooltipPhase,
 }
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TooltipPhase {
+    Passive,
+    FocusRequested,
+    Focused,
+    Dismissed,
+}
 impl TooltipInteractionState {
     pub(super) const fn new(identity: u64) -> Self {
         Self {
             identity,
-            focused: false,
-            had_focus: false,
-            focus_requested: false,
-            dismissed: false,
+            phase: TooltipPhase::Passive,
+        }
+    }
+    pub(super) fn focused(self) -> bool {
+        self.phase == TooltipPhase::Focused
+    }
+    pub(super) fn focus_requested(self) -> bool {
+        self.phase == TooltipPhase::FocusRequested
+    }
+    pub(super) fn dismissed(self) -> bool {
+        self.phase == TooltipPhase::Dismissed
+    }
+    pub(super) fn engaged(self) -> bool {
+        matches!(
+            self.phase,
+            TooltipPhase::FocusRequested | TooltipPhase::Focused
+        )
+    }
+    pub(super) fn request_focus(&mut self) {
+        if !self.focused() {
+            self.phase = TooltipPhase::FocusRequested;
+        }
+    }
+    pub(super) fn dismiss(&mut self) {
+        self.phase = TooltipPhase::Dismissed;
+    }
+    pub(super) fn observe_focus(&mut self, focused: bool) {
+        if focused {
+            self.phase = TooltipPhase::Focused;
+        } else if self.focused() {
+            self.phase = TooltipPhase::Dismissed;
         }
     }
 }
@@ -345,7 +375,7 @@ pub(super) fn native_tooltip_handoff_active(context: &egui::Context, emit_trace:
                 && tooltip_pointer_moved_away(previous, pointer, current)
             {
                 let mut dismissed = TooltipInteractionState::new(current.identity);
-                dismissed.dismissed = true;
+                dismissed.dismiss();
                 data.insert_temp(interaction_id, dismissed);
             }
             if let Some(pointer) = pointer {
@@ -370,7 +400,7 @@ pub(super) fn native_tooltip_handoff_active(context: &egui::Context, emit_trace:
     if let Some(geometry) = geometry
         && geometry.handoff_until > now
         && !geometry.pointer_inside_viewport
-        && !interaction.is_some_and(|state| state.focused || state.focus_requested)
+        && !interaction.is_some_and(|state| state.engaged())
         && !pointer.is_some_and(|pointer| tooltip_region_contains(pointer, geometry))
     {
         // A pointer leaving the route may not generate another repaint. Make
@@ -424,10 +454,10 @@ pub(super) fn tooltip_handoff_is_active(
     interaction: Option<TooltipInteractionState>,
 ) -> bool {
     let interaction = tooltip_interaction_for_geometry(geometry, interaction);
-    if interaction.is_some_and(|state| state.dismissed) {
+    if interaction.is_some_and(|state| state.dismissed()) {
         return false;
     }
-    if interaction.is_some_and(|state| state.focused || state.focus_requested) {
+    if interaction.is_some_and(|state| state.engaged()) {
         return true;
     }
     geometry.is_some_and(|geometry| {
@@ -491,9 +521,7 @@ pub(super) fn tooltip_viewport_should_render(
         || geometry.is_some_and(|geometry| {
             geometry.identity == identity && geometry.pointer_inside_viewport
         })
-        || interaction.is_some_and(|state| {
-            state.identity == identity && (state.focused || state.focus_requested)
-        })
+        || interaction.is_some_and(|state| state.identity == identity && (state.engaged()))
 }
 
 pub(super) fn trace_native_tooltip_handoff(
@@ -525,7 +553,9 @@ pub(super) fn trace_native_tooltip_handoff(
         |interaction| {
             format!(
                 "focused={} requested={} dismissed={}",
-                interaction.focused, interaction.focus_requested, interaction.dismissed,
+                interaction.focused(),
+                interaction.focus_requested(),
+                interaction.dismissed(),
             )
         },
     );
@@ -833,9 +863,7 @@ pub(super) fn publish_tooltip_interaction(
             return false;
         };
         if geometry.pointer_inside_viewport && !pointer_inside_viewport {
-            interaction.dismissed = true;
-            interaction.focused = false;
-            interaction.focus_requested = false;
+            interaction.dismiss();
         }
         let changed = geometry.pointer_inside_viewport != pointer_inside_viewport
             || data.get_temp::<TooltipInteractionState>(interaction_id) != Some(interaction);
@@ -1136,7 +1164,7 @@ pub(super) fn show_native_tooltip_card(
             .filter(|state| state.identity == identity)
             .unwrap_or(TooltipInteractionState::new(identity))
     });
-    if interaction.dismissed {
+    if interaction.dismissed() {
         return;
     }
     let geometry_id = tooltip_geometry_id(context);
@@ -1176,7 +1204,8 @@ pub(super) fn show_native_tooltip_card(
         );
     });
     let capture_viewport = captures.has_pending_for("diagnostic");
-    let activate_viewport = capture_viewport || interaction.focus_requested || interaction.focused;
+    let activate_viewport =
+        capture_viewport || interaction.focus_requested() || interaction.focused();
 
     // Keep the popup non-activating in production, while still letting it
     // receive pointer movement and wheel events for scrolling. A queued QA
@@ -1211,12 +1240,12 @@ pub(super) fn show_native_tooltip_card(
             } else {
                 input.focused
             };
-            if interaction.dismissed {
+            if interaction.dismissed() {
                 return;
             }
             ui.ctx()
                 .data_mut(|data| data.insert_temp(egui::Id::new("tooltip-link-activated"), false));
-            let frame = if interaction.focused {
+            let frame = if interaction.focused() {
                 tooltip_frame.stroke(Stroke::new(
                     1.0,
                     style.visuals.widgets.active.bg_stroke.color,
@@ -1234,7 +1263,7 @@ pub(super) fn show_native_tooltip_card(
                         ui,
                         &detail,
                         identity,
-                        interaction.focused || interaction.focus_requested,
+                        interaction.engaged(),
                         &link_sender,
                     );
                 }
@@ -1256,12 +1285,9 @@ pub(super) fn show_native_tooltip_card(
                 popup_focused,
             );
             let interaction = if dismiss_requested {
-                TooltipInteractionState {
-                    focused: false,
-                    focus_requested: false,
-                    dismissed: true,
-                    ..interaction
-                }
+                let mut interaction = interaction;
+                interaction.dismiss();
+                interaction
             } else {
                 interaction
             };
@@ -2161,21 +2187,11 @@ pub(super) fn update_tooltip_interaction_state(
     if state.identity != identity {
         state = TooltipInteractionState::new(identity);
     }
-    if popup_interacted {
-        state.focus_requested = true;
+    if popup_interacted && !state.dismissed() {
+        state.request_focus();
     }
-    match popup_focused {
-        Some(true) => {
-            state.focused = true;
-            state.had_focus = true;
-            state.dismissed = false;
-        }
-        Some(false) if state.had_focus => {
-            state.focused = false;
-            state.focus_requested = false;
-            state.dismissed = true;
-        }
-        _ => {}
+    if let Some(focused) = popup_focused {
+        state.observe_focus(focused);
     }
     state
 }

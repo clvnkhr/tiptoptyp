@@ -275,6 +275,7 @@ fn generate_third_party_notices() -> Result<(), String> {
         root.join("docs/licenses/Unicode-3.0.txt"),
         root.join("docs/licenses/zig-MIT.txt"),
         root.join("docs/licenses/mathgloss-MIT.txt"),
+        root.join("resources/github-cli/LICENSE"),
         root.join("assets/liquid/SACREMOSES-LICENSE"),
         root.join("toolchain/ltex/LICENSE.md"),
         root.join("toolchain/ltex/ACKNOWLEDGMENTS.md"),
@@ -814,7 +815,7 @@ fn fetch_tinymist_license(licenses: &Path) -> Result<(), String> {
     let destination = licenses.join("tinymist-LICENSE");
     if !destination.is_file() || sha256(&destination)? != TINYMIST_LICENSE_SHA256 {
         download(
-            "https://raw.githubusercontent.com/Myriad-Dreamin/tinymist/v0.15.2/LICENSE",
+            "https://raw.githubusercontent.com/Myriad-Dreamin/tinymist/v0.15.12/LICENSE",
             &destination,
         )?;
     }

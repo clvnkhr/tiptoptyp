@@ -27,7 +27,7 @@ impl EditorApp {
     }
 
     pub(super) fn insert_editor_text(&mut self, context: &egui::Context, text: &str) {
-        if self.overleaf_source_locked() {
+        if self.reject_read_only_edit(context) {
             return;
         }
         let snapshot = self.editor_snapshot(context);
@@ -56,13 +56,7 @@ impl EditorApp {
         context: &egui::Context,
         symbol: &crate::handwriting::Insertion,
     ) {
-        if self.overleaf_source_locked()
-            || self.table_editor.is_some()
-            || self.tool_dialog_open()
-            || self.version_history.is_some()
-            || self.overleaf.review.is_some()
-            || self.liquid.visible()
-        {
+        if self.reject_read_only_edit(context) {
             return;
         }
         if self.document().kind() != DocumentKind::Tex {
@@ -102,10 +96,7 @@ impl EditorApp {
     pub(super) fn show_find_bar(&mut self, ui: &mut egui::Ui) {
         let source = self.tabs.current_record().document.source();
         let document_key = self.document().key();
-        let enabled = self.table_editor.is_none()
-            && !self.tool_dialog_open()
-            && !self.liquid.visible()
-            && !self.overleaf_source_locked();
+        let enabled = !self.source_edit_blocked();
         let actions = {
             let _queued = crate::child_view::begin_queued_edit_events(
                 ui.ctx(),
@@ -159,12 +150,10 @@ impl EditorApp {
                 )
                 .map(|matched| EditorSelection::Search(matched.char_range.clone()));
         }
-        if replace_one
-            && (self.table_editor.is_none()
-                && !self.tool_dialog_open()
-                && !self.liquid.visible()
-                && !self.overleaf_source_locked())
-        {
+        if (replace_one || replace_all) && self.reject_read_only_edit(context) {
+            return;
+        }
+        if replace_one {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -194,12 +183,7 @@ impl EditorApp {
                 }
             }
         }
-        if replace_all
-            && (self.table_editor.is_none()
-                && !self.tool_dialog_open()
-                && !self.liquid.visible()
-                && !self.overleaf_source_locked())
-        {
+        if replace_all {
             let snapshot = self.editor_snapshot(context);
             let find_query = &self.find_bar.query;
             let replacement = &self.find_bar.replacement;
@@ -229,7 +213,7 @@ impl EditorApp {
     }
 
     pub(super) fn show_editor(&mut self, ui: &mut egui::Ui) {
-        if self.overleaf_source_locked() {
+        if self.source_edit_blocked() {
             self.editor_completion = None;
             self.snippet_session = None;
         }
@@ -252,7 +236,7 @@ impl EditorApp {
             // Render the normal editor in this same pass. An empty return
             // lets egui shrink the resizable side panel to its minimum.
         }
-        if self.document_diff.is_some() && !self.overleaf_source_locked() {
+        if self.document_diff.is_some() && !self.source_edit_blocked() {
             self.show_document_diff(ui);
             return;
         }
@@ -272,7 +256,7 @@ impl EditorApp {
                     .clicked()
                 {
                     let root = discover_project_root(path.parent().unwrap_or(&path));
-                    self.finish_open_folder_selection(root);
+                    self.finish_open_folder_selection(root, ui.ctx());
                 }
             });
         }
@@ -281,10 +265,7 @@ impl EditorApp {
             .ctx()
             .data_mut(|data| data.remove_temp::<(PathBuf, Pos2)>(drop_id))
             && ui.max_rect().contains(position)
-            && (self.table_editor.is_none()
-                && !self.tool_dialog_open()
-                && !self.liquid.visible()
-                && !self.overleaf_source_locked())
+            && !self.reject_read_only_edit(ui.ctx())
         {
             let text = self
                 .document()
@@ -299,10 +280,7 @@ impl EditorApp {
         }
 
         let _span = crate::performance::span("ui.source");
-        let read_only = self.overleaf_source_locked()
-            || self.table_editor.is_some()
-            || self.tool_dialog_open()
-            || self.liquid.visible();
+        let read_only = self.source_edit_blocked();
         if self.overleaf_source_locked() {
             let open = ui
                 .horizontal(|ui| {
@@ -371,7 +349,7 @@ impl EditorApp {
         let gutter_width = editor_gutter_width(line_number_width, git_gutter);
         let dark_mode = ui.visuals().dark_mode;
         let document_kind = self.document().kind();
-        let contexts = if document_kind.is_typst() {
+        let contexts = if document_kind.typesetting_language().is_some() {
             self.editor_data.context_regions()
         } else {
             Arc::from([])
@@ -392,7 +370,11 @@ impl EditorApp {
         self.folding_mut().set_marker_width(fold_marker_width);
         let highlight_path = (!document_kind.is_typst())
             .then(|| self.document().path().clone())
-            .flatten();
+            .flatten()
+            .or_else(|| {
+                // A syntax hint only: an unsaved TeX tab already has a language.
+                (document_kind == DocumentKind::Tex).then(|| PathBuf::from("Untitled.tex"))
+            });
         let asset_source_path = document_kind
             .typesetting_language()
             .is_some()
@@ -404,7 +386,7 @@ impl EditorApp {
         let source_preview_trigger = self.settings.source_preview_trigger;
         let preview_jump_enabled = (document_kind.is_typst() && self.interactive_preview_active())
             || (document_kind == DocumentKind::Tex && self.synctex.artifact.is_some());
-        let sticky_context_enabled = document_kind.is_typst()
+        let sticky_context_enabled = document_kind.typesetting_language().is_some()
             && (sticky_context_snapshot || self.settings.sticky_context_rows);
         let snapshot_scroll_offset = source_editor_snapshot_scroll_offset(self.snapshot_scene);
         let (search_highlight_matches, selected_search_match) = if self.find_bar.visible {
@@ -434,6 +416,10 @@ impl EditorApp {
         };
         let completion_edit_triggered = document_kind.typesetting_language().is_some()
             && ui.input(|input| completion_requested_after_events(&input.events));
+        let overleaf_reveal = self.take_overleaf_reveal(ui);
+        if let Some(at) = overleaf_reveal {
+            self.folding_mut().reveal(at);
+        }
         if let Some(selection) = self.pending_editor_selection.clone() {
             let selection = selection.range();
             self.folding_mut().reveal(selection.start);
@@ -495,7 +481,7 @@ impl EditorApp {
             .set_rainbow_brackets(self.settings.rainbow_brackets);
         let indent_spaces = self.settings.indent_spaces;
         let surround_enabled = self.settings.auto_pair_delimiters;
-        let auto_pair_enabled = surround_enabled && document_kind.is_typst();
+        let auto_pair_enabled = surround_enabled && document_kind.typesetting_language().is_some();
         let auto_pair_syntax = &mut self.auto_pair_syntax;
         let highlight_local_uses = self.settings.highlight_local_uses
             && matches!(document_kind, DocumentKind::Typst | DocumentKind::Tex);
@@ -549,7 +535,11 @@ impl EditorApp {
         let scroll_area = egui::ScrollArea::new([!line_wrap, true])
             .id_salt(("source-editor-scroll", active_tab))
             .auto_shrink([false, false])
-            .animated(resize_anchor.is_none() && self.pending_hunk_popup.is_none());
+            .animated(
+                resize_anchor.is_none()
+                    && self.pending_hunk_popup.is_none()
+                    && overleaf_reveal.is_none(),
+            );
         // egui collapses the caret to the press point for any pointer button,
         // including right-click. The stored state is still the previous
         // frame's until the editor below runs, so stash a press inside the
@@ -645,7 +635,37 @@ impl EditorApp {
                     // document height cannot leave an internal border behind.
                     .frame(egui::Frame::new().inner_margin(editor_margin))
                     .layouter(&mut layouter);
-                let mut output = editor.show(ui);
+                let mut output = {
+                    // An immutable TextBuffer prevents writes, but egui still
+                    // collapses its selection after an attempted edit. Exclude
+                    // mutating events owned by the focused source editor;
+                    // navigation, pointer selection and copying stay available.
+                    if read_only_source_input(ui.ctx(), source_editor_id(ui.ctx()), read_only) {
+                        editor_read_only::reject(
+                            ui.ctx(),
+                            source_editor_id(ui.ctx()),
+                            document_key,
+                        );
+                    }
+                    editor.show(ui)
+                };
+                // egui drops a retained selection when another widget takes
+                // its IME ownership. Choosers and other external controls must
+                // keep the source range without taking keyboard focus back.
+                if !output.response.has_focus()
+                    && !output.response.changed()
+                    && output.response.interact_pointer_pos().is_none()
+                    && !ui.input(|input| {
+                        input
+                            .events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::Ime(_)))
+                    })
+                    && let Some(selection) = pre_frame_selection
+                {
+                    output.state.cursor.set_char_range(Some(selection));
+                    output.state.clone().store(ui.ctx(), output.response.id);
+                }
                 if output.response.changed()
                     && let Some(session) = self.snippet_session.as_mut()
                 {
@@ -797,13 +817,20 @@ impl EditorApp {
                     );
                     output.response.request_focus();
                 }
-                let cursor_rect = output
-                    .galley
-                    .pos_from_cursor(CCursor::new(range.start))
+                let cursor_rect = row_index
+                    .cursor
+                    .rect(&output.galley, CCursor::new(range.start))
                     .translate(output.galley_pos.to_vec2());
                 ui.scroll_to_rect(cursor_rect, Some(Align::Center));
             }
 
+            if let Some(at) = overleaf_reveal {
+                let rect = row_index
+                    .cursor
+                    .rect(&output.galley, CCursor::new(at))
+                    .translate(output.galley_pos.to_vec2());
+                ui.scroll_to_rect(rect, Some(Align::Center));
+            }
             editor_has_focus = output.response.has_focus();
             if let Some(range) = output.state.cursor.char_range()
                 && range.primary.index == range.secondary.index
@@ -811,9 +838,9 @@ impl EditorApp {
                 let cursor = range.primary.index.0;
                 completion_cursor = Some(cursor);
                 completion_anchor = Some(
-                    output
-                        .galley
-                        .pos_from_cursor(CCursor::new(cursor))
+                    row_index
+                        .cursor
+                        .rect(&output.galley, CCursor::new(cursor))
                         .translate(output.galley_pos.to_vec2()),
                 );
             }
@@ -830,12 +857,11 @@ impl EditorApp {
                 ui,
                 &output,
                 visible_viewport,
-                document.source(),
-                current_char,
+                current_char.map(|at| self.editor_data.line_index_at_char(at)),
                 &line_rows,
                 current_line_slot,
             );
-            if document_kind.is_typst()
+            if document_kind.typesetting_language().is_some()
                 && editor_has_focus
                 && let Some(range) = output.state.cursor.char_range()
                 && range.is_empty()
@@ -848,10 +874,9 @@ impl EditorApp {
                     .painter()
                     .with_clip_rect(output.response.rect.intersect(ui.clip_rect()));
                 for endpoint in pair {
-                    for rect in delimiter_rects(&output.galley, endpoint) {
+                    for rect in delimiter_rects(&output.galley, &row_index.cursor, endpoint) {
                         let rect = rect.translate(output.galley_pos.to_vec2());
                         backgrounds.push(egui::Shape::rect_filled(rect, 2, fill));
-                        painter.rect_stroke(rect, 2, Stroke::new(1.0, accent), StrokeKind::Inside);
                     }
                 }
                 painter.set(delimiter_fill_slot, egui::Shape::Vec(backgrounds));
@@ -961,9 +986,9 @@ impl EditorApp {
                     .iter()
                     .find(|diagnostic| diagnostic.line == line)
                 {
-                    let rect = output
-                        .galley
-                        .pos_from_cursor(CCursor::new(cursor))
+                    let rect = row_index
+                        .cursor
+                        .rect(&output.galley, CCursor::new(cursor))
                         .translate(output.galley_pos.to_vec2());
                     self.diagnostic_tooltip = Some(DiagnosticTooltipOverlay {
                         source: diagnostic_source,
@@ -977,9 +1002,9 @@ impl EditorApp {
             }
             let hover_position = requested_caret
                 .map(|cursor| {
-                    let rect = output
-                        .galley
-                        .pos_from_cursor(CCursor::new(cursor))
+                    let rect = row_index
+                        .cursor
+                        .rect(&output.galley, CCursor::new(cursor))
                         .translate(output.galley_pos.to_vec2());
                     (cursor, rect.center())
                 })
@@ -1062,13 +1087,13 @@ impl EditorApp {
                 } else {
                     self.editor_data.hover_token_range(char_index)
                 } {
-                    let start = output
-                        .galley
-                        .pos_from_cursor(CCursor::new(range.start))
+                    let start = row_index
+                        .cursor
+                        .rect(&output.galley, CCursor::new(range.start))
                         .translate(output.galley_pos.to_vec2());
-                    let end = output
-                        .galley
-                        .pos_from_cursor(CCursor::new(range.end))
+                    let end = row_index
+                        .cursor
+                        .rect(&output.galley, CCursor::new(range.end))
                         .translate(output.galley_pos.to_vec2());
                     let token_rect = Rect::from_min_max(
                         start.left_top(),
@@ -1082,7 +1107,7 @@ impl EditorApp {
                 }
             }
 
-            if document_kind.is_typst()
+            if document_kind.typesetting_language().is_some()
                 && output.response.hovered()
                 && ui.input(|input| input.modifiers.command)
                 && let Some(pointer) = ui.ctx().pointer_hover_pos()
@@ -1120,7 +1145,7 @@ impl EditorApp {
                 );
             }
 
-            let clicked_link = if document_kind.is_typst() {
+            let clicked_link = if document_kind.typesetting_language().is_some() {
                 output.response.interact_pointer_pos().and_then(|pointer| {
                     let char_index = output
                         .galley
@@ -1208,6 +1233,7 @@ impl EditorApp {
                 ui,
                 editor_particles::Surface {
                     edit: &output,
+                    cursor_index: &row_index.cursor,
                     document: document.key(),
                     viewport: visible_viewport,
                     view: editor_particles::View::Source,
@@ -1327,6 +1353,13 @@ impl EditorApp {
             }
         }
 
+        editor_read_only::paint(
+            ui,
+            source_editor_id(ui.ctx()),
+            self.document().key(),
+            read_only,
+            scroll_output.inner_rect.intersect(ui.clip_rect()),
+        );
         if let Some(popup) = popup_request {
             self.open_app_popup(popup);
         }
@@ -1477,7 +1510,7 @@ impl EditorApp {
             || self.palette_holds_find(&context);
         let present =
             self.snapshot_scene.is_some() || self.find_bar.present(owner_focused, Instant::now());
-        if self.find_bar.blur_started.is_some() && present {
+        if self.find_bar.is_blurring() && present {
             context.request_repaint_after(Duration::from_millis(150));
         }
         let owner = context.content_rect();
@@ -1518,7 +1551,7 @@ impl EditorApp {
         let frame = theme::popup_card_frame(&style)
             .outer_margin(egui::Margin::same(2))
             .inner_margin(egui::Margin::same(6));
-        let focus = self.find_bar.focus;
+        let focus = self.find_bar.focus_requested();
         let child = scoped_child_viewport_id(&context, find_bar::VIEWPORT_SALT);
         let spec = ChildViewSpec::modeless_popup(
             find_bar::VIEWPORT_SALT,
@@ -1535,10 +1568,7 @@ impl EditorApp {
         let mut actions = find_bar::FindBarActions::default();
         let source = self.tabs.current_record().document.source();
         let key = self.document().key();
-        let editable = self.table_editor.is_none()
-            && !self.tool_dialog_open()
-            && !self.liquid.visible()
-            && !self.overleaf_source_locked();
+        let editable = !self.source_edit_blocked();
         let shortcuts = self.settings.effective_shortcuts();
         let allow_requested_paste = self
             .pending_widget_paste
@@ -1713,6 +1743,98 @@ fn search_match_color(context: &egui::Context, selected: bool) -> Color32 {
     Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha)
 }
 
+fn source_mutating_event(event: &egui::Event) -> bool {
+    match event {
+        egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut => true,
+        egui::Event::Ime(
+            egui::ImeEvent::Preedit { .. }
+            | egui::ImeEvent::Commit(_)
+            | egui::ImeEvent::DeleteSurrounding { .. },
+        ) => true,
+        egui::Event::Key {
+            key,
+            pressed: true,
+            modifiers,
+            ..
+        } => {
+            matches!(
+                key,
+                egui::Key::Backspace | egui::Key::Delete | egui::Key::Enter | egui::Key::Tab
+            ) || modifiers.ctrl
+                && matches!(
+                    key,
+                    egui::Key::H | egui::Key::K | egui::Key::U | egui::Key::W
+                )
+                || (modifiers.command || modifiers.mac_cmd || modifiers.ctrl)
+                    && matches!(key, egui::Key::Z | egui::Key::Y)
+        }
+        _ => false,
+    }
+}
+
+fn read_only_source_input(context: &egui::Context, editor: egui::Id, read_only: bool) -> bool {
+    let transition = editor.with("read-only-input");
+    if !read_only {
+        context.data_mut(|data| data.remove_temp::<bool>(transition));
+        return false;
+    }
+    let entered = context.data_mut(|data| {
+        if data.get_temp::<bool>(transition) == Some(true) {
+            false
+        } else {
+            data.insert_temp(transition, true);
+            true
+        }
+    });
+    if entered {
+        // Retire an IME composition when editing becomes locked. The purpose
+        // field is private to egui; rebuild its transient widget state while
+        // preserving the complete selection and undo history. Otherwise a late
+        // empty commit after unlocking could delete the old preedit selection.
+        if context.input(|input| input.focused) {
+            context.memory_mut(|memory| {
+                if memory.owns_ime_events(editor) {
+                    memory.interrupt_ime();
+                }
+            });
+        }
+        if let Some(previous) = egui::text_edit::TextEditState::load(context, editor) {
+            let undoer = previous.undoer();
+            let mut state = egui::text_edit::TextEditState::default();
+            state.cursor = previous.cursor;
+            state.set_undoer(undoer);
+            state.store(context, editor);
+        }
+    }
+    if context.memory(|memory| memory.has_focus(editor)) {
+        // Consume only this editor's rejected edits. Do not restore an input
+        // snapshot: that would resurrect navigation consumed by TextEdit.
+        return context.input_mut(|input| {
+            let mut rejected = false;
+            input.events.retain(|event| {
+                if !source_mutating_event(event) {
+                    return true;
+                }
+                // Empty IME updates can cancel composition during a focus
+                // handoff. Consume them without reporting an attempted edit.
+                rejected |= match event {
+                    egui::Event::Ime(
+                        egui::ImeEvent::Preedit { text, .. } | egui::ImeEvent::Commit(text),
+                    ) => !text.is_empty(),
+                    egui::Event::Ime(egui::ImeEvent::DeleteSurrounding {
+                        before_chars,
+                        after_chars,
+                    }) => *before_chars > 0 || *after_chars > 0,
+                    _ => true,
+                };
+                false
+            });
+            rejected
+        });
+    }
+    false
+}
+
 /// Selection a right-click preserves: the pre-press range survives only when
 /// the press lands inside it, matching native text behavior. A press outside
 /// (or with no selection) keeps egui's moved caret instead.
@@ -1782,6 +1904,7 @@ pub(super) fn editor_context_popup(
     character: Option<usize>,
     key: DocumentKey,
 ) -> AppPopup {
+    data.set_document_kind(kind);
     // Typst-looking text in another language's comments or verbatim regions
     // is still source text, not a Typst font, link, or table declaration.
     let typst_character = character.filter(|_| kind.is_typst());
@@ -1794,7 +1917,9 @@ pub(super) fn editor_context_popup(
         source: character
             .filter(|_| kind.typesetting_language().is_some())
             .map(|char_index| preview_jump::SourceLocation { key, char_index }),
-        link: typst_character.and_then(|character| editor_web_link_at(data, character)),
+        link: character
+            .filter(|_| kind.typesetting_language().is_some())
+            .and_then(|character| editor_web_link_at(data, character)),
         table: character
             .and_then(|character| TableTarget::at(source, character, kind))
             .map(|target| BoundTableTarget {
@@ -1810,12 +1935,16 @@ pub(super) fn editor_context_popup(
 
 /// Use glyph advances rather than a cursor rectangle spanning a soft wrap.
 /// Raw delimiters may contain multiple backticks and can cross visual rows.
-pub(super) fn delimiter_rects(galley: &egui::Galley, characters: Range<usize>) -> Vec<Rect> {
+pub(super) fn delimiter_rects(
+    galley: &egui::Galley,
+    index: &editor_layout::CursorIndex,
+    characters: Range<usize>,
+) -> Vec<Rect> {
     let mut rectangles: Vec<Rect> = Vec::new();
     for character in characters {
         let mut cursor = CCursor::new(character);
         cursor.prefer_next_row = true;
-        let position = galley.layout_from_cursor(cursor);
+        let position = index.layout(galley, cursor);
         let Some(row) = galley.rows.get(position.row) else {
             continue;
         };

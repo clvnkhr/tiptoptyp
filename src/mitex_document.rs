@@ -124,6 +124,44 @@ struct Active {
     projection: Projection,
     saved_canonical: Arc<str>,
 }
+/// A preflighted same-document server update. Projection work is complete
+/// before a caller commits any of the tabs sharing that server entity.
+pub struct ExternalChange {
+    key: DocumentKey,
+    source: String,
+    saved_source: String,
+    active: Option<Active>,
+    fingerprint: u64,
+    canonical_changed: bool,
+}
+impl ExternalChange {
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+    pub fn saved_source(&self) -> &str {
+        &self.saved_source
+    }
+    pub fn editor_scalar_cursor(
+        &self,
+        cursor: tiptoptyp_core::text::ScalarOffset,
+    ) -> Option<tiptoptyp_core::text::ScalarOffset> {
+        let Some(active) = &self.active else {
+            return Some(cursor);
+        };
+        let map = active.projection.view();
+        let byte = map
+            .input()
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain([map.input().len()])
+            .nth(cursor.get())?;
+        let byte = map.input_to_output(byte)?;
+        Some(tiptoptyp_core::text::ScalarOffset::new(
+            map.output()[..byte].chars().count(),
+        ))
+    }
+}
+
 struct Cached {
     key: DocumentKey,
     result: Result<CanonicalSnapshot, Error>,
@@ -333,6 +371,14 @@ impl<C> Document<C> {
             .dirty
     }
 
+    /// Persisted authored source, independent of its current editor notation.
+    pub fn saved_canonical_source(&self) -> &str {
+        self.active.as_ref().map_or_else(
+            || self.editor.saved_source().as_str(),
+            |active| active.saved_canonical.as_ref(),
+        )
+    }
+
     pub fn prepare_save(&self, path: PathBuf, kind: DocumentKind) -> Result<SaveRequest, Error> {
         if self.active.is_some() && !kind.is_typst() {
             return Err(Error::NotTypst);
@@ -376,6 +422,88 @@ impl<C> Document<C> {
             }
         }
         Ok(status)
+    }
+
+    pub fn prepare_external_change(
+        &self,
+        source: &str,
+        saved_source: &str,
+        disk_fingerprint: u64,
+    ) -> Result<ExternalChange, Error> {
+        let active = self
+            .active
+            .as_ref()
+            .map(|active| {
+                Ok::<_, Error>(Active {
+                    config: active.config.clone(),
+                    projection: Projection::open(source, active.config.clone())?,
+                    saved_canonical: Arc::from(saved_source),
+                })
+            })
+            .transpose()?;
+        let displayed = active
+            .as_ref()
+            .map_or(source, |active| active.projection.view().output());
+        let saved_displayed = if let Some(active) = &active {
+            if source == saved_source {
+                displayed.to_owned()
+            } else {
+                Projection::open(saved_source, active.config.clone())?
+                    .view()
+                    .output()
+                    .to_owned()
+            }
+        } else {
+            saved_source.to_owned()
+        };
+        Ok(ExternalChange {
+            key: self.key(),
+            source: displayed.to_owned(),
+            saved_source: saved_displayed,
+            active,
+            fingerprint: disk_fingerprint,
+            canonical_changed: self.active.is_some()
+                && self.canonical_snapshot()?.source() != source,
+        })
+    }
+
+    /// A clean peer-owned source may temporarily stop being representable in
+    /// dollar notation. Keep its exact canonical bytes editable in native mode.
+    pub fn prepare_external_change_without_projection(
+        &self,
+        source: &str,
+        saved_source: &str,
+        disk_fingerprint: u64,
+    ) -> Result<ExternalChange, Error> {
+        Ok(ExternalChange {
+            key: self.key(),
+            source: source.into(),
+            saved_source: saved_source.into(),
+            active: None,
+            fingerprint: disk_fingerprint,
+            canonical_changed: self.active.is_some()
+                && self.canonical_snapshot()?.source() != source,
+        })
+    }
+
+    pub fn commit_external_change(
+        &mut self,
+        change: ExternalChange,
+        undo_cursor: C,
+    ) -> Result<bool, Error> {
+        if self.key() != change.key {
+            return Err(Error::StaleSnapshot);
+        }
+        let changed = self.editor.synchronize_external(
+            change.source,
+            change.saved_source,
+            change.fingerprint,
+            change.canonical_changed,
+            undo_cursor,
+        );
+        self.active = change.active;
+        self.canonical.get_mut().take();
+        Ok(changed)
     }
 
     /// Reloads canonical bytes, retaining the mode for Typst files. A refusal

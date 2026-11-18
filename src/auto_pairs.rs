@@ -1,6 +1,7 @@
 //! Adapt native TextEdit operations, keeping event ordering, selections, IME,
 //! and undo in their existing owners. Only explicit typing enables pairing.
 mod indentation;
+mod tex;
 
 use std::ops::Range;
 
@@ -38,15 +39,66 @@ pub(crate) fn ascii_punctuation(events: &mut [egui::Event]) {
     }
 }
 
-pub(crate) struct PairSyntax(Source);
+pub(crate) struct PairSyntax(Source, Option<tex::Syntax>);
 
 impl Default for PairSyntax {
     fn default() -> Self {
-        Self(Source::detached(String::new()))
+        Self(Source::detached(String::new()), None)
     }
 }
 
 impl PairSyntax {
+    fn prepare_for(&mut self, source: &str, kind: crate::document::DocumentKind) {
+        if kind == crate::document::DocumentKind::Tex {
+            if let Some(syntax) = &mut self.1 {
+                syntax.prepare(source);
+            } else {
+                self.1 = Some(tex::Syntax::new(source));
+            }
+        } else {
+            self.prepare(source);
+        }
+    }
+
+    fn may_open_for(
+        &mut self,
+        source: &str,
+        byte: usize,
+        open: char,
+        kind: crate::document::DocumentKind,
+    ) -> bool {
+        if kind == crate::document::DocumentKind::Tex {
+            self.1.as_ref().unwrap().may_open(byte, open)
+        } else {
+            self.may_open(source, byte, open)
+        }
+    }
+
+    fn empty_at_for(
+        &mut self,
+        source: &str,
+        byte: usize,
+        kind: crate::document::DocumentKind,
+    ) -> bool {
+        if kind == crate::document::DocumentKind::Tex {
+            self.1.as_ref().unwrap().empty_at(byte)
+        } else {
+            self.empty_at(source, byte)
+        }
+    }
+
+    fn may_step_over_for(
+        &self,
+        byte: usize,
+        close: char,
+        kind: crate::document::DocumentKind,
+    ) -> bool {
+        if kind == crate::document::DocumentKind::Tex {
+            self.1.as_ref().unwrap().may_step_over(byte, close)
+        } else {
+            self.may_step_over(byte, close)
+        }
+    }
     fn raw_fence_at(&self, byte: usize) -> Option<Option<usize>> {
         let mut node = LinkedNode::new(self.0.root()).leaf_at(byte, Side::After)?;
         loop {
@@ -244,6 +296,24 @@ fn escaped_at(source: &str, byte: usize) -> bool {
         == 1
 }
 
+fn closer_for(open: char, kind: crate::document::DocumentKind) -> Option<char> {
+    if kind == crate::document::DocumentKind::Tex && !"([{$".contains(open) {
+        None
+    } else {
+        pairing::closer(open)
+    }
+}
+
+fn empty_pair_for(
+    before: Option<char>,
+    after: Option<char>,
+    kind: crate::document::DocumentKind,
+) -> bool {
+    before
+        .and_then(|open| closer_for(open, kind))
+        .is_some_and(|close| Some(close) == after)
+}
+
 fn has_surround_typing(events: &[egui::Event]) -> bool {
     events.iter().any(|event| {
         matches!(event, egui::Event::Text(text)
@@ -333,6 +403,96 @@ impl TextBuffer for PairingBuffer<'_> {
         self.source.delete_selected(selection)
     }
     fn insert_text_at(&mut self, cursor: &mut CCursor, text: &str, limit: usize) {
+        if self.enabled
+            && self.document_kind == crate::document::DocumentKind::Tex
+            && (matches!(text, "[" | "(" | "\\" | "]" | ")" | "\\]" | "\\)")
+                || (self.typed_enter && text == "\n"))
+        {
+            let byte = self.source.byte_index_from_char_index(cursor.index).0;
+            let next = &self.source[byte..];
+            if matches!(text, "\\" | "]" | ")" | "\\]" | "\\)")
+                && (next.starts_with("\\]")
+                    || next.starts_with("\\)")
+                    || (self.source[..byte].ends_with('\\') && next.starts_with([']', ')'])))
+            {
+                self.syntax.prepare_for(self.source, self.document_kind);
+                if let Some(advance) = self.syntax.1.as_ref().unwrap().command_step(byte, text) {
+                    cursor.index += advance;
+                    return;
+                }
+            }
+            if matches!(text, "[" | "(") && self.source[..byte].ends_with('\\') {
+                self.syntax.prepare_for(self.source, self.document_kind);
+                if let Some(close) = self
+                    .syntax
+                    .1
+                    .as_ref()
+                    .unwrap()
+                    .command_opener(byte, text.chars().next().unwrap())
+                    && (self.deleted_selection.is_some()
+                        || matches!(
+                            pairing::typed_action(
+                                text.chars().next().unwrap(),
+                                next.chars().next(),
+                                true,
+                                false
+                            ),
+                            TypedAction::InsertPair(_)
+                        ))
+                {
+                    let selected = self.deleted_selection.as_deref().unwrap_or("");
+                    let inserted = format!("{text}{selected}\\{close}");
+                    if limit.saturating_sub(self.source.chars().count()) >= inserted.chars().count()
+                    {
+                        let advance = if self.deleted_selection.is_some() {
+                            inserted.chars().count()
+                        } else {
+                            1
+                        };
+                        self.deleted_selection = None;
+                        self.source.insert_text(&inserted, cursor.index);
+                        cursor.index += advance;
+                        return;
+                    }
+                }
+            }
+            if self.typed_enter && text == "\n" {
+                let mut headers = indentation::environment_headers(self.source, byte).peekable();
+                if headers.peek().is_some() {
+                    self.syntax.prepare_for(self.source, self.document_kind);
+                }
+                let header = headers.find(|header| {
+                    self.syntax
+                        .1
+                        .as_ref()
+                        .unwrap()
+                        .may_complete_environment(header.start)
+                });
+                drop(headers);
+                if let Some(header) = header {
+                    let edit = indentation::complete_environment(
+                        self.source,
+                        byte,
+                        &header,
+                        self.indent_spaces.unwrap_or(2),
+                    );
+                    if self
+                        .source
+                        .chars()
+                        .count()
+                        .saturating_sub(edit.trim_after)
+                        .saturating_add(edit.text.chars().count())
+                        <= limit
+                    {
+                        self.source
+                            .delete_char_range(cursor.index..cursor.index + edit.trim_after);
+                        self.source.insert_text(&edit.text, cursor.index);
+                        cursor.index += edit.advance;
+                        return;
+                    }
+                }
+            }
+        }
         if let Some(selected) = self.deleted_selection.take()
             && text.chars().count() == 1
             && let Some(close) = text.chars().next().and_then(pairing::closer)
@@ -391,7 +551,7 @@ impl TextBuffer for PairingBuffer<'_> {
                 return;
             }
         }
-        if self.enabled && text == " " {
+        if self.enabled && self.document_kind.is_typst() && text == " " {
             let byte = self.source.byte_index_from_char_index(cursor.index).0;
             if self.source[..byte].ends_with('$') && self.source[byte..].starts_with('$') {
                 self.syntax.prepare(self.source);
@@ -406,7 +566,7 @@ impl TextBuffer for PairingBuffer<'_> {
         }
         // Completing a triple fence is not opening a fourth,
         // paired single backtick. Its matching fence is inserted on Enter.
-        if self.enabled && text == "`" {
+        if self.enabled && self.document_kind.is_typst() && text == "`" {
             let byte = self.source.byte_index_from_char_index(cursor.index).0;
             if self.source[..byte].ends_with("``") && !self.source[..byte].ends_with("```") {
                 if self.source[byte..].starts_with('`') {
@@ -431,12 +591,28 @@ impl TextBuffer for PairingBuffer<'_> {
         {
             let byte = self.source.byte_index_from_char_index(cursor.index).0;
             let next = self.source[byte..].chars().next();
-            self.syntax.prepare(self.source);
+            self.syntax.prepare_for(self.source, self.document_kind);
+            if self.document_kind == crate::document::DocumentKind::Tex
+                && typed == '$'
+                && self.syntax.1.as_ref().unwrap().expand_empty_math(byte)
+                && limit.saturating_sub(self.source.chars().count()) >= 2
+            {
+                self.source.insert_text("$$", cursor.index);
+                cursor.index += 1;
+                return;
+            }
             let step = next == Some(typed)
-                && (self.syntax.may_step_over(byte, typed)
-                    || self.syntax.empty_at(self.source, byte));
-            self.syntax.prepare(self.source);
-            let open = !step && self.syntax.may_open(self.source, byte, typed);
+                && (self
+                    .syntax
+                    .may_step_over_for(byte, typed, self.document_kind)
+                    || self
+                        .syntax
+                        .empty_at_for(self.source, byte, self.document_kind));
+            self.syntax.prepare_for(self.source, self.document_kind);
+            let open = !step
+                && self
+                    .syntax
+                    .may_open_for(self.source, byte, typed, self.document_kind);
             match pairing::typed_action(typed, next, open, step) {
                 TypedAction::StepOver => {
                     cursor.index += 1;
@@ -476,11 +652,26 @@ impl TextBuffer for PairingBuffer<'_> {
     fn delete_previous_char(&mut self, cursor: CCursor) -> CCursor {
         if self.enabled && cursor.index.0 > 0 {
             let byte = self.source.byte_index_from_char_index(cursor.index).0;
+            if self.document_kind == crate::document::DocumentKind::Tex
+                && (self.source[..byte].ends_with("\\[") || self.source[..byte].ends_with("\\("))
+                && (self.source[byte..].starts_with("\\]")
+                    || self.source[byte..].starts_with("\\)"))
+            {
+                self.syntax.prepare_for(self.source, self.document_kind);
+                if self.syntax.1.as_ref().unwrap().empty_command(byte) {
+                    self.source
+                        .delete_char_range(cursor.index - 2..cursor.index + 2);
+                    return cursor - 2;
+                }
+            }
             let before = self.source[..byte].chars().next_back();
             let after = self.source[byte..].chars().next();
-            if pairing::empty_pair(before, after) {
-                self.syntax.prepare(self.source);
-                if self.syntax.empty_at(self.source, byte) {
+            if empty_pair_for(before, after, self.document_kind) {
+                self.syntax.prepare_for(self.source, self.document_kind);
+                if self
+                    .syntax
+                    .empty_at_for(self.source, byte, self.document_kind)
+                {
                     self.source
                         .delete_char_range(cursor.index - 1..cursor.index + 1);
                     return cursor - 1;
@@ -496,6 +687,272 @@ mod tests {
     use super::*;
     use egui::text::CCursorRange;
     use tiptoptyp_core::document::{DocumentKind, DocumentSession, WindowSessionId};
+
+    fn tex_typed(source: &str, caret: usize, text: &str) -> (String, usize) {
+        let mut source = source.to_owned();
+        let mut syntax = PairSyntax::default();
+        let mut cursor = CCursor::new(caret);
+        PairingBuffer::new(
+            &mut source,
+            &mut syntax,
+            true,
+            &[egui::Event::Text(text.into())],
+        )
+        .with_document_kind(DocumentKind::Tex)
+        .insert_text_at(&mut cursor, text, usize::MAX);
+        assert!(
+            syntax.0.text().is_empty(),
+            "TeX must not be parsed as Typst"
+        );
+        (source, cursor.index.0)
+    }
+
+    #[test]
+    fn tex_command_math_openers_insert_their_matching_commands() {
+        assert_eq!(tex_typed("\\", 1, "["), ("\\[\\]".into(), 2));
+        assert_eq!(tex_typed("文🦀\\", 3, "("), ("文🦀\\(\\)".into(), 4));
+    }
+
+    #[test]
+    fn tex_command_closers_overtype_and_empty_commands_delete_atomically() {
+        for (source, caret, text, expected) in [
+            ("\\[x\\]", 3, "\\", 4),
+            ("\\[x\\]", 4, "]", 5),
+            ("\\[x\\]", 3, "]", 5),
+            ("\\(x\\)", 3, "\\)", 5),
+            ("\\(x\\)", 3, ")", 5),
+        ] {
+            assert_eq!(tex_typed(source, caret, text), (source.into(), expected));
+        }
+        for source in ["\\[\\]", "\\(\\)"] {
+            let mut source = format!("文🦀{source}");
+            let mut syntax = PairSyntax::default();
+            let cursor = PairingBuffer::new(&mut source, &mut syntax, true, &[])
+                .with_document_kind(DocumentKind::Tex)
+                .delete_previous_char(CCursor::new(4));
+            assert_eq!(source, "文🦀");
+            assert_eq!(cursor.index.0, 2);
+        }
+    }
+
+    #[test]
+    fn native_tex_command_pairing_overtype_and_backspace_keep_atomic_history() {
+        for (open, close) in [("[", "]"), ("(", ")")] {
+            let ctx = egui::Context::default();
+            let mut syntax = PairSyntax::default();
+            let mut document =
+                DocumentSession::new(WindowSessionId::new(1), "\\", DocumentKind::Tex);
+            let body = frame(
+                &ctx,
+                &mut document,
+                &mut syntax,
+                vec![egui::Event::Text(open.into())],
+                true,
+                CCursorRange::one(CCursor::new(1)),
+            );
+            let paired = format!("\\{open}\\{close}");
+            assert_eq!(document.source(), &paired);
+            let paired_key = document.key();
+            let after = frame(
+                &ctx,
+                &mut document,
+                &mut syntax,
+                vec![
+                    egui::Event::Text("\\".into()),
+                    egui::Event::Text(close.into()),
+                ],
+                true,
+                body,
+            );
+            assert_eq!(
+                document.key(),
+                paired_key,
+                "overtype must not create a document revision"
+            );
+            assert_eq!(after.primary.index.0, 4);
+            let deleted = frame(
+                &ctx,
+                &mut document,
+                &mut syntax,
+                vec![key(egui::Key::Backspace)],
+                true,
+                body,
+            );
+            assert_eq!(document.source(), "");
+            let undo = document.history_step(false, deleted).unwrap();
+            assert_eq!(document.source(), &paired);
+            assert_eq!(undo.cursor, body);
+            document.history_step(true, undo.cursor).unwrap();
+            assert_eq!(document.source(), "");
+        }
+    }
+
+    #[test]
+    fn tex_command_pairing_respects_literals_escapes_settings_and_limits() {
+        for prefix in [
+            r"% comment \",
+            r"\verb|\",
+            r"\url{\",
+            "\\begin{verbatim}\n\\",
+            r"$x\",
+        ] {
+            assert_eq!(
+                tex_typed(prefix, prefix.chars().count(), "["),
+                (format!("{prefix}["), prefix.chars().count() + 1)
+            );
+        }
+        assert_eq!(tex_typed("\\\\", 2, "["), ("\\\\[]".into(), 3));
+        for (event, enabled) in [
+            (egui::Event::Text("[".into()), false),
+            (egui::Event::Paste("[".into()), true),
+            (egui::Event::Ime(egui::ImeEvent::Commit("[".into())), true),
+        ] {
+            let mut source = "\\".into();
+            let mut syntax = PairSyntax::default();
+            let mut cursor = CCursor::new(1);
+            PairingBuffer::new(&mut source, &mut syntax, enabled, &[event])
+                .with_document_kind(DocumentKind::Tex)
+                .insert_text_at(&mut cursor, "[", usize::MAX);
+            assert_eq!(source, "\\[");
+        }
+        let mut source = "\\".into();
+        let mut syntax = PairSyntax::default();
+        let mut cursor = CCursor::new(1);
+        PairingBuffer::new(
+            &mut source,
+            &mut syntax,
+            true,
+            &[egui::Event::Text("[".into())],
+        )
+        .with_document_kind(DocumentKind::Tex)
+        .insert_text_at(&mut cursor, "[", 2);
+        assert_eq!(source, "\\[");
+    }
+
+    #[test]
+    fn tex_pairs_groups_optional_arguments_and_math_without_markup_rules() {
+        for (source, caret, text, expected, after) in [
+            ("", 0, "{", "{}", 1),
+            ("\\section", 8, "{", "\\section{}", 9),
+            ("\\includegraphics", 16, "[", "\\includegraphics[]", 17),
+            ("文🦀", 2, "(", "文🦀()", 3),
+            ("", 0, "$", "$$", 1),
+            ("$$", 1, "$", "$$$$", 2),
+            ("$x$", 2, "$", "$x$", 3),
+            ("$$x$$", 3, "$", "$$x$$", 4),
+            ("$$x$$", 4, "$", "$$x$$", 5),
+            ("$x", 2, "$", "$x$", 3),
+            ("$$x", 3, "$", "$$x$", 4),
+            ("$$x$", 4, "$", "$$x$$", 5),
+            ("{}", 1, "}", "{}", 2),
+            ("\\url{}", 5, "}", "\\url{}", 6),
+            ("[]", 1, "]", "[]", 2),
+            ("()", 1, ")", "()", 2),
+        ] {
+            assert_eq!(
+                tex_typed(source, caret, text),
+                (expected.into(), after),
+                "{source:?} + {text:?}"
+            );
+        }
+        for text in ["*", "_", "\"", "`", "<", ">"] {
+            assert_eq!(tex_typed("", 0, text), (text.into(), 1));
+        }
+    }
+
+    #[test]
+    fn tex_comments_escapes_and_literal_payloads_keep_typed_punctuation_verbatim() {
+        for source in [
+            "% comment",
+            "\\verb|literal",
+            "\\verb|literal|% comment",
+            "\\lstinline[language=TeX]|literal",
+            "\\mintinline{tex}|literal",
+            "\\begin{verbatim}\nliteral",
+            "\\begin{Verbatim*}\nliteral",
+            "\\begin{BVerbatim}\nliteral",
+            "\\begin{comment}\nliteral",
+        ] {
+            for text in ["(", "[", "{", "$", "_"] {
+                assert_eq!(
+                    tex_typed(source, source.chars().count(), text),
+                    (format!("{source}{text}"), source.chars().count() + 1),
+                    "{source:?} + {text}"
+                );
+            }
+        }
+        for text in ["{", "$", "_"] {
+            assert_eq!(tex_typed("\\", 1, text), (format!("\\{text}"), 2));
+        }
+        for source in ["\\verb|literal|", "\\begin{verbatim}\nx\n\\end{verbatim}"] {
+            assert_eq!(
+                tex_typed(source, source.chars().count(), "("),
+                (format!("{source}()"), source.chars().count() + 1)
+            );
+        }
+    }
+
+    #[test]
+    fn tex_empty_pair_deletion_and_cached_index_do_not_touch_typst_syntax() {
+        for (source, caret, expected, after) in [
+            ("{}", 1, "", 0),
+            ("[]", 1, "", 0),
+            ("()", 1, "", 0),
+            ("$$", 1, "", 0),
+            ("$$$$", 2, "$$", 1),
+            ("\\url{}", 5, "\\url", 4),
+            ("% ()", 3, "% )", 2),
+            ("\\verb|()|", 7, "\\verb|)|", 6),
+        ] {
+            let mut source = source.into();
+            let mut syntax = PairSyntax::default();
+            let cursor = PairingBuffer::new(&mut source, &mut syntax, true, &[])
+                .with_document_kind(DocumentKind::Tex)
+                .delete_previous_char(CCursor::new(caret));
+            assert_eq!((source, cursor.index.0), (expected.into(), after));
+            assert!(syntax.0.text().is_empty());
+        }
+        let mut syntax = PairSyntax::default();
+        let mut source = "{}".into();
+        let mut cursor = CCursor::new(1);
+        PairingBuffer::new(&mut source, &mut syntax, true, &[])
+            .with_document_kind(DocumentKind::Tex)
+            .insert_text_at(&mut cursor, "}", usize::MAX);
+        syntax.prepare_for(&source, DocumentKind::Tex);
+        syntax.prepare_for(&source, DocumentKind::Tex);
+        assert_eq!(syntax.1.as_ref().unwrap().builds, 1);
+        let mut source = String::new();
+        let mut syntax = PairSyntax::default();
+        PairingBuffer::new(&mut source, &mut syntax, true, &[])
+            .with_document_kind(DocumentKind::Tex)
+            .insert_text_at(&mut CCursor::new(0), "word", usize::MAX);
+        assert!(syntax.1.is_none());
+    }
+
+    #[test]
+    fn tex_explicit_selection_keeps_shared_wrapping_but_paste_and_ime_stay_literal() {
+        for (text, event, expected) in [
+            ("_", egui::Event::Text("_".into()), "_selected_"),
+            ("*", egui::Event::Text("*".into()), "*selected*"),
+            ("\"", egui::Event::Text("\"".into()), "\"selected\""),
+            ("(", egui::Event::Paste("(".into()), "("),
+            (
+                "(",
+                egui::Event::Ime(egui::ImeEvent::Commit("(".into())),
+                "(",
+            ),
+        ] {
+            let mut source = "selected".into();
+            let mut syntax = PairSyntax::default();
+            let mut buffer = PairingBuffer::new(&mut source, &mut syntax, true, &[event])
+                .with_document_kind(DocumentKind::Tex);
+            let mut cursor =
+                buffer.delete_selected(&CCursorRange::two(CCursor::new(0), CCursor::new(8)));
+            buffer.insert_text_at(&mut cursor, text, usize::MAX);
+            assert_eq!(source, expected);
+            assert_eq!(cursor.index.0, expected.chars().count());
+        }
+    }
 
     fn typed(source: &str, caret: usize, text: &str) -> (String, usize) {
         let mut source = source.to_owned();
@@ -858,6 +1315,196 @@ mod tests {
     }
 
     #[test]
+    fn native_tex_enter_completes_a_new_environment_in_one_undo() {
+        let ctx = egui::Context::default();
+        let mut syntax = PairSyntax::default();
+        let before = "  \\begin{align}";
+        let mut doc = DocumentSession::new(WindowSessionId::new(1), before, DocumentKind::Tex);
+        let original = CCursorRange::one(CCursor::new(before.chars().count()));
+        let cursor = frame(
+            &ctx,
+            &mut doc,
+            &mut syntax,
+            vec![key(egui::Key::Enter)],
+            true,
+            original,
+        );
+        assert_eq!(doc.source(), "  \\begin{align}\n    \n  \\end{align}");
+        assert_eq!(cursor.primary.index.0, "  \\begin{align}\n    ".len());
+        let undo = doc.history_step(false, cursor).unwrap();
+        assert_eq!(doc.source(), before);
+        assert_eq!(undo.cursor, original);
+        doc.history_step(true, undo.cursor).unwrap();
+        assert_eq!(doc.source(), "  \\begin{align}\n    \n  \\end{align}");
+    }
+
+    #[test]
+    fn tex_environment_enter_supports_headers_raw_names_suffixes_and_line_endings() {
+        for (before, expected, spaces) in [
+            (
+                "\\begin{document}|",
+                "\\begin{document}\n|\n\\end{document}",
+                2,
+            ),
+            (
+                "  \\begin{tabular}{ll}  |",
+                "  \\begin{tabular}{ll}  \n    |\n  \\end{tabular}",
+                2,
+            ),
+            (
+                "\\begin{minted}[linenos]{tex}|",
+                "\\begin{minted}[linenos]{tex}\n  |\n\\end{minted}",
+                2,
+            ),
+            (
+                "\\begin{verbatim}|",
+                "\\begin{verbatim}\n  |\n\\end{verbatim}",
+                2,
+            ),
+            (
+                "\\begin{lstlisting}[language=TeX]|",
+                "\\begin{lstlisting}[language=TeX]\n  |\n\\end{lstlisting}",
+                2,
+            ),
+            (
+                "\\begin{my:env*}|",
+                "\\begin{my:env*}\n  |\n\\end{my:env*}",
+                2,
+            ),
+            ("\\begin{résumé}|", "\\begin{résumé}\n  |\n\\end{résumé}", 2),
+            (
+                "\\begin{align}|α🙂 suffix\r\nnext",
+                "\\begin{align}\r\n  |α🙂 suffix\r\n\\end{align}\r\nnext",
+                2,
+            ),
+            (
+                "  text \\begin{align}|x",
+                "  text \\begin{align}\n    |x\n  \\end{align}",
+                2,
+            ),
+            (
+                " \t\\begin{align}|",
+                " \t\\begin{align}\n \t\t|\n \t\\end{align}",
+                0,
+            ),
+            (
+                "\\begin{align} % \\begin{fake}|",
+                "\\begin{align} % \\begin{fake}\n  |\n\\end{align}",
+                2,
+            ),
+        ] {
+            let caret = before.find('|').unwrap();
+            let mut source = before.replacen('|', "", 1);
+            let mut syntax = PairSyntax::default();
+            let mut cursor = CCursor::new(source[..caret].chars().count());
+            PairingBuffer::new(&mut source, &mut syntax, true, &[key(egui::Key::Enter)])
+                .with_document_kind(DocumentKind::Tex)
+                .with_indentation(spaces)
+                .insert_text_at(&mut cursor, "\n", usize::MAX);
+            let byte = source
+                .char_indices()
+                .nth(cursor.index.0)
+                .map_or(source.len(), |(byte, _)| byte);
+            source.insert(byte, '|');
+            assert_eq!(source, expected, "{before:?}");
+        }
+    }
+
+    #[test]
+    fn tex_environment_enter_deduplicates_real_ends_and_ignores_literal_fake_headers() {
+        for (before, expected) in [
+            (
+                "\\begin{align}|\\end{align}",
+                "\\begin{align}\n  |\n\\end{align}",
+            ),
+            (
+                "\\begin{align}|\n  x\n\\end{align}",
+                "\\begin{align}\n  |\n  x\n\\end{align}",
+            ),
+            (
+                "\\begin{outer}\n  \\begin{inner}|\n  \\end{inner}",
+                "\\begin{outer}\n  \\begin{inner}\n    |\n  \\end{inner}",
+            ),
+            (
+                "\\begin{itemize}\n  \\begin{itemize}|\n\\end{itemize}",
+                "\\begin{itemize}\n  \\begin{itemize}\n    |\n  \\end{itemize}\n\\end{itemize}",
+            ),
+            (
+                "\\begin{itemize}\n  \\begin{itemize}|\n  \\end{itemize}\n\\end{itemize}",
+                "\\begin{itemize}\n  \\begin{itemize}\n    |\n  \\end{itemize}\n\\end{itemize}",
+            ),
+            ("% \\begin{align}|", "% \\begin{align}\n|"),
+            ("\\url{\\begin{verbatim}|", "\\url{\\begin{verbatim}\n|"),
+            (
+                "\\begin{verbatim}\n\\begin{align}|",
+                "\\begin{verbatim}\n\\begin{align}\n|",
+            ),
+            ("\\begin{align} x|", "\\begin{align} x\n  |"),
+        ] {
+            let caret = before.find('|').unwrap();
+            let mut source = before.replacen('|', "", 1);
+            let mut syntax = PairSyntax::default();
+            let mut cursor = CCursor::new(caret);
+            PairingBuffer::new(&mut source, &mut syntax, true, &[key(egui::Key::Enter)])
+                .with_document_kind(DocumentKind::Tex)
+                .with_indentation(2)
+                .insert_text_at(&mut cursor, "\n", usize::MAX);
+            source.insert(cursor.index.0, '|');
+            assert_eq!(source, expected, "{before:?}");
+        }
+    }
+
+    #[test]
+    fn tex_environment_completion_preserves_disabled_paste_limit_and_existing_group_behavior() {
+        for (events, enabled, limit, expected) in [
+            (
+                vec![key(egui::Key::Enter)],
+                false,
+                usize::MAX,
+                "\\begin{align}\n  ",
+            ),
+            (
+                vec![egui::Event::Paste("\n".into())],
+                true,
+                usize::MAX,
+                "\\begin{align}\n",
+            ),
+            (
+                vec![key(egui::Key::Enter)],
+                true,
+                "\\begin{align}".len() + 1,
+                "\\begin{align}\n",
+            ),
+        ] {
+            let mut source = "\\begin{align}".to_owned();
+            let mut syntax = PairSyntax::default();
+            let mut cursor = CCursor::new(source.len());
+            PairingBuffer::new(&mut source, &mut syntax, enabled, &events)
+                .with_document_kind(DocumentKind::Tex)
+                .with_indentation(2)
+                .insert_text_at(&mut cursor, "\n", limit);
+            assert_eq!(source, expected);
+        }
+        assert_eq!(
+            tex_typed("\\begin{align}", "\\begin{align".len(), "}"),
+            ("\\begin{align}".into(), "\\begin{align}".len())
+        );
+        let mut source = "\\selected".to_owned();
+        let mut syntax = PairSyntax::default();
+        let mut buffer = PairingBuffer::new(
+            &mut source,
+            &mut syntax,
+            true,
+            &[egui::Event::Text("[".into())],
+        )
+        .with_document_kind(DocumentKind::Tex);
+        let mut cursor =
+            buffer.delete_selected(&CCursorRange::two(CCursor::new(1), CCursor::new(9)));
+        buffer.insert_text_at(&mut cursor, "[", usize::MAX);
+        assert_eq!(source, "\\[selected\\]");
+    }
+
+    #[test]
     fn native_enter_preserves_existing_indentation_even_without_delimiter_pairing() {
         for kind in [DocumentKind::Typst, DocumentKind::Tex] {
             for source in ["  first", "\t  first", "  \t", "\t", "  alpha😀"] {
@@ -1002,58 +1649,60 @@ mod tests {
 
     #[test]
     fn native_text_edit_preserves_event_order_selection_and_atomic_undo_redo() {
-        let ctx = egui::Context::default();
-        let mut syntax = PairSyntax::default();
-        let mut doc = DocumentSession::new(WindowSessionId::new(1), "文稿", DocumentKind::Typst);
-        let start = CCursorRange::one(CCursor::new(2));
-        let cursor = frame(
-            &ctx,
-            &mut doc,
-            &mut syntax,
-            vec![
-                egui::Event::Text("(".into()),
-                egui::Event::Text("[".into()),
-                key(egui::Key::Backspace),
-            ],
-            true,
-            start,
-        );
-        assert_eq!(doc.source(), "文稿()");
-        assert_eq!(cursor.primary.index.0, 3);
-        let undo = doc.history_step(false, cursor).unwrap();
-        assert_eq!(doc.source(), "文稿");
-        assert_eq!(undo.cursor, start);
-        let redo = doc.history_step(true, undo.cursor).unwrap();
-        assert_eq!(doc.source(), "文稿()");
-        frame(
-            &ctx,
-            &mut doc,
-            &mut syntax,
-            vec![key(egui::Key::Backspace)],
-            true,
-            redo.cursor,
-        );
-        assert_eq!(doc.source(), "文稿");
-        let selected = CCursorRange::two(CCursor::new(0), CCursor::new(2));
-        let cursor = frame(
-            &ctx,
-            &mut doc,
-            &mut syntax,
-            vec![egui::Event::Text("[".into())],
-            true,
-            selected,
-        );
-        assert_eq!(doc.source(), "[文稿]");
-        assert_eq!(cursor.primary.index.0, 4);
-        frame(
-            &ctx,
-            &mut doc,
-            &mut syntax,
-            vec![key(egui::Key::Backspace)],
-            false,
-            cursor,
-        );
-        assert_eq!(doc.source(), "[文稿");
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let ctx = egui::Context::default();
+            let mut syntax = PairSyntax::default();
+            let mut doc = DocumentSession::new(WindowSessionId::new(1), "文稿", kind);
+            let start = CCursorRange::one(CCursor::new(2));
+            let cursor = frame(
+                &ctx,
+                &mut doc,
+                &mut syntax,
+                vec![
+                    egui::Event::Text("(".into()),
+                    egui::Event::Text("[".into()),
+                    key(egui::Key::Backspace),
+                ],
+                true,
+                start,
+            );
+            assert_eq!(doc.source(), "文稿()");
+            assert_eq!(cursor.primary.index.0, 3);
+            let undo = doc.history_step(false, cursor).unwrap();
+            assert_eq!(doc.source(), "文稿");
+            assert_eq!(undo.cursor, start);
+            let redo = doc.history_step(true, undo.cursor).unwrap();
+            assert_eq!(doc.source(), "文稿()");
+            frame(
+                &ctx,
+                &mut doc,
+                &mut syntax,
+                vec![key(egui::Key::Backspace)],
+                true,
+                redo.cursor,
+            );
+            assert_eq!(doc.source(), "文稿");
+            let selected = CCursorRange::two(CCursor::new(0), CCursor::new(2));
+            let cursor = frame(
+                &ctx,
+                &mut doc,
+                &mut syntax,
+                vec![egui::Event::Text("[".into())],
+                true,
+                selected,
+            );
+            assert_eq!(doc.source(), "[文稿]");
+            assert_eq!(cursor.primary.index.0, 4);
+            frame(
+                &ctx,
+                &mut doc,
+                &mut syntax,
+                vec![key(egui::Key::Backspace)],
+                false,
+                cursor,
+            );
+            assert_eq!(doc.source(), "[文稿");
+        }
     }
 
     #[test]

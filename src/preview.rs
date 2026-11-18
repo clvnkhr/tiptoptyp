@@ -335,6 +335,10 @@ impl PreviewController {
                         PreviewEffect::StopAttempt(event.generation()),
                         PreviewEffect::DiscardLanguageRequests,
                     ],
+                    Failure::Permanent => vec![
+                        PreviewEffect::StopService,
+                        PreviewEffect::DiscardLanguageRequests,
+                    ],
                 }
             }
             PreviewTransitionEvent::RecoveryTick(now) => {
@@ -431,11 +435,29 @@ impl PreviewController {
                 message,
                 fatal,
                 ..
-            } if *fatal || *stage == "preview" => format!("{stage}: {message}"),
+            } if *fatal
+                || *stage == "preview"
+                || *stage == crate::tinymist::CONFIGURATION_ERROR_STAGE =>
+            {
+                if *stage == crate::tinymist::CONFIGURATION_ERROR_STAGE {
+                    message.clone()
+                } else {
+                    format!("{stage}: {message}")
+                }
+            }
             TinymistEvent::Stopped { reason, .. } => reason.clone(),
             _ => return None,
         };
-        let outcome = self.recovery.failed(event.generation(), now);
+        let permanent = matches!(
+            event,
+            TinymistEvent::Error { stage, .. }
+                if *stage == crate::tinymist::CONFIGURATION_ERROR_STAGE
+        );
+        let outcome = if permanent {
+            self.recovery.failed_permanently(event.generation())
+        } else {
+            self.recovery.failed(event.generation(), now)
+        };
         match outcome {
             Failure::Ignored => {}
             Failure::Waiting { failures, .. } => {
@@ -456,6 +478,12 @@ impl PreviewController {
                     ServiceState::Failed(format!("Five consecutive failures: {detail}"));
                 self.webview_state =
                     ServiceState::Failed("Tinymist retry limit reached".to_owned());
+            }
+            Failure::Permanent => {
+                self.connection.stop();
+                let message = format!("Invalid Tinymist configuration: {detail}");
+                self.tinymist_state = ServiceState::Failed(message.clone());
+                self.webview_state = ServiceState::Failed(message);
             }
         }
         Some(outcome)
@@ -1004,6 +1032,87 @@ mod tests {
         preview.compile_status(Generation(2), "/other.typ".into(), Compiling, start);
         preview.compile_status(Generation(2), "/other.typ".into(), CompileError, start);
         assert_eq!(preview.status, PreviewStatus::Error);
+    }
+
+    #[test]
+    fn invalid_configuration_fails_once_with_the_cause_and_only_explicit_restart_recovers() {
+        use crate::tinymist::{CONFIGURATION_ERROR_STAGE, Generation, TinymistEvent};
+        use tiptoptyp_core::recovery::Failure;
+        let mut preview = PreviewController::new(false, PreviewPreference::InteractivePartial);
+        let generation = Generation(7);
+        let now = Instant::now();
+        preview.tinymist_preview_enabled = true;
+        preview.recovery.started(generation);
+        preview.connection.start(generation);
+        let failure = TinymistEvent::Error {
+            generation,
+            stage: CONFIGURATION_ERROR_STAGE,
+            message: "tinymist_configuration.formatterProseWrap: choose none, fill, sentence"
+                .into(),
+            fatal: true,
+        };
+        let transition = preview.transition(PreviewTransitionEvent::Failure(&failure, now));
+        assert!(transition.handled);
+        assert_eq!(
+            transition.effects,
+            vec![
+                PreviewEffect::StopService,
+                PreviewEffect::DiscardLanguageRequests,
+            ]
+        );
+        for state in [&preview.tinymist_state, &preview.webview_state] {
+            let ServiceState::Failed(message) = state else {
+                panic!("invalid configuration must be visible as an immediate failure");
+            };
+            assert!(message.contains("formatterProseWrap"));
+            assert!(message.contains("none, fill, sentence"));
+            assert!(!message.contains("retry limit"));
+            assert!(!message.contains("Five consecutive"));
+        }
+        assert_eq!(preview.recovery.deadline(), None);
+        assert!(!preview.connection.is_ready());
+        assert!(!preview.initialized(generation));
+        assert_eq!(
+            preview.receive_tinymist_failure(&failure, now),
+            Some(Failure::Ignored)
+        );
+        let stopped = TinymistEvent::Stopped {
+            generation,
+            code: None,
+            reason: "same failed attempt stopped".into(),
+        };
+        assert_eq!(
+            preview.receive_tinymist_failure(&stopped, now),
+            Some(Failure::Ignored)
+        );
+        for seconds in [1, 30, 600] {
+            assert!(
+                preview
+                    .transition(PreviewTransitionEvent::RecoveryTick(
+                        now + Duration::from_secs(seconds)
+                    ))
+                    .effects
+                    .is_empty()
+            );
+        }
+        let restart = preview.transition(PreviewTransitionEvent::Restart {
+            preserve_surface: false,
+        });
+        assert_eq!(
+            restart.effects,
+            vec![PreviewEffect::RestartService {
+                preserve_surface: false
+            }]
+        );
+        let corrected = Generation(8);
+        preview.recovery.started(corrected);
+        preview.connection.start(corrected);
+        assert!(preview.initialized(corrected));
+        assert!(preview.recovery.accepts(corrected));
+        assert_eq!(
+            preview.receive_tinymist_failure(&failure, now),
+            Some(Failure::Ignored)
+        );
     }
 
     #[test]

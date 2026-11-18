@@ -6,9 +6,9 @@ use std::{
 };
 
 pub(crate) struct Mirror {
-    root: PathBuf,
+    pub(super) root: PathBuf,
     #[cfg(unix)]
-    directory: fs::File,
+    pub(super) directory: fs::File,
 }
 impl Mirror {
     pub(crate) fn open(root: &Path) -> Result<Self, String> {
@@ -36,6 +36,7 @@ impl Mirror {
     /// Materialize only server-declared folders and retire only paths recorded
     /// in our previous server manifest. Generated artifacts are never uploaded,
     /// included in the remote tree, or recursively deleted here.
+    #[cfg(test)]
     pub(crate) fn apply_tree(&self, tree: &Tree) -> Result<(), String> {
         #[cfg(unix)]
         {
@@ -64,6 +65,26 @@ impl Mirror {
                         .map_err(|e| e.to_string())?;
                 }
             }
+            // Retire only server-recorded directories, deepest first. The
+            // nonrecursive rmdir preserves compiler output and any untracked
+            // local files, including empty untracked subdirectories.
+            let mut retired_folders: Vec<_> = previous
+                .iter()
+                .filter(|entry| {
+                    entry.kind == EntryKind::Folder && !paths.contains(entry.path.as_str())
+                })
+                .map(|entry| {
+                    (
+                        entry.path.bytes().filter(|&byte| byte == b'/').count(),
+                        entry,
+                    )
+                })
+                .collect();
+            retired_folders.sort_by_key(|(depth, _)| std::cmp::Reverse(*depth));
+            for (_, entry) in retired_folders {
+                unix::remove_empty_directory(&self.directory, &entry.relative_path()?)
+                    .map_err(|error| error.to_string())?;
+            }
             for entry in &tree.entries {
                 let relative = entry.relative_path()?;
                 if entry.kind == EntryKind::Folder {
@@ -80,6 +101,7 @@ impl Mirror {
             Err("Secure Overleaf mirroring is unavailable.".into())
         }
     }
+    #[cfg(test)]
     pub(crate) fn write_document(&self, entry: &Entry, source: &str) -> Result<PathBuf, String> {
         if entry.kind != EntryKind::Doc {
             return Err("The Overleaf entry is not a document.".into());
@@ -89,12 +111,14 @@ impl Mirror {
         }
         self.write(entry, source.as_bytes())
     }
+    #[cfg(test)]
     pub(crate) fn write_file(&self, entry: &Entry, encoded: &str) -> Result<PathBuf, String> {
         if entry.kind != EntryKind::File {
             return Err("The Overleaf entry is not an asset.".into());
         }
         self.write(entry, &decode_base64(encoded)?)
     }
+    #[cfg(test)]
     fn write(&self, entry: &Entry, bytes: &[u8]) -> Result<PathBuf, String> {
         let relative = entry.relative_path()?;
         #[cfg(unix)]
@@ -106,7 +130,7 @@ impl Mirror {
     }
 }
 
-fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+pub(super) fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     if input.len() > MAX_FILE_BYTES.div_ceil(3) * 4 || !input.len().is_multiple_of(4) {
         return Err("The Overleaf asset has invalid or oversized base64 data.".into());
     }
@@ -167,9 +191,10 @@ pub(super) mod unix {
         io,
         os::{
             fd::{AsRawFd, FromRawFd},
-            unix::ffi::OsStrExt,
+            unix::{ffi::OsStrExt, fs::MetadataExt},
         },
         sync::atomic::{AtomicU64, Ordering},
+        time::{Duration, Instant},
     };
     fn name(value: &std::ffi::OsStr) -> io::Result<CString> {
         CString::new(value.as_bytes()).map_err(|_| io::Error::other("Invalid mirror name"))
@@ -210,6 +235,17 @@ pub(super) mod unix {
         root_directory_with(root, false)
     }
     fn root_directory_with(root: &Path, create: bool) -> io::Result<fs::File> {
+        // This is also called directly by workspace/session readers and writers,
+        // which must not reinterpret a relative path as a child of `/`.
+        if !root.is_absolute()
+            || root
+                .components()
+                .any(|part| !matches!(part, Component::RootDir | Component::Normal(_)))
+        {
+            return Err(io::Error::other(
+                "Mirror path must be absolute and normalized",
+            ));
+        }
         let mut result = fs::File::open("/")?;
         for component in root.components() {
             match component {
@@ -220,7 +256,7 @@ pub(super) mod unix {
         }
         Ok(result)
     }
-    pub(super) fn directory(
+    pub(in crate::overleaf) fn directory(
         root: &fs::File,
         relative: &Path,
         create: bool,
@@ -242,17 +278,74 @@ pub(super) mod unix {
         )?;
         Ok((parent, file))
     }
-    pub(in crate::overleaf) fn read(
-        root: &fs::File,
-        path: &Path,
-        cap: usize,
-    ) -> io::Result<Vec<u8>> {
+    /// Serialize this application's checkpoint writers across windows and
+    /// processes. The retained file descriptor releases the lock on drop.
+    /// Call only on a worker: contention waits are bounded and never repaint.
+    pub(in crate::overleaf) struct SyncLock {
+        _file: fs::File,
+    }
+    pub(in crate::overleaf) fn sync_lock(root: &fs::File) -> io::Result<SyncLock> {
+        sync_lock_for(root, Duration::from_secs(2))
+    }
+    fn sync_lock_for(root: &fs::File, timeout: Duration) -> io::Result<SyncLock> {
+        let (parent, name) = parent(root, Path::new(".tiptoptyp/overleaf-sync.lock"), true)?;
+        // SAFETY: retained no-follow directory, validated single component,
+        // explicit create mode and a newly owned descriptor on success.
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDWR
+                    | libc::O_CREAT
+                    | libc::O_NOFOLLOW
+                    | libc::O_CLOEXEC
+                    | libc::O_NONBLOCK,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a newly owned descriptor.
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other(
+                "The Overleaf workspace lock is not a regular file.",
+            ));
+        }
+        let started = Instant::now();
+        loop {
+            // SAFETY: a live regular file descriptor; LOCK_NB never waits in
+            // the kernel for an unrelated window/process to release its lock.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(SyncLock { _file: file });
+            }
+            let error = io::Error::last_os_error();
+            if !matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+            ) {
+                return Err(error);
+            }
+            let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "This Overleaf workspace is being updated in another window. Try again when it finishes.",
+                ));
+            };
+            std::thread::sleep(Duration::from_millis(10).min(remaining));
+        }
+    }
+    fn regular_file(root: &fs::File, path: &Path) -> io::Result<fs::File> {
         let (parent, file) = parent(root, path, false)?;
+        regular_file_at(&parent, &file)
+    }
+    fn regular_file_at(parent: &fs::File, name: &CString) -> io::Result<fs::File> {
         // SAFETY: validated terminated filename under retained parent.
         let fd = unsafe {
             libc::openat(
                 parent.as_raw_fd(),
-                file.as_ptr(),
+                name.as_ptr(),
                 libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
             )
         };
@@ -264,6 +357,126 @@ pub(super) mod unix {
         if !file.metadata()?.is_file() {
             return Err(io::Error::other("Mirror file is not regular"));
         }
+        Ok(file)
+    }
+    /// Compare physical files under the retained root without following any
+    /// symlink. Different spellings can name one directory entry on a
+    /// case-insensitive volume; unlinking either would then remove both.
+    pub(in crate::overleaf) fn same_file(
+        root: &fs::File,
+        first: &Path,
+        second: &Path,
+    ) -> io::Result<bool> {
+        // Retain both handles while comparing identities, including when an
+        // unrelated editor replaces one of the directory entries concurrently.
+        let first = regular_file(root, first)?;
+        let second = regular_file(root, second)?;
+        let first_metadata = first.metadata()?;
+        let second_metadata = second.metadata()?;
+        Ok(first_metadata.dev() == second_metadata.dev()
+            && first_metadata.ino() == second_metadata.ino())
+    }
+    pub(in crate::overleaf) fn same_directory(
+        root: &fs::File,
+        first: &Path,
+        second: &Path,
+    ) -> io::Result<bool> {
+        let first = directory(root, first, false)?;
+        let second = directory(root, second, false)?;
+        let first_metadata = first.metadata()?;
+        let second_metadata = second.metadata()?;
+        Ok(first_metadata.dev() == second_metadata.dev()
+            && first_metadata.ino() == second_metadata.ino())
+    }
+    /// Repair the stored spelling of an already-owned alias, never move data
+    /// to a distinct destination. Call only after validating same-ID/kind tree
+    /// or journal lineage. Darwin's exclusive rename accepts case aliases but
+    /// rejects even a raced-in destination or a distinct hard-link name.
+    #[cfg(target_os = "macos")]
+    pub(in crate::overleaf) fn rename_alias(
+        root: &fs::File,
+        previous: &Path,
+        current: &Path,
+        kind: EntryKind,
+    ) -> io::Result<bool> {
+        let prepare = || -> io::Result<_> {
+            let (previous_parent, previous_name) = parent(root, previous, false)?;
+            let (current_parent, current_name) = parent(root, current, false)?;
+            let open = |parent: &fs::File, name: &CString| {
+                if kind == EntryKind::Folder {
+                    open_directory(parent, std::ffi::OsStr::from_bytes(name.as_bytes()), false)
+                } else {
+                    regular_file_at(parent, name)
+                }
+            };
+            let previous_file = open(&previous_parent, &previous_name)?;
+            let current_file = open(&current_parent, &current_name)?;
+            Ok((
+                previous_parent,
+                previous_name,
+                current_parent,
+                current_name,
+                previous_file,
+                current_file,
+            ))
+        };
+        let (
+            previous_parent,
+            previous_name,
+            current_parent,
+            current_name,
+            previous_file,
+            current_file,
+        ) = match prepare() {
+            Ok(value) => value,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let previous_metadata = previous_file.metadata()?;
+        let current_metadata = current_file.metadata()?;
+        if previous_metadata.dev() != current_metadata.dev()
+            || previous_metadata.ino() != current_metadata.ino()
+        {
+            return Ok(false);
+        }
+        // SAFETY: retained no-follow parents, validated single names, and an
+        // exclusive metadata-only rename that cannot overwrite another entry.
+        let result = unsafe {
+            libc::renameatx_np(
+                previous_parent.as_raw_fd(),
+                previous_name.as_ptr(),
+                current_parent.as_raw_fd(),
+                current_name.as_ptr(),
+                libc::RENAME_EXCL,
+            )
+        };
+        if result != 0 {
+            let error = io::Error::last_os_error();
+            return if matches!(
+                error.kind(),
+                io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound
+            ) {
+                Ok(false)
+            } else {
+                Err(error)
+            };
+        }
+        previous_parent.sync_all()?;
+        let previous_metadata = previous_parent.metadata()?;
+        let current_metadata = current_parent.metadata()?;
+        if previous_metadata.dev() != current_metadata.dev()
+            || previous_metadata.ino() != current_metadata.ino()
+        {
+            current_parent.sync_all()?;
+        }
+        Ok(true)
+    }
+    pub(in crate::overleaf) fn read(
+        root: &fs::File,
+        path: &Path,
+        cap: usize,
+    ) -> io::Result<Vec<u8>> {
+        let file = regular_file(root, path)?;
         let mut bytes = Vec::new();
         file.take(cap as u64 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > cap {
@@ -271,7 +484,7 @@ pub(super) mod unix {
         }
         Ok(bytes)
     }
-    pub(super) fn remove(root: &fs::File, path: &Path) -> io::Result<()> {
+    pub(in crate::overleaf) fn remove(root: &fs::File, path: &Path) -> io::Result<()> {
         let (parent, file) = match parent(root, path, false) {
             Ok(value) => value,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -284,6 +497,40 @@ pub(super) mod unix {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
+        }
+    }
+    fn directory_retirement_error(error: io::Error) -> io::Result<()> {
+        // POSIX permits ENOTEMPTY or EEXIST for a nonempty directory. Such
+        // contents belong to local tooling/the user, so leave them untouched.
+        if matches!(
+            error.kind(),
+            io::ErrorKind::NotFound
+                | io::ErrorKind::DirectoryNotEmpty
+                | io::ErrorKind::AlreadyExists
+        ) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+    pub(in crate::overleaf) fn remove_empty_directory(
+        root: &fs::File,
+        path: &Path,
+    ) -> io::Result<()> {
+        let (parent, directory) = match parent(root, path, false) {
+            Ok(value) => value,
+            Err(error) => return directory_retirement_error(error),
+        };
+        // Unlike recursive removal, AT_REMOVEDIR succeeds only for an empty
+        // directory. It does not follow a symlink swapped into the final name;
+        // parent() already opened every ancestor with O_NOFOLLOW.
+        // SAFETY: retained parent descriptor and validated terminated name.
+        let result =
+            unsafe { libc::unlinkat(parent.as_raw_fd(), directory.as_ptr(), libc::AT_REMOVEDIR) };
+        if result == 0 {
+            Ok(())
+        } else {
+            directory_retirement_error(io::Error::last_os_error())
         }
     }
     pub(in crate::overleaf) fn write(root: &fs::File, path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -355,6 +602,39 @@ pub(super) mod unix {
         }
         result
     }
+
+    #[cfg(test)]
+    mod lock_tests {
+        use super::*;
+        use std::os::unix::fs::symlink;
+
+        #[test]
+        fn independent_window_writers_contend_and_release_without_unbounded_waits() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let first = root_directory_existing(&root).unwrap();
+            let second = root_directory_existing(&root).unwrap();
+            let owned = sync_lock_for(&first, Duration::ZERO).unwrap();
+            let error = sync_lock_for(&second, Duration::ZERO).err().unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+            drop(owned);
+            assert!(sync_lock_for(&second, Duration::ZERO).is_ok());
+        }
+
+        #[test]
+        fn workspace_lock_rejects_symlinks_without_touching_the_target() {
+            let temporary = tempfile::tempdir().unwrap();
+            let root = temporary.path().canonicalize().unwrap();
+            let directory = root_directory_existing(&root).unwrap();
+            let metadata = root.join(".tiptoptyp");
+            fs::create_dir(&metadata).unwrap();
+            let target = root.join("real.txt");
+            fs::write(&target, b"real user data").unwrap();
+            symlink(&target, metadata.join("overleaf-sync.lock")).unwrap();
+            assert!(sync_lock_for(&directory, Duration::ZERO).is_err());
+            assert_eq!(fs::read(&target).unwrap(), b"real user data");
+        }
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -374,6 +654,122 @@ mod manifest_tests {
                 kind: EntryKind::Doc,
             })
             .collect()
+    }
+    fn folder_entry(id: &str, path: &str) -> Entry {
+        Entry {
+            id: id.into(),
+            path: path.into(),
+            kind: EntryKind::Folder,
+        }
+    }
+    #[test]
+    fn retired_empty_server_folders_are_removed_deepest_first_without_touching_local_dirs() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let mirror = Mirror::open(&root).unwrap();
+        let outer = folder_entry("outer", "notes");
+        let inner = folder_entry("inner", "notes/inner");
+        let doc = Entry {
+            id: "source".into(),
+            path: "notes/inner/main.tex".into(),
+            kind: EntryKind::Doc,
+        };
+        mirror
+            .apply_tree(
+                &Tree::new(
+                    "Paper".into(),
+                    None,
+                    vec![outer.clone(), inner, doc.clone()],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        mirror.write_document(&doc, "Tracked source").unwrap();
+        fs::create_dir(root.join("untracked-empty")).unwrap();
+        mirror
+            .apply_tree(&Tree::new("Paper".into(), None, vec![outer]).unwrap())
+            .unwrap();
+        assert!(
+            root.join("notes").is_dir(),
+            "a server-declared empty folder stays visible"
+        );
+        assert!(!root.join("notes/inner").exists());
+        mirror
+            .apply_tree(&Tree::new("Paper".into(), None, vec![]).unwrap())
+            .unwrap();
+        assert!(
+            !root.join("notes").exists(),
+            "removed empty server folders must not survive in the mirror"
+        );
+        assert!(root.join("untracked-empty").is_dir());
+    }
+    #[test]
+    fn retiring_server_folders_preserves_untracked_files_and_untracked_empty_subdirectories() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let mirror = Mirror::open(&root).unwrap();
+        let doc = Entry {
+            id: "source".into(),
+            path: "notes/main.tex".into(),
+            kind: EntryKind::Doc,
+        };
+        mirror
+            .apply_tree(
+                &Tree::new(
+                    "Paper".into(),
+                    None,
+                    vec![folder_entry("folder", "notes"), doc.clone()],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        mirror.write_document(&doc, "Tracked source").unwrap();
+        fs::write(root.join("notes/generated.pdf"), b"Keep compiler output").unwrap();
+        fs::create_dir(root.join("notes/local-empty")).unwrap();
+        let empty = Tree::new("Paper".into(), None, vec![]).unwrap();
+        mirror.apply_tree(&empty).unwrap();
+        mirror.apply_tree(&empty).unwrap();
+        assert!(!root.join("notes/main.tex").exists());
+        assert_eq!(
+            fs::read(root.join("notes/generated.pdf")).unwrap(),
+            b"Keep compiler output"
+        );
+        assert!(
+            root.join("notes/local-empty").is_dir(),
+            "never recursively clean even empty untracked folders"
+        );
+        assert_eq!(
+            fs::read(root.join(".tiptoptyp/overleaf-files.json")).unwrap(),
+            b"[]"
+        );
+    }
+    #[test]
+    fn retiring_server_folders_never_follows_a_replacement_symlink() {
+        use std::os::unix::fs::symlink;
+        let temporary = tempfile::tempdir().unwrap();
+        let base = temporary.path().canonicalize().unwrap();
+        let root = base.join("mirror");
+        let mirror = Mirror::open(&root).unwrap();
+        mirror
+            .apply_tree(
+                &Tree::new("Paper".into(), None, vec![folder_entry("folder", "notes")]).unwrap(),
+            )
+            .unwrap();
+        let outside = base.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.tex"), b"Unrelated source").unwrap();
+        fs::remove_dir(root.join("notes")).unwrap();
+        symlink(&outside, root.join("notes")).unwrap();
+        assert!(
+            mirror
+                .apply_tree(&Tree::new("Paper".into(), None, vec![]).unwrap())
+                .is_err()
+        );
+        assert!(root.join("notes").is_symlink());
+        assert_eq!(
+            fs::read(outside.join("keep.tex")).unwrap(),
+            b"Unrelated source"
+        );
     }
     #[test]
     fn large_server_manifest_is_readable_on_the_next_mirror_update() {

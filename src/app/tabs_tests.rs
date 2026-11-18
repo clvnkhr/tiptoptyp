@@ -18,6 +18,7 @@ fn changing_the_pinned_preview_cannot_write_its_pdf_to_the_previous_entry_destin
     );
     app.activate_tab(first, &context);
     app.document_workflow.pending_export = Some(PendingExport {
+        automatic_destination: false,
         path: destination.clone(),
         source: app.pdf_output_source(),
         intent: PdfWriteIntent::Compile,
@@ -62,6 +63,7 @@ fn a_pdf_receipt_and_queued_write_survive_switching_editor_tabs() {
         super::super::pdf_output::PdfOutputStatus::Saved
     );
     app.document_workflow.pending_export = Some(PendingExport {
+        automatic_destination: false,
         path: destination.clone(),
         source: app.pdf_output_source(),
         intent: PdfWriteIntent::Compile,
@@ -198,7 +200,7 @@ fn opening_tex_preserves_native_source_and_never_requests_typst_services() {
         true,
         true
     ));
-    assert!(app.tinymist_sync.generation.is_none());
+    assert!(app.tinymist_sync.generation().is_none());
     app.document_mut()
         .edit(CCursorRange::default(), |text| text.push_str("% edit"));
     app.mark_edited();
@@ -333,7 +335,10 @@ fn native_drag_is_excluded_on_tab_hover_and_until_the_tab_gesture_ends() {
         "suppress AppKit before mouse-down"
     );
     assert!(!tabs.claims_window_drag(empty_toolbar, false));
-    tabs.tab_drag_active = true;
+    tabs.tab_drag = TabDrag::Held {
+        source: 0,
+        grab: 0.0,
+    };
     assert!(tabs.claims_window_drag(empty_toolbar, true));
     assert!(
         tabs.claims_window_drag(None, true),
@@ -404,7 +409,7 @@ fn reordering_tabs_remaps_active_and_preview_without_changing_tab_identity() {
     let mut tabs = Tabs {
         order: vec![10, 20, 30, 40],
         active: Some(20),
-        preview: Some(40),
+        preview: PreviewOwnership::Automatic(40),
         ..Default::default()
     };
 
@@ -481,19 +486,65 @@ fn new_tabs_preserve_the_designated_preview_identity() {
 }
 
 #[test]
+fn closing_a_non_preview_tab_preserves_automatic_and_explicit_single_tab_policies() {
+    for explicit in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = fixture(&context, root.path());
+        app.tabs.adopt_active_preview();
+        let first = app.tabs.active_id().unwrap();
+        if explicit {
+            app.tabs.preview.pin(Some(first));
+        }
+        assert_eq!(app.tabs.uses_designated_preview(), explicit);
+        app.append_tab(&context);
+        assert_eq!(app.tabs.preview_id(), Some(first));
+        assert!(app.tabs.uses_designated_preview());
+        app.finish_close_tab(&context);
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tabs.preview_id(), Some(first));
+        assert_eq!(app.tabs.uses_designated_preview(), explicit);
+        let empty = app.tabs.empty_after();
+        assert!(empty.is_empty());
+        assert_eq!(empty.preview_id(), None);
+        assert!(empty.uses_designated_preview());
+    }
+}
+
+#[test]
+fn a_tab_gesture_needs_an_owned_press_and_keeps_its_grab_when_the_pointer_leaves() {
+    let mut drag = TabDrag::default();
+    drag.press(4, None);
+    assert_eq!(drag.source(), None);
+    drag.press(4, Some(12.0));
+    assert_eq!(drag.source(), Some(4));
+    drag.press(4, None);
+    assert_eq!(drag.grab(), 12.0);
+    drag.press(5, None);
+    assert_eq!(
+        drag.source(),
+        Some(4),
+        "missing press geometry cannot transfer a live gesture"
+    );
+    drag = TabDrag::Idle;
+    assert_eq!(drag.source(), None);
+}
+
+#[test]
 fn new_tab_does_not_restart_or_schedule_the_pinned_preview() {
     let root = tempfile::tempdir().unwrap();
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
     app.lifecycle = DocumentLifecycle::Active;
-    app.tinymist_sync.generation = Some(crate::tinymist::Generation(42));
+    app.tinymist_sync
+        .fixture_session(crate::tinymist::Generation(42), None, None);
     app.preview.status = PreviewStatus::Ready(Duration::from_millis(123));
     app.compile_deadline = None;
     let preview = app.tabs.preview_id();
     app.new_tab(&context);
     assert_eq!(app.tabs.preview_id(), preview);
     assert_eq!(
-        app.tinymist_sync.generation,
+        app.tinymist_sync.generation(),
         Some(crate::tinymist::Generation(42))
     );
     assert_eq!(
@@ -515,7 +566,7 @@ fn vector_tab_controls_remain_named_and_do_not_select_a_different_tab() {
     let context = egui::Context::default();
     let mut app = fixture(&context, root.path());
     app.append_tab(&context);
-    app.tabs.preview = app.tabs.id_at(1);
+    app.tabs.preview.replace_target(app.tabs.id_at(1));
     let mut harness = Harness::builder()
         .with_size(Vec2::new(700.0, 200.0))
         .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
@@ -607,7 +658,7 @@ fn check_tab_drag(release_with_move: bool, narrow: bool) {
     });
     harness.run_steps(1);
     assert!(
-        harness.state().tabs.tab_drag_source.is_some(),
+        harness.state().tabs.tab_drag.source().is_some(),
         "tab must own the press"
     );
     if release_with_move {
@@ -650,7 +701,7 @@ fn check_tab_drag(release_with_move: bool, narrow: bool) {
     );
     assert_eq!(harness.state().tabs.active_id(), active_id);
     assert_eq!(harness.state().tabs.preview_id(), preview_id);
-    assert!(harness.state().tabs.tab_drag_source.is_none());
+    assert!(harness.state().tabs.tab_drag.source().is_none());
 }
 
 #[test]
@@ -680,7 +731,7 @@ fn last_tab_closes_to_an_empty_workspace_and_new_reuses_the_window() {
     }
     assert!(app.compile_deadline.is_none());
     assert!(!app.project_index_deadline.is_pending());
-    assert!(app.tinymist_sync.generation.is_none());
+    assert!(app.tinymist_sync.generation().is_none());
     assert!(app.native_command_enabled(AppCommand::New));
     assert!(app.native_command_enabled(AppCommand::Open));
     for command in [
@@ -912,7 +963,7 @@ fn save_completion_follows_a_parked_tab_id_after_reorder_not_the_active_slot() {
         assert_eq!(fs::read_to_string(path).unwrap(), "first!");
         assert_eq!(app.document().source(), "other tab");
         assert!(!app.document_for_tab(saved_tab).unwrap().is_dirty());
-        assert!(app.manual_format_revision.is_none());
+        assert!(!app.formatting.saves_after_reply());
         assert_eq!(
             app.document_workflow.continuation_token(),
             expected_continuation
@@ -945,7 +996,7 @@ fn parked_save_as_rebinds_its_workspace_and_tinymist_path() {
     ready.recv_timeout(Duration::from_secs(5)).unwrap();
     assert!(app.save_to(path.clone(), &context));
     app.append_tab(&context);
-    app.tabs.preview = app.tabs.active_id();
+    app.tabs.preview.replace_target(app.tabs.active_id());
     let active_workspace = app.workspace_root.clone();
     release.send(()).unwrap();
     holder.join().unwrap();
@@ -962,7 +1013,7 @@ fn parked_save_as_rebinds_its_workspace_and_tinymist_path() {
     assert_eq!(app.workspace_root, active_workspace);
     assert!(!app.tinymist_sync.tab_backings.contains_key(&saved_tab));
     if let Ok(uri) = crate::tinymist::path_to_file_uri(&old_sync_path) {
-        assert!(!app.tinymist_sync.open_uris.contains(&uri));
+        assert!(!app.tinymist_sync.is_uri_open(&uri));
     }
 }
 
@@ -1132,7 +1183,7 @@ fn repeated_tab_switches_do_not_start_window_services() {
         app.activate_tab(second, &context);
     }
 
-    assert!(app.tinymist_sync.generation.is_none());
+    assert!(app.tinymist_sync.generation().is_none());
     assert!(!app.project_index_job.is_running());
     assert!(!app.workspace_service.is_running());
     assert_eq!(app.tabs.records.len(), 2);
@@ -1181,7 +1232,7 @@ fn tab_store_cost_probe() {
         started.elapsed().as_nanos(),
         idle_bytes
     );
-    assert!(harness.state().tinymist_sync.generation.is_none());
+    assert!(harness.state().tinymist_sync.generation().is_none());
 }
 
 #[test]
@@ -1292,7 +1343,7 @@ fn idle_tab_strip_does_not_start_services_or_mutate_inactive_sources() {
         .with_size(Vec2::new(700.0, 70.0))
         .build_ui_state(|ui, app: &mut EditorApp| app.show_tabs(ui, None), app);
     harness.run_steps(10);
-    assert!(harness.state().tinymist_sync.generation.is_none());
+    assert!(harness.state().tinymist_sync.generation().is_none());
     assert!(!harness.state().project_index_job.is_running());
     assert!(!harness.state().workspace_service.is_running());
     assert_eq!(
@@ -1480,13 +1531,14 @@ fn tex_formatting_is_one_unicode_safe_undoable_edit_and_rejects_stale_results() 
         },
         new_text: "longer tail".into(),
     };
-    app.format_request_key = Some(key);
+    app.formatting.request(key, formatting::Intent::Edit);
     app.receive_formatted_document(
         &context,
         Generation(identity.generation.0 + 1),
         &identity.uri,
         0,
-        Some(vec![edit.clone()]),
+        app.formatting.request_token().unwrap_or(0),
+        vec![edit.clone()],
     );
     assert_eq!(
         app.document().source(),
@@ -1498,7 +1550,8 @@ fn tex_formatting_is_one_unicode_safe_undoable_edit_and_rejects_stale_results() 
         identity.generation,
         &identity.uri,
         revision_as_i32(key.revision),
-        Some(vec![edit.clone()]),
+        app.formatting.request_token().unwrap_or(0),
+        vec![edit.clone()],
     );
     assert_eq!(app.document().source(), "é😀 longer tail\n");
     assert_eq!(
@@ -1506,13 +1559,14 @@ fn tex_formatting_is_one_unicode_safe_undoable_edit_and_rejects_stale_results() 
         source.chars().count() + 7
     );
     let changed = app.document().key();
-    app.format_request_key = Some(key);
+    app.formatting.request(key, formatting::Intent::Edit);
     app.receive_formatted_document(
         &context,
         identity.generation,
         &identity.uri,
         revision_as_i32(key.revision),
-        Some(vec![edit]),
+        app.formatting.request_token().unwrap_or(0),
+        vec![edit],
     );
     assert_eq!(
         app.document().key(),
@@ -1877,7 +1931,7 @@ fn a_drag_within_the_same_slot_tracks_the_pointer_then_returns_on_release() {
     );
     harness.run_steps(12);
     assert_eq!(harness.get_by_label("first.typ").rect(), before);
-    assert!(harness.state().tabs.tab_drag_source.is_none());
+    assert!(harness.state().tabs.tab_drag.source().is_none());
     assert!(
         harness
             .state()

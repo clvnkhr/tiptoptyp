@@ -75,11 +75,14 @@ fn temporary_root(path: &Path) -> Option<&Path> {
 /// Only explicit opens probe metadata. Descriptor parsing and ancestor
 /// validation remain on a worker; normal files keep the synchronous open path.
 fn descriptor_hint(path: &Path) -> bool {
-    path.ancestors().take(128).any(|root| {
-        root.join(".tiptoptyp/overleaf-project.json")
-            .symlink_metadata()
-            .is_ok()
-    })
+    path.join(crate::overleaf::workspace_session::LINK_PATH)
+        .symlink_metadata()
+        .is_ok()
+        || path.ancestors().take(128).any(|root| {
+            root.join(".tiptoptyp/overleaf-project.json")
+                .symlink_metadata()
+                .is_ok()
+        })
 }
 
 impl EditorApp {
@@ -158,18 +161,57 @@ impl EditorApp {
         self.overleaf.reopen.pending = None;
         self.overleaf.reopen.discovery.supersede();
         if let Some((project, root)) = self.overleaf_project_for_path(&path) {
+            // Explicitly reopening this stored copy owns its existing location,
+            // rather than the next-project folder selected in the chooser.
+            self.overleaf.pending_storage = None;
+            self.overleaf.storage_draft = None;
             let relative = path
                 .strip_prefix(&root)
                 .ok()
                 .filter(|relative| !relative.as_os_str().is_empty() && !path.is_dir())
                 .map(Path::to_path_buf);
             let current = self.overleaf.connection.as_ref().is_some_and(|c| {
-                c.project == project && c.root == root && c.online && !c.hydration.pending
+                c.project == project && c.root == root && c.online() && !c.hydration.pending()
             });
-            if current && relative.is_some() && self.open_overleaf_path(&path) {
+            if root == self.workspace_root
+                && !self.overleaf.offline.departed
+                && self.overleaf.offline.disk_untrusted.is_empty()
+                && self.overleaf.offline.active()
+                && self
+                    .overleaf
+                    .connection
+                    .as_ref()
+                    .is_some_and(|c| c.root == root)
+            {
+                if relative.is_some() && self.open_cached_overleaf_path(&path, context) {
+                    return true;
+                }
+                if root == self.workspace_root {
+                    return true;
+                }
+            }
+            if current
+                && root == self.workspace_root
+                && self.overleaf.offline.disk_untrusted.is_empty()
+                && relative.is_some()
+                && self.open_overleaf_path(&path)
+            {
                 return true;
             }
-            if let Err(error) = self.open_overleaf_project_url(project.url(), relative, context) {
+            let active_copy = root == self.workspace_root
+                && !self.overleaf.offline.departed
+                && self.overleaf.offline.disk_untrusted.is_empty()
+                && self
+                    .overleaf
+                    .connection
+                    .as_ref()
+                    .is_some_and(|c| c.root == root);
+            let result = if active_copy {
+                self.open_overleaf_project_url(project.url(), relative, context)
+            } else {
+                self.open_stored_overleaf_project(&project, &root, relative, context)
+            };
+            if let Err(error) = result {
                 self.show_file_error(error);
             }
             return true;
@@ -239,7 +281,9 @@ impl EditorApp {
                 let relative = request.path.strip_prefix(&stored.root).ok()
                     .filter(|relative| !relative.as_os_str().is_empty() && !request.path.is_dir())
                     .map(Path::to_path_buf);
-                if let Err(error) = self.open_overleaf_project_url(stored.project.url(), relative, context) {
+                self.overleaf.pending_storage = None;
+                self.overleaf.storage_draft = None;
+                if let Err(error) = self.open_stored_overleaf_project(&stored.project, &stored.root, relative, context) {
                     self.show_file_error(error);
                 }
             }
@@ -255,7 +299,7 @@ impl EditorApp {
             .recent_workspaces
             .iter()
             .map(PathBuf::from)
-            .filter(|root| self.is_overleaf_path(root))
+            .filter(|root| temporary_root(root).is_some())
             .collect();
         for root in roots {
             self.forget_workspace(&root);
@@ -368,7 +412,18 @@ mod tests {
     #[test]
     fn all_managed_open_entrypoints_reject_stale_disk_content_without_authentication() {
         let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().canonicalize().unwrap();
+        let base = directory.path().canonicalize().unwrap();
+        let project = ProjectUrl::parse(URL).unwrap();
+        let storage = crate::overleaf::StorageLease::prepare(
+            &project,
+            &crate::overleaf::StorageOptions {
+                keep_local_copy: true,
+                directory: Some(base.join("copies")),
+            },
+            &base,
+        )
+        .unwrap();
+        let root = storage.root().to_owned();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.clone());
         let path = root.join("main.tex");
@@ -379,25 +434,42 @@ mod tests {
             DocumentKind::Tex,
             None,
         );
+        app.document_mut().edit(CCursorRange::default(), |source| {
+            source.push_str(" unsaved");
+        });
+        app.overleaf.epoch = 1;
         app.overleaf.connection = Some(Connection {
-            project: ProjectUrl::parse(URL).unwrap(),
+            project,
             root: root.clone(),
             model: Model::new(1),
             status: "Signed out".into(),
-            online: false,
-            storage: None,
+            transport: Transport::Offline,
+            storage: Some(storage),
             hydration: Hydration::waiting(),
         });
         let key = app.document().key();
-        let tabs = app.tabs.len();
+        let tabs = app.tabs.ids().collect::<Vec<_>>();
+        assert_eq!(tabs.len(), 1, "the retained draft must own a real page");
         assert!(!app.open_tab_path(path.clone(), &context));
         assert!(!app.load_path(path.clone()));
-        assert!(!app.open_git_file_diff_path(path, &context));
-        app.finish_open_folder_selection(root);
-        assert_eq!(app.document().source(), "retained native draft");
+        assert!(!app.open_git_file_diff_path(path.clone(), &context));
+        app.finish_open_folder_selection(root.clone(), &context);
+        assert_eq!(app.workspace_root, root);
+        assert_eq!(app.document().source(), "retained native draft unsaved");
+        assert!(app.document().is_dirty());
         assert_eq!(app.document().key(), key);
-        assert_eq!(app.tabs.len(), tabs);
-        assert!(app.overleaf.error.is_some() || app.notice.is_some());
+        assert_eq!(app.tabs.ids().collect::<Vec<_>>(), tabs);
+        assert!(app.overleaf_source_locked());
+        assert!(
+            app.overleaf
+                .connection
+                .as_ref()
+                .unwrap()
+                .hydration
+                .pending()
+        );
+        assert!(!app.overleaf.storage_job.is_running());
+        assert_eq!(fs::read_to_string(path).unwrap(), "stale disk copy");
     }
 
     #[test]
@@ -459,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_roots_and_files_are_pruned_from_local_history_while_local_roots_remain() {
+    fn persistent_overleaf_workspaces_remain_in_history_but_temporary_ones_are_pruned() {
         let directory = tempfile::tempdir().unwrap();
         let base = directory.path().canonicalize().unwrap();
         let context = egui::Context::default();
@@ -468,14 +540,21 @@ mod tests {
         let managed = ProjectUrl::parse(URL)
             .unwrap()
             .mirror_root(&cache_base().unwrap());
-        app.settings.recent_workspaces =
-            vec![managed.display().to_string(), base.display().to_string()];
+        let temporary = base.join("tiptoptyp-overleaf-test-temporary");
+        app.settings.recent_workspaces = vec![
+            managed.display().to_string(),
+            temporary.display().to_string(),
+            base.display().to_string(),
+        ];
         app.settings.last_opened_files.insert(
             managed.display().to_string(),
             managed.join("main.tex").display().to_string(),
         );
         app.prune_overleaf_workspace_history();
-        assert_eq!(app.settings.recent_workspaces, [base.display().to_string()]);
+        assert_eq!(
+            app.settings.recent_workspaces,
+            [managed.display().to_string(), base.display().to_string()]
+        );
         assert!(
             !app.settings
                 .last_opened_files

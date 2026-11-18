@@ -1,7 +1,9 @@
 //! Finite editor-action feedback over the existing editor, with no input or layout widgets.
 use crate::{
     document::DocumentKey,
-    settings::{ActionEffectSettings, EditorEffectSettings, ParticleDensity, ParticleStyle},
+    settings::{
+        ActionEffectSettings, EditorEffectSettings, LingeringStyle, ParticleDensity, ParticleStyle,
+    },
     theme,
 };
 use eframe::egui::{self, Id, Pos2, Rect, Ui, Vec2, text_edit::TextEditOutput};
@@ -12,6 +14,8 @@ mod gpu;
 pub(crate) use gpu::Renderer;
 mod clock;
 mod feedback;
+mod lingering;
+use lingering::{CursorSample, Secondary};
 #[cfg(test)]
 mod gpu_tests;
 #[cfg(test)]
@@ -21,6 +25,9 @@ pub(super) mod shake;
 const LIMIT: usize = 256;
 const MAX_INPUT_EVENTS: usize = 64;
 const LIFETIME: f64 = 0.64;
+const SMOKE_LIFETIME: f64 = 2.8;
+const EMBER_LIFETIME: f64 = 1.8;
+const AFTERBURNER_LIFETIME: f64 = 0.45;
 
 pub(super) use crate::settings::EditorAction as Action;
 impl Action {
@@ -207,6 +214,7 @@ pub(super) enum View {
 
 pub(super) struct Surface<'a> {
     pub(super) edit: &'a TextEditOutput,
+    pub(super) cursor_index: &'a super::editor_layout::CursorIndex,
     pub(super) document: DocumentKey,
     pub(super) viewport: Rect,
     pub(super) view: View,
@@ -218,9 +226,10 @@ pub(super) struct Surface<'a> {
 // mutation belongs to egui's paint owner; do not snapshot it for a worker.
 pub(super) fn input_enabled(settings: EditorEffectSettings) -> bool {
     settings.enabled
-        && Action::ALL
-            .into_iter()
-            .any(|a| settings.actions.get(a).enabled())
+        && (settings.cursor_afterburner
+            || Action::ALL
+                .into_iter()
+                .any(|a| settings.effect(a).enabled()))
 }
 
 #[cfg(any(test, target_os = "macos"))]
@@ -241,12 +250,9 @@ pub(super) fn active(context: &egui::Context, editor: Id, document: DocumentKey)
     if !now.is_finite() {
         return false;
     }
-    // Births are ordered, so checking the newest particle bounds this query even
-    // at maximum density. Expired state need not wait for another editor paint.
-    state.particles.last().is_some_and(|particle| {
-        let end = particle.born + LIFETIME;
-        particle.born.is_finite() && end.is_finite() && particle.born <= now && now < end
-    }) || state.feedback.is_some_and(|pulse| pulse.alive(now))
+    // Lifetimes differ: an older smoke puff can outlive a newer spark.
+    state.particles.iter().any(|particle| particle.alive(now))
+        || state.feedback.is_some_and(|pulse| pulse.alive(now))
 }
 
 pub(super) fn prepare_shake(
@@ -257,9 +263,7 @@ pub(super) fn prepare_shake(
     if !settings.enabled {
         return None;
     }
-    let configured = Action::ALL
-        .into_iter()
-        .any(|a| settings.actions.get(a).shake);
+    let configured = Action::ALL.into_iter().any(|a| settings.effect(a).shake);
     // A pulse captures its flags when the action succeeds. Changing the last
     // Shake preference must not drop that finite, already-running transform.
     let live = !configured
@@ -297,11 +301,21 @@ struct Particle {
     color_seed: f32,
     flash: bool,
     style: ParticleStyle,
+    secondary: Option<Secondary>,
     born: f64,
     frame: u64,
 }
-#[cfg(test)]
 impl Particle {
+    fn alive(&self, now: f64) -> bool {
+        (0.0..self.secondary.map_or(LIFETIME, Secondary::lifetime)).contains(&(now - self.born))
+    }
+
+    #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
+    fn label(&self) -> &'static str {
+        self.secondary.map_or(self.style.label(), Secondary::label)
+    }
+
+    #[cfg(test)]
     // Keep the original state-only measurement workload comparable. Runtime
     // motion, drag, trails and glow are calculated only by the GPU shaders.
     fn position(self, now: f64) -> Pos2 {
@@ -320,6 +334,10 @@ struct State {
     last_frame: Option<u64>,
     last_time: f64,
     emitted_frame: Option<u64>,
+    emission_origin: Option<Pos2>,
+    lingering_frame: Option<u64>,
+    cursor: Option<CursorSample>,
+    cursor_bursts: u64,
     bursts: u64,
     seed: u32,
     base_time: f64,
@@ -360,6 +378,9 @@ impl State {
             self.feedback = None;
             self.gpu_instances = None;
             self.emitted_frame = None;
+            self.emission_origin = None;
+            self.lingering_frame = None;
+            self.cursor = None;
         }
         if self.feedback.is_some_and(|pulse| !pulse.alive(now)) {
             self.feedback = None;
@@ -368,24 +389,21 @@ impl State {
         self.last_frame = Some(frame);
         self.last_time = now;
         let previous_count = self.particles.len();
-        self.particles
-            .retain(|particle| now - particle.born < LIFETIME);
+        self.particles.retain(|particle| particle.alive(now));
         if previous_count != self.particles.len() {
             self.gpu_instances = None;
         }
         // A discarded layout pass must neither emit twice nor leave its new
         // particles at the first pass's old caret coordinates.
         if self.emitted_frame == Some(frame) {
-            if let Some(caret) = caret {
-                for particle in self
-                    .particles
-                    .iter_mut()
-                    .filter(|particle| particle.frame == frame)
-                {
-                    if particle.origin != caret {
-                        particle.origin = caret;
-                        self.gpu_instances = None;
+            if let (Some(caret), Some(previous)) = (caret, self.emission_origin) {
+                let delta = caret - previous;
+                if delta != Vec2::ZERO {
+                    for particle in self.particles.iter_mut().filter(|p| p.frame == frame) {
+                        particle.origin += delta;
                     }
+                    self.gpu_instances = None;
+                    self.emission_origin = Some(caret);
                 }
             }
             return;
@@ -416,12 +434,14 @@ impl State {
                 color_seed,
                 flash: index == 0,
                 style: self.style,
+                secondary: None,
                 born: now,
                 frame,
             });
         }
         self.gpu_instances = None;
         self.emitted_frame = Some(frame);
+        self.emission_origin = Some(origin);
         self.bursts = self.bursts.wrapping_add(1);
     }
 
@@ -478,6 +498,9 @@ impl State {
 // Keep the original eight-float instance stride: kind occupies the low two
 // bits, and the burst's immutable style occupies the remaining small integer.
 fn packed_kind(particle: &Particle) -> f32 {
+    if let Some(secondary) = particle.secondary {
+        return (secondary.code() * 4) as f32;
+    }
     let kind = if particle.flash {
         1
     } else if particle.color_seed > 0.9 {
@@ -638,14 +661,15 @@ pub(super) fn paint(
             copied,
         )
     });
-    let action = action.filter(|&action| settings.actions.get(action).enabled());
+    let action = action.filter(|&action| settings.effect(action).enabled());
     // Reject an unavailable particle-only backend before allocating a fresh
     // state on every keystroke. CPU feedback still runs independently.
     let initial_renderer = (existing.is_none()
-        && action.is_some_and(|a| settings.actions.get(a).particles.is_some()))
+        && (settings.cursor_afterburner
+            || action.is_some_and(|a| settings.effect(a).gpu_enabled())))
     .then(|| Renderer::for_context(context));
     let action = action.filter(|&a| {
-        let effects = settings.actions.get(a);
+        let effects = settings.effect(a);
         !initial_renderer
             .as_ref()
             .is_some_and(Renderer::is_unavailable)
@@ -654,10 +678,10 @@ pub(super) fn paint(
             || effects.glow
     });
     let accepted = action.is_some();
-    if existing.is_none() && !accepted {
+    if existing.is_none() && !accepted && !settings.cursor_afterburner {
         if Action::ALL
             .into_iter()
-            .any(|action| settings.actions.get(action).particles.is_some())
+            .any(|action| settings.effect(action).gpu_enabled())
         {
             initial_renderer
                 .unwrap_or_else(|| Renderer::for_context(context))
@@ -677,8 +701,13 @@ pub(super) fn paint(
     // CPU-only feedback never needs a particle backend. An active particle
     // burst retains the shared renderer, avoiding context-map lookups on each
     // animation frame while keeping all GL commands on their context owner.
+    let gpu_configured = settings.cursor_afterburner
+        || Action::ALL
+            .into_iter()
+            .any(|action| settings.effect(action).gpu_enabled());
     let renderer = (!state.particles.is_empty()
-        || action.is_some_and(|a| settings.actions.get(a).particles.is_some()))
+        || gpu_configured
+        || action.is_some_and(|a| settings.effect(a).gpu_enabled()))
     .then(|| {
         state
             .renderer
@@ -695,16 +724,35 @@ pub(super) fn paint(
         state.gpu_instances = None;
     }
     let action = action.filter(|&a| {
-        let effects = settings.actions.get(a);
+        let effects = settings.effect(a);
         !unavailable || effects.shake || effects.flash || effects.glow
     });
     let accepted = action.is_some();
     let frame = context.cumulative_frame_nr();
     let viewport = surface.viewport.intersect(ui.clip_rect());
     let action = action.unwrap_or(state.action);
+    let cursor_focused = settings.cursor_afterburner
+        && !unavailable
+        && surface.edit.response.has_focus()
+        && context.input(|input| input.focused)
+        && super::focused_input_viewport(context) == context.viewport_id();
+    let cursor_index = surface
+        .edit
+        .state
+        .cursor
+        .char_range()
+        .map(|range| usize::from(range.primary.index));
+    let cursor_geometry_changed = cursor_focused
+        && cursor_index.is_some_and(|index| {
+            state.cursor.is_none_or(|sample| {
+                sample.index != index
+                    || sample.galley_pos != surface.edit.galley_pos
+                    || sample.viewport != viewport
+            })
+        });
     let caret = caret_for_frame(
         settings.enabled,
-        accepted,
+        accepted || cursor_geometry_changed,
         (state.emitted_frame == Some(frame) && !state.particles.is_empty())
             || state.feedback.is_some_and(|pulse| pulse.frame == frame),
         || {
@@ -715,25 +763,34 @@ pub(super) fn paint(
                 .char_range()
                 .map(|range| {
                     surface
-                        .edit
-                        .galley
-                        .pos_from_cursor(range.primary)
+                        .cursor_index
+                        .rect(&surface.edit.galley, range.primary)
                         .translate(surface.edit.galley_pos.to_vec2())
                         .center()
                 })
-                .and_then(|point| visible_origin(point, viewport, action))
+                .and_then(|point| {
+                    visible_origin(
+                        point,
+                        viewport,
+                        if cursor_focused && !accepted {
+                            Action::Typing
+                        } else {
+                            action
+                        },
+                    )
+                })
         },
     );
     let now = state.clock.now(context);
     #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
-    let bursts_before = state.bursts;
-    let effects = *settings.actions.get(action);
+    let emissions_before = (state.bursts, state.cursor_bursts);
+    let effects = *settings.effect(action);
     if let Some(style) = effects.particles {
         state.style = style;
     }
     state.action = action;
     state.update(
-        Identity::new(surface.document, surface.view),
+        identity,
         frame,
         now,
         caret,
@@ -743,6 +800,54 @@ pub(super) fn paint(
             0
         },
     );
+    if let Some((style, origin)) = effects
+        .lingering
+        .zip(caret)
+        .filter(|_| accepted && !unavailable)
+    {
+        state.linger(style, origin, settings.density, frame, now);
+    }
+    let cursor_sample = cursor_index.filter(|_| cursor_focused).map(|index| {
+        let point = caret.or_else(|| {
+            state
+                .cursor
+                .filter(|sample| {
+                    sample.index == index
+                        && sample.galley_pos == surface.edit.galley_pos
+                        && sample.viewport == viewport
+                })
+                .and_then(|sample| sample.point)
+        });
+        CursorSample {
+            index,
+            point,
+            galley_pos: surface.edit.galley_pos,
+            viewport,
+            frame,
+        }
+    });
+    // Resolve the previous character in the current layout only on movement.
+    // A font/wrap/layout change can move it without changing the galley origin;
+    // never turn those stale coordinates into a cursor jet.
+    if let Some((previous, current)) = state.cursor.zip(cursor_sample)
+        && previous.index != current.index
+    {
+        let current_previous_point = surface
+            .cursor_index
+            .rect(
+                &surface.edit.galley,
+                egui::text::CCursor::new(previous.index),
+            )
+            .translate(surface.edit.galley_pos.to_vec2())
+            .center();
+        if previous
+            .point
+            .is_none_or(|point| point.distance(current_previous_point) > 1.0)
+        {
+            state.cursor = None;
+        }
+    }
+    state.move_cursor(cursor_sample, settings.density, now);
     let feedback_emitted = state.update_feedback(caret, accepted.then_some(effects), now, frame);
     #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
     if feedback_emitted {
@@ -750,13 +855,23 @@ pub(super) fn paint(
     }
     let _ = feedback_emitted;
     #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
-    if state.bursts != bursts_before {
-        record_emission(context, id, &state, now, viewport);
+    if (state.bursts, state.cursor_bursts) != emissions_before {
+        record_emission(
+            context,
+            id,
+            &state,
+            now,
+            viewport,
+            state.bursts != emissions_before.0,
+            state.cursor_bursts != emissions_before.1,
+        );
     }
     let pulse = state.feedback;
     if state.particles.is_empty() && pulse.is_none() {
         drop(state);
-        context.data_mut(|data| data.remove::<SharedState>(id));
+        if gpu_configured && !unavailable {
+            renderer.as_ref().unwrap().warm(ui, viewport);
+        }
         return;
     }
     let instances = (!state.particles.is_empty()).then(|| state.instances());
@@ -792,7 +907,8 @@ pub(super) fn paint(
 struct Trace {
     identity: Identity,
     burst_count: u64,
-    last_style: ParticleStyle,
+    cursor_bursts: u64,
+    last_style: Option<&'static str>,
     last_action: Action,
     action_bursts: [u64; 10],
     emitted_count: u64,
@@ -803,7 +919,15 @@ struct Trace {
 }
 
 #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
-fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, clip: Rect) {
+fn record_emission(
+    context: &egui::Context,
+    id: Id,
+    state: &State,
+    now: f64,
+    clip: Rect,
+    action_emitted: bool,
+    cursor_emitted: bool,
+) {
     let Some(identity) = state.identity else {
         return;
     };
@@ -822,7 +946,8 @@ fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, cli
             .unwrap_or(Trace {
                 identity,
                 burst_count: 0,
-                last_style: particle.style,
+                cursor_bursts: 0,
+                last_style: None,
                 last_action: state.action,
                 action_bursts: [0; 10],
                 emitted_count: 0,
@@ -832,11 +957,26 @@ fn record_emission(context: &egui::Context, id: Id, state: &State, now: f64, cli
                 clip,
             });
         trace.identity = identity;
-        trace.last_style = particle.style;
-        trace.last_action = state.action;
-        trace.action_bursts[state.action as usize] =
-            trace.action_bursts[state.action as usize].saturating_add(1);
-        trace.burst_count = trace.burst_count.saturating_add(1);
+        if action_emitted {
+            trace.last_style = state
+                .particles
+                .iter()
+                .rev()
+                .find(|p| p.frame == particle.frame && p.secondary.is_none())
+                .or_else(|| {
+                    state.particles.iter().rev().find(|p| {
+                        p.frame == particle.frame && p.secondary != Some(Secondary::Afterburner)
+                    })
+                })
+                .map(Particle::label);
+            trace.last_action = state.action;
+            trace.action_bursts[state.action as usize] =
+                trace.action_bursts[state.action as usize].saturating_add(1);
+            trace.burst_count = trace.burst_count.saturating_add(1);
+        }
+        trace.cursor_bursts = trace
+            .cursor_bursts
+            .saturating_add(u64::from(cursor_emitted));
         trace.emitted_count = trace.emitted_count.saturating_add(emitted as u64);
         trace.max_live = trace.max_live.max(state.particles.len());
         trace.last_emission = now;
@@ -873,9 +1013,9 @@ pub(super) fn inspected(
         for particle in state
             .particles
             .iter()
-            .filter(|particle| (0.0..LIFETIME).contains(&(now - particle.born)))
+            .filter(|particle| particle.alive(now))
         {
-            *live_styles.entry(particle.style.label()).or_insert(0usize) += 1;
+            *live_styles.entry(particle.label()).or_insert(0usize) += 1;
         }
         live_styles.values().sum::<usize>()
     });
@@ -884,17 +1024,19 @@ pub(super) fn inspected(
         "gpu": Renderer::for_context(context).inspected(),
         "active_count": active_count,
         "live_styles": live_styles,
-        "last_style": trace.as_ref().map(|trace| trace.last_style.label()),
-        "last_action": trace.as_ref().map(|trace| trace.last_action.label()),
+        "last_style": trace.as_ref().and_then(|trace| trace.last_style),
+        "last_action": trace.as_ref().filter(|trace| trace.burst_count > 0).map(|trace| trace.last_action.label()),
         "action_bursts": Action::ALL.into_iter().filter_map(|action| {
             let count = trace.as_ref().map_or(0, |trace| trace.action_bursts[action as usize]);
             (count > 0).then_some((action.label(), count))
         }).collect::<std::collections::BTreeMap<_, _>>(),
         "burst_count": trace.as_ref().map_or(0, |trace| trace.burst_count),
+        "cursor_bursts": trace.as_ref().map_or(0, |trace| trace.cursor_bursts),
         "emitted_count": trace.as_ref().map_or(0, |trace| trace.emitted_count),
         "max_live": trace.as_ref().map_or(0, |trace| trace.max_live),
         "pool_limit": LIMIT,
         "lifetime_ms": (LIFETIME * 1000.0) as u64,
+        "max_lifetime_ms": (SMOKE_LIFETIME * 1000.0) as u64,
         "last_emission_age_ms": trace.as_ref().map(|trace| (now - trace.last_emission).max(0.0) * 1000.0),
         "origin": trace.as_ref().map(|trace| [trace.origin.x, trace.origin.y]),
         "clip": trace.as_ref().map(|trace| [trace.clip.left(), trace.clip.top(), trace.clip.right(), trace.clip.bottom()]),
@@ -908,7 +1050,7 @@ pub(super) mod tests {
     use egui_kittest::Harness;
     use tiptoptyp_core::document::WindowSessionId;
 
-    fn identity(epoch: u64, revision: u64, view: View) -> Identity {
+    pub(super) fn identity(epoch: u64, revision: u64, view: View) -> Identity {
         Identity::new(
             DocumentKey::new(WindowSessionId::new(1), epoch, revision),
             view,
@@ -1049,6 +1191,7 @@ pub(super) mod tests {
             let editor = Id::new("feedback-deadlines");
             let key = identity(1, 0, View::Diff);
             let mut effects = ActionEffectSettings {
+                lingering: None,
                 particles: None,
                 shake,
                 flash,
@@ -1081,6 +1224,7 @@ pub(super) mod tests {
     fn discarded_feedback_pass_realigns_without_a_second_action_or_changing_the_envelope() {
         let mut state = State::default();
         let effects = ActionEffectSettings {
+            lingering: None,
             particles: None,
             glow: true,
             flash: false,
@@ -1216,6 +1360,121 @@ pub(super) mod tests {
         assert_eq!(instances.len(), LIMIT);
         state.update(identity(1, 102, View::Source), 102, 1.0, None, 0);
         assert!(state.particles.is_empty());
+    }
+
+    #[test]
+    fn real_editor_reuses_idle_particle_pool_without_requesting_animation_frames() {
+        let mut harness = editor(false);
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::Text("a".into()));
+        harness.step();
+        let id = state_id(source_editor_id(&harness.ctx));
+        let first = harness
+            .ctx
+            .data(|data| data.get_temp::<SharedState>(id))
+            .unwrap();
+        let allocation = first.lock().unwrap().particles.as_ptr();
+        harness.run_steps(50);
+        let idle = harness
+            .ctx
+            .data(|data| data.get_temp::<SharedState>(id))
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &idle));
+        assert!(idle.lock().unwrap().particles.is_empty());
+        assert_eq!(idle.lock().unwrap().particles.as_ptr(), allocation);
+        assert!(
+            harness
+                .ctx
+                .repaint_causes()
+                .iter()
+                .all(|cause| !cause.file.ends_with("editor_particles.rs"))
+        );
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::Text("b".into()));
+        harness.step();
+        let next = harness
+            .ctx
+            .data(|data| data.get_temp::<SharedState>(id))
+            .unwrap();
+        assert!(Arc::ptr_eq(&idle, &next));
+        assert_eq!(next.lock().unwrap().particles.as_ptr(), allocation);
+        assert_eq!(next.lock().unwrap().bursts, 2);
+    }
+
+    #[test]
+    fn reused_cpu_only_pool_prewarms_newly_enabled_particles_without_an_action() {
+        let mut harness = editor(false);
+        for action in Action::ALL {
+            *harness
+                .state_mut()
+                .settings
+                .editor_effects
+                .actions
+                .get_mut(action) = ActionEffectSettings {
+                particles: None,
+                lingering: None,
+                shake: false,
+                flash: false,
+                glow: false,
+            };
+        }
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .actions
+            .typing
+            .glow = true;
+        harness
+            .ctx
+            .data_mut(|data| data.remove::<Renderer>(Id::new("editor-particle-gpu")));
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::Text("a".into()));
+        harness.step();
+        harness.run_steps(50);
+        assert!(
+            harness
+                .ctx
+                .data(|data| data.get_temp::<Renderer>(Id::new("editor-particle-gpu")))
+                .is_none()
+        );
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .actions
+            .typing
+            .lingering = Some(LingeringStyle::Smoke);
+        harness.step();
+        assert!(
+            harness
+                .output()
+                .shapes
+                .iter()
+                .any(|shape| matches!(shape.shape, egui::Shape::Callback(_))),
+            "a cold pipeline must warm before the first new input"
+        );
+        assert!(
+            harness
+                .ctx
+                .repaint_causes()
+                .iter()
+                .all(|cause| !cause.file.ends_with("editor_particles.rs"))
+        );
+        let observed = inspected(
+            &harness.ctx,
+            source_editor_id(&harness.ctx),
+            harness.state().document().key(),
+        );
+        assert_eq!(observed["burst_count"], 0);
+        assert_eq!(observed["active_count"], 0);
+        assert_eq!(observed["feedback"]["burst_count"], 1);
     }
 
     #[test]
@@ -1634,7 +1893,11 @@ pub(super) mod tests {
                         matches!(command, egui::OutputCommand::CopyText(text) if text == "prefix")));
                 }
                 harness.run_steps(45);
-                assert_eq!(counts(&harness), (0, 0), "{action:?} must expire");
+                assert_eq!(
+                    counts(&harness),
+                    (0, 1),
+                    "{action:?} must expire while the reusable pool retains its burst counter"
+                );
                 assert!(
                     harness
                         .ctx
@@ -1769,7 +2032,7 @@ pub(super) mod tests {
             assert_eq!(harness.state().document().source(), "prefix 日本 paste");
             assert_eq!(counts(&harness).1, 2);
             harness.run_steps(45);
-            assert_eq!(counts(&harness), (0, 0));
+            assert_eq!(counts(&harness), (0, 2));
         }
     }
 

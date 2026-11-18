@@ -376,6 +376,9 @@ impl EditorApp {
                     self.bottom_panel.toggle_maximized();
                     ui.ctx().request_repaint();
                 }
+                if self.bottom_panel.selected() == Some(PanelTab::Problems) && ui.available_width() >= 100.0 {
+                    self.show_problems_fix_all(ui);
+                }
                 if self.bottom_panel.selected() == Some(PanelTab::Terminal)
                     && let Some(status) = self.terminal.status_text()
                 {
@@ -827,7 +830,7 @@ mod tests {
                     .state()
                     .terminal_focused(&harness.ctx, egui::ViewportId::ROOT)
             );
-            assert_eq!(harness.state().document().source(), DEFAULT_SOURCE);
+            assert_eq!(harness.state().document().source(), demo::SOURCE);
         }
     }
 

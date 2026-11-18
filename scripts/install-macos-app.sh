@@ -55,6 +55,21 @@ if [ ! -d "$source_app" ]; then
     exit 1
 fi
 
+source_executable="$source_app/Contents/MacOS/tiptoptyp"
+if [ ! -x "$source_executable" ]; then
+    echo "packaged app has no runnable executable: $source_executable" >&2
+    exit 1
+fi
+
+echo "Checking saved settings with the packaged app"
+if "$source_executable" --check-settings; then
+    :
+else
+    check_status=$?
+    echo "Settings compatibility check failed; the installed app has not been replaced." >&2
+    exit "$check_status"
+fi
+
 mkdir -p "$applications_dir"
 if [ -e "$installed_app" ]; then
     rm -rf -- "$installed_app"

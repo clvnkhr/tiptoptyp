@@ -33,6 +33,7 @@ pub struct GenericSyntaxHighlighter {
     decorations: crate::editor_decoration::Decorations,
     rainbow: crate::rainbow::RainbowBrackets,
     theme_revision: u64,
+    cached_theme_revision: u64,
     #[cfg(test)]
     parsed_lines_last: usize,
 }
@@ -58,6 +59,10 @@ impl Default for GenericSyntaxHighlighter {
 }
 
 impl GenericSyntaxHighlighter {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn inspected_syntax(&self) -> Option<&str> {
+        self.has_cache.then_some(self.cached_syntax.as_str())
+    }
     fn with_databases(
         syntaxes: &'static LazyLock<Arc<SyntaxSet>>,
         themes: &'static LazyLock<Arc<ThemeSet>>,
@@ -77,6 +82,7 @@ impl GenericSyntaxHighlighter {
             decorations: Default::default(),
             rainbow: Default::default(),
             theme_revision: 0,
+            cached_theme_revision: 0,
             #[cfg(test)]
             parsed_lines_last: 0,
         }
@@ -129,6 +135,10 @@ impl GenericSyntaxHighlighter {
             .as_deref()
             .and_then(|extension| syntaxes.find_syntax_by_extension(extension))
             .or_else(|| {
+                path.filter(|path| crate::document::is_tex_path(path))
+                    .and_then(|_| syntaxes.find_syntax_by_extension("tex"))
+            })
+            .or_else(|| {
                 source
                     .lines()
                     .next()
@@ -138,6 +148,8 @@ impl GenericSyntaxHighlighter {
         let mut job = self.highlight_incrementally(source, syntax, dark_mode, extension);
         if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("json")) {
             crate::rainbow::apply_json(&mut job, self.rainbow, dark_mode);
+        } else if matches!(syntax.name.as_str(), "TeX" | "LaTeX") {
+            crate::rainbow::apply_tex(&mut job, self.rainbow, dark_mode);
         }
 
         self.decoration_options.decorate_generic(
@@ -149,6 +161,7 @@ impl GenericSyntaxHighlighter {
         self.cached_source.push_str(source);
         self.cached_extension = normalized_extension;
         self.cached_dark_mode = dark_mode;
+        self.cached_theme_revision = self.theme_revision;
         self.cached_job = job.clone();
         self.has_cache = true;
         job
@@ -162,7 +175,9 @@ impl GenericSyntaxHighlighter {
         extension: Option<&str>,
     ) -> LayoutJob {
         let lines = LinesWithEndings::from(source).collect::<Vec<_>>();
-        let reuse = self.has_cache
+        // Decorations/rainbow only change the final layout overlay, not the
+        // Syntect state. Theme changes still invalidate every cached color.
+        let reuse = self.cached_theme_revision == self.theme_revision
             && self.cached_dark_mode == dark_mode
             && extensions_match(self.cached_extension.as_deref(), extension)
             && self.cached_syntax == syntax.name;
@@ -430,6 +445,143 @@ mod tests {
             } else {
                 assert_ne!(format(&job, usage).color, accent);
             }
+        }
+    }
+
+    #[test]
+    fn tex_rainbow_obeys_palettes_theme_and_toggle_without_reparsing_syntax() {
+        use crate::rainbow::{BracketFamily, BracketPalette, RainbowBrackets};
+        let source = "\\textbf{α (x [y])} % {ignored}\n\\verb|[raw]|";
+        let path = Some(Path::new("source.TEX"));
+        let mut highlighter = GenericSyntaxHighlighter::default();
+        let mut settings = RainbowBrackets {
+            enabled: false,
+            ..Default::default()
+        };
+        highlighter.set_rainbow_brackets(settings);
+        let plain = highlighter.highlight(source, path, false);
+        let lines = highlighter.cached_lines.clone();
+        settings.enabled = true;
+        highlighter.set_rainbow_brackets(settings);
+        let colored = highlighter.highlight(source, path, false);
+        assert_eq!(colored.text, source);
+        assert_eq!(
+            highlighter.parsed_lines_last, 0,
+            "palette overlays must reuse syntax"
+        );
+        assert!(
+            lines
+                .iter()
+                .zip(&highlighter.cached_lines)
+                .all(|(old, new)| Arc::ptr_eq(old, new))
+        );
+        let color = |job: &LayoutJob, byte: usize| {
+            job.sections
+                .iter()
+                .find(|section| {
+                    section.byte_range.start.0 <= byte && byte < section.byte_range.end.0
+                })
+                .unwrap()
+                .format
+                .color
+        };
+        for (symbol, family) in [
+            ('(', BracketFamily::Round),
+            ('[', BracketFamily::Square),
+            ('{', BracketFamily::Curly),
+        ] {
+            assert_eq!(
+                color(&colored, source.find(symbol).unwrap()),
+                settings.palettes[family as usize].colors(false)[0]
+            );
+        }
+        for marker in ["{ignored}", "[raw]"] {
+            let at = source.find(marker).unwrap();
+            assert_eq!(color(&plain, at), color(&colored, at));
+        }
+        assert_eq!(highlighter.highlight(source, path, false), colored);
+        settings.palettes[BracketFamily::Curly as usize] = BracketPalette::Orchid;
+        highlighter.set_rainbow_brackets(settings);
+        let recolored = highlighter.highlight(source, path, false);
+        assert_eq!(highlighter.parsed_lines_last, 0);
+        assert_eq!(
+            color(&recolored, source.find('{').unwrap()),
+            BracketPalette::Orchid.colors(false)[0]
+        );
+        let dark = highlighter.highlight(source, path, true);
+        assert_eq!(
+            color(&dark, source.find('{').unwrap()),
+            BracketPalette::Orchid.colors(true)[0]
+        );
+        assert!(
+            highlighter.parsed_lines_last > 0,
+            "theme changes must refresh Syntect colors"
+        );
+        settings.enabled = false;
+        highlighter.set_rainbow_brackets(settings);
+        assert_eq!(highlighter.highlight(source, path, true).text, source);
+        assert_eq!(highlighter.parsed_lines_last, 0);
+        let non_tex = highlighter.highlight(source, Some(Path::new("source.txt")), false);
+        assert_ne!(
+            color(&non_tex, source.find('{').unwrap()),
+            settings.palettes[BracketFamily::Curly as usize].colors(false)[0]
+        );
+    }
+
+    #[test]
+    fn class_style_and_alternate_tex_extensions_get_tex_syntax_and_rainbow() {
+        let source = "\\newcommand{\\name}{(value)}";
+        let mut highlighter = GenericSyntaxHighlighter::default();
+        let expected = highlighter.highlight(source, Some(Path::new("main.tex")), false);
+        let color = |job: &LayoutJob, byte: usize| {
+            job.sections
+                .iter()
+                .find(|section| {
+                    section.byte_range.start.0 <= byte && byte < section.byte_range.end.0
+                })
+                .unwrap()
+                .format
+                .color
+        };
+        for extension in crate::document::TEX_SOURCE_EXTENSIONS {
+            let path = format!("main.{}", extension.to_ascii_uppercase());
+            let actual = highlighter.highlight(source, Some(Path::new(&path)), false);
+            assert!(
+                matches!(highlighter.cached_syntax.as_str(), "TeX" | "LaTeX"),
+                "{extension}"
+            );
+            assert_eq!(actual.text, source);
+            for (byte, _) in source.match_indices(['{', '}', '(', ')']) {
+                assert_eq!(color(&actual, byte), color(&expected, byte), "{extension}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "opt-in optimized TeX rainbow baseline/after component probe"]
+    fn tex_bracket_cost_probe() {
+        use std::time::Instant;
+        for enabled in [false, true] {
+            let mut highlighter = GenericSyntaxHighlighter::default();
+            highlighter.set_rainbow_brackets(crate::rainbow::RainbowBrackets {
+                enabled,
+                ..Default::default()
+            });
+            let mut source = (0..5_000).map(|n| format!("\\section{{Section {n}}} Here is \\emph{{(highlighted [text])}} and $x_n^2$.\n")).collect::<String>();
+            let path = Some(Path::new("paper.tex"));
+            highlighter.highlight(&source, path, false);
+            let marker = source.find("Section 2500").unwrap();
+            let started = Instant::now();
+            for n in 0..25 {
+                source.replace_range(marker..marker + 1, if n % 2 == 0 { "s" } else { "S" });
+                assert_eq!(highlighter.highlight(&source, path, false).text, source);
+            }
+            println!(
+                "rainbow={enabled} fixture_lines=5000 fixture_bytes={} edits=25 palette=default dark=false total_ms={:.3} per_edit_ms={:.3}",
+                source.len(),
+                started.elapsed().as_secs_f64() * 1000.0,
+                started.elapsed().as_secs_f64() * 1000.0 / 25.0
+            );
         }
     }
 

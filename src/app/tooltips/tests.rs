@@ -366,6 +366,35 @@ fn tooltip_culling_keeps_scroll_geometry_and_invalidates_for_width_and_style() {
 }
 
 #[test]
+fn tooltip_focus_request_waits_for_admission_and_identity_change_retires_focus() {
+    let identity = 42;
+    let requested = update_tooltip_interaction_state(
+        TooltipInteractionState::new(identity),
+        identity,
+        true,
+        Some(false),
+    );
+    assert!(requested.focus_requested());
+    assert!(!requested.focused());
+    assert!(!requested.dismissed());
+    let focused = update_tooltip_interaction_state(requested, identity, false, Some(true));
+    assert!(focused.focused());
+    assert!(
+        !focused.focus_requested(),
+        "admitted focus consumes the request phase"
+    );
+    let blurred = update_tooltip_interaction_state(focused, identity, false, Some(false));
+    assert!(blurred.dismissed());
+    assert!(!blurred.engaged());
+    let replacement = update_tooltip_interaction_state(focused, identity + 1, false, Some(false));
+    assert!(!replacement.engaged());
+    assert!(
+        !replacement.dismissed(),
+        "another tooltip cannot inherit old focus history"
+    );
+}
+
+#[test]
 fn tooltip_child_scroll_does_not_wake_parent_but_leaving_dismisses() {
     let context = egui::Context::default();
     let geometry_id = tooltip_geometry_id(&context);
@@ -412,7 +441,7 @@ fn tooltip_child_scroll_does_not_wake_parent_but_leaving_dismisses() {
     assert!(context.data(|data| {
         data.get_temp::<TooltipInteractionState>(interaction_id)
             .unwrap()
-            .dismissed
+            .dismissed()
     }));
     assert!(!requests.lock().unwrap().is_empty());
     publish_tooltip_interaction(

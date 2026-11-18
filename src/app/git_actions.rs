@@ -35,7 +35,7 @@ impl EditorApp {
             || self.pdfium_preview.has_focus(context)
             || self.pdfium_asset.has_focus(context)
             || self.focused_preview_target(context).is_some();
-        if self.document_flow_busy() || self.process_close_pending || relinquished_focus {
+        if self.document_flow_busy() || self.process_close_pending() || relinquished_focus {
             self.git.take_file_diff();
             self.pending_git_file_diff = None;
             self.pending_git_file_origin = None;
@@ -221,6 +221,9 @@ impl EditorApp {
         key: DocumentKey,
         chunk: ChunkDiff,
     ) {
+        if action == Action::Revert && self.reject_read_only_edit(context) {
+            return;
+        }
         if self.document_flow_busy() || self.git_hunk_job.is_running() {
             return;
         }
@@ -241,9 +244,6 @@ impl EditorApp {
             }
         };
         if action == Action::Revert {
-            if self.overleaf_source_locked() {
-                return;
-            }
             let replacement = hunks::revert(&source, &chunk.hunk).and_then(|text| {
                 self.document()
                     .project_canonical_change(

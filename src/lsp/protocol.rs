@@ -44,7 +44,94 @@ pub(crate) struct VersionedDocument<'a> {
 
 #[derive(Serialize)]
 pub(crate) struct ContentChange<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) range: Option<LspRange>,
     pub(crate) text: &'a str,
+}
+impl<'a> ContentChange<'a> {
+    pub(crate) fn full(text: &'a str) -> Self {
+        Self { range: None, text }
+    }
+
+    /// A bounded linear scan, with no document-sized line index or diff matrix.
+    /// The payload borrows only the changed span of the new source. This runs
+    /// in each provider's worker, never the editor paint path.
+    pub(crate) fn between(before: &str, after: &'a str) -> Self {
+        // Bare CR is a line delimiter in LSP, while the editor's coordinate
+        // index uses LF/CRLF. A full change is valid for incremental servers
+        // too and avoids sending an ambiguous range for that source.
+        if before
+            .match_indices('\r')
+            .any(|(byte, _)| before.as_bytes().get(byte + 1) != Some(&b'\n'))
+        {
+            return Self::full(after);
+        }
+        let mut prefix = before
+            .bytes()
+            .zip(after.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !before.is_char_boundary(prefix) {
+            prefix -= 1;
+        }
+        let mut suffix = before[prefix..]
+            .bytes()
+            .rev()
+            .zip(after[prefix..].bytes().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let mut end = before.len() - suffix;
+        while !before.is_char_boundary(end) {
+            end += 1;
+        }
+        suffix = before.len() - end;
+        // Neither endpoint may lie in the middle of the CRLF line delimiter.
+        if prefix > 0
+            && before.as_bytes()[prefix - 1] == b'\r'
+            && before.as_bytes().get(prefix) == Some(&b'\n')
+        {
+            prefix -= 1;
+        }
+        if end > 0
+            && before.as_bytes()[end - 1] == b'\r'
+            && before.as_bytes().get(end) == Some(&b'\n')
+        {
+            end += 1;
+            suffix -= 1;
+        }
+        let position = |byte: usize| {
+            let prefix = &before[..byte];
+            let line = prefix.bytes().filter(|&byte| byte == b'\n').count() as u32;
+            let tail = prefix.rsplit_once('\n').map_or(prefix, |(_, tail)| tail);
+            LspPosition::new(line, tail.encode_utf16().count() as u32)
+        };
+        Self {
+            range: Some(LspRange {
+                start: position(prefix),
+                end: position(end),
+            }),
+            text: &after[prefix..after.len() - suffix],
+        }
+    }
+}
+
+pub(crate) fn incremental_sync(capabilities: &Value) -> bool {
+    let sync = &capabilities["textDocumentSync"];
+    sync.as_u64() == Some(2) || sync["change"].as_u64() == Some(2)
+}
+
+/// All source coordinates and edits use UTF-16. Omission selects the LSP
+/// default; an explicitly different or malformed encoding cannot be used.
+pub(crate) fn validate_position_encoding(capabilities: &Value) -> Result<(), String> {
+    if capabilities
+        .get("positionEncoding")
+        .is_some_and(|encoding| encoding.as_str() != Some("utf-16"))
+    {
+        return Err(
+            "Language server selected an unsupported position encoding; UTF-16 is required".into(),
+        );
+    }
+    Ok(())
 }
 
 /// Where a candidate was created, independent of its snippet/text edit format.
@@ -324,8 +411,14 @@ fn completion_documentation(value: &Value) -> Option<String> {
 
 pub(crate) fn parse_format_document_result(
     result: Value,
-) -> std::result::Result<Option<Vec<LspTextEdit>>, serde_json::Error> {
-    serde_json::from_value(result)
+) -> std::result::Result<Vec<LspTextEdit>, serde_json::Error> {
+    // LSP formatting permits a successful null result (Badness uses it for
+    // unchanged documents). Unsupported methods arrive as JSON-RPC errors.
+    if result.is_null() {
+        Ok(Vec::new())
+    } else {
+        serde_json::from_value(result)
+    }
 }
 
 pub(crate) fn scroll_preview_params(
@@ -437,6 +530,163 @@ mod tests {
     use super::*;
 
     #[test]
+    fn position_encoding_defaults_to_utf16_and_rejects_other_or_malformed_choices() {
+        for capabilities in [json!({}), json!({"positionEncoding":"utf-16"})] {
+            assert!(validate_position_encoding(&capabilities).is_ok());
+        }
+        for encoding in [
+            json!("utf-8"),
+            json!("utf-32"),
+            json!(false),
+            json!(null),
+            json!(16),
+        ] {
+            assert!(validate_position_encoding(&json!({"positionEncoding":encoding})).is_err());
+        }
+    }
+
+    /// A deliberately simple receiver: decode the serialized UTF-16 range
+    /// against complete lines, independently of both the diff and core index.
+    fn receive_change(source: &str, wire: &Value) -> String {
+        let replacement = wire["text"].as_str().unwrap();
+        let Some(range) = wire.get("range") else {
+            return replacement.into();
+        };
+        let position = |value: &Value| {
+            let line = value["line"].as_u64().unwrap() as usize;
+            let column = value["character"].as_u64().unwrap() as usize;
+            let mut lines = source.split('\n');
+            let mut base = 0;
+            for _ in 0..line {
+                base += lines.next().expect("range line exists").len() + 1;
+            }
+            let raw = lines.next().expect("range line exists");
+            let content = raw.strip_suffix('\r').unwrap_or(raw);
+            let mut units = 0;
+            for (byte, character) in content.char_indices() {
+                if units == column {
+                    return base + byte;
+                }
+                units += character.len_utf16();
+                assert!(units <= column, "range splits a surrogate: {wire}");
+            }
+            assert_eq!(units, column, "range extends past EOL: {wire}");
+            base + content.len()
+        };
+        let start = position(&range["start"]);
+        let end = position(&range["end"]);
+        assert!(start <= end, "reversed range: {wire}");
+        let mut result = source.to_owned();
+        result.replace_range(start..end, replacement);
+        result
+    }
+
+    fn short_sources() -> Vec<String> {
+        // Shared UTF-8 prefixes, supplementary scalars, combining sequences,
+        // and every line-ending transition, including unsupported bare CR.
+        const TOKENS: [&str; 7] = ["a", "😀", "😁", "文", "e\u{301}", "\n", "\r"];
+        let mut sources = vec![String::new()];
+        let mut generation = vec![String::new()];
+        for _ in 0..3 {
+            generation = generation
+                .iter()
+                .flat_map(|prefix| TOKENS.map(|token| format!("{prefix}{token}")))
+                .collect();
+            sources.extend(generation.iter().cloned());
+        }
+        sources
+    }
+
+    #[test]
+    fn generated_incremental_wire_changes_reconstruct_every_short_source_pair() {
+        // Exactly 400 short sources / 160,000 ordered transitions, without
+        // randomness, shrinking, external processes, or unbounded input sizes.
+        let sources = short_sources();
+        for before in &sources {
+            for after in &sources {
+                let change = ContentChange::between(before, after);
+                let wire = serde_json::to_value(&change).unwrap();
+                assert_eq!(
+                    receive_change(before, &wire),
+                    *after,
+                    "before={before:?}, after={after:?}, wire={wire}"
+                );
+                let bare_cr = before
+                    .as_bytes()
+                    .windows(2)
+                    .any(|pair| pair[0] == b'\r' && pair[1] != b'\n')
+                    || before.ends_with('\r');
+                assert_eq!(change.range.is_none(), bare_cr, "before={before:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn generated_sequential_wire_changes_never_use_stale_coordinates() {
+        // Fixed 32 seeds × 32 edits. Failure messages identify the exact
+        // replayable seed/step; this is bounded generation, not a fuzz runner.
+        let sources = short_sources();
+        for seed in 0..32 {
+            let mut sender = format!("before-{seed} α😀\r\nlast");
+            let mut receiver = sender.clone();
+            for step in 0..32 {
+                let scalars = sender.chars().collect::<Vec<_>>();
+                let start = (seed * 17 + step * 11) % (scalars.len() + 1);
+                let end = start + (seed + step * 3) % (scalars.len() - start + 1);
+                let replacement = &sources[(seed * 31 + step * 53) % sources.len()];
+                let after = scalars[..start]
+                    .iter()
+                    .chain(replacement.chars().collect::<Vec<_>>().iter())
+                    .chain(scalars[end..].iter())
+                    .collect::<String>();
+                let wire = serde_json::to_value(ContentChange::between(&sender, &after)).unwrap();
+                receiver = receive_change(&receiver, &wire);
+                assert_eq!(receiver, after, "seed={seed}, step={step}, wire={wire}");
+                sender = after;
+            }
+        }
+    }
+
+    #[test]
+    fn incremental_payload_borrows_only_the_changed_span_of_large_sources() {
+        let change = ContentChange::between("文😀 old", "文😀 new");
+        assert_eq!(change.range.unwrap().start, LspPosition::new(0, 4));
+        let before = format!(
+            "{}old{}",
+            "unchanged\n".repeat(10_000),
+            "tail\n".repeat(10_000)
+        );
+        let after = before.replacen("old", "new", 1);
+        let change = ContentChange::between(&before, &after);
+        assert_eq!(change.text, "new");
+        assert_eq!(change.range.unwrap().start, LspPosition::new(10_000, 0));
+        assert_eq!(change.text.as_ptr(), after[100_000..].as_ptr());
+        assert!(serde_json::to_string(&change).unwrap().len() < 150);
+    }
+
+    #[test]
+    fn incremental_sync_requires_an_explicit_server_capability() {
+        for capabilities in [
+            json!({}),
+            json!({"textDocumentSync":0}),
+            json!({"textDocumentSync":1}),
+            json!({"textDocumentSync":{"change":1}}),
+        ] {
+            assert!(!incremental_sync(&capabilities));
+        }
+        for capabilities in [
+            json!({"textDocumentSync":2}),
+            json!({"textDocumentSync":{"change":2}}),
+        ] {
+            assert!(incremental_sync(&capabilities));
+        }
+        assert_eq!(
+            serde_json::to_value(ContentChange::full("whole")).unwrap(),
+            json!({"text":"whole"})
+        );
+    }
+
+    #[test]
     fn notifications_borrow_document_text_and_preserve_wire_fields() {
         let document = TextDocument {
             uri: "file:///project/main.typ".into(),
@@ -469,9 +719,7 @@ mod tests {
                     uri: &document.uri,
                     version: 8,
                 },
-                content_changes: [ContentChange {
-                    text: &document.text,
-                }],
+                content_changes: [ContentChange::full(&document.text)],
             },
         };
         assert!(std::ptr::eq(

@@ -1,53 +1,112 @@
 //! Working-copy ownership and the fresh-server-to-disk editing barrier.
 use super::*;
 
+/// Fresh network content is editable only after both metadata and every file
+/// have been persisted. Transport connectivity alone never opens this barrier.
 #[derive(Default)]
 pub(super) struct Hydration {
-    pub(super) pending: bool,
     pub(super) session: u64,
-    tree: Option<Tree>,
-    tree_written: bool,
-    files: BTreeMap<String, Entry>,
+    phase: HydrationPhase,
+}
+#[derive(Default)]
+enum HydrationPhase {
+    #[default]
+    Unrestricted,
+    AwaitingTree,
+    Copying {
+        tree: Tree,
+        metadata: MetadataCopy,
+        files: BTreeMap<String, Entry>,
+    },
+    Ready {
+        tree: Tree,
+        files: BTreeMap<String, Entry>,
+    },
+}
+#[derive(PartialEq, Eq)]
+enum MetadataCopy {
+    Pending,
+    Written,
 }
 impl Hydration {
+    pub(super) fn pending(&self) -> bool {
+        matches!(
+            self.phase,
+            HydrationPhase::AwaitingTree | HydrationPhase::Copying { .. }
+        )
+    }
     pub(super) fn waiting() -> Self {
         Self {
-            pending: true,
-            ..Default::default()
+            session: 0,
+            phase: HydrationPhase::AwaitingTree,
         }
     }
     pub(super) fn restart(&mut self) {
-        let session = self.session.wrapping_add(1);
-        *self = Self {
-            pending: true,
-            session,
-            ..Default::default()
-        };
+        self.session = self.session.wrapping_add(1);
+        self.phase = HydrationPhase::AwaitingTree;
     }
     pub(super) fn reset(&mut self, tree: &Tree) {
-        self.pending = true;
-        self.files.retain(|id, entry| tree.entry(id) == Some(entry));
-        self.tree = Some(tree.clone());
-        self.tree_written = false;
+        let mut files = match std::mem::take(&mut self.phase) {
+            HydrationPhase::Copying { files, .. } | HydrationPhase::Ready { files, .. } => files,
+            _ => BTreeMap::new(),
+        };
+        files.retain(|id, entry| tree.entry(id) == Some(entry));
+        self.phase = HydrationPhase::Copying {
+            tree: tree.clone(),
+            metadata: MetadataCopy::Pending,
+            files,
+        };
     }
-    pub(super) fn accept_tree(&mut self, tree: &Tree) {
-        if self.tree.as_ref() == Some(tree) {
-            self.tree_written = true;
+    pub(super) fn accept_tree(&mut self, written: &Tree) {
+        if let HydrationPhase::Copying { tree, metadata, .. } = &mut self.phase
+            && tree == written
+        {
+            *metadata = MetadataCopy::Written;
         }
     }
     pub(super) fn accept_file(&mut self, entry: &Entry) {
-        if self.tree.as_ref().and_then(|tree| tree.entry(&entry.id)) == Some(entry) {
-            self.files.insert(entry.id.clone(), entry.clone());
+        match &mut self.phase {
+            HydrationPhase::Copying { tree, files, .. } | HydrationPhase::Ready { tree, files }
+                if tree.entry(&entry.id) == Some(entry) =>
+            {
+                files.insert(entry.id.clone(), entry.clone());
+            }
+            _ => {}
         }
     }
     fn complete(&self) -> bool {
-        self.tree_written
-            && self.tree.as_ref().is_some_and(|tree| {
-                tree.entries()
-                    .iter()
-                    .filter(|entry| entry.kind != EntryKind::Folder)
-                    .all(|entry| self.files.get(&entry.id) == Some(entry))
-            })
+        match &self.phase {
+            HydrationPhase::Ready { .. } => true,
+            HydrationPhase::Copying {
+                tree,
+                metadata: MetadataCopy::Written,
+                files,
+            } => tree
+                .entries()
+                .iter()
+                .filter(|entry| entry.kind != EntryKind::Folder)
+                .all(|entry| files.get(&entry.id) == Some(entry)),
+            _ => false,
+        }
+    }
+    pub(super) fn finish(&mut self) {
+        assert!(
+            self.complete(),
+            "fresh Overleaf metadata and files must be persisted before editing"
+        );
+        self.phase = match std::mem::take(&mut self.phase) {
+            HydrationPhase::Copying { tree, files, .. } => HydrationPhase::Ready { tree, files },
+            other => other,
+        };
+    }
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(super) fn phase(&self) -> &'static str {
+        match self.phase {
+            HydrationPhase::Unrestricted => "unrestricted",
+            HydrationPhase::AwaitingTree => "awaiting_tree",
+            HydrationPhase::Copying { .. } => "copying",
+            HydrationPhase::Ready { .. } => "ready",
+        }
     }
 }
 
@@ -55,6 +114,9 @@ pub(super) struct PreparedStorage {
     pub(super) epoch: u64,
     pub(super) project: ProjectUrl,
     pub(super) storage: Arc<crate::overleaf::StorageLease>,
+    pub(super) pending_storage: Option<crate::settings::OverleafStoragePreference>,
+    pub(super) session: crate::overleaf::workspace_session::WorkspaceSession,
+    pub(super) model: Option<Model>,
 }
 impl OperationSummary for PreparedStorage {
     fn completion_summary(&self) -> String {
@@ -63,6 +125,96 @@ impl OperationSummary for PreparedStorage {
 }
 
 impl EditorApp {
+    pub(super) fn open_stored_overleaf_project(
+        &mut self,
+        project: &ProjectUrl,
+        root: &Path,
+        relative: Option<PathBuf>,
+        context: &egui::Context,
+    ) -> Result<(), String> {
+        if !self.overleaf.offline.disk_untrusted.is_empty()
+            && self
+                .overleaf
+                .connection
+                .as_ref()
+                .is_some_and(|c| c.root == root)
+            && self.tabs.ids().any(|tab| {
+                self.document_for_tab(tab)
+                    .and_then(|d| d.path().as_ref())
+                    .is_some_and(|p| p.starts_with(root))
+            })
+        {
+            return Err("Close this project's pages before reopening its local copy. Save As keeps a separate copy of unsaved edits.".into());
+        }
+        let base = root
+            .parent()
+            .ok_or("The saved project folder is invalid.")?;
+        if project.mirror_root(base) != root {
+            return self.open_overleaf_project_url(project.url(), relative, context);
+        }
+        let preference = crate::settings::OverleafStoragePreference {
+            keep_local_copy: true,
+            directory: Some(base.to_string_lossy().into_owned()),
+        };
+        self.overleaf.query = project.url().into();
+        self.overleaf.pending_storage = None;
+        self.overleaf.storage_draft =
+            Some(storage_ui::StorageDraft::new(project.url(), &preference));
+        self.overleaf.reopening_workspace = true;
+        let result = self.apply_overleaf_storage(context);
+        self.overleaf.reopening_workspace = false;
+        result?;
+        self.overleaf.reopen_relative =
+            relative.map(|path| (project.url().into(), self.overleaf.epoch, path));
+        Ok(())
+    }
+    pub(in crate::app) fn overleaf_persistent_path(&self, path: &Path) -> bool {
+        self.overleaf.connection.as_ref().is_some_and(|c| {
+            path.starts_with(&c.root) && c.storage.as_ref().is_some_and(|s| s.persistent())
+        })
+    }
+    pub(in crate::app) fn stage_overleaf_workspace(
+        &mut self,
+        folder: &Path,
+        context: &egui::Context,
+    ) {
+        let project_query = ProjectUrl::parse(&self.overleaf.query)
+            .ok()
+            .map(|p| p.url().to_owned());
+        // A newly selected workspace owns a distinct browser profile from the
+        // first login page, before a project has been chosen.
+        self.overleaf.browser = BrowserLifecycle::Closed;
+        self.overleaf.browser.cancel_creation();
+        self.overleaf.events = None;
+        self.overleaf.sender = None;
+        if let Some(connection) = &mut self.overleaf.connection {
+            // The chooser's new login view cannot publish through the old
+            // project's previously authenticated connection.
+            connection.transport = Transport::Offline;
+            connection.model.reconnect(self.overleaf.epoch);
+            connection.status = "Reconnect required".into();
+        }
+        self.overleaf.browser_profile = Some(crate::overleaf::workspace_session::new_profile_id());
+        self.begin_overleaf(context);
+        self.overleaf.ensure_browsing(context);
+        if let Some(query) = project_query {
+            self.overleaf.query = query;
+        }
+        self.overleaf.error = None;
+        self.overleaf.pending_storage = Some(crate::settings::OverleafStoragePreference {
+            keep_local_copy: true,
+            directory: Some(folder.to_string_lossy().into_owned()),
+        });
+        self.overleaf.storage_draft = None;
+        let project = ProjectUrl::parse(&self.overleaf.query).ok();
+        self.overleaf.address_draft = project.is_some();
+        if let Err(error) = self.overleaf.ensure_storage_draft(
+            project.as_ref(),
+            self.pending_settings.as_ref().unwrap_or(&self.settings),
+        ) {
+            self.overleaf.error = Some(error);
+        }
+    }
     pub(super) fn arm_overleaf_navigation(&mut self) {
         self.overleaf.navigation = Some(NavigationOwner {
             tab: self.tabs.active_id(),
@@ -71,11 +223,84 @@ impl EditorApp {
         });
     }
     pub(super) fn overleaf_navigation_current(&self) -> bool {
-        self.overleaf.navigation.as_ref().is_none_or(|owner| {
-            owner.tab == self.tabs.active_id()
-                && owner.key == (!self.tabs.is_empty()).then(|| self.document().key())
-                && owner.workspace == self.workspace_root
-        })
+        self.workspace_switch.adopting_overleaf(self.overleaf.epoch)
+            || self.overleaf.navigation.as_ref().is_none_or(|owner| {
+                owner.tab == self.tabs.active_id()
+                    && owner.key == (!self.tabs.is_empty()).then(|| self.document().key())
+                    && owner.workspace == self.workspace_root
+            })
+    }
+    pub(in crate::app) fn resume_overleaf_workspace_open(&mut self, _context: &egui::Context) {
+        self.remember_workspace(&self.workspace_root.clone());
+        if self.overleaf.offline.restoring_pages() {
+            self.restore_overleaf_pages(_context);
+            return;
+        }
+        self.arm_overleaf_navigation();
+        let path = self.overleaf.open_after.as_ref().and_then(|id| {
+            let connection = self.overleaf.connection.as_ref()?;
+            let entry = connection.model.tree()?.entry(id)?;
+            Some(connection.root.join(&entry.path))
+        });
+        if let Some(path) = path {
+            // Approval may outlast the first mirror download. Ask for fresh
+            // bytes again, with the newly committed workspace as owner.
+            self.open_overleaf_path(&path);
+        }
+    }
+    pub(in crate::app) fn resume_workspace_overleaf_connection(
+        &mut self,
+        url: &str,
+        preference: crate::settings::OverleafStoragePreference,
+        context: &egui::Context,
+    ) {
+        self.overleaf.query = url.into();
+        self.overleaf.storage_draft = Some(storage_ui::StorageDraft::new(url, &preference));
+        let relative = self
+            .overleaf
+            .reopen_relative
+            .take()
+            .filter(|(project, _, _)| project == url);
+        match self.apply_overleaf_storage(context) {
+            Ok(()) => {
+                self.overleaf.reopen_relative =
+                    relative.map(|(project, _, path)| (project, self.overleaf.epoch, path))
+            }
+            Err(error) => self.overleaf.error = Some(error),
+        }
+    }
+    pub(in crate::app) fn overleaf_workspace_matches(&self, root: &Path, epoch: u64) -> bool {
+        self.overleaf.epoch == epoch
+            && self
+                .overleaf
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.root == root)
+    }
+    pub(in crate::app) fn cancel_overleaf_workspace_open(&mut self, epoch: u64) {
+        if self.overleaf.epoch == epoch {
+            self.overleaf.open_after = None;
+            self.overleaf.navigation = None;
+            self.overleaf.reopen_relative = None;
+            self.overleaf.cancel_adoption();
+        }
+    }
+    pub(in crate::app) fn depart_overleaf_workspace(&mut self, root: &Path, connecting: bool) {
+        if self
+            .overleaf
+            .connection
+            .as_ref()
+            .is_some_and(|connection| connection.root == root)
+        {
+            self.overleaf.offline.departed = true;
+            self.stop_overleaf_cursor();
+            self.overleaf.open_after = None;
+            self.overleaf.navigation = None;
+            if !connecting {
+                self.overleaf.reopen_relative = None;
+            }
+            self.overleaf.cancel_adoption();
+        }
     }
     pub(in crate::app) fn overleaf_source_locked(&self) -> bool {
         if self.overleaf_reopen_locked() {
@@ -87,12 +312,30 @@ impl EditorApp {
         if let Some(connection) = &self.overleaf.connection
             && path.starts_with(&connection.root)
         {
-            return !connection.online
-                || connection.hydration.pending
-                || self.overleaf_entry(path).is_some_and(|entry| {
-                    self.overleaf.blocked.contains(&entry.id)
-                        || self.overleaf.rebases.contains_key(&entry.id)
-                });
+            if self.overleaf.offline.active() {
+                return self.overleaf_file_operation_pending()
+                    || self
+                        .tabs
+                        .active_id()
+                        .and_then(|tab| self.overleaf_entry_for_tab(tab))
+                        .is_none_or(|entry| {
+                            entry.kind != EntryKind::Doc
+                                || connection.model.document(&entry.id).is_none()
+                                || self.overleaf.blocked.contains(&entry.id)
+                        });
+            }
+            return self.overleaf.authentication.required()
+                || !connection.online()
+                || connection.hydration.pending()
+                || self.overleaf_file_operation_pending()
+                || self
+                    .tabs
+                    .active_id()
+                    .and_then(|tab| self.overleaf_entry_for_tab(tab))
+                    .is_none_or(|entry| {
+                        self.overleaf.blocked.contains(&entry.id)
+                            || self.overleaf.rebases.contains_key(&entry.id)
+                    });
         }
         self.is_overleaf_path(path)
     }
@@ -103,14 +346,12 @@ impl EditorApp {
         context: &egui::Context,
     ) -> Result<(), String> {
         let project = ProjectUrl::parse(url)?;
-        let preference = self
-            .pending_settings
-            .as_ref()
-            .unwrap_or(&self.settings)
-            .overleaf_storage_preference(project.url())?;
         self.overleaf.query = project.url().into();
-        self.overleaf.storage_draft =
-            Some(storage_ui::StorageDraft::new(project.url(), &preference));
+        self.overleaf.storage_draft = None;
+        self.overleaf.ensure_storage_draft(
+            Some(&project),
+            self.pending_settings.as_ref().unwrap_or(&self.settings),
+        )?;
         self.connect_overleaf(context)?;
         self.overleaf.reopen_relative =
             relative.map(|path| (project.url().into(), self.overleaf.epoch, path));
@@ -118,6 +359,12 @@ impl EditorApp {
     }
     pub(in crate::app) fn poll_overleaf_storage(&mut self, context: &egui::Context) {
         self.poll_overleaf_reopen(context);
+        #[cfg(target_os = "macos")]
+        match self.overleaf.passwords_job.poll() {
+            LatestJobPoll::Ready(_) => {}
+            LatestJobPoll::Failed(error) => self.overleaf.error = Some(error),
+            _ => {}
+        }
         if let crate::workflow::DialogPoll::Ready {
             request,
             selection: Some(folder),
@@ -126,25 +373,104 @@ impl EditorApp {
             && draft.project_url == request
         {
             draft.directory = folder.path().to_string_lossy().into_owned();
+            if self.overleaf.pending_storage.is_some() {
+                self.overleaf.pending_storage = Some(draft.raw_preference());
+            }
         }
         match self.overleaf.storage_job.poll() {
             LatestJobPoll::Ready(prepared) if prepared.epoch == self.overleaf.epoch => {
                 let root = prepared.storage.root().to_owned();
+                let restored = prepared.model.is_some();
+                self.overleaf.browser_profile = Some(prepared.session.profile_id);
+                self.overleaf.offline.install(prepared.session, restored);
+                self.overleaf
+                    .accept_pending_storage(&prepared.pending_storage);
                 self.remember_overleaf_return_workspace();
                 self.overleaf.connection = Some(Connection {
-                    model: Model::for_project(prepared.epoch, &prepared.project),
+                    model: prepared
+                        .model
+                        .unwrap_or_else(|| Model::for_project(prepared.epoch, &prepared.project)),
                     project: prepared.project,
-                    root,
+                    root: root.clone(),
                     storage: Some(prepared.storage),
                     hydration: Hydration::waiting(),
                     status: "Connecting to Overleaf…".into(),
-                    online: false,
+                    transport: Transport::Offline,
                 });
                 self.overleaf.workspace = None;
                 self.overleaf.tab_entities.clear();
                 self.overleaf.blocked.clear();
                 self.overleaf.rebases.clear();
-                self.prepare_overleaf_browser(context);
+                self.overleaf.blocked.extend(
+                    self.overleaf
+                        .connection
+                        .as_ref()
+                        .unwrap()
+                        .model
+                        .conflict_ids()
+                        .map(str::to_owned),
+                );
+                if let Some(tree) = self
+                    .overleaf
+                    .connection
+                    .as_ref()
+                    .and_then(|c| c.model.tree())
+                {
+                    for entry in tree.entries() {
+                        if let Some(document) = self
+                            .overleaf
+                            .connection
+                            .as_ref()
+                            .and_then(|c| c.model.document(&entry.id))
+                        {
+                            self.overleaf
+                                .offline
+                                .recovery_sources
+                                .insert(entry.id.clone(), document.source().to_owned());
+                            if document.is_dirty() || document.conflict().is_some() {
+                                self.overleaf
+                                    .offline
+                                    .saved_sources
+                                    .insert(entry.id.clone(), document.source().to_owned());
+                            }
+                            if document.conflict().is_some() {
+                                self.overleaf.blocked.insert(entry.id.clone());
+                            }
+                        }
+                    }
+                }
+                if restored {
+                    let connection = self.overleaf.connection.as_ref().unwrap();
+                    if let Some(tree) = connection.model.tree() {
+                        self.overleaf.workspace = Some(WorkspaceTree::from_shared(Arc::new(
+                            remote_snapshot(&connection.root, tree),
+                        )));
+                    }
+                    if root != self.workspace_root {
+                        self.request_workspace_switch(
+                            crate::app::workspace_switch::Destination::Overleaf {
+                                root: root.clone(),
+                                epoch: self.overleaf.epoch,
+                            },
+                            context,
+                        );
+                    } else {
+                        self.restore_overleaf_pages(context);
+                    }
+                }
+                if self.overleaf.offline.active() && restored {
+                    let connection = self.overleaf.connection.as_mut().unwrap();
+                    connection.hydration = Hydration::default();
+                    connection.status = "Offline".into();
+                    self.overleaf.browser.cancel_creation();
+                    self.overleaf.browser = BrowserLifecycle::Closed;
+                    self.overleaf.events = None;
+                    self.overleaf.sender = None;
+                    self.overleaf.cancel_adoption();
+                    self.hide_overleaf(context);
+                } else {
+                    self.prepare_overleaf_browser(context);
+                }
             }
             LatestJobPoll::Failed(error) => {
                 self.overleaf.error = Some(error);
@@ -166,13 +492,18 @@ impl EditorApp {
             && self.overleaf.queued.is_empty()
             && !self.overleaf.downloads.has_pending();
         if let Some(connection) = &mut self.overleaf.connection
-            && connection.online
-            && connection.hydration.pending
+            && connection.online()
+            && !self.overleaf.authentication.required()
+            && connection.hydration.pending()
             && quiet
             && connection.hydration.complete()
         {
-            connection.hydration.pending = false;
+            connection.hydration.finish();
             connection.status = "Ready".into();
+            self.overleaf.authentication.allow_return();
+            if let Some(browser) = self.overleaf.browser.as_ref() {
+                browser.project_ready();
+            }
             context.request_repaint();
         }
     }
@@ -185,17 +516,21 @@ impl EditorApp {
             .as_ref()
             .is_none_or(|storage| storage.persistent())
             || (self.workspace_root == connection.root
-                && (connection.online || self.overleaf.browser.is_some()))
-            || (self.overleaf.visible && self.overleaf.browser.is_some())
+                && (connection.online() || self.overleaf.browser.is_some()))
+            || (self.overleaf.visible & self.overleaf.browser.as_ref().is_some())
             || self.overleaf.storage_job.is_running()
-            || self.overleaf.awaiting_project
-            || connection.hydration.pending
-            || self.overleaf.save_active
-            || self.overleaf.pending.is_some()
+            || self.overleaf.awaiting_project()
+            || connection.hydration.pending()
+            || self.overleaf.save.active()
+            || self.overleaf.save.pending().is_some()
             || self.overleaf.io.is_running()
             || !self.overleaf.queued.is_empty()
             || self.overleaf.downloads.has_pending()
             || connection.model.has_unsynced()
+            || self
+                .tabs
+                .ids()
+                .any(|tab| self.tab_workspace(tab) == Some(connection.root.as_path()))
             || self.tabs.ids().any(|tab| {
                 self.document_for_tab(tab)
                     .and_then(|doc| doc.path().as_ref())
@@ -209,7 +544,7 @@ impl EditorApp {
             epoch: self.overleaf.epoch,
         });
         self.overleaf.epoch = self.overleaf.epoch.saturating_add(1);
-        self.overleaf.browser = None;
+        self.overleaf.browser = BrowserLifecycle::Closed;
         self.overleaf.events = None;
         self.overleaf.sender = None;
         self.overleaf.workspace = None;
@@ -255,6 +590,43 @@ impl EditorApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hydration_requires_the_current_tree_receipt_and_every_current_file() {
+        let source = tree("main.tex");
+        let mut state = Hydration::waiting();
+        state.reset(&source);
+        for entry in source.entries() {
+            state.accept_file(entry);
+        }
+        assert!(state.pending());
+        assert!(
+            !state.complete(),
+            "file receipts alone cannot release the metadata barrier"
+        );
+        state.accept_tree(&source);
+        assert!(state.complete());
+        state.finish();
+        assert!(!state.pending());
+        state.finish();
+        assert!(
+            state.complete(),
+            "a repeated finish cannot erase the ready snapshot"
+        );
+        let changed = tree("renamed.tex");
+        state.reset(&changed);
+        state.accept_tree(&source);
+        assert!(
+            !state.complete(),
+            "old metadata cannot admit a changed tree"
+        );
+        state.accept_tree(&changed);
+        assert!(!state.complete(), "a renamed file needs its own receipt");
+        state.accept_file(changed.entry("a").unwrap());
+        assert!(state.complete(), "unchanged file receipts remain reusable");
+        state.restart();
+        assert!(state.pending());
+        assert!(!state.complete());
+    }
     fn tree(path: &str) -> Tree {
         Tree::new(
             "Paper".into(),
@@ -349,6 +721,12 @@ mod controller_tests {
             .collect();
         app.apply_overleaf_mirror(
             Mirrored {
+                origin: MirrorOrigin {
+                    root: root.to_path_buf(),
+                    profile: app.overleaf.browser_profile,
+                },
+                heads: BTreeMap::new(),
+                documents: BTreeMap::new(),
                 epoch: app.overleaf.epoch,
                 hydration_session: app.overleaf.connection.as_ref().unwrap().hydration.session,
                 tree,
@@ -379,7 +757,7 @@ mod controller_tests {
             root: root.clone(),
             storage: None,
             status: "Connecting".into(),
-            online: false,
+            transport: Transport::Offline,
             hydration: Hydration::waiting(),
         });
         for epoch in [1, 2] {
@@ -387,7 +765,7 @@ mod controller_tests {
                 app.overleaf.epoch = epoch;
                 let c = app.overleaf.connection.as_mut().unwrap();
                 c.model.reconnect(epoch);
-                c.online = false;
+                c.transport = Transport::Offline;
                 c.hydration = Hydration::waiting();
             }
             assert!(app.overleaf_source_locked());
@@ -489,7 +867,7 @@ mod lifetime_tests {
             root: root.clone(),
             storage: Some(storage),
             status: "Ready".into(),
-            online: true,
+            transport: Transport::Online,
             hydration: Hydration::default(),
         });
         app.workspace_root = root;
@@ -527,7 +905,7 @@ mod lifetime_tests {
         let local = directory.path().canonicalize().unwrap();
         let context = egui::Context::default();
         let (mut app, weak) = temporary_workspace(&context, &local, Vec::new());
-        app.overleaf.connection.as_mut().unwrap().online = false;
+        app.overleaf.connection.as_mut().unwrap().transport = Transport::Offline;
         // The Disconnect action has also dropped the browser. A network loss
         // with its browser still alive retains the active project instead.
         assert!(app.overleaf.browser.is_none());

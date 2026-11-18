@@ -43,11 +43,43 @@ struct Sample {
 }
 
 #[derive(Default)]
+enum Phase {
+    #[default]
+    Empty,
+    Loading {
+        request: Request,
+        job: LatestJob<RasterizedSample>,
+    },
+    Ready(Request),
+    Failed {
+        request: Request,
+        error: String,
+    },
+}
+
+impl Phase {
+    fn request(&self) -> Option<&Request> {
+        match self {
+            Self::Empty => None,
+            Self::Loading { request, .. } | Self::Ready(request) | Self::Failed { request, .. } => {
+                Some(request)
+            }
+        }
+    }
+
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::Failed { error, .. } => Some(error),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Default)]
 struct Slot {
-    requested: Option<Request>,
+    phase: Phase,
+    // Retained samples are an independent bounded LRU, not the current request.
     samples: VecDeque<(Request, Sample)>,
-    job: LatestJob<RasterizedSample>,
-    error: Option<String>,
 }
 
 #[derive(Default)]
@@ -137,24 +169,34 @@ fn rasterize(request: &Request) -> Result<RasterizedSample, String> {
 
 impl Slot {
     fn update(&mut self, context: &egui::Context, request: &Request) {
-        if self.requested.as_ref() != Some(request) {
-            self.requested = Some(request.clone());
-            self.error = None;
-            self.job.supersede();
+        if self.phase.request() != Some(request) {
+            // Dropping the old phase disconnects its replaceable result owner.
+            self.phase = Phase::Empty;
             if let Some(index) = self.samples.iter().position(|(key, _)| key == request) {
                 let cached = self.samples.remove(index).unwrap();
                 self.samples.push_front(cached);
+                self.phase = Phase::Ready(request.clone());
             } else {
-                let request = request.clone();
-                if let Err(error) = self
-                    .job
-                    .start_and_repaint("font-preview", context, move || rasterize(&request))
+                let input = request.clone();
+                let mut job = LatestJob::default();
+                self.phase = match job
+                    .start_and_repaint("font-preview", context, move || rasterize(&input))
                 {
-                    self.error = Some(error);
-                }
+                    Ok(()) => Phase::Loading {
+                        request: request.clone(),
+                        job,
+                    },
+                    Err(error) => Phase::Failed {
+                        request: request.clone(),
+                        error,
+                    },
+                };
             }
         }
-        match self.job.poll() {
+        let Phase::Loading { request, job } = &mut self.phase else {
+            return;
+        };
+        match job.poll() {
             LatestJobPoll::Ready(mut sample) => {
                 let texture = context.load_texture(
                     "font-preview",
@@ -171,8 +213,14 @@ impl Slot {
                     },
                 ));
                 self.samples.truncate(CACHE_SIZE);
+                self.phase = Phase::Ready(request.clone());
             }
-            LatestJobPoll::Failed(error) => self.error = Some(error),
+            LatestJobPoll::Failed(error) => {
+                self.phase = Phase::Failed {
+                    request: request.clone(),
+                    error,
+                }
+            }
             LatestJobPoll::Pending | LatestJobPoll::Idle => {}
         }
     }
@@ -226,7 +274,7 @@ pub(crate) fn show(ui: &mut egui::Ui, slot_name: &str, family: &FontFamily) -> b
             .add(mesh);
         true
     } else {
-        ui.label(slot.error.as_deref().unwrap_or("Loading font preview…"));
+        ui.label(slot.phase.error().unwrap_or("Loading font preview…"));
         false
     }
 }
@@ -279,7 +327,7 @@ pub(crate) fn paint_name(
         } else {
             // An unreadable font still displays its name and must not hold a
             // framebuffer capture or schedule another failed request forever.
-            ready = slot.error.is_some();
+            ready = slot.phase.error().is_some();
         }
     }
     if !painted {
@@ -308,7 +356,7 @@ pub(crate) fn name_is_ready(context: &egui::Context, row: usize, name: &str) -> 
         ))
         .is_some_and(|slot| {
             slot.samples.front().is_some_and(|(request, _)| {
-                slot.requested.as_ref() == Some(request) && request.text == name
+                slot.phase.request() == Some(request) && request.text == name
             })
         })
 }
@@ -325,6 +373,50 @@ mod tests {
         let path = directory.join(format!("{key}.ttf"));
         std::fs::write(&path, &definitions.font_data[key].font).unwrap();
         FontCatalog::single_font_fixture(&path).families()[0].clone()
+    }
+
+    #[test]
+    fn failed_preview_is_terminal_until_the_request_changes_and_can_then_recover() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let request = Request {
+            path: directory.path().join("missing.ttf"),
+            index: 0,
+            text: SAMPLE_TEXT.into(),
+            font_size: SAMPLE_SIZE,
+            pixels_per_point: 1.0,
+            options: egui::Visuals::light().text_options,
+        };
+        let mut slot = Slot::default();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while slot.phase.error().is_none() && Instant::now() < deadline {
+            slot.update(&context, &request);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let failure = slot
+            .phase
+            .error()
+            .expect("missing font must fail")
+            .to_owned();
+        for _ in 0..1_000 {
+            slot.update(&context, &request);
+            assert!(matches!(&slot.phase, Phase::Failed { error, .. } if error == &failure));
+        }
+        assert!(slot.samples.is_empty());
+
+        let family = fixture(directory.path(), egui::FontFamily::Proportional);
+        let request = Request {
+            path: family.primary_face().unwrap().path.clone(),
+            ..request
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !matches!(slot.phase, Phase::Ready(_)) && Instant::now() < deadline {
+            slot.update(&context, &request);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(matches!(&slot.phase, Phase::Ready(current) if current == &request));
+        assert_eq!(slot.samples.len(), 1);
+        assert!(slot.phase.error().is_none());
     }
 
     #[test]
@@ -443,7 +535,7 @@ mod tests {
             let previews = previews.lock().unwrap();
             assert_eq!(previews.slots.len(), 1);
             let slot = previews.slots.values().next().unwrap();
-            assert!(!slot.job.is_running());
+            assert!(!matches!(slot.phase, Phase::Loading { .. }));
             assert!(slot.samples.len() <= 2);
             textures.push(slot.samples.front().unwrap().1.mesh.texture_id);
         }
@@ -489,7 +581,7 @@ mod tests {
         let previews = previews.lock().unwrap();
         assert_eq!(previews.slots.len(), COMPLETION_NAME_SLOTS);
         for slot in previews.slots.values() {
-            assert!(!slot.job.is_running());
+            assert!(!matches!(slot.phase, Phase::Loading { .. }));
             assert_eq!(slot.samples.len(), 1);
             let request = &slot.samples.front().unwrap().0;
             assert_eq!(request.text, family.name);

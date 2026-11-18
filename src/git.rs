@@ -88,12 +88,98 @@ impl crate::worker::OperationSummary for ResultData {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OperationMode {
+    Foreground,
+    BackgroundRefresh,
+}
+
+#[derive(Default)]
+enum OperationPhase {
+    #[default]
+    Idle,
+    Running {
+        workspace: PathBuf,
+        mode: OperationMode,
+        job: ExclusiveJob<ResultData>,
+    },
+}
+
+enum OperationPoll {
+    Idle,
+    Pending,
+    Completed {
+        workspace: PathBuf,
+        mode: OperationMode,
+        result: Result<Box<ResultData>, String>,
+    },
+}
+
+impl OperationPhase {
+    fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+
+    fn is_background(&self) -> bool {
+        matches!(
+            self,
+            Self::Running {
+                mode: OperationMode::BackgroundRefresh,
+                ..
+            }
+        )
+    }
+
+    fn start_and_repaint(
+        &mut self,
+        name: &str,
+        context: &egui::Context,
+        workspace: PathBuf,
+        mode: OperationMode,
+        work: impl FnOnce() -> Result<ResultData, String> + Send + 'static,
+    ) -> Result<(), String> {
+        if self.is_running() {
+            return Err("An operation is already in progress".into());
+        }
+        let mut job = ExclusiveJob::default();
+        job.start_and_repaint(name, context, work)?;
+        *self = Self::Running {
+            workspace,
+            mode,
+            job,
+        };
+        Ok(())
+    }
+
+    fn poll(&mut self) -> OperationPoll {
+        let Self::Running { job, .. } = self else {
+            return OperationPoll::Idle;
+        };
+        let result = match job.poll() {
+            LatestJobPoll::Pending => return OperationPoll::Pending,
+            LatestJobPoll::Ready(result) => Ok(Box::new(result)),
+            LatestJobPoll::Failed(error) => Err(error),
+            LatestJobPoll::Idle => unreachable!("a running Git operation owns an admitted worker"),
+        };
+        let Self::Running {
+            workspace, mode, ..
+        } = std::mem::take(self)
+        else {
+            unreachable!()
+        };
+        OperationPoll::Completed {
+            workspace,
+            mode,
+            result,
+        }
+    }
+}
+
 pub(crate) struct GitPanel {
     pub(crate) visible: bool,
     workspace: PathBuf,
     snapshot: Snapshot,
-    job: ExclusiveJob<ResultData>,
-    job_workspace: Option<PathBuf>,
+    operation: OperationPhase,
     message: String,
     commit_message: String,
     failed: bool,
@@ -103,7 +189,8 @@ pub(crate) struct GitPanel {
     pending_file_diff: Option<DiffSelection>,
     ready_file_diff: Option<PathBuf>,
     revert_request: Option<RevertRequest>,
-    background_refresh: bool,
+    local_copy_pending: bool,
+    configuration_pending: bool,
     status_changed: bool,
     view_cache: view::Cache,
     #[cfg(test)]
@@ -118,8 +205,7 @@ impl Default for GitPanel {
             visible: true,
             workspace: PathBuf::new(),
             snapshot: Snapshot::default(),
-            job: ExclusiveJob::default(),
-            job_workspace: None,
+            operation: OperationPhase::default(),
             message: String::new(),
             commit_message: String::new(),
             failed: false,
@@ -129,7 +215,8 @@ impl Default for GitPanel {
             pending_file_diff: None,
             ready_file_diff: None,
             revert_request: None,
-            background_refresh: false,
+            local_copy_pending: false,
+            configuration_pending: false,
             status_changed: false,
             view_cache: view::Cache::default(),
             #[cfg(test)]
@@ -139,9 +226,42 @@ impl Default for GitPanel {
 }
 
 impl GitPanel {
+    pub(crate) fn set_configuration_pending(&mut self, pending: bool) {
+        self.configuration_pending = pending;
+    }
+
+    pub(crate) fn set_local_copy_pending(&mut self, pending: bool) {
+        self.local_copy_pending = pending;
+    }
+
+    pub(crate) fn operation_busy(&self) -> bool {
+        self.configuration_pending
+            || (self.operation.is_running() && !self.operation.is_background())
+            || self.pending_operation.is_some()
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn desktop_inspection(&self) -> serde_json::Value {
+        serde_json::json!({
+            "initialized": self.snapshot.initialized,
+            "managed_overleaf": self.snapshot.managed_overleaf,
+            "local_copy_pending": self.local_copy_pending,
+            "configuration_pending": self.configuration_pending,
+            "branch": self.snapshot.branch,
+            "root": self.snapshot.root,
+            "busy": self.operation_busy(),
+            "message": self.message,
+            "failed": self.failed,
+            "changes": self.snapshot.entries.len(),
+            "staged": self.snapshot.entries.staged,
+            "commit_message_set": !self.commit_message.trim().is_empty(),
+            "commit_message_fingerprint": crate::desktop_test::fingerprint(&self.commit_message),
+        })
+    }
+
     pub(crate) fn activity(&self) -> crate::activity::Activity {
         crate::activity::Activity::work(
-            self.job.is_running(),
+            self.operation.is_running(),
             self.refresh_requested || self.pending_operation.is_some(),
             self.failed.then_some(self.message.as_str()),
         )
@@ -163,7 +283,7 @@ impl GitPanel {
     pub(crate) fn open(&mut self, context: &egui::Context, workspace: &Path) {
         self.visible = true;
         self.sync_workspace(context, workspace);
-        if !self.job.is_running() {
+        if !self.operation.is_running() {
             self.start(context, Operation::Refresh);
         }
     }
@@ -179,7 +299,7 @@ impl GitPanel {
             self.pending_file_diff = None;
             self.ready_file_diff = None;
             self.revert_request = None;
-            if !self.job.is_running() {
+            if !self.operation.is_running() {
                 self.start_operation(context, Operation::Refresh, true);
             } else {
                 self.refresh_requested = true;
@@ -192,10 +312,23 @@ impl GitPanel {
     }
 
     fn start_operation(&mut self, context: &egui::Context, operation: Operation, quiet: bool) {
-        if self.job.is_running() {
+        if self.configuration_pending && !matches!(operation, Operation::Refresh) {
+            return;
+        }
+        if self.local_copy_pending && takes_local_copy(&operation) {
+            self.pending_operation = Some(operation);
+            let message =
+                "Wait for Overleaf files to finish saving locally before staging or committing.";
+            if self.message != message {
+                self.message = message.into();
+            }
+            self.failed = false;
+            return;
+        }
+        if self.operation.is_running() {
             if matches!(&operation, Operation::Refresh) {
                 self.refresh_requested = true;
-            } else if self.background_refresh {
+            } else if self.operation.is_background() {
                 // Background status reads leave the controls responsive. Hold
                 // the user's action until the read completes rather than
                 // silently dropping a click during that short interval.
@@ -225,8 +358,12 @@ impl GitPanel {
             }),
             _ => None,
         };
-        self.background_refresh = quiet && matches!(&operation, Operation::Refresh);
-        if !self.background_refresh {
+        let mode = if quiet && matches!(&operation, Operation::Refresh) {
+            OperationMode::BackgroundRefresh
+        } else {
+            OperationMode::Foreground
+        };
+        if mode == OperationMode::Foreground {
             self.diff = selection.clone().map(|selection| DiffView {
                 selection,
                 content: None,
@@ -234,36 +371,37 @@ impl GitPanel {
             });
         }
         let workspace = self.workspace.clone();
-        self.job_workspace = Some(workspace.clone());
         self.failed = false;
-        if !self.background_refresh {
+        if mode == OperationMode::Foreground {
             self.message = "Working…".into();
         }
-        if let Err(error) = self.job.start_and_repaint("git", context, move || {
-            // Return operation errors as data too, so a late failure cannot
-            // overwrite another workspace's state.
-            let result = Repository::new(&workspace).execute(operation);
-            Ok(match result {
-                Ok(result) => result,
-                Err(error) => ResultData {
-                    snapshot: Repository::new(&workspace)
-                        .execute(Operation::Refresh)
-                        .map(|result| result.snapshot)
-                        .unwrap_or_default(),
-                    workspace,
-                    output: format!("Error: {error}"),
-                    committed: false,
-                    failed: true,
-                    diff: selection.map(|selection| DiffResult {
-                        selection,
-                        content: Err(error),
-                        editable: false,
-                    }),
-                },
-            })
-        }) {
+        if let Err(error) =
+            self.operation
+                .start_and_repaint("git", context, workspace.clone(), mode, move || {
+                    // Return operation errors as data too, so a late failure cannot
+                    // overwrite another workspace's state.
+                    let result = Repository::new(&workspace).execute(operation);
+                    Ok(match result {
+                        Ok(result) => result,
+                        Err(error) => ResultData {
+                            snapshot: Repository::new(&workspace)
+                                .execute(Operation::Refresh)
+                                .map(|result| result.snapshot)
+                                .unwrap_or_default(),
+                            workspace,
+                            output: format!("Error: {error}"),
+                            committed: false,
+                            failed: true,
+                            diff: selection.map(|selection| DiffResult {
+                                selection,
+                                content: Err(error),
+                                editable: false,
+                            }),
+                        },
+                    })
+                })
+        {
             self.failed = true;
-            self.background_refresh = false;
             self.message = error.clone();
             if let Some(diff) = &mut self.diff {
                 diff.content = Some(Err(error));
@@ -272,17 +410,20 @@ impl GitPanel {
     }
 
     pub(crate) fn poll(&mut self, context: &egui::Context, workspace: &Path) {
-        if !self.visible && !self.job.is_running() {
+        if !self.visible && !self.operation.is_running() {
             return;
         }
         self.sync_workspace(context, workspace);
-        match self.job.poll() {
-            LatestJobPoll::Ready(result) if result.workspace == self.workspace => {
-                let quiet_refresh = self.background_refresh;
+        match self.operation.poll() {
+            OperationPoll::Completed {
+                mode,
+                result: Ok(result),
+                ..
+            } if result.workspace == self.workspace => {
+                let quiet_refresh = mode == OperationMode::BackgroundRefresh;
                 let was_failed = self.failed;
                 let snapshot_changed = self.snapshot != result.snapshot;
                 self.status_changed |= snapshot_changed;
-                self.background_refresh = false;
                 self.failed = result.failed;
                 if !self.failed || result.snapshot.initialized {
                     self.snapshot = result.snapshot;
@@ -309,15 +450,21 @@ impl GitPanel {
                     self.commit_message.clear();
                 }
             }
-            LatestJobPoll::Ready(_) => self.refresh_requested = true,
-            LatestJobPoll::Failed(_) if self.job_workspace.as_ref() != Some(&self.workspace) => {
-                self.background_refresh = false;
+            OperationPoll::Completed { result: Ok(_), .. } => self.refresh_requested = true,
+            OperationPoll::Completed {
+                workspace,
+                result: Err(_),
+                ..
+            } if workspace != self.workspace => {
                 self.refresh_requested = true;
             }
-            LatestJobPoll::Failed(error) => {
-                let quiet_refresh = self.background_refresh;
+            OperationPoll::Completed {
+                mode,
+                result: Err(error),
+                ..
+            } => {
+                let quiet_refresh = mode == OperationMode::BackgroundRefresh;
                 let error_changed = !self.failed || self.message != error;
-                self.background_refresh = false;
                 self.failed = true;
                 if !quiet_refresh || error_changed {
                     self.message = error.clone();
@@ -326,9 +473,9 @@ impl GitPanel {
                     diff.content = Some(Err(error));
                 }
             }
-            LatestJobPoll::Pending | LatestJobPoll::Idle => {}
+            OperationPoll::Pending | OperationPoll::Idle => {}
         }
-        if !self.job.is_running() {
+        if !self.operation.is_running() {
             if let Some(operation) = self.pending_operation.take() {
                 self.start_operation(context, operation, false);
             } else if self.refresh_requested {
@@ -350,20 +497,24 @@ impl GitPanel {
         // Maintenance scans stay out of the visible loading state. They must
         // not dim controls or replace the stable status row on every timer
         // tick; explicit operations still use the normal busy state.
-        let busy =
-            (self.job.is_running() && !self.background_refresh) || self.pending_operation.is_some();
+        let busy = self.operation_busy();
         let output = view::show_panel(
             ui,
             view::Input {
                 toolbar_style,
                 snapshot: &self.snapshot,
-                message: &self.message,
+                message: if self.configuration_pending {
+                    "Saving Git configuration…"
+                } else {
+                    &self.message
+                },
                 commit_message: &self.commit_message,
                 failed: self.failed,
                 diff: self.diff.as_ref(),
                 diff_style,
                 busy,
                 dirty,
+                local_copy_pending: self.local_copy_pending,
             },
             &mut self.view_cache,
         );
@@ -403,7 +554,9 @@ impl GitPanel {
     }
 
     pub(crate) fn request_file_diff(&mut self, context: &egui::Context, path: PathBuf) {
-        if self.job.is_running() && !self.background_refresh {
+        if self.configuration_pending
+            || (self.operation.is_running() && !self.operation.is_background())
+        {
             return;
         }
         let Some(entry) = self
@@ -467,7 +620,9 @@ impl GitPanel {
                 "The workspace or editor changes changed; review them before reverting".into();
             return;
         }
-        if (self.job.is_running() && !self.background_refresh) || self.pending_operation.is_some() {
+        if (self.operation.is_running() && !self.operation.is_background())
+            || self.pending_operation.is_some()
+        {
             self.failed = true;
             self.message =
                 "Another Git operation is running; review the changes before reverting".into();
@@ -510,6 +665,7 @@ impl GitPanel {
 4b6c205 Add experiment figures"
                     .into(),
                 initialized: true,
+                managed_overleaf: false,
             },
             message: "Status refreshed".into(),
             commit_message: "Update the evaluation results".into(),
@@ -536,6 +692,16 @@ impl GitPanel {
     }
 }
 
+fn takes_local_copy(operation: &Operation) -> bool {
+    matches!(
+        operation,
+        Operation::Stage(_)
+            | Operation::StageAll
+            | Operation::Commit(_)
+            | Operation::StageAllAndCommit(_)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,6 +719,65 @@ mod tests {
             crate::settings::ToolbarStyle::Icons,
         );
         panel.apply_view_output(ui.ctx(), output);
+    }
+
+    #[test]
+    fn pending_overleaf_copy_never_starts_or_duplicates_a_backup_worker() {
+        let context = egui::Context::default();
+        for operation in [
+            Operation::StageAll,
+            Operation::Commit("Backup".into()),
+            Operation::StageAllAndCommit("Backup".into()),
+        ] {
+            let mut panel = GitPanel {
+                workspace: "/not-accessed".into(),
+                ..Default::default()
+            };
+            panel.set_local_copy_pending(true);
+            panel.start(&context, operation);
+            let message = panel.message.as_ptr();
+            for _ in 0..100 {
+                panel.poll(&context, Path::new("/not-accessed"));
+                assert_eq!(
+                    panel.message.as_ptr(),
+                    message,
+                    "waiting must reuse its status text"
+                );
+            }
+            assert!(!panel.operation.is_running());
+            assert!(
+                panel
+                    .pending_operation
+                    .as_ref()
+                    .is_some_and(takes_local_copy)
+            );
+            assert!(panel.message.contains("Overleaf files"));
+            assert!(!panel.failed);
+        }
+        assert!(!takes_local_copy(&Operation::Fetch));
+        assert!(!takes_local_copy(&Operation::Push));
+    }
+
+    #[test]
+    fn a_pending_configuration_never_queues_a_push_against_an_unreviewed_remote() {
+        let context = egui::Context::default();
+        let mut panel = GitPanel {
+            workspace: "/not-accessed".into(),
+            ..Default::default()
+        };
+        panel.set_configuration_pending(true);
+        for operation in [
+            Operation::Push,
+            Operation::StageAll,
+            Operation::Commit("Backup".into()),
+        ] {
+            panel.start(&context, operation);
+            assert!(panel.operation_busy());
+            assert!(!panel.operation.is_running());
+            assert!(panel.pending_operation.is_none());
+        }
+        panel.set_configuration_pending(false);
+        assert!(!panel.operation_busy());
     }
 
     #[test]
@@ -580,7 +805,7 @@ mod tests {
         for label in ["Revert", "Revert all"] {
             harness.get_by_label(label).click();
             harness.run();
-            assert!(!harness.state().job.is_running());
+            assert!(!harness.state().operation.is_running());
             let request = harness.state_mut().take_revert_request().unwrap();
             assert_eq!(request.paths, [PathBuf::from("new.typ")]);
             assert!(
@@ -620,7 +845,7 @@ mod tests {
                 Path::new(workspace),
                 dirty,
             );
-            assert!(panel.failed && !panel.job.is_running());
+            assert!(panel.failed && !panel.operation.is_running());
         }
     }
 
@@ -648,7 +873,7 @@ mod tests {
             Operation::StageAllAndCommit(panel.commit_message.clone()),
         );
         let deadline = Instant::now() + Duration::from_secs(10);
-        while panel.job.is_running() {
+        while panel.operation.is_running() {
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(10));
             panel.poll(&context, root);
@@ -705,7 +930,7 @@ mod tests {
         harness.run();
         assert_eq!(harness.state().1, "= Fast editing");
         assert!(harness.state().0.rendered_change_rows <= 10);
-        assert!(!harness.state().0.job.is_running());
+        assert!(!harness.state().0.operation.is_running());
         assert!(!harness.state().0.refresh_requested);
 
         harness.get_by_label("source/file-00002.typ").hover();
@@ -725,14 +950,16 @@ mod tests {
             .unwrap()
             .rect();
         let (sender, receiver) = std::sync::mpsc::channel();
-        harness.state_mut().0.background_refresh = true;
+        let operation_workspace = harness.state().0.workspace.clone();
         harness
             .state_mut()
             .0
-            .job
+            .operation
             .start_and_repaint(
                 "hold-status-for-action-test",
                 &egui::Context::default(),
+                operation_workspace,
+                OperationMode::BackgroundRefresh,
                 move || {
                     let _ = receiver.recv();
                     Err("Test finished".into())
@@ -890,7 +1117,7 @@ mod tests {
         };
         panel.start(&context, Operation::Commit(panel.commit_message.clone()));
         let deadline = Instant::now() + Duration::from_secs(10);
-        while panel.job.is_running() {
+        while panel.operation.is_running() {
             assert!(Instant::now() < deadline, "commit did not finish");
             panel.poll(&context, &workspace);
             thread::yield_now();
@@ -1001,7 +1228,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             panel.poll(&context, root);
-            if !panel.job.is_running() && !panel.refresh_requested {
+            if !panel.operation.is_running() && !panel.refresh_requested {
                 break;
             }
             assert!(Instant::now() < deadline, "Git panel poll timed out");
@@ -1019,14 +1246,15 @@ mod tests {
         let workspace = root.to_path_buf();
         let mut panel = GitPanel {
             workspace: workspace.clone(),
-            background_refresh: true,
             ..Default::default()
         };
         panel
-            .job
+            .operation
             .start_and_repaint(
                 "blocked-git-refresh",
                 &egui::Context::default(),
+                workspace.clone(),
+                OperationMode::BackgroundRefresh,
                 move || {
                     blocked.recv().unwrap();
                     Ok(ResultData {
@@ -1049,7 +1277,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             panel.poll(&context, root);
-            if root.join(".git").is_dir() && !panel.job.is_running() {
+            if root.join(".git").is_dir() && !panel.operation.is_running() {
                 break;
             }
             assert!(Instant::now() < deadline, "queued Git action timed out");
@@ -1317,7 +1545,11 @@ mod tests {
         assert!(perform(root, Operation::Stage(".tiptoptyp/mirror/main.typ".into())).is_err());
         // Existing staged artifacts remain visible and can be removed from the
         // index by the panel, without deleting a running preview's files.
-        text_run(root, &["add", "--", ".tiptoptyp/mirror/main.typ"]).unwrap();
+        text_run(
+            root,
+            &["add", "--force", "--", ".tiptoptyp/mirror/main.typ"],
+        )
+        .unwrap();
         assert!(
             snapshot(root)
                 .unwrap()
@@ -1410,7 +1642,7 @@ mod tests {
 
     fn finish_ui_job(harness: &mut egui_kittest::Harness<'_, GitPanel>) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        while harness.state().job.is_running() {
+        while harness.state().operation.is_running() {
             assert!(Instant::now() < deadline, "Git UI job timed out");
             thread::sleep(Duration::from_millis(10));
             harness.step();
@@ -1547,10 +1779,12 @@ mod tests {
         let (sender, receiver) = std::sync::mpsc::channel();
         let workspace = panel.workspace.clone();
         panel
-            .job
+            .operation
             .start_and_repaint(
                 "git-test-delayed-diff",
                 &egui::Context::default(),
+                workspace.clone(),
+                OperationMode::Foreground,
                 move || {
                     receiver.recv().unwrap();
                     Ok(ResultData {

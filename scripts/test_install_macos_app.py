@@ -35,11 +35,24 @@ elif name == "cargo":
             bundle = Path.cwd() / "target/release/tiptoptyp.app"
             bundle.mkdir(parents=True)
             (bundle / "new-app").write_text("verified new app")
+            if not os.environ.get("INSTALL_TEST_MISSING_EXECUTABLE"):
+                executable = bundle / "Contents/MacOS/tiptoptyp"
+                executable.parent.mkdir(parents=True)
+                executable.write_text(
+                    "#!/not/a/real/interpreter\n"
+                    if os.environ.get("INSTALL_TEST_UNRUNNABLE_EXECUTABLE")
+                    else Path(sys.argv[0]).read_text())
+                executable.chmod(0o755)
     elif arguments[:5] == ["run", "--manifest-path", "xtask/Cargo.toml", "--", "verify-package"]:
         if os.environ.get("INSTALL_TEST_VERIFY_FAILURE"):
             sys.exit(25)
     else:
         raise AssertionError("Unexpected cargo arguments: " + repr(arguments))
+elif name == "tiptoptyp":
+    assert arguments == ["--check-settings"], arguments
+    if os.environ.get("INSTALL_TEST_SETTINGS_FAILURE"):
+        print("Saved settings are incompatible: tinymist_configuration.formatterProseWrap", file=sys.stderr)
+        sys.exit(26)
 elif name == "ditto":
     assert arguments[:2] == ["--rsrc", "--extattr"]
     assert len(arguments) == 4
@@ -99,7 +112,7 @@ class MacAppInstallerTests(unittest.TestCase):
         result = self.run_install()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         events = self.events()
-        self.assertEqual([event["name"] for event in events], ["uname", "cargo", "cargo", "ditto"])
+        self.assertEqual([event["name"] for event in events], ["uname", "cargo", "cargo", "tiptoptyp", "ditto"])
         build, verify = self.cargo_events()
         self.assertNotIn("Preparing the bundled grammar model", result.stdout)
         self.assertEqual(build["arguments"], [
@@ -114,6 +127,10 @@ class MacAppInstallerTests(unittest.TestCase):
             self.assertEqual(Path(event["cwd"]), self.root.resolve())
             self.assertEqual(event["target"], "universal-apple-darwin")
             self.assertTrue(event["old_app_present"])
+        preflight = events[-2]
+        self.assertEqual(preflight["arguments"], ["--check-settings"])
+        self.assertTrue(preflight["old_app_present"])
+        self.assertEqual(Path(preflight["cwd"]), self.caller.resolve())
         self.assertFalse(events[-1]["old_app_present"])
         self.assertEqual(events[-1]["arguments"], [
             "--rsrc", "--extattr", str(self.root / "target/release/tiptoptyp.app"),
@@ -146,6 +163,9 @@ class MacAppInstallerTests(unittest.TestCase):
         self.assertEqual(build["arguments"][0], "packager")
         self.assertEqual(verify["arguments"][4], "verify-package")
         self.assertFalse(build["old_app_present"])
+        preflight = next(event for event in self.events() if event["name"] == "tiptoptyp")
+        self.assertEqual(preflight["arguments"], ["--check-settings"])
+        self.assertFalse(preflight["old_app_present"])
         self.assertTrue((self.installed / "new-app").is_file())
 
     def test_build_error_does_not_verify_or_replace_previous_installation(self):
@@ -168,6 +188,31 @@ class MacAppInstallerTests(unittest.TestCase):
         self.assertIn("packager did not produce", result.stderr)
         self.assertTrue((self.installed / "old-app").is_file())
         self.assertNotIn("ditto", [event["name"] for event in self.events()])
+
+    def test_incompatible_saved_settings_abort_before_replacing_previous_app(self):
+        result = self.run_install(INSTALL_TEST_SETTINGS_FAILURE="1")
+        self.assertEqual(result.returncode, 26, result.stdout + result.stderr)
+        self.assertIn("tinymist_configuration.formatterProseWrap", result.stderr)
+        self.assertIn("installed app has not been replaced", result.stderr)
+        self.assertEqual([event["name"] for event in self.events()],
+                         ["uname", "cargo", "cargo", "tiptoptyp"])
+        self.assertTrue(all(event["old_app_present"] for event in self.events()))
+        self.assertEqual((self.installed / "old-app").read_text(), "keep until verified")
+        self.assertFalse((self.installed / "new-app").exists())
+
+    def test_missing_packaged_executable_cannot_skip_the_settings_check(self):
+        result = self.run_install(INSTALL_TEST_MISSING_EXECUTABLE="1")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("no runnable executable", result.stderr)
+        self.assertEqual([event["name"] for event in self.events()], ["uname", "cargo", "cargo"])
+        self.assertTrue((self.installed / "old-app").is_file())
+
+    def test_unexecutable_packaged_binary_preserves_previous_installation(self):
+        result = self.run_install(INSTALL_TEST_UNRUNNABLE_EXECUTABLE="1")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Settings compatibility check failed", result.stderr)
+        self.assertEqual([event["name"] for event in self.events()], ["uname", "cargo", "cargo"])
+        self.assertTrue((self.installed / "old-app").is_file())
 
     def test_explicit_architecture_overrides_environment_for_every_build_step(self):
         result = self.run_install(

@@ -1,6 +1,9 @@
 use super::*;
 use crate::diagnostics::DiagnosticCorrection;
-use egui_kittest::{Harness, kittest::Queryable as _};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT as _, Queryable as _},
+};
 
 fn app_with_problems() -> EditorApp {
     let context = egui::Context::default();
@@ -818,4 +821,230 @@ fn filtering_in_a_narrow_bottom_panel_never_changes_the_users_height() {
     harness.get_by_label("Reset problem filters").click();
     harness.run_steps(6);
     assert_eq!(height(&mut harness), initial);
+}
+
+#[test]
+fn inline_problem_fix_applies_exact_source_and_dictionary_action_does_not_edit_it() {
+    let mut harness = workspace_harness(app_with_problems());
+    harness.get_by_label("Fix automatically").click();
+    harness.run_steps(4);
+    assert_eq!(
+        harness.state().document().source(),
+        "first\nthe\nthird\nfourth"
+    );
+    assert!(
+        harness
+            .get_by_label("Fix automatically")
+            .accesskit_node()
+            .is_disabled()
+    );
+
+    let mut harness = workspace_harness(app_with_problems());
+    let before = harness.state().document().snapshot();
+    harness
+        .get_by_label("Add “teh” to Harper dictionary")
+        .click();
+    harness.run_steps(4);
+    assert_eq!(harness.state().document().key(), before.key());
+    assert_eq!(harness.state().document().source(), before.source());
+    assert!(
+        harness
+            .state()
+            .settings_snapshot()
+            .harper_dictionary
+            .lines()
+            .any(|word| word == "teh")
+    );
+}
+
+#[test]
+fn fix_all_respects_filters_and_stale_problems_and_can_be_undone_once() {
+    let mut app = app_with_problems();
+    let mut second = app.preview.editor_diagnostics[0].clone();
+    second.provider = Some("LTeX+".into());
+    let correction = second.correction.as_mut().unwrap();
+    correction.range = 10..15;
+    correction.original = "third".into();
+    correction.replacements = vec!["THIRD".into()];
+    app.preview.editor_diagnostics.push(second);
+    app.mark_diagnostics_changed();
+    app.problems.filter.provider = Some("Harper".into());
+    let mut harness = workspace_harness(app);
+    harness
+        .get_by_label("Fix all fixable problems in this file")
+        .click();
+    harness.run_steps(4);
+    assert_eq!(
+        harness.state().document().source(),
+        "first\nthe\nthird\nfourth"
+    );
+    assert!(
+        harness
+            .get_by_label("Fix all fixable problems in this file")
+            .accesskit_node()
+            .is_disabled()
+    );
+    let context = harness.ctx.clone();
+    harness.state_mut().undo_editor(&context, false);
+    harness.run_steps(3);
+    assert_eq!(
+        harness.state().document().source(),
+        "first\nteh\nthird\nfourth"
+    );
+    // Even after Undo, the old revision's suggestions stay stale.
+    assert!(
+        harness
+            .get_by_label("Fix all fixable problems in this file")
+            .accesskit_node()
+            .is_disabled()
+    );
+}
+
+#[test]
+fn ambiguous_problem_opens_choices_and_read_only_disables_source_fixes() {
+    let mut app = app_with_problems();
+    app.preview.editor_diagnostics[0]
+        .correction
+        .as_mut()
+        .unwrap()
+        .replacements
+        .push("tea".into());
+    app.mark_diagnostics_changed();
+    let mut harness = workspace_harness(app);
+    harness.get_by_label("Choose correction").click();
+    harness.run_steps(3);
+    harness.get_by_label("Replace with “the”");
+    harness.get_by_label("Replace with “tea”");
+    assert_eq!(
+        harness.state().document().source(),
+        "first\nteh\nthird\nfourth"
+    );
+
+    let mut app = app_with_problems();
+    let context = egui::Context::default();
+    app.begin_new_table(&context);
+    let harness = workspace_harness(app);
+    assert!(
+        harness
+            .get_by_label("Fix automatically")
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert!(
+        harness
+            .get_by_label("Fix all fixable problems in this file")
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert!(
+        !harness
+            .get_by_label("Add “teh” to Harper dictionary")
+            .accesskit_node()
+            .is_disabled()
+    );
+}
+
+#[test]
+fn problem_action_ownership_is_cached_across_painting_and_filtering() {
+    let mut harness = workspace_harness(app_with_problems());
+    let rebuilds = harness.state().problems.actions.rebuilds;
+    assert_eq!(rebuilds, 1);
+    harness.run_steps(20);
+    assert_eq!(harness.state().problems.actions.rebuilds, rebuilds);
+    harness.state_mut().problems.filter.provider = Some("Harper".into());
+    harness.run_steps(4);
+    assert_eq!(harness.state().problems.actions.rebuilds, rebuilds);
+    assert_eq!(harness.state().problems.actions.shown_fixes.len(), 1);
+    harness.state_mut().problems.filter.provider = Some("LTeX+".into());
+    harness.run_steps(4);
+    assert_eq!(harness.state().problems.actions.rebuilds, rebuilds);
+    assert!(harness.state().problems.actions.shown_fixes.is_empty());
+}
+
+#[test]
+fn generated_suggestion_admission_does_not_require_an_existing_correction() {
+    for provider in ["typst", "Tinymist", "TeXLab"] {
+        let mut app = app_with_problems();
+        app.preview.diagnostics = vec![diagnostic(
+            provider,
+            DiagnosticSeverity::Error,
+            "Unknown variable without a code action",
+            1,
+        )];
+        app.preview.editor_diagnostics.clear();
+        app.mark_diagnostics_changed();
+        let mut harness = workspace_harness(app);
+        assert!(
+            harness.state().problems.actions.current.is_empty(),
+            "ordinary code-action admission remains unchanged"
+        );
+        assert_eq!(
+            harness.state().problems.actions.suggestions,
+            HashSet::from([0])
+        );
+        let rebuilds = harness.state().problems.actions.rebuilds;
+        harness
+            .get_by_label("Unknown variable without a code action")
+            .click_secondary();
+        harness.run_steps(4);
+        assert!(
+            !harness
+                .get_by_label("Suggest fix")
+                .accesskit_node()
+                .is_disabled(),
+            "{provider} diagnostics without replacements can request a generated fix"
+        );
+        harness.run_steps(8);
+        assert_eq!(
+            harness.state().problems.actions.rebuilds,
+            rebuilds,
+            "menu painting reuses cached ownership and admission"
+        );
+        assert!(
+            !harness.state().diagnostic_fix.busy(),
+            "opening a menu never starts model work"
+        );
+    }
+}
+
+#[test]
+fn generated_suggestions_reject_foreign_and_identifiably_stale_problems() {
+    for foreign in [true, false] {
+        let mut app = app_with_problems();
+        let mut problem = diagnostic(
+            "Tinymist",
+            DiagnosticSeverity::Error,
+            "Unavailable generated suggestion",
+            1,
+        );
+        if foreign {
+            problem.source = DiagnosticSource::File("/unrelated/other.typ".into());
+        } else {
+            let mut correction =
+                DiagnosticCorrection::new(0..5, "first".into(), None, None, vec!["First".into()]);
+            let key = app.document().key();
+            correction.document = Some(DocumentKey::new(
+                key.owner,
+                key.epoch,
+                key.revision.wrapping_sub(1),
+            ));
+            problem.correction = Some(correction);
+        }
+        app.preview.diagnostics = vec![problem];
+        app.preview.editor_diagnostics.clear();
+        app.mark_diagnostics_changed();
+        let mut harness = workspace_harness(app);
+        assert!(harness.state().problems.actions.suggestions.is_empty());
+        harness
+            .get_by_label("Unavailable generated suggestion")
+            .click_secondary();
+        harness.run_steps(4);
+        assert!(
+            harness
+                .get_by_label("Suggest fix")
+                .accesskit_node()
+                .is_disabled()
+        );
+        assert!(!harness.state().diagnostic_fix.busy());
+    }
 }

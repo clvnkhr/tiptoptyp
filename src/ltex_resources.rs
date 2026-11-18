@@ -193,7 +193,7 @@ fn read_catalog(source: &Path) -> Result<(manifest::Manifest, String), String> {
     )?;
     Ok((
         manifest::Manifest::parse(&bytes)?,
-        format!("{:x}", Sha256::digest(&bytes)),
+        hex::encode(Sha256::digest(&bytes)),
     ))
 }
 fn read_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
@@ -254,7 +254,7 @@ fn verify_file(path: &Path, bytes: u64, hash: &str, cancel: &AtomicBool) -> Resu
         actual += count as u64;
         hasher.update(&buffer[..count]);
     }
-    if actual != bytes || format!("{:x}", hasher.finalize()) != hash {
+    if actual != bytes || hex::encode(hasher.finalize()) != hash {
         return Err("LTeX+ archive failed its integrity check.".into());
     }
     Ok(())
@@ -378,7 +378,7 @@ fn download_command(
             }
             thread::sleep(Duration::from_millis(25));
         }
-        if count != bytes || format!("{:x}", hasher.finalize()) != hash {
+        if count != bytes || hex::encode(hasher.finalize()) != hash {
             return Err("LTeX+ download failed its size or SHA-256 check.".into());
         }
         output.flush().map_err(error)
@@ -879,9 +879,9 @@ mod tests {
             name: name.into(),
             target: target.map(str::to_owned),
             bytes: bytes.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(bytes)),
+            sha256: hex::encode(Sha256::digest(bytes)),
             compressed_bytes: compressed.len() as u64,
-            compressed_sha256: format!("{:x}", Sha256::digest(&compressed)),
+            compressed_sha256: hex::encode(Sha256::digest(&compressed)),
         }
     }
     #[cfg(target_os = "macos")]
@@ -1357,7 +1357,7 @@ mod tests {
     #[cfg(unix)]
     fn downloader_requires_success_exact_size_and_checksum() {
         let cancel = AtomicBool::new(false);
-        let hash = format!("{:x}", Sha256::digest(b"fixture"));
+        let hash = hex::encode(Sha256::digest(b"fixture"));
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "printf fixture"]);
         let mut output = Vec::new();

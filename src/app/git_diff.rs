@@ -63,12 +63,16 @@ impl EditorApp {
         ui.set_min_width(ui.available_width());
         let editor_bounds = ui.available_rect_before_wrap();
         let path = self.document().path().clone().unwrap_or_default();
+        let overleaf_reveal = self.take_overleaf_reveal(ui);
         let pending_selection = self.pending_editor_selection.take();
         let takes_focus = pending_selection
             .as_ref()
             .is_some_and(EditorSelection::takes_focus);
-        let jump = pending_selection.map(|selection| selection.range().clone());
-        if let Some(range) = &jump {
+        let selection = pending_selection.map(|selection| selection.range().clone());
+        let jump = selection
+            .clone()
+            .or_else(|| overleaf_reveal.map(|at| at..at));
+        if let Some(range) = &selection {
             self.store_editor_cursor(
                 ui.ctx(),
                 CCursorRange::two(CCursor::new(range.start), CCursor::new(range.end)),
@@ -81,12 +85,10 @@ impl EditorApp {
         let overleaf_cursors = self.overleaf_presence_for_active();
         let snapshot = self.editor_snapshot(ui.ctx());
         let key = self.document().key();
-        let cursor_line = snapshot
-            .source
-            .chars()
-            .take(snapshot.cursor.primary.index.0)
-            .filter(|&c| c == '\n')
-            .count();
+        self.prepare_editor_source_data();
+        let cursor_line = self
+            .editor_data
+            .line_index_at_char(snapshot.cursor.primary.index.0);
         let selected = self
             .git_editor
             .hunks
@@ -126,7 +128,7 @@ impl EditorApp {
                     crate::auto_pairs::PairingBuffer::new(
                         source,
                         auto_pair,
-                        settings.auto_pair_delimiters && kind.is_typst(),
+                        settings.auto_pair_delimiters && kind.typesetting_language().is_some(),
                         &input.events,
                     )
                     .with_surround(settings.auto_pair_delimiters, &input.events)
@@ -165,10 +167,9 @@ impl EditorApp {
             self.find_bar.search.clear();
             self.mark_edited();
         }
-        let caret = output
-            .edit
-            .galley
-            .pos_from_cursor(cursor.primary)
+        let cursor_index = self.source_rows.cursor_index(&output.edit.galley);
+        let caret = cursor_index
+            .rect(&output.edit.galley, cursor.primary)
             .translate(output.edit.galley_pos.to_vec2());
         self.last_editor_caret = Some(EditorCaretState {
             key: self.document().key(),
@@ -224,6 +225,7 @@ impl EditorApp {
             ui,
             editor_particles::Surface {
                 edit: &output.edit,
+                cursor_index: &cursor_index,
                 document: self.document().key(),
                 viewport: attention_viewport,
                 view: editor_particles::View::Diff,
@@ -245,7 +247,7 @@ impl EditorApp {
             Some(full_view::Action::Previous) => self.navigate_document_diff(ui.ctx(), true),
             Some(full_view::Action::Next) => self.navigate_document_diff(ui.ctx(), false),
             Some(full_view::Action::RevertLine(index)) => {
-                if self.overleaf_source_locked() {
+                if self.reject_read_only_edit(ui.ctx()) {
                     return;
                 }
                 if let Some(text) = self

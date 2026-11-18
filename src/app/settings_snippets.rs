@@ -270,6 +270,38 @@ impl Draft {
         self.filter = Filter::default();
         self.validate();
     }
+    fn add_tex_magic(&mut self) {
+        for snippet in crate::snippet_presets::tex_magic_defaults() {
+            if self.all().any(|existing| {
+                existing.language == snippet.language && existing.prefix == snippet.prefix
+            }) {
+                continue;
+            }
+            let index = self.presets.len();
+            self.source_delimiters.insert(
+                index,
+                (
+                    snippet.placeholder_open.clone(),
+                    snippet.placeholder_close.clone(),
+                ),
+            );
+            self.editor_ids.insert(index, fresh_editor_id());
+            self.saved_entries.insert(index, None);
+            self.presets.push(snippet);
+        }
+        let selected = self
+            .all()
+            .position(|snippet| snippet.language == Language::Tex && snippet.prefix == "texroot")
+            .unwrap_or(0);
+        self.selected = selected;
+        self.reveal_selected = true;
+        self.filter = Filter {
+            query: "tex".into(),
+            language: Some(Language::Tex),
+            ..Default::default()
+        };
+        self.validate();
+    }
     fn duplicate(&mut self) {
         let Some(mut entry) = self.get(self.selected).cloned() else {
             return;
@@ -891,6 +923,11 @@ fn editor_library(ui: &mut egui::Ui, draft: &mut Draft) {
         if restore.clicked() {
             draft.restore();
         }
+        let magic = ui.button("Add TeX magic comments");
+        observe("settings.snippets.add.tex_magic", &magic);
+        if magic.clicked() {
+            draft.add_tex_magic();
+        }
     });
     editor_filters(ui, &mut draft.filter);
     let visible = draft.visible();
@@ -1286,7 +1323,7 @@ fn editor_detail(
         ui.label("Write ordinary Typst or TeX, with real line breaks. Dollars, quotes and backslashes are literal; no JSON escaping.");
         ui.monospace("{{1:name}}   {{1}}   {{2:value}}   {{0}}");
         ui.label("Use the same placeholders in Typst and TeX. Numbered fields are visited in order; repeated numbers stay linked. Field 0 places the final cursor. Opening delimiter and Closing delimiter can be changed per snippet. Rewrite markers changes existing placeholders; Keep source leaves the source unchanged and reserves only the new pair.");
-        ui.label("Math shortcuts appear in equations; text shortcuts can wrap inline math. Code means Typst code. Start of line allows leading indentation. Comments and raw/verbatim text are excluded.");
+        ui.label("Math shortcuts appear in equations; text shortcuts can wrap inline math. Code means Typst code. Start of line allows leading indentation. TeX magic comments complete in the top-of-file header; other comments and raw/verbatim text are excluded.");
         ui.label("Multiline expansions keep the current indentation. TeX package imports are added when needed. Undo reverses insertion and imports together. Use separate numbered fields rather than nesting fields.");
         ui.label("Uncheck Enabled to keep a snippet temporarily out of completions. Save applies all draft changes; Revert discards them. Removing a suggestion removes it from the library; Restore suggestions restores the bundled library while keeping your snippets. Your enabled eligible snippet takes precedence over a suggestion with the same prefix.");
     });
@@ -1993,6 +2030,60 @@ mod tests {
                 .len(),
             draft.len()
         );
+    }
+    #[test]
+    fn adding_tex_magic_preserves_existing_edits_disabled_entries_and_custom_editor_identity() {
+        let mut presets = crate::snippet_presets::defaults();
+        presets.retain(|snippet| !snippet.prefix.starts_with("tex"));
+        presets[0].body = "edited preset {{1:x}}{{0}}".into();
+        presets[0].enabled = false;
+        let mut root = crate::snippet_presets::tex_magic_defaults().next().unwrap();
+        root.body = "custom root {{1:kept}}{{0}}".into();
+        root.enabled = false;
+        let mut draft = Draft::new(std::slice::from_ref(&root), &presets);
+        let original_presets = draft.presets.clone();
+        let custom_identity = draft.editor_ids[draft.presets.len()];
+        let custom_saved = draft.saved_entries[draft.presets.len()].clone();
+        draft.add_tex_magic();
+        assert_eq!(&draft.presets[..presets.len()], &original_presets);
+        assert_eq!(draft.presets.len(), presets.len() + 4);
+        assert_eq!(draft.entries, vec![root.clone()]);
+        assert_eq!(draft.selected, draft.presets.len());
+        assert_eq!(draft.get(draft.selected), Some(&root));
+        assert_eq!(draft.editor_ids[draft.selected], custom_identity);
+        assert_eq!(draft.saved_entries[draft.selected], custom_saved);
+        assert_eq!(draft.source_delimiters.len(), draft.len());
+        assert_eq!(draft.editor_ids.len(), draft.len());
+        assert_eq!(draft.saved_entries.len(), draft.len());
+        assert!(draft.validation.is_ok());
+        let expected = draft.presets.clone();
+        let identities = draft.editor_ids.clone();
+        draft.add_tex_magic();
+        assert_eq!(draft.presets, expected);
+        assert_eq!(draft.editor_ids, identities);
+    }
+
+    #[test]
+    fn add_tex_magic_control_saves_only_missing_headers_without_restoring_other_presets() {
+        let mut settings = AppSettings::default();
+        settings.snippet_presets.truncate(1);
+        settings.snippet_presets[0].body = "kept {{1:edit}}{{0}}".into();
+        let kept = settings.snippet_presets[0].clone();
+        let mut harness = form(settings);
+        harness.get_by_label("Add TeX magic comments").click();
+        harness.run();
+        let draft = harness.state().1.as_ref().unwrap();
+        assert_eq!(draft.presets.len(), 6);
+        assert_eq!(draft.presets[0], kept);
+        assert_eq!(draft.get(draft.selected).unwrap().prefix, "texroot");
+        assert_eq!(harness.state().0.snippet_presets.len(), 1);
+        harness.get_by_label("Save snippets").click();
+        harness.run();
+        assert_eq!(harness.state().0.snippet_presets.len(), 6);
+        assert_eq!(harness.state().0.snippet_presets[0], kept);
+        for snippet in crate::snippet_presets::tex_magic_defaults() {
+            assert!(harness.state().0.snippet_presets.contains(&snippet));
+        }
     }
     #[test]
     fn language_filters_include_shared_snippets_but_both_filter_is_specific() {

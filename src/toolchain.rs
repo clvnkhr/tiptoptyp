@@ -514,7 +514,7 @@ mod tests {
         std::fs::write(&archive, b"compressed payload token").unwrap();
         std::fs::write(
             directory.path().join("manifest.tsv"),
-            format!("typst\t3\t{:x}\n", Sha256::digest(b"abc")),
+            format!("typst\t3\t{}\n", hex::encode(Sha256::digest(b"abc"))),
         )
         .unwrap();
         let resolved = resolve_from(

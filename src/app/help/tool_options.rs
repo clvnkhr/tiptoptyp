@@ -192,8 +192,8 @@ const TOOLS: [ToolHelp; 6] = [
                 purpose: "Formatter indentation; editable default is 2 spaces.",
             },
             ToolOption {
-                example: "Configuration JSON: \"formatterProseWrap\": true",
-                purpose: "Reflow prose; editable default false preserves authored wrapping.",
+                example: "Configuration JSON: \"formatterProseWrap\": \"fill\"",
+                purpose: "Reflow prose. Default \"none\" preserves authored wrapping; \"sentence\" places each sentence on its own line.",
             },
             ToolOption {
                 example: "Configuration JSON: \"lint\": {\"enabled\": true, \"when\": \"onType\"}",
@@ -209,15 +209,15 @@ const TOOLS: [ToolHelp; 6] = [
             },
         ],
         notes: &[
-            "JSON examples go directly in the object. Merge entries; do not wrap them in a tinymist object. Tinymist 0.15.2 embeds a Typst 0.15.0 fork, separate from the Typst exporter.",
-            "For this bundled version, formatterProseWrap is boolean. typstExtraArgs accepts --input options only; use --input=key=value. The app owns preview transport, scheduling, compile status and document navigation.",
+            "JSON examples go directly in the object. Merge entries; do not wrap them in a tinymist object. Tinymist 0.15.12 embeds a Typst 0.15.1 fork, separate from the Typst exporter.",
+            "formatterProseWrap accepts none, fill or sentence. In this app, typstExtraArgs accepts --input options only; use --input=key=value. The app owns preview transport, scheduling, compile status and document navigation.",
             "Lint/export policies are never, onSave and onType. The script policy is unfinished. Do not pass preview/compile flags to lsp.",
             "Inputs, fonts and packages must match the separate Typst exporter when saving the same document as PDF.",
         ],
         links: &[
             (
                 "Configuration schema",
-                "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.2/crates/tinymist/src/config.rs",
+                "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.12/crates/tinymist/src/config.rs",
             ),
             (
                 "Compiler settings",
@@ -421,7 +421,7 @@ const TOOLS: [ToolHelp; 6] = [
             ),
             (
                 "Bundled implementation",
-                "https://github.com/jolars/badness/blob/v0.24.0/src/config.rs",
+                "https://github.com/jolars/badness/blob/v0.29.0/src/config.rs",
             ),
         ],
     },
@@ -578,7 +578,7 @@ mod tests {
                 .data_mut(|data| data.remove_temp::<String>(id))
                 .as_deref(),
             Some(
-                "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.2/crates/tinymist/src/config.rs"
+                "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.12/crates/tinymist/src/config.rs"
             )
         );
         assert!(

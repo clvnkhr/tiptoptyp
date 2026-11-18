@@ -18,6 +18,7 @@ pub(crate) enum ShortcutAction {
     New,
     NewWindow,
     NewFromTemplate,
+    MakeDemoFile,
     ComfyPreview,
     Open,
     OpenInNewWindow,
@@ -104,12 +105,13 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 88] = [
+    pub(crate) const ALL: [Self; 89] = [
         Self::Settings,
         Self::CommandPalette,
         Self::New,
         Self::NewWindow,
         Self::NewFromTemplate,
+        Self::MakeDemoFile,
         Self::ComfyPreview,
         Self::Open,
         Self::OpenInNewWindow,
@@ -202,6 +204,7 @@ impl ShortcutAction {
             Self::New => "file.new",
             Self::NewWindow => "file.new_window",
             Self::NewFromTemplate => "file.new_from_template",
+            Self::MakeDemoFile => "file.make_demo_file",
             Self::ComfyPreview => "view.comfy_preview",
             Self::Open => "file.open",
             Self::OpenInNewWindow => "file.open_in_new_window",
@@ -299,6 +302,7 @@ impl ShortcutAction {
             Self::New => "New document",
             Self::NewWindow => "New window",
             Self::NewFromTemplate => "New from template",
+            Self::MakeDemoFile => "Make demo file",
             Self::ComfyPreview => "Toggle comfy preview",
             Self::Open => "Open",
             Self::OpenInNewWindow => "Open in new window",
@@ -376,7 +380,7 @@ impl ShortcutAction {
             Self::StatusHistory => "Status history",
             Self::ToggleLineWrap => "Toggle line wrapping",
             Self::ToggleLineNumbers => "Toggle line numbers",
-            Self::ToggleStickyContext => "Toggle Typst sticky context",
+            Self::ToggleStickyContext => "Toggle sticky context",
             Self::UiScaleReset => "Reset interface scale",
             Self::WindowColor => "Window color",
             Self::FileMenu => "File menu",
@@ -397,6 +401,7 @@ impl ShortcutAction {
             Self::New
             | Self::NewWindow
             | Self::NewFromTemplate
+            | Self::MakeDemoFile
             | Self::Open
             | Self::OpenInNewWindow
             | Self::ChangeWorkspaceRoot
@@ -1235,6 +1240,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
         | Action::Overleaf
         | Action::RevertTo
         | Action::NewFromTemplate
+        | Action::MakeDemoFile
         | Action::ComfyPreview => {
             return None;
         }
@@ -1349,6 +1355,7 @@ mod tests {
                             | ShortcutAction::Overleaf
                             | ShortcutAction::EditTable
                             | ShortcutAction::NewFromTemplate
+                            | ShortcutAction::MakeDemoFile
                             | ShortcutAction::ComfyPreview
                     )
             ));

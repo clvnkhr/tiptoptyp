@@ -8,7 +8,7 @@ use std::{
 };
 
 mod mutations;
-pub(crate) use mutations::validate_entry_name;
+pub(crate) use mutations::{create_workspace, validate_entry_name};
 
 /// Workspace mutations require a target resolved through its owning root.
 pub(crate) struct WorkspaceRoot(PathBuf);
@@ -43,73 +43,35 @@ impl WorkspaceRoot {
             .parent()
             .ok_or_else(|| io::Error::other("missing parent"))?
             .canonicalize()?;
-        if !parent.starts_with(&self.0) || !fs::symlink_metadata(path)?.file_type().is_file() {
+        let name = path
+            .file_name()
+            .ok_or_else(|| io::Error::other("missing file name"))?;
+        validate_entry_name(name)?;
+        let path = parent.join(name);
+        if !parent.starts_with(&self.0) || !fs::symlink_metadata(&path)?.file_type().is_file() {
             return Err(io::Error::other(
                 "only regular workspace files can be deleted",
             ));
         }
         Ok(WorkspaceFile {
             root: self.0.clone(),
-            path: path.to_owned(),
+            path,
         })
     }
 }
 impl WorkspaceDirectory {
     pub(crate) fn import(&self, source: &Path) -> io::Result<PathBuf> {
-        import_file(&self.root, &self.path, source)
+        mutations::import_file(&self.root, &self.path, source)
     }
 }
 impl WorkspaceFile {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn delete(self) -> io::Result<()> {
-        delete_file(&self.root, &self.path)
+        mutations::delete_file(&self.root, &self.path)
     }
-}
-
-/// Revalidate at execution; a validated target is not protection against an
-/// external filesystem race between validation and the OS operation itself.
-fn import_file(root: &Path, directory: &Path, source: &Path) -> io::Result<PathBuf> {
-    let root = root.canonicalize()?;
-    let directory = directory.canonicalize()?;
-    if !directory.starts_with(&root) || !directory.is_dir() {
-        return Err(io::Error::other("the destination is outside the workspace"));
-    }
-    if !fs::symlink_metadata(source)?.file_type().is_file() {
-        return Err(io::Error::other("only regular files can be imported"));
-    }
-    let name = source
-        .file_name()
-        .ok_or_else(|| io::Error::other("missing file name"))?;
-    let destination = directory.join(name);
-    let mut input = fs::File::open(source)?;
-    let mut output = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&destination)?;
-    let mut copy = || -> io::Result<()> {
-        io::copy(&mut input, &mut output)?;
-        output.set_permissions(input.metadata()?.permissions())?;
-        output.sync_all()
-    };
-    if let Err(error) = copy() {
-        drop(output);
-        let _ = fs::remove_file(&destination);
-        return Err(error);
-    }
-    Ok(destination)
-}
-
-fn delete_file(root: &Path, path: &Path) -> io::Result<()> {
-    let root = root.canonicalize()?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("missing parent"))?
-        .canonicalize()?;
-    if !parent.starts_with(root) || !fs::symlink_metadata(path)?.file_type().is_file() {
-        return Err(io::Error::other(
-            "only regular workspace files can be deleted",
-        ));
-    }
-    fs::remove_file(path)
 }
 
 /// The kind of an entry in the project tree.
@@ -320,6 +282,16 @@ mod tests {
 
     use super::*;
 
+    fn import_file(root: &Path, directory: &Path, source: &Path) -> io::Result<PathBuf> {
+        WorkspaceRoot::open(root)?
+            .directory(directory)?
+            .import(source)
+    }
+
+    fn delete_file(root: &Path, path: &Path) -> io::Result<()> {
+        WorkspaceRoot::open(root)?.file(path)?.delete()
+    }
+
     #[cfg(unix)]
     #[test]
     fn validated_delete_rechecks_a_target_replaced_by_a_symlink() {
@@ -420,6 +392,78 @@ mod tests {
         assert!(delete_file(&root, &folder).is_err());
         delete_file(&root, &imported).unwrap();
         assert!(!imported.exists());
+    }
+
+    #[test]
+    fn import_and_delete_cannot_bypass_a_managed_overleaf_ancestor() {
+        let project = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        fs::create_dir_all(project.path().join(".tiptoptyp")).unwrap();
+        fs::write(
+            project.path().join(".tiptoptyp/overleaf-project.json"),
+            b"descriptor",
+        )
+        .unwrap();
+        let selected = project.path().join("subdir");
+        fs::create_dir_all(selected.join("chapters")).unwrap();
+        let source = external.path().join("local.tex");
+        fs::write(&source, b"local contents").unwrap();
+        let existing = selected.join("server.tex");
+        fs::write(&existing, b"server contents").unwrap();
+        let root = WorkspaceRoot::open(&selected).unwrap();
+        let target = root.directory(&selected.join("chapters")).unwrap();
+        assert!(target.import(&source).is_err());
+        assert!(!selected.join("chapters/local.tex").exists());
+        assert!(root.file(&existing).unwrap().delete().is_err());
+        assert_eq!(fs::read(&existing).unwrap(), b"server contents");
+        assert_eq!(fs::read(&source).unwrap(), b"local contents");
+    }
+
+    #[test]
+    fn importing_a_reserved_name_cannot_replace_workspace_metadata_storage() {
+        let project = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let source = external.path().join(".tiptoptyp");
+        fs::write(&source, b"ordinary file").unwrap();
+        let root = WorkspaceRoot::open(project.path()).unwrap();
+        assert!(
+            root.directory(project.path())
+                .unwrap()
+                .import(&source)
+                .is_err()
+        );
+        assert!(!project.path().join(".tiptoptyp").exists());
+        assert_eq!(fs::read(&source).unwrap(), b"ordinary file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validated_import_and_delete_never_adopt_a_replacement_workspace_symlink() {
+        use std::os::unix::fs::symlink;
+        let parent = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let root_path = parent.path().join("project");
+        fs::create_dir(&root_path).unwrap();
+        let local = root_path.join("keep.tex");
+        fs::write(&local, b"workspace contents").unwrap();
+        let external_keep = external.path().join("keep.tex");
+        fs::write(&external_keep, b"external contents").unwrap();
+        let source = parent.path().join("imported.tex");
+        fs::write(&source, b"imported contents").unwrap();
+        let root = WorkspaceRoot::open(&root_path).unwrap();
+        let directory = root.directory(&root_path).unwrap();
+        let file = root.file(&local).unwrap();
+        let original = parent.path().join("original");
+        fs::rename(&root_path, &original).unwrap();
+        symlink(external.path(), &root_path).unwrap();
+        assert!(directory.import(&source).is_err());
+        assert!(file.delete().is_err());
+        assert!(!external.path().join("imported.tex").exists());
+        assert_eq!(fs::read(&external_keep).unwrap(), b"external contents");
+        assert_eq!(
+            fs::read(original.join("keep.tex")).unwrap(),
+            b"workspace contents"
+        );
     }
 
     #[cfg(unix)]

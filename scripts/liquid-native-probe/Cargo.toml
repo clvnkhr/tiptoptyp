@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 license = "MIT"
+default-run = "tiptoptyp-liquid-native-probe"
+
+[[bin]]
+name = "tiptoptyp-diagnostic-fix-probe"
+path = "src/diagnostic_fix.rs"
 
 # This measures the actual production modules without constructing the editor or
 # linking its GUI dependencies. Keep inference/tokenizer versions in sync with
@@ -13,17 +18,27 @@ tokenizers = { version = "=0.23.2", default-features = false, features = ["fancy
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = { version = "0.10", features = ["asm"] }
-zstd = { version = "0.13.3", default-features = false }
+sha2 = "0.11.1"
+hex = "0.4.3"
+zstd = { version = "0.14.3", default-features = false }
 tempfile = "3"
+ureq = "3.5.1"
+tar = "0.4"
+flate2 = "1"
+tiptoptyp-core = { path = "../../core" }
+typst-syntax = "=0.15.1"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.28.0", features = ["signal", "user"] }
+nix = { version = "0.31.3", features = ["signal", "user"] }
 
 [features]
 production = []
 
 [workspace]
+
+# Measure the same maintained tokenizer implementation as the application.
+[patch.crates-io]
+tokenizers = { path = "../../vendor/tokenizers" }
 
 [profile.release]
 lto = "thin"

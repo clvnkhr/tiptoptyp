@@ -4,10 +4,7 @@ use std::time::Instant;
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 use crate::{
-    child_view::{
-        ChildViewHost, ChildViewSpec, POPUP_BLUR_GRACE, popup_focus_should_close,
-        viewport_scoped_id,
-    },
+    child_view::{ChildViewHost, ChildViewSpec, POPUP_BLUR_GRACE, PopupFocus, viewport_scoped_id},
     screenshot::CaptureController,
     theme,
 };
@@ -16,8 +13,7 @@ use crate::{
 struct LogoState {
     color: Option<Color32>,
     open: bool,
-    had_focus: bool,
-    blur_started: Option<Instant>,
+    focus: PopupFocus,
 }
 
 pub(crate) fn toggle(context: &egui::Context) {
@@ -25,8 +21,7 @@ pub(crate) fn toggle(context: &egui::Context) {
     context.data_mut(|data| {
         let state = data.get_temp_mut_or_default::<LogoState>(id);
         state.open = !state.open;
-        state.had_focus = false;
-        state.blur_started = None;
+        state.focus = PopupFocus::default();
     });
     context.request_repaint();
 }
@@ -40,8 +35,7 @@ pub(crate) fn show(ui: &mut egui::Ui, captures: &CaptureController) {
     let response = logo_button(ui, state.color, state.open);
     if response.clicked() {
         state.open = !state.open;
-        state.had_focus = false;
-        state.blur_started = None;
+        state.focus = PopupFocus::default();
     } else if context.input(|input| {
         input.key_pressed(egui::Key::Escape)
             || (input.pointer.any_pressed()
@@ -79,13 +73,8 @@ pub(crate) fn show(ui: &mut egui::Ui, captures: &CaptureController) {
             done |= input.close_requested || input.escape_pressed;
             state.open &= !input.close_requested
                 && !input.escape_pressed
-                && !popup_focus_should_close(
-                    &mut state.had_focus,
-                    &mut state.blur_started,
-                    input.focused,
-                    now,
-                );
-            if let Some(started) = state.blur_started {
+                && !state.focus.observe(input.focused, now);
+            if let Some(started) = state.focus.blur_started() {
                 let elapsed = now.saturating_duration_since(started);
                 if elapsed < POPUP_BLUR_GRACE {
                     ui.ctx().request_repaint_after(POPUP_BLUR_GRACE - elapsed);

@@ -6,6 +6,7 @@ pub(super) fn empty_workspace_command(command: AppCommand) -> bool {
         command,
         AppCommand::CommandPalette
             | AppCommand::New
+            | AppCommand::MakeDemoFile
             | AppCommand::NewFromTemplate
             | AppCommand::NewWindow
             | AppCommand::Open

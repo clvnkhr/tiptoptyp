@@ -31,6 +31,34 @@ fn instances_for_style(style: ParticleStyle) -> Arc<[[f32; 8]]> {
     state.instances()
 }
 
+// Deliberately construct the public eight-float GPU contract independently of
+// CPU emission. The CPU tests cover packing; these pixels exercise the actual
+// shader lifetime, motion, blend and clip behavior for each supplemental code.
+#[cfg(target_os = "macos")]
+fn supplemental_instances(code: u8) -> Arc<[[f32; 8]]> {
+    (0..16)
+        .map(|index| {
+            let seed = (index as f32 * 0.618_034).fract();
+            let radius = match code {
+                5 => 3.0 + (index % 3) as f32 * 1.2,
+                6 => 1.1 + (index % 3) as f32 * 0.45,
+                7 => 2.6,
+                _ => panic!("unknown supplemental GPU style"),
+            };
+            [
+                154.0 + (index % 4) as f32 * 3.0,
+                146.0,
+                ((index % 5) as f32 - 2.0) * 8.0,
+                -24.0 - (index % 3) as f32 * 9.0,
+                radius,
+                0.0,
+                seed,
+                f32::from(code) * 4.0,
+            ]
+        })
+        .collect()
+}
+
 #[test]
 fn every_style_uses_the_same_bounded_instance_stride_and_packed_kind() {
     assert_eq!(std::mem::size_of::<super::gpu::Instance>(), 32);
@@ -471,6 +499,11 @@ fn gpu_explosion_framebuffer_review() {
 
 #[cfg(target_os = "macos")]
 fn check_translucent_style(style: ParticleStyle, capture: bool) {
+    check_translucent_batch(style.label(), instances_for_style(style), capture);
+}
+
+#[cfg(target_os = "macos")]
+fn check_translucent_batch(label: &str, batch: Arc<[[f32; 8]]>, capture: bool) {
     use eframe::glow::{self, HasContext as _};
     for dark in [false, true] {
         for opacity in [0, 96] {
@@ -495,7 +528,7 @@ fn check_translucent_style(style: ParticleStyle, capture: bool) {
                 &mut framebuffer,
                 &context,
                 &renderer,
-                instances_for_style(style),
+                batch.clone(),
                 (dark, 1.0, opacity),
                 0.035,
                 capture.then_some(path.as_path()),
@@ -567,7 +600,7 @@ fn check_translucent_style(style: ParticleStyle, capture: bool) {
                 if !capture {
                     let path = std::path::PathBuf::from(format!(
                         ".tiptoptyp/screenshots/agent-review/particle-variants/{}-{}-alpha{opacity}-failure.png",
-                        style.label().to_ascii_lowercase(),
+                        label.to_ascii_lowercase(),
                         if dark { "dark" } else { "light" },
                     ));
                     save_frame(&active, &path);
@@ -732,10 +765,167 @@ fn gpu_particle_variants_framebuffer_review() {
 
 #[test]
 #[cfg(target_os = "macos")]
-#[ignore = "real Glow alpha 0/96 contract for all five particle styles"]
+#[ignore = "real Glow alpha 0/96 contract for primary and supplemental particle styles"]
 fn gpu_particle_variants_preserve_translucent_pixels() {
     for style in ParticleStyle::ALL {
         check_translucent_style(style, false);
+    }
+    for (code, label) in [(5, "smoke"), (6, "embers"), (7, "afterburner")] {
+        check_translucent_batch(label, supplemental_instances(code), false);
+    }
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "real Glow supplemental lifetimes, animation, clipping and upload reuse"]
+fn gpu_supplemental_particles_linger_then_expire_without_uploads() {
+    use eframe::glow::{self, HasContext as _};
+    for dark in [false, true] {
+        for scale in [1.0, 2.0] {
+            for (code, label, early, late, lifetime) in [
+                (5, "smoke", 0.18, 1.2, super::SMOKE_LIFETIME),
+                (6, "embers", 0.10, 0.9, super::EMBER_LIFETIME),
+                (7, "afterburner", 0.06, 0.22, super::AFTERBURNER_LIFETIME),
+            ] {
+                let context = egui::Context::default();
+                let renderer = Renderer::for_context(&context);
+                let mut framebuffer = crate::test_framebuffer::Framebuffer::new([
+                    (360.0 * scale) as u32,
+                    (240.0 * scale) as u32,
+                ]);
+                let gl = framebuffer.gl();
+                let appearance = (dark, scale, 255);
+                let baseline = render_frame(
+                    &mut framebuffer,
+                    &context,
+                    &renderer,
+                    Arc::from([]),
+                    appearance,
+                    0.0,
+                    None,
+                );
+                assert!(renderer.inspected()["ready"].as_bool().unwrap_or(false));
+                let batch = supplemental_instances(code);
+                let mut first_pixels = None;
+                for (time, phase) in [(early, "early"), (late, "lingering")] {
+                    let path = std::path::PathBuf::from(format!(
+                        ".tiptoptyp/screenshots/agent-review/particle-variants/{label}-{}-2x-{phase}.png",
+                        if dark { "dark" } else { "light" },
+                    ));
+                    let image = render_frame(
+                        &mut framebuffer,
+                        &context,
+                        &renderer,
+                        batch.clone(),
+                        appearance,
+                        time,
+                        (scale == 2.0).then_some(path.as_path()),
+                    );
+                    assert!(
+                        changed_inside_clip(&baseline, &image, scale)
+                            > (10.0 * scale * scale) as usize,
+                        "{label} vanished at {time}s, before its own expiry",
+                    );
+                    if let Some(first) = &first_pixels {
+                        assert_ne!(
+                            first, &image.pixels,
+                            "{label} must move and fade on the GPU"
+                        );
+                    } else {
+                        first_pixels = Some(image.pixels);
+                    }
+                }
+                let expired = render_frame(
+                    &mut framebuffer,
+                    &context,
+                    &renderer,
+                    batch.clone(),
+                    appearance,
+                    lifetime as f32 + 0.1,
+                    None,
+                );
+                assert_eq!(
+                    baseline.pixels, expired.pixels,
+                    "{label} left residual pixels"
+                );
+                assert_eq!(counter(&renderer, "uploads"), 1);
+                assert_eq!(counter(&renderer, "draws"), 3);
+                assert_eq!(
+                    counter(&renderer, "uploaded_bytes_total"),
+                    std::mem::size_of_val(&*batch) as u64,
+                );
+                renderer.destroy(&gl);
+                unsafe { assert_eq!(gl.get_error(), glow::NO_ERROR) };
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "real Glow cursor afterburner follows supplied velocity in all four directions"]
+fn gpu_afterburner_retains_horizontal_and_downward_launch_direction() {
+    use eframe::glow::{self, HasContext as _};
+    let origin = egui::pos2(174.0, 122.0);
+    for dark in [false, true] {
+        for direction in [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y] {
+            let context = egui::Context::default();
+            let renderer = Renderer::for_context(&context);
+            let mut framebuffer = crate::test_framebuffer::Framebuffer::new([360, 240]);
+            let gl = framebuffer.gl();
+            let baseline = render_frame(
+                &mut framebuffer,
+                &context,
+                &renderer,
+                Arc::from([]),
+                (dark, 1.0, 255),
+                0.0,
+                None,
+            );
+            let velocity = direction * 180.0;
+            let batch: Arc<[[f32; 8]]> = Arc::from([[
+                origin.x, origin.y, velocity.x, velocity.y, 3.5, 0.0, 0.5, 28.0,
+            ]]);
+            let active = render_frame(
+                &mut framebuffer,
+                &context,
+                &renderer,
+                batch,
+                (dark, 1.0, 255),
+                0.18,
+                None,
+            );
+            assert!(changed_inside_clip(&baseline, &active, 1.0) > 10);
+            let mut weighted = Vec2::ZERO;
+            let mut total = 0.0;
+            for (index, (before, after)) in baseline.pixels.iter().zip(&active.pixels).enumerate() {
+                let weight: f32 = before.to_array()[..3]
+                    .iter()
+                    .zip(&after.to_array()[..3])
+                    .map(|(a, b)| (f32::from(*a) - f32::from(*b)).abs())
+                    .sum();
+                weighted += egui::vec2(
+                    (index % active.size[0]) as f32 + 0.5,
+                    (index / active.size[0]) as f32 + 0.5,
+                ) * weight;
+                total += weight;
+            }
+            assert!(total > 0.0);
+            let displacement = weighted / total - origin.to_vec2();
+            assert!(
+                displacement.dot(direction) > 12.0,
+                "afterburner ignored its launch direction {direction:?}: {displacement:?}",
+            );
+            assert!(
+                displacement
+                    .dot(egui::vec2(-direction.y, direction.x))
+                    .abs()
+                    < 3.0,
+                "afterburner developed a fixed upward bias: {displacement:?}",
+            );
+            renderer.destroy(&gl);
+            unsafe { assert_eq!(gl.get_error(), glow::NO_ERROR) };
+        }
     }
 }
 
@@ -760,16 +950,27 @@ fn gpu_resident_batch_measurement() {
     }
     let mut cases = Vec::new();
     for dark in [false, true] {
-        for style in ParticleStyle::ALL {
-            let source = instances_for_style(style);
+        for (label, source, ages) in ParticleStyle::ALL
+            .into_iter()
+            .map(|style| (style.label(), instances_for_style(style), [0.035, 0.3]))
+            .chain(
+                [
+                    (5, "Smoke", [0.5, 2.6]),
+                    (6, "Embers", [0.1, 1.6]),
+                    (7, "Afterburner", [0.01, 0.4]),
+                ]
+                .into_iter()
+                .map(|(code, label, ages)| (label, supplemental_instances(code), ages)),
+            )
+        {
             let batch: Arc<[[f32; 8]]> = (0..super::LIMIT)
                 .map(|index| source[index % source.len()])
                 .collect();
-            renderer.measure_resident_batch(&gl, clip, &batch, dark, 200);
+            renderer.measure_resident_batch(&gl, clip, &batch, dark, 200, ages);
             let samples: Vec<_> = (0..3)
                 .map(|_| {
                     let (submission, complete) =
-                        renderer.measure_resident_batch(&gl, clip, &batch, dark, iterations);
+                        renderer.measure_resident_batch(&gl, clip, &batch, dark, iterations, ages);
                     serde_json::json!({
                         "submission_ms": submission.as_secs_f64() * 1_000.0,
                         "completion_ms": complete.as_secs_f64() * 1_000.0,
@@ -778,7 +979,8 @@ fn gpu_resident_batch_measurement() {
                 .collect();
             cases.push(serde_json::json!({
                 "dark": dark,
-                "style": style.label(),
+                "style": label,
+                "sample_age_range_s": ages,
                 "samples": samples,
             }));
         }

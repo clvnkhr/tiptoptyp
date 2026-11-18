@@ -19,13 +19,60 @@ pub(in crate::app) struct Dialog {
     editing: bool,
     focus_editor: bool,
     revision: u64,
-    diff_revision: Option<u64>,
-    requested: Option<u64>,
-    failed: Option<u64>,
-    job: ExclusiveJob<DocumentDiff>,
-    diff: Option<DocumentDiff>,
-    error: Option<String>,
-    stale: bool,
+    comparison: Comparison,
+    choice_error: Option<String>,
+    validity: ReviewValidity,
+}
+struct CachedComparison {
+    revision: u64,
+    diff: DocumentDiff,
+}
+enum Comparison {
+    Unrequested,
+    Computing {
+        revision: u64,
+        job: ExclusiveJob<DocumentDiff>,
+        previous: Option<CachedComparison>,
+    },
+    Ready(CachedComparison),
+    Failed {
+        revision: u64,
+        message: String,
+        previous: Option<CachedComparison>,
+    },
+}
+impl Comparison {
+    fn cached(&self) -> Option<&CachedComparison> {
+        match self {
+            Self::Ready(cached) => Some(cached),
+            Self::Computing { previous, .. } | Self::Failed { previous, .. } => previous.as_ref(),
+            Self::Unrequested => None,
+        }
+    }
+    fn into_cached(self) -> Option<CachedComparison> {
+        match self {
+            Self::Ready(cached) => Some(cached),
+            Self::Computing { previous, .. } | Self::Failed { previous, .. } => previous,
+            Self::Unrequested => None,
+        }
+    }
+    fn running(&self) -> bool {
+        matches!(self, Self::Computing { .. })
+    }
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn phase(&self) -> &'static str {
+        match self {
+            Self::Unrequested => "unrequested",
+            Self::Computing { .. } => "computing",
+            Self::Ready(_) => "ready",
+            Self::Failed { .. } => "failed",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewValidity {
+    Current,
+    Stale,
 }
 impl Dialog {
     fn new(review: ConflictReview, path: PathBuf) -> Self {
@@ -36,13 +83,9 @@ impl Dialog {
             editing: false,
             focus_editor: false,
             revision: 0,
-            diff_revision: None,
-            requested: None,
-            failed: None,
-            job: Default::default(),
-            diff: None,
-            error: None,
-            stale: false,
+            comparison: Comparison::Unrequested,
+            choice_error: None,
+            validity: ReviewValidity::Current,
         }
     }
 
@@ -51,60 +94,91 @@ impl Dialog {
             .revision
             .checked_add(1)
             .expect("merge revision exhausted");
-        self.error = None;
+        self.choice_error = None;
     }
 
+    fn error(&self) -> Option<&str> {
+        self.choice_error
+            .as_deref()
+            .or(match &self.comparison {
+                Comparison::Failed {
+                    revision, message, ..
+                } if *revision == self.revision => Some(message.as_str()),
+                _ => None,
+            })
+            .or((self.validity == ReviewValidity::Stale).then_some(STALE))
+    }
     fn poll(&mut self, context: &egui::Context) {
-        match self.job.poll() {
-            LatestJobPoll::Ready(diff) => {
-                if self.requested == Some(self.revision) {
-                    self.diff_revision = self.requested;
-                    self.diff = Some(diff);
+        let comparison = std::mem::replace(&mut self.comparison, Comparison::Unrequested);
+        self.comparison = match comparison {
+            Comparison::Computing {
+                revision,
+                mut job,
+                previous,
+            } => match job.poll() {
+                LatestJobPoll::Ready(diff) if revision == self.revision => {
+                    Comparison::Ready(CachedComparison { revision, diff })
                 }
-                self.requested = None;
-            }
-            LatestJobPoll::Failed(error) => {
-                let requested = self.requested.take();
-                if requested == Some(self.revision) {
-                    self.failed = requested;
-                    self.error = Some(error);
+                LatestJobPoll::Failed(message) if revision == self.revision => Comparison::Failed {
+                    revision,
+                    message,
+                    previous,
+                },
+                LatestJobPoll::Ready(_) | LatestJobPoll::Failed(_) => {
+                    previous.map_or(Comparison::Unrequested, Comparison::Ready)
                 }
-            }
-            _ => {}
-        }
+                _ => Comparison::Computing {
+                    revision,
+                    job,
+                    previous,
+                },
+            },
+            state => state,
+        };
         if self.editing
-            || self.job.is_running()
-            || self.diff_revision == Some(self.revision)
-            || self.failed == Some(self.revision)
+            || self.comparison.running()
+            || self
+                .comparison
+                .cached()
+                .is_some_and(|cached| cached.revision == self.revision)
+            || matches!(self.comparison, Comparison::Failed { revision, .. } if revision == self.revision)
         {
             return;
         }
+        let previous =
+            std::mem::replace(&mut self.comparison, Comparison::Unrequested).into_cached();
         let remote = self.review.remote.clone();
         let result = self.result.clone();
-        self.requested = Some(self.revision);
-        if let Err(error) =
-            self.job
-                .start_and_repaint("Compare Overleaf conflict", context, move || {
-                    Ok(DocumentDiff::new(remote, &result))
-                })
-        {
-            self.failed = Some(self.revision);
-            self.requested = None;
-            self.error = Some(error);
-        }
+        let mut job = ExclusiveJob::default();
+        self.comparison =
+            match job.start_and_repaint("Compare Overleaf conflict", context, move || {
+                Ok(DocumentDiff::new(remote, &result))
+            }) {
+                Ok(()) => Comparison::Computing {
+                    revision: self.revision,
+                    job,
+                    previous,
+                },
+                Err(message) => Comparison::Failed {
+                    revision: self.revision,
+                    message,
+                    previous,
+                },
+            };
     }
 
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(in crate::app) fn inspection(&self) -> serde_json::Value {
         serde_json::json!({
             "open": true,
-            "loading": self.job.is_running(),
+            "loading": self.comparison.running(),
+            "phase": self.comparison.phase(),
             "left": crate::desktop_test::fingerprint(&self.review.remote),
             "right": crate::desktop_test::fingerprint(&self.result),
             "local": crate::desktop_test::fingerprint(&self.review.local),
             "editing": self.editing,
-            "current": !self.stale,
-            "error": self.error.as_deref().or(self.stale.then_some(STALE)),
+            "current": self.validity == ReviewValidity::Current,
+            "error": self.error(),
         })
     }
 }
@@ -137,6 +211,15 @@ impl EditorApp {
                         .is_some_and(|document| document.path().as_ref() == Some(&path))
                 })
             });
+        let target = target.or_else(|| {
+            if self.open_cached_overleaf_path(&path, context) {
+                self.tabs
+                    .active_id()
+                    .filter(|&tab| self.overleaf_entity_for_tab(tab) == Some(id))
+            } else {
+                None
+            }
+        });
         let Some(target) = target else {
             self.notice = Some(Notice {
                 message: "Open this file before reviewing its conflict.".into(),
@@ -155,7 +238,7 @@ impl EditorApp {
         self.activate_tab(target, context);
         self.workspace_chooser_visible = false;
         self.overleaf.visible = false;
-        if let Some(browser) = &self.overleaf.browser {
+        if let Some(browser) = self.overleaf.browser.as_ref() {
             let _ = browser.set_visible(false);
         }
         ChildViewHost::hide(context, SALT);
@@ -199,11 +282,16 @@ impl EditorApp {
         let Some(mut dialog) = self.overleaf.review.take() else {
             return;
         };
-        dialog.stale = !self
+        dialog.validity = if self
             .overleaf
             .connection
             .as_ref()
-            .is_some_and(|connection| connection.model.conflict_review_current(&dialog.review));
+            .is_some_and(|connection| connection.model.conflict_review_current(&dialog.review))
+        {
+            ReviewValidity::Current
+        } else {
+            ReviewValidity::Stale
+        };
         dialog.poll(ui.ctx());
         ui.set_min_width(ui.available_width());
         let bounds = ui.available_rect_before_wrap();
@@ -241,7 +329,7 @@ impl EditorApp {
                     self.finish_overleaf_review(ui.ctx());
                     return;
                 }
-                Err(error) => dialog.error = Some(error),
+                Err(error) => dialog.choice_error = Some(error),
             }
         }
         if dialog.revision != revision || dialog.editing != editing {
@@ -318,10 +406,24 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog, settings: &AppSettings) -> Optio
         });
     });
     ui.horizontal_wrapped(|ui| {
-        if button(ui, "use_remote", "Use Overleaf", !dialog.stale).clicked() {
+        if button(
+            ui,
+            "use_remote",
+            "Use Overleaf",
+            dialog.validity == ReviewValidity::Current,
+        )
+        .clicked()
+        {
             action = Some(Action::Remote);
         }
-        if button(ui, "use_local", "Keep local", !dialog.stale).clicked() {
+        if button(
+            ui,
+            "use_local",
+            "Keep local",
+            dialog.validity == ReviewValidity::Current,
+        )
+        .clicked()
+        {
             action = Some(Action::Local);
         }
         let edit = ui.selectable_label(
@@ -337,14 +439,22 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog, settings: &AppSettings) -> Optio
             dialog.editing = !dialog.editing;
             dialog.focus_editor = dialog.editing;
         }
-        if dialog.editing && button(ui, "apply", "Apply merge", !dialog.stale).clicked() {
+        if dialog.editing
+            && button(
+                ui,
+                "apply",
+                "Apply merge",
+                dialog.validity == ReviewValidity::Current,
+            )
+            .clicked()
+        {
             action = Some(Action::Apply);
         }
-        if dialog.job.is_running() {
+        if dialog.comparison.running() {
             ui.spinner();
         }
     });
-    if let Some(error) = dialog.error.as_deref().or(dialog.stale.then_some(STALE)) {
+    if let Some(error) = dialog.error() {
         ui.add(
             egui::Label::new(RichText::new(error).color(ui.visuals().error_fg_color)).truncate(),
         );
@@ -392,7 +502,7 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog, settings: &AppSettings) -> Optio
             });
         }
         ui.separator();
-        if let Some(diff) = &dialog.diff {
+        if let Some(CachedComparison { diff, .. }) = dialog.comparison.cached() {
             let id = ui.make_persistent_id(("overleaf-conflict-diff", &dialog.review.id));
             let bounds = full_view::show_styled_comparison(ui, diff, id, &dialog.path, settings);
             observe(
@@ -450,18 +560,41 @@ mod tests {
         model.apply(snapshot("remote\n")).unwrap();
         let review = model.conflict_review("a").unwrap();
         let mut dialog = Dialog::new(review, PathBuf::from("main.tex"));
-        dialog.diff = Some(DocumentDiff::new(
-            dialog.review.remote.clone(),
-            &dialog.result,
-        ));
-        dialog.diff_revision = Some(0);
+        dialog.comparison = Comparison::Ready(CachedComparison {
+            revision: 0,
+            diff: DocumentDiff::new(dialog.review.remote.clone(), &dialog.result),
+        });
         (dialog, model)
+    }
+
+    #[test]
+    fn failed_comparison_latches_its_revision_without_losing_the_previous_review() {
+        let (mut dialog, _) = fixture();
+        let previous =
+            std::mem::replace(&mut dialog.comparison, Comparison::Unrequested).into_cached();
+        dialog.comparison = Comparison::Failed {
+            revision: dialog.revision,
+            message: "comparison failed".into(),
+            previous,
+        };
+        let context = egui::Context::default();
+        for _ in 0..100 {
+            dialog.poll(&context);
+        }
+        assert!(!dialog.comparison.running());
+        assert_eq!(dialog.error(), Some("comparison failed"));
+        assert_eq!(dialog.comparison.cached().unwrap().diff.current, "local\n");
+        dialog.editing = true;
+        dialog.changed();
+        dialog.poll(&context);
+        assert!(dialog.error().is_none());
+        assert!(!dialog.comparison.running());
     }
 
     #[test]
     fn comparison_uses_whole_remote_and_local_sources_and_stays_cached_while_idle() {
         let (mut dialog, model) = fixture();
-        let diff = dialog.diff.as_ref().unwrap();
+        let diff = &dialog.comparison.cached().unwrap().diff;
         assert_eq!(diff.before, "remote\n");
         assert_eq!(diff.current, "local\n");
         assert!(model.conflict_review_current(&dialog.review));
@@ -469,9 +602,9 @@ mod tests {
         for _ in 0..50 {
             dialog.poll(&context);
         }
-        assert!(!dialog.job.is_running());
-        assert_eq!(dialog.diff.as_ref().unwrap().builds, 1);
-        assert!(dialog.requested.is_none());
+        assert!(!dialog.comparison.running());
+        assert_eq!(dialog.comparison.cached().unwrap().diff.builds, 1);
+        assert!(!dialog.comparison.running());
     }
 
     #[test]
@@ -484,10 +617,13 @@ mod tests {
         for _ in 0..50 {
             dialog.poll(&context);
         }
-        assert!(!dialog.job.is_running());
-        assert!(dialog.requested.is_none());
-        assert_eq!(dialog.diff.as_ref().unwrap().current, "local\n");
-        assert_ne!(dialog.diff_revision, Some(dialog.revision));
+        assert!(!dialog.comparison.running());
+        assert!(!dialog.comparison.running());
+        assert_eq!(dialog.comparison.cached().unwrap().diff.current, "local\n");
+        assert_ne!(
+            dialog.comparison.cached().map(|cached| cached.revision),
+            Some(dialog.revision)
+        );
     }
 
     #[test]
@@ -554,8 +690,12 @@ mod tests {
     fn stale_review_keeps_both_versions_visible_but_disables_every_resolution() {
         let (mut dialog, mut model) = fixture();
         model.set_draft("a", "later local\n".into()).unwrap();
-        dialog.stale = !model.conflict_review_current(&dialog.review);
-        assert!(dialog.stale);
+        dialog.validity = if model.conflict_review_current(&dialog.review) {
+            ReviewValidity::Current
+        } else {
+            ReviewValidity::Stale
+        };
+        assert_eq!(dialog.validity, ReviewValidity::Stale);
         let mut fonts_ready = false;
         let mut harness = Harness::builder()
             .with_size(Vec2::new(560.0, 360.0))
@@ -609,7 +749,7 @@ mod tests {
             root: directory.path().into(),
             model,
             status: "Conflict".into(),
-            online: true,
+            transport: Transport::Online,
             storage: None,
             hydration: Hydration::default(),
         });

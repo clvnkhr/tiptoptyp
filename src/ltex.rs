@@ -15,7 +15,7 @@ use crate::{
 use eframe::egui;
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io::{BufReader, Read},
     path::PathBuf,
     process::{Command, Stdio},
@@ -34,9 +34,12 @@ const START_TIMEOUT: Duration = Duration::from_secs(60);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(120);
 const SOURCE_LIMIT: usize = 2 * 1024 * 1024;
 const DIAGNOSTIC_LIMIT: usize = 4096;
+const ACTION_REQUEST_LIMIT: usize = 32;
+const ACTION_RESULT_LIMIT: usize = 512;
 const STDERR_LIMIT: usize = 8192;
 
 mod profile;
+mod prose;
 mod settings;
 pub(crate) use settings::LtexSettings;
 
@@ -361,10 +364,46 @@ struct Pending {
     id: u64,
     serial: u64,
     snapshot: LtexSnapshot,
+    prose: Option<prose::TypstProse>,
+    oxford_spelling: bool,
     diagnostics: Vec<Value>,
     started: Instant,
-    canceled: bool,
-    actions: bool,
+    validity: CheckValidity,
+    phase: CheckPhase,
+}
+/// A superseded explicit check must drain to completion: canceling its Java
+/// future does not stop unversioned diagnostics. Suggestion requests can cancel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckValidity {
+    Current,
+    Superseded,
+}
+enum CheckPhase {
+    Checking,
+    Suggestions {
+        document_version: i32,
+        remaining: VecDeque<Value>,
+        collected: Vec<Value>,
+    },
+}
+impl Pending {
+    fn supersede(&mut self) -> bool {
+        let cancel_suggestion = self.validity == CheckValidity::Current
+            && matches!(self.phase, CheckPhase::Suggestions { .. });
+        self.validity = CheckValidity::Superseded;
+        cancel_suggestion
+    }
+    fn checking(&self) -> bool {
+        matches!(self.phase, CheckPhase::Checking)
+    }
+    fn action_version(&self) -> Option<i32> {
+        match self.phase {
+            CheckPhase::Checking => None,
+            CheckPhase::Suggestions {
+                document_version, ..
+            } => Some(document_version),
+        }
+    }
 }
 fn run(
     settings: LtexSettings,
@@ -398,6 +437,40 @@ fn run(
         }
     })
 }
+enum WorkerPhase {
+    Initializing { started: Instant },
+    Ready { opened: Option<LtexSnapshot> },
+}
+impl WorkerPhase {
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready { .. })
+    }
+    fn opened(&self) -> Option<&LtexSnapshot> {
+        match self {
+            Self::Initializing { .. } => None,
+            Self::Ready { opened } => opened.as_ref(),
+        }
+    }
+    fn close_document(&mut self) {
+        if let Self::Ready { opened } = self {
+            *opened = None;
+        }
+    }
+    fn initialized(&mut self) {
+        if !self.is_ready() {
+            *self = Self::Ready { opened: None };
+        }
+    }
+    fn open_document(&mut self, snapshot: LtexSnapshot) {
+        let Self::Ready { opened } = self else {
+            panic!("LTeX+ document synchronization requires initialization");
+        };
+        *opened = Some(snapshot);
+    }
+    fn timed_out(&self) -> bool {
+        matches!(self, Self::Initializing { started } if started.elapsed() > START_TIMEOUT)
+    }
+}
 fn run_session(
     settings: &LtexSettings,
     root: &std::path::Path,
@@ -415,12 +488,12 @@ fn run_session(
         "capabilities":{"general":{"positionEncodings":["utf-16"]},"workspace":{"configuration":true},"textDocument":{"publishDiagnostics":{"versionSupport":true},"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["quickfix"]}}}}},
         "initializationOptions":{"customCapabilities":{"workspaceSpecificConfiguration":true}}
     }}))?;
-    let created = Instant::now();
+    let mut phase = WorkerPhase::Initializing {
+        started: Instant::now(),
+    };
     let mut configuration = settings.effective_configuration();
-    let mut initialized = false;
     let mut next_id = 2u64;
     let mut last_serial = 0;
-    let mut opened: Option<LtexSnapshot> = None;
     let mut version = 0i32;
     let mut pending: Option<Pending> = None;
     loop {
@@ -436,7 +509,7 @@ fn run_session(
         if stop {
             return Ok(());
         }
-        if !initialized && created.elapsed() > START_TIMEOUT {
+        if phase.timed_out() {
             return Err("LTeX+ initialization timed out".into());
         }
         if let Some(status) = session
@@ -450,26 +523,25 @@ fn run_session(
             return Err(format!("LTeX+ exited with {status}"));
         }
         if let Some(check) = &mut pending {
-            if check.serial != serial && !check.canceled {
+            if check.serial != serial && check.validity == CheckValidity::Current {
                 // A canceled CompletableFuture may reply before its Java task
                 // stops publishing unversioned diagnostics. Drain explicit
                 // checks to their normal completion; only action requests are
                 // safe to cancel because they never publish diagnostics.
-                if check.actions {
+                if check.supersede() {
                     session.notify("$/cancelRequest", json!({"id":check.id}))?;
                 }
-                check.canceled = true;
             }
             if check.started.elapsed() > CHECK_TIMEOUT {
                 return Err("LTeX+ grammar check timed out".into());
             }
         }
-        if initialized
+        if phase.is_ready()
             && pending.is_none()
             && serial != last_serial
             && (desired.is_none() || changed.elapsed() >= DEBOUNCE)
         {
-            if let Some(old) = &opened
+            if let Some(old) = phase.opened()
                 && desired.as_ref().is_none_or(|new| {
                     old.uri != new.uri || !crate::diagnostics::same_document(old.key, new.key)
                 })
@@ -478,7 +550,7 @@ fn run_session(
                     "textDocument/didClose",
                     json!({"textDocument":{"uri":old.uri}}),
                 )?;
-                opened = None;
+                phase.close_document();
             }
             last_serial = serial;
             if let Some(snapshot) = desired {
@@ -496,15 +568,22 @@ fn run_session(
                 configuration["language"] = settings.language_for_snapshot(&snapshot).into();
                 let id = next_id;
                 next_id += 1;
-                session.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":"_ltex.checkDocument","arguments":[{"uri":snapshot.uri,"codeLanguageId":snapshot.language_id,"text":snapshot.source.as_ref()}]}}))?;
+                let prose = (snapshot.language_id == "typst")
+                    .then(|| prose::TypstProse::new(&snapshot.source));
+                let text = prose
+                    .as_ref()
+                    .map_or(snapshot.source.as_ref(), |prose| prose.text.as_str());
+                session.send(json!({"jsonrpc":"2.0","id":id,"method":"workspace/executeCommand","params":{"command":"_ltex.checkDocument","arguments":[{"uri":snapshot.uri,"codeLanguageId":snapshot.language_id,"text":text}]}}))?;
                 pending = Some(Pending {
                     id,
                     serial,
                     snapshot,
+                    prose,
+                    oxford_spelling: settings.oxford_spelling,
                     diagnostics: Vec::new(),
                     started: Instant::now(),
-                    canceled: false,
-                    actions: false,
+                    validity: CheckValidity::Current,
+                    phase: CheckPhase::Checking,
                 });
             }
         }
@@ -534,7 +613,7 @@ fn run_session(
                     session.send(json!({"jsonrpc":"2.0","id":id,"result":result}))?;
                 } else if method == "textDocument/publishDiagnostics"
                     && let Some(check) = &mut pending
-                    && !check.actions
+                    && check.checking()
                     && message["params"]["uri"].as_str() == Some(&check.snapshot.uri)
                     && let Some(diagnostics) = message["params"]["diagnostics"].as_array()
                 {
@@ -547,14 +626,9 @@ fn run_session(
                 if let Some(error) = message.get("error") {
                     return Err(protocol::rpc_error_message(error));
                 }
-                if message["result"]["capabilities"]["positionEncoding"]
-                    .as_str()
-                    .is_some_and(|s| s != "utf-16")
-                {
-                    return Err("LTeX+ selected unsupported position encoding".into());
-                }
+                protocol::validate_position_encoding(&message["result"]["capabilities"])?;
                 session.notify("initialized", json!({}))?;
-                initialized = true;
+                phase.initialized();
                 shared.lock().unwrap().ready = true;
                 context.request_repaint();
                 continue;
@@ -567,53 +641,63 @@ fn run_session(
             }
             let mut check = pending.take().unwrap();
             let current = shared.lock().unwrap().serial == check.serial;
-            if !current || check.canceled {
+            if !current || check.validity == CheckValidity::Superseded {
+                continue;
+            }
+            if let CheckPhase::Suggestions { collected, .. } = &mut check.phase {
+                collect_actions(collected, &message["result"]);
+                if collected.len() < ACTION_RESULT_LIMIT
+                    && request_next_action(&mut check, &mut next_id, session)?
+                {
+                    pending = Some(check);
+                } else {
+                    let CheckPhase::Suggestions { collected, .. } = &mut check.phase else {
+                        unreachable!("suggestion completion retains its phase");
+                    };
+                    let actions = Value::Array(std::mem::take(collected));
+                    publish(shared, context, &check, &actions);
+                }
                 continue;
             }
             if let Some(error) = message.get("error") {
-                if check.actions {
-                    publish(shared, context, &check, &Value::Null);
-                    continue;
-                }
                 return Err(format!(
                     "LTeX+ check failed: {}",
                     protocol::rpc_error_message(error)
                 ));
             }
-            if check.actions {
-                publish(shared, context, &check, &message["result"]);
-            } else {
-                if message["result"]["success"] != true {
-                    return Err("LTeX+ did not complete its grammar check".into());
+            if message["result"]["success"] != true {
+                return Err("LTeX+ did not complete its grammar check".into());
+            }
+            // Publish immediately; enrich this same snapshot with suggestions later.
+            let action_diagnostics = publish(shared, context, &check, &Value::Null);
+            if !action_diagnostics.is_empty() {
+                // The first explicit check pulls manual mode before any didOpen.
+                // LTeX otherwise starts with automatic edit checking and publishes
+                // an untagged result, even if didChangeConfiguration was sent.
+                version = version
+                    .checked_add(1)
+                    .ok_or("LTeX+ document version exhausted")?;
+                let text = check
+                    .prose
+                    .as_ref()
+                    .map_or(check.snapshot.source.as_ref(), |prose| prose.text.as_str());
+                if phase.opened().is_none() {
+                    session.notify("textDocument/didOpen", json!({"textDocument":{"uri":check.snapshot.uri,"languageId":check.snapshot.language_id,"version":version,"text":text}}))?;
+                } else {
+                    session.notify("textDocument/didChange", json!({"textDocument":{"uri":check.snapshot.uri,"version":version},"contentChanges":[{"text":text}]}))?;
                 }
-                // Publish immediately; enrich this same snapshot with suggestions later.
-                publish(shared, context, &check, &Value::Null);
-                if !check.diagnostics.is_empty() {
-                    // The first explicit check pulls manual mode before any didOpen.
-                    // LTeX otherwise starts with automatic edit checking and publishes
-                    // an untagged result, even if didChangeConfiguration was sent.
-                    version = version
-                        .checked_add(1)
-                        .ok_or("LTeX+ document version exhausted")?;
-                    if opened.is_none() {
-                        session.notify("textDocument/didOpen", json!({"textDocument":{"uri":check.snapshot.uri,"languageId":check.snapshot.language_id,"version":version,"text":check.snapshot.source.as_ref()}}))?;
-                    } else {
-                        session.notify("textDocument/didChange", json!({"textDocument":{"uri":check.snapshot.uri,"version":version},"contentChanges":[{"text":check.snapshot.source.as_ref()}]}))?;
-                    }
-                    opened = Some(check.snapshot.clone());
+                phase.open_document(check.snapshot.clone());
 
-                    let end = end_position(&check.snapshot.source);
-                    let id = next_id;
-                    next_id += 1;
-                    session.send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/codeAction","params":{"textDocument":{"uri":check.snapshot.uri},"range":{"start":{"line":0,"character":0},"end":end},"context":{"diagnostics":check.diagnostics,"only":["quickfix"]}}}))?;
-                    check.id = id;
-                    check.actions = true;
-                    check.started = Instant::now();
-                    pending = Some(check);
-                }
+                check.phase = CheckPhase::Suggestions {
+                    document_version: version,
+                    remaining: action_diagnostics,
+                    collected: Vec::new(),
+                };
+                request_next_action(&mut check, &mut next_id, session)?;
+                pending = Some(check);
             }
         }
-        let delay = if initialized && pending.is_none() && serial == last_serial {
+        let delay = if phase.is_ready() && pending.is_none() && serial == last_serial {
             Duration::from_secs(1)
         } else {
             Duration::from_millis(20)
@@ -621,8 +705,101 @@ fn run_session(
         let _ = wake.recv_timeout(delay);
     }
 }
-fn publish(shared: &Mutex<Shared>, context: &egui::Context, check: &Pending, actions: &Value) {
-    let diagnostics = convert_diagnostics(&check.snapshot, &check.diagnostics, actions);
+
+fn collect_actions(collected: &mut Vec<Value>, response: &Value) {
+    if let Some(actions) = response.as_array() {
+        let remaining = ACTION_RESULT_LIMIT.saturating_sub(collected.len());
+        collected.extend(actions.iter().take(remaining).cloned());
+    }
+}
+
+/// Each request targets one visible finding. LTeX otherwise offers only bulk
+/// "all selected matches" actions, which cannot be split into safe choices.
+fn request_next_action(
+    check: &mut Pending,
+    next_id: &mut u64,
+    session: &Session,
+) -> Result<bool, String> {
+    let CheckPhase::Suggestions { remaining, .. } = &mut check.phase else {
+        return Ok(false);
+    };
+    let Some(diagnostic) = remaining.pop_front() else {
+        return Ok(false);
+    };
+    let id = *next_id;
+    *next_id += 1;
+    session.send(json!({"jsonrpc":"2.0","id":id,"method":"textDocument/codeAction","params":{"textDocument":{"uri":check.snapshot.uri},"range":diagnostic["range"],"context":{"diagnostics":[diagnostic],"only":["quickfix"]}}}))?;
+    check.id = id;
+    // `started` belongs to the whole check/batch, never to an individual action.
+    Ok(true)
+}
+
+fn visible_action_diagnostics(
+    snapshot: &LtexSnapshot,
+    raw: &[Value],
+    visible: &[Diagnostic],
+) -> VecDeque<Value> {
+    let visible: BTreeSet<_> = visible
+        .iter()
+        .filter_map(|diagnostic| diagnostic.correction.as_ref())
+        .map(|correction| {
+            (
+                correction.range.start,
+                correction.range.end,
+                correction.rule.as_deref(),
+            )
+        })
+        .collect();
+    if visible.is_empty() {
+        return VecDeque::new();
+    }
+    let parsed: Vec<_> = raw
+        .iter()
+        .filter_map(|raw| protocol::parse_diagnostic(raw).map(|diagnostic| (raw, diagnostic)))
+        .collect();
+    let index = SourceIndex::new(
+        &snapshot.source,
+        parsed
+            .iter()
+            .flat_map(|(_, diagnostic)| [diagnostic.range.start, diagnostic.range.end]),
+    );
+    parsed
+        .into_iter()
+        .filter_map(|(raw, diagnostic)| {
+            let (_, start, _) = index.position(diagnostic.range.start)?;
+            let (_, end, _) = index.position(diagnostic.range.end)?;
+            let rule = diagnostic.code.map(|code| {
+                code.as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| code.to_string())
+            });
+            visible
+                .contains(&(start, end, rule.as_deref()))
+                .then(|| raw.clone())
+        })
+        .take(ACTION_REQUEST_LIMIT)
+        .collect()
+}
+
+fn publish(
+    shared: &Mutex<Shared>,
+    context: &egui::Context,
+    check: &Pending,
+    actions: &Value,
+) -> VecDeque<Value> {
+    let diagnostics = convert_diagnostics_with_prose(
+        &check.snapshot,
+        &check.diagnostics,
+        actions,
+        check.action_version(),
+        check.prose.as_ref(),
+        check.oxford_spelling,
+    );
+    let action_diagnostics = if check.checking() {
+        visible_action_diagnostics(&check.snapshot, &check.diagnostics, &diagnostics)
+    } else {
+        VecDeque::new()
+    };
     let mut shared = shared.lock().unwrap();
     if shared.serial == check.serial && !shared.stop.load(Ordering::Acquire) {
         shared.result = Some(LtexEvent::Diagnostics {
@@ -633,6 +810,7 @@ fn publish(shared: &Mutex<Shared>, context: &egui::Context, check: &Pending, act
         drop(shared);
         context.request_repaint();
     }
+    action_diagnostics
 }
 fn configuration_response(settings: &Value, params: &Value) -> Value {
     Value::Array(
@@ -663,17 +841,6 @@ fn configuration_response(settings: &Value, params: &Value) -> Value {
             .unwrap_or_default(),
     )
 }
-fn end_position(source: &str) -> LspPosition {
-    let line = source.bytes().filter(|&b| b == b'\n').count() as u32;
-    let column = source
-        .rsplit('\n')
-        .next()
-        .unwrap_or("")
-        .encode_utf16()
-        .count() as u32;
-    LspPosition::new(line, column)
-}
-
 /// Resolve sorted UTF-16 endpoints in one forward scan, even when thousands
 /// of diagnostics share one very long line. Invalid positions are never clamped.
 type SourceCoordinates = (usize, usize, usize); // byte offset, scalar offset, one-based column
@@ -733,55 +900,115 @@ fn range_key(range: LspRange) -> RangeKey {
         range.end.character.get(),
     )
 }
-fn action_replacements(uri: &str, actions: &Value) -> BTreeMap<RangeKey, Vec<String>> {
-    let mut by_range: BTreeMap<RangeKey, Vec<String>> = BTreeMap::new();
-    let mut insert = |edit: &Value| {
-        let (Some(range), Some(text)) = (
-            edit.get("range")
-                .and_then(|v| serde_json::from_value::<LspRange>(v.clone()).ok()),
-            edit["newText"].as_str(),
-        ) else {
-            return;
-        };
-        if text.len() > SOURCE_LIMIT {
-            return;
+/// Only independent, complete quick fixes may become per-diagnostic choices.
+/// Splitting a multi-edit action loses its atomic semantics, even in one file.
+fn single_action_edit<'a>(uri: &str, version: Option<i32>, action: &'a Value) -> Option<&'a Value> {
+    let action = action.as_object()?;
+    if action.contains_key("disabled") || action.contains_key("command") {
+        return None;
+    }
+    if let Some(kind) = action.get("kind") {
+        let kind = kind.as_str()?;
+        if kind != "quickfix" && !kind.starts_with("quickfix.") {
+            return None;
         }
-        let replacements = by_range.entry(range_key(range)).or_default();
-        if replacements.len() < 32 && !replacements.iter().any(|old| old == text) {
-            replacements.push(text.to_owned());
+    }
+    let edit = action.get("edit")?.as_object()?;
+    if edit.contains_key("changeAnnotations") {
+        return None;
+    }
+    let edits = match (edit.get("documentChanges"), edit.get("changes")) {
+        (Some(changes), None) => {
+            let [change] = changes.as_array()?.as_slice() else {
+                return None;
+            };
+            let change = change.as_object()?;
+            if change.contains_key("kind") {
+                return None;
+            }
+            let document = change.get("textDocument")?.as_object()?;
+            if document.get("uri")?.as_str()? != uri {
+                return None;
+            }
+            if let Some(requested) = document.get("version")
+                && !requested.is_null()
+                && !version.is_some_and(|version| requested.as_i64() == Some(i64::from(version)))
+            {
+                return None;
+            }
+            change.get("edits")?.as_array()?
         }
+        (None, Some(changes)) => {
+            let changes = changes.as_object()?;
+            if changes.len() != 1 {
+                return None;
+            }
+            changes.get(uri)?.as_array()?
+        }
+        _ => return None,
     };
+    let [edit] = edits.as_slice() else {
+        return None;
+    };
+    let edit = edit.as_object()?;
+    if edit.contains_key("annotationId") {
+        return None;
+    }
+    // Return the original value, without reconstructing or partially copying it.
+    edits.first()
+}
+
+fn action_replacements(
+    uri: &str,
+    actions: &Value,
+    version: Option<i32>,
+) -> BTreeMap<RangeKey, Vec<String>> {
+    let mut by_range: BTreeMap<RangeKey, Vec<String>> = BTreeMap::new();
     if let Some(actions) = actions.as_array() {
         for action in actions {
-            // Extract individual same-file replacements; never execute commands
-            // or apply bulk edits from the server's grouped quick fixes.
-            if let Some(changes) = action["edit"]["documentChanges"].as_array() {
-                if changes
-                    .iter()
-                    .any(|change| change["textDocument"]["uri"].as_str() != Some(uri))
-                {
-                    continue;
-                }
-                for change in changes {
-                    if let Some(edits) = change["edits"].as_array() {
-                        for edit in edits {
-                            insert(edit);
-                        }
-                    }
-                }
-            } else if let Some(changes) = action["edit"]["changes"].as_object()
-                && changes.len() == 1
-                && let Some(edits) = changes.get(uri).and_then(Value::as_array)
+            let Some(edit) = single_action_edit(uri, version, action) else {
+                continue;
+            };
+            let (Some(range), Some(text)) = (
+                edit.get("range")
+                    .and_then(|v| serde_json::from_value::<LspRange>(v.clone()).ok()),
+                edit["newText"].as_str(),
+            ) else {
+                continue;
+            };
+            if (range.end.line.get(), range.end.character.get())
+                < (range.start.line.get(), range.start.character.get())
+                || text.len() > SOURCE_LIMIT
             {
-                for edit in edits {
-                    insert(edit);
-                }
+                continue;
+            }
+            let replacements = by_range.entry(range_key(range)).or_default();
+            if replacements.len() < 32 && !replacements.iter().any(|old| old == text) {
+                replacements.push(text.to_owned());
             }
         }
     }
     by_range
 }
-fn convert_diagnostics(snapshot: &LtexSnapshot, raw: &[Value], actions: &Value) -> Vec<Diagnostic> {
+#[cfg(test)]
+fn convert_diagnostics(
+    snapshot: &LtexSnapshot,
+    raw: &[Value],
+    actions: &Value,
+    version: Option<i32>,
+) -> Vec<Diagnostic> {
+    let prose = (snapshot.language_id == "typst").then(|| prose::TypstProse::new(&snapshot.source));
+    convert_diagnostics_with_prose(snapshot, raw, actions, version, prose.as_ref(), false)
+}
+
+fn convert_diagnostics_with_prose(
+    snapshot: &LtexSnapshot,
+    raw: &[Value],
+    actions: &Value,
+    version: Option<i32>,
+    prose: Option<&prose::TypstProse>,
+    oxford_spelling: bool,
+) -> Vec<Diagnostic> {
     let parsed = raw
         .iter()
         .filter_map(protocol::parse_diagnostic)
@@ -790,13 +1017,16 @@ fn convert_diagnostics(snapshot: &LtexSnapshot, raw: &[Value], actions: &Value) 
         &snapshot.source,
         parsed.iter().flat_map(|d| [d.range.start, d.range.end]),
     );
-    let replacements = action_replacements(&snapshot.uri, actions);
+    let replacements = action_replacements(&snapshot.uri, actions, version);
     parsed
         .into_iter()
         .filter_map(|lsp| {
             let (start_byte, start_scalar, column) = index.position(lsp.range.start)?;
             let (end_byte, end_scalar, _) = index.position(lsp.range.end)?;
             if end_byte < start_byte {
+                return None;
+            }
+            if prose.is_some_and(|prose| !prose.admits(start_scalar, end_scalar)) {
                 return None;
             }
             let rule = lsp.code.as_ref().map(|code| {
@@ -809,6 +1039,12 @@ fn convert_diagnostics(snapshot: &LtexSnapshot, raw: &[Value], actions: &Value) 
                 .cloned()
                 .unwrap_or_default();
             let original = &snapshot.source[start_byte..end_byte];
+            if rule.as_deref().is_some_and(|rule| {
+                (!oxford_spelling && rule.starts_with("OXFORD_SPELLING"))
+                    || (rule.starts_with("MORFOLOGIK_RULE_") && prose::mathematical_name(original))
+            }) {
+                return None;
+            }
             if original.contains(if snapshot.language_id == "latex" {
                 &['\\', '{', '}', '$'][..]
             } else {

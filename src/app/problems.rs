@@ -25,6 +25,21 @@ pub(super) struct State {
     controls_height: f32,
     scroll_layout: Option<ScrollLayout>,
     collapsed: HashSet<(String, DiagnosticSeverity)>,
+    actions: Actions,
+}
+
+/// Resolve source ownership only on publication/revision changes, never while
+/// painting every row. Applying an action validates its exact source again.
+#[derive(Default)]
+struct Actions {
+    stamp: Option<(DocumentKey, u64, PathBuf)>,
+    current: HashSet<usize>,
+    automatic: HashSet<usize>,
+    suggestions: HashSet<usize>,
+    filter: Option<filter::Filter>,
+    shown_fixes: Vec<usize>,
+    #[cfg(test)]
+    rebuilds: usize,
 }
 impl Default for State {
     fn default() -> Self {
@@ -43,6 +58,7 @@ impl Default for State {
             controls_height: 0.0,
             scroll_layout: None,
             collapsed: HashSet::new(),
+            actions: Actions::default(),
         }
     }
 }
@@ -344,10 +360,83 @@ fn controls(
 }
 
 impl EditorApp {
-    pub(super) fn show_problems(&mut self, ui: &mut egui::Ui) {
-        ui.set_min_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = 2.0;
-        self.prepare_diagnostic_visibility(Some(ui.ctx()));
+    fn refresh_problem_actions(&mut self) {
+        if self.tabs.is_empty() {
+            self.problems.actions = Actions::default();
+            return;
+        }
+        let stamp = (
+            self.document().key(),
+            self.diagnostic_regions.generation,
+            self.preview_document_path(),
+        );
+        if self.problems.actions.stamp.as_ref() == Some(&stamp) {
+            return;
+        }
+        let mut ownership = std::collections::HashMap::new();
+        let mut current = HashSet::new();
+        let mut automatic = HashSet::new();
+        let mut suggestions = HashSet::new();
+        let suggestion_kind = matches!(
+            self.document().kind(),
+            DocumentKind::Typst | DocumentKind::Tex
+        );
+        for (index, diagnostic) in self
+            .preview
+            .diagnostics
+            .iter()
+            .chain(&self.preview.editor_diagnostics)
+            .enumerate()
+        {
+            let correction_current = diagnostic
+                .correction
+                .as_ref()
+                .is_some_and(|correction| correction.is_current(stamp.0));
+            // Generating a proposal does not require an existing LSP code action.
+            // Revision-bound corrections still provide a useful staleness guard.
+            let suggestion = suggestion_kind
+                && diagnostic
+                    .location
+                    .is_some_and(|location| location.line > 0 && location.column > 0)
+                && diagnostic
+                    .correction
+                    .as_ref()
+                    .is_none_or(|correction| correction.document.is_none_or(|key| key == stamp.0));
+            if !(correction_current || suggestion)
+                || !*ownership
+                    .entry(&diagnostic.source)
+                    .or_insert_with(|| self.diagnostic_targets_current_document(diagnostic))
+            {
+                continue;
+            }
+            if correction_current {
+                current.insert(index);
+                if diagnostic
+                    .correction
+                    .as_ref()
+                    .and_then(diagnostic_corrections::automatic_index)
+                    .is_some()
+                {
+                    automatic.insert(index);
+                }
+            }
+            if suggestion {
+                suggestions.insert(index);
+            }
+        }
+        self.problems.actions = Actions {
+            stamp: Some(stamp),
+            current,
+            automatic,
+            suggestions,
+            #[cfg(test)]
+            rebuilds: self.problems.actions.rebuilds + 1,
+            ..Default::default()
+        };
+    }
+
+    fn refresh_problems_model(&mut self, context: &egui::Context) -> bool {
+        self.prepare_diagnostic_visibility(Some(context));
         let main_path = self.preview_document_path();
         self.problems.model.update(
             self.diagnostic_regions.generation,
@@ -356,7 +445,78 @@ impl EditorApp {
             Some(&main_path),
             &self.diagnostic_regions.suppressed,
         );
-        let refreshed = self.problems.model.refilter(&self.problems.filter);
+        self.refresh_problem_actions();
+        let changed = self.problems.model.refilter(&self.problems.filter);
+        if self.problems.actions.filter.as_ref() != Some(&self.problems.filter) {
+            self.problems.actions.shown_fixes = self
+                .problems
+                .model
+                .indices()
+                .iter()
+                .copied()
+                .filter(|index| self.problems.actions.automatic.contains(index))
+                .collect();
+            self.problems.actions.filter = Some(self.problems.filter.clone());
+        }
+        changed
+    }
+
+    /// In the existing tab header: no permanent extra toolbar/list row.
+    pub(super) fn show_problems_fix_all(&mut self, ui: &mut egui::Ui) {
+        if self.refresh_problems_model(ui.ctx()) {
+            self.dismiss_hover_on_scroll(ui.ctx());
+        }
+        let available =
+            !self.problems.actions.shown_fixes.is_empty() && !self.source_edit_blocked();
+        let response = ui.add_enabled(available, egui::Button::new("Fix all fixable").small());
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                available,
+                "Fix all fixable problems in this file",
+            )
+        });
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("problems.fix_all", &response);
+        if response.clicked() {
+            let candidates: Vec<_> = self
+                .problems
+                .actions
+                .shown_fixes
+                .iter()
+                .map(|&index| {
+                    if index < self.preview.diagnostics.len() {
+                        self.preview.diagnostics[index].clone()
+                    } else {
+                        self.preview.editor_diagnostics[index - self.preview.diagnostics.len()]
+                            .clone()
+                    }
+                })
+                .collect();
+            match self.apply_automatic_diagnostic_fixes(&candidates, ui.ctx()) {
+                Ok(count) => {
+                    self.notice = Some(Notice {
+                        message: if count == 0 {
+                            "No non-conflicting fixes available".into()
+                        } else {
+                            format!("Applied {count} fixes in this file")
+                        },
+                        kind: if count == 0 {
+                            NoticeKind::Info
+                        } else {
+                            NoticeKind::Success
+                        },
+                    });
+                }
+                Err(error) => self.show_file_error(error),
+            }
+        }
+    }
+
+    pub(super) fn show_problems(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 2.0;
+        let refreshed = self.refresh_problems_model(ui.ctx());
         let search = search_id(ui.ctx());
         let sticky = self.problems.filter.is_active()
             || self.problems.focus_search
@@ -388,6 +548,10 @@ impl EditorApp {
         let mut copied = false;
         let mut jump_target = None;
         let mut correction_target = None;
+        let mut dictionary_target = None;
+        let mut suggestion_target = None;
+        let suggestion_ready = !self.diagnostic_fix.busy();
+        let edits_allowed = !self.source_edit_blocked();
         let current_key = (!self.tabs.is_empty()).then(|| self.document().key());
         // Floating scrollbars expand on hover. Keep row actions outside the
         // full hit area, including when only the hidden toolbar overflows.
@@ -488,6 +652,12 @@ impl EditorApp {
                         } else {
                             &self.preview.editor_diagnostics[index - self.preview.diagnostics.len()]
                         };
+                        let correction = diagnostic.correction.as_ref();
+                        let actionable = self.problems.actions.current.contains(&index);
+                        let correction_key = current_key.filter(|_| actionable && edits_allowed);
+                        let has_fixes = correction.is_some_and(|c| !c.replacements.is_empty());
+                        let dictionary_word = diagnostic_corrections::dictionary_word(diagnostic);
+                        let action_count = usize::from(has_fixes) + usize::from(dictionary_word.is_some());
                         let color = diagnostic_color(diagnostic.severity, ui.ctx());
                         let code = diagnostic_code(diagnostic);
                         let details_id = ui.make_persistent_id((
@@ -508,6 +678,7 @@ impl EditorApp {
                             .ctx()
                             .data(|data| data.get_temp::<bool>(details_id).unwrap_or(false));
                         let mut disclosure_rect = None;
+                        let mut actions_rect = Rect::NOTHING;
                         let background_slot = ui.painter().add(egui::Shape::Noop);
                         let row = ui
                             .push_id((details_id, index), |ui| {
@@ -560,8 +731,14 @@ impl EditorApp {
                                             .size()
                                             .x
                                     };
+                                    let action_width = if action_count > 0 {
+                                        let font = egui::TextStyle::Button.resolve(ui.style());
+                                        let measure = |text: &str| ui.painter().layout_no_wrap(text.into(), font.clone(), ui.visuals().text_color()).size().x + 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x;
+                                        (if has_fixes { measure("Fix…") } else { 0.0 })
+                                            + (if dictionary_word.is_some() { measure("Add word") } else { 0.0 })
+                                    } else { 0.0 };
                                     let (message_width, provider_width) = problem_text_widths(
-                                        ui.available_width(),
+                                        (ui.available_width() - action_width).max(0.0),
                                         provider_width,
                                         has_details,
                                         ui.spacing().item_spacing.x,
@@ -596,6 +773,36 @@ impl EditorApp {
                                                 );
                                             },
                                         );
+                                    }
+                                    if let Some(correction) = correction.filter(|_| has_fixes) {
+                                        let automatic = diagnostic_corrections::automatic_index(correction);
+                                        let fix = ui.add_enabled(actionable && edits_allowed,
+                                            egui::Button::new(if automatic.is_some() { "Fix" } else { "Fix…" }).small());
+                                        fix.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, actionable && edits_allowed,
+                                            if automatic.is_some() { "Fix automatically" } else { "Choose correction" }));
+                                        actions_rect |= fix.rect;
+                                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                        if ui.is_rect_visible(fix.rect) { crate::desktop_test::observe(&format!("problem.{index}.fix"), &fix); }
+                                        if let Some(selected) = automatic {
+                                            if fix.clicked() { correction_target = Some((diagnostic.clone(), selected)); }
+                                        } else {
+                                            let menu = egui::Popup::menu(&fix).show(|ui| {
+                                                if let Some(selected) = diagnostic_corrections::show_corrections(ui, correction, correction_key) {
+                                                    correction_target = Some((diagnostic.clone(), selected));
+                                                    ui.close();
+                                                }
+                                            });
+                                            self.problems.popup_open |= menu.is_some();
+                                        }
+                                    }
+                                    if let Some(word) = dictionary_word {
+                                        let add = ui.add_enabled(actionable, egui::Button::new("Add word").small());
+                                        add.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, actionable,
+                                            format!("Add “{word}” to Harper dictionary")));
+                                        actions_rect |= add.rect;
+                                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                        if ui.is_rect_visible(add.rect) { crate::desktop_test::observe(&format!("problem.{index}.dictionary"), &add); }
+                                        if add.clicked() { dictionary_target = Some(diagnostic.clone()); }
                                     }
                                     if has_details {
                                         let label = if expanded {
@@ -663,14 +870,33 @@ impl EditorApp {
                                 context_requested.then_some(egui::SetOpenCommand::Bool(true)),
                             )
                             .show(|ui| {
+                                let suggestion = ui.add_enabled(
+                                    self.problems.actions.suggestions.contains(&index)
+                                        && edits_allowed && suggestion_ready,
+                                    egui::Button::new(diagnostic_fix::MENU_LABEL),
+                                );
+                                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                {
+                                    crate::desktop_test::observe("menu.Suggest fix", &suggestion);
+                                    crate::desktop_test::observe(&format!("problem.{index}.suggest_fix"), &suggestion);
+                                }
+                                if suggestion.clicked() {
+                                    suggestion_target = Some(diagnostic.clone());
+                                    ui.close();
+                                }
                                 if let Some(correction) = &diagnostic.correction
                                     && let Some(index) = diagnostic_corrections::show_corrections(
                                         ui,
                                         correction,
-                                        current_key,
+                                        correction_key,
                                     )
                                 {
                                     correction_target = Some((diagnostic.clone(), index));
+                                    ui.close();
+                                }
+                                if let Some(word) = dictionary_word
+                                    && ui.add_enabled(actionable, egui::Button::new(format!("Add “{word}” to Harper dictionary"))).clicked() {
+                                    dictionary_target = Some(diagnostic.clone());
                                     ui.close();
                                 }
                                 if ui.button("Copy diagnostic").clicked() {
@@ -715,6 +941,7 @@ impl EditorApp {
                         });
                         if diagnostic.location.is_some()
                             && !disclosure_hovered
+                            && !ui.ctx().pointer_latest_pos().is_some_and(|point| actions_rect.contains(point))
                             // Offscreen row rectangles can sit behind the sticky
                             // filters or another popup; only their visible layer
                             // may respond to a diagnostic double-click.
@@ -782,7 +1009,20 @@ impl EditorApp {
         if copied {
             self.focus_problems_search(ui.ctx());
         }
-        if let Some((diagnostic, index)) = correction_target {
+        if let Some(diagnostic) = suggestion_target {
+            let cursor = egui::text_edit::TextEditState::load(ui.ctx(), source_editor_id(ui.ctx()))
+                .and_then(|state| state.cursor.char_range())
+                .unwrap_or_default();
+            if let Some(target) = self.bind_diagnostic_fix(&diagnostic, cursor) {
+                self.begin_diagnostic_fix(target, ui.ctx());
+            } else {
+                self.show_file_error("The diagnostic changed; reopen its menu.".into());
+            }
+        } else if let Some(diagnostic) = dictionary_target {
+            if let Err(error) = self.add_diagnostic_word(&diagnostic, ui.ctx()) {
+                self.show_file_error(error);
+            }
+        } else if let Some((diagnostic, index)) = correction_target {
             if let Err(error) = self.apply_diagnostic_correction(&diagnostic, index, ui.ctx()) {
                 self.show_file_error(error);
             }

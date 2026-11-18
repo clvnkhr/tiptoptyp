@@ -414,7 +414,7 @@ fn command_toolbar_menu_and_shortcut_effects_agree_once_per_owner() {
                     assert_eq!(app.view_mode, view);
                     assert_eq!(app.document().key(), key);
                     assert!(app.compile_deadline.is_none());
-                    assert!(app.tinymist_sync.generation.is_none());
+                    assert!(app.tinymist_sync.generation().is_none());
                 }
                 assert_eq!(
                     harness.state_mut().take_settings_open_request(),
@@ -562,8 +562,8 @@ fn problems_keyboard_owner_blocks_source_editing_and_find_commands() {
                     source_selection,
                     "{route:?} {command:?}"
                 );
-                assert!(harness.state().format_request_key.is_none());
-                assert!(harness.state().format_when_service_ready.is_none());
+                assert!(harness.state().formatting.request_key().is_none());
+                assert!(harness.state().formatting.saved_document().is_none());
             }
             harness.event(egui::Event::Text("must not reach source".into()));
             harness.run();
@@ -715,7 +715,11 @@ fn command_select_all_obeys_source_or_find_focus() {
             let mut app = fixture(&context, root.path(), egui::ViewportId::ROOT);
             app.find_bar.query = "beta".into();
             app.find_bar.visible = find;
-            app.find_bar.focus = find;
+            if find {
+                app.find_bar.request_focus();
+            } else {
+                app.find_bar.clear_focus_request();
+            }
             if !find {
                 app.pending_editor_selection = Some(EditorSelection::Focus(0..0));
             }
@@ -1120,7 +1124,7 @@ fn deferred_find_select_all_is_delivered_once_to_query_without_editing_source() 
     app.document_mut()
         .replace_unprojected_untitled("keep this source");
     app.find_bar.visible = true;
-    app.find_bar.focus = true;
+    app.find_bar.request_focus();
     app.find_bar.query = "old query".into();
     let mut harness = Harness::builder()
         .with_size(egui::vec2(700.0, 100.0))

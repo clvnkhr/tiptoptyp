@@ -98,8 +98,10 @@ pub(crate) fn highlight_job_with_mitex(
         .set_rainbow_brackets(settings.rainbow_brackets);
     cache.typst.set_rainbow_brackets(settings.rainbow_brackets);
     cache.typst.set_mitex_dollars(mitex_dollars);
-    let local_uses =
-        settings.highlight_local_uses && matches!(extension, "typ" | "typ-code" | "tex");
+    let path = format!("source.{extension}");
+    let local_uses = settings.highlight_local_uses
+        && (matches!(extension, "typ" | "typ-code")
+            || crate::document::is_tex_path(Path::new(&path)));
     let accent = crate::theme::palette(ui.ctx()).accent;
     cache
         .generic
@@ -107,7 +109,6 @@ pub(crate) fn highlight_job_with_mitex(
     cache
         .typst
         .set_decorations(local_uses, &settings.highlight_rules, accent);
-    let path = format!("source.{extension}");
     let Highlight { generic, typst, .. } = &mut *cache;
     if extension == "typ" {
         typst.highlight(source, ui.visuals().dark_mode, generic)
@@ -225,5 +226,55 @@ mod tests {
                 .iter()
                 .all(|section| section.byte_range.end.0 <= source.len())
         );
+    }
+
+    #[test]
+    fn tex_class_and_style_code_fields_keep_local_macro_use_highlights() {
+        let source = "\\newcommand{\\localname}{x} \\localname";
+        let usage = source.rfind("\\localname").unwrap();
+        let declaration = source.find("\\localname").unwrap();
+        let settings = AppSettings {
+            highlight_local_uses: true,
+            ..AppSettings::default()
+        };
+        let mut harness = egui_kittest::Harness::new_ui(|ui| {
+            let request =
+                crate::presentation::active_theme_request(&settings, Some(ui.ctx().theme()), None);
+            let (active, _) = crate::presentation::load_active_theme_or_fallback(&request);
+            let mut palette = active.palette;
+            palette.accent = crate::sublime_theme::Rgba::rgb(1, 2, 3);
+            crate::theme::set_imported_palette(ui.ctx(), Some((ui.visuals().dark_mode, palette)));
+            for extension in crate::document::TEX_SOURCE_EXTENSIONS {
+                let extension = extension.to_ascii_uppercase();
+                let job = highlight_job(
+                    ui,
+                    ui.make_persistent_id(&extension),
+                    source,
+                    &extension,
+                    &settings,
+                );
+                let color_at = |byte| {
+                    job.sections
+                        .iter()
+                        .find(|section| {
+                            section.byte_range.start.0 <= byte && byte < section.byte_range.end.0
+                        })
+                        .unwrap()
+                        .format
+                        .color
+                };
+                assert_eq!(
+                    color_at(usage),
+                    egui::Color32::from_rgb(1, 2, 3),
+                    "{extension}"
+                );
+                assert_ne!(
+                    color_at(declaration),
+                    egui::Color32::from_rgb(1, 2, 3),
+                    "{extension}"
+                );
+            }
+        });
+        harness.run();
     }
 }

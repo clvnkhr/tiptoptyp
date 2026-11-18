@@ -269,6 +269,71 @@ impl PrivateSourceMirror {
         &self.mirror_root
     }
 
+    /// Replace one in-memory project source in this private snapshot. Every
+    /// directory link along its route is detached before creating or writing
+    /// children, so an unsaved dependency can never write through to disk.
+    pub(crate) fn overlay_source(&self, source_path: &Path, source: &str) -> io::Result<()> {
+        let relative = source_path
+            .strip_prefix(&self.project_root)
+            .map_err(|_| io::Error::other("The source overlay is outside its project"))?;
+        if relative.as_os_str().is_empty()
+            || relative.components().any(|part| {
+                !matches!(part, Component::Normal(_))
+                    || part
+                        .as_os_str()
+                        .as_encoded_bytes()
+                        .eq_ignore_ascii_case(PRIVATE_DIRECTORY_NAME.as_bytes())
+            })
+        {
+            return Err(io::Error::other(
+                "The source overlay is not a regular project path",
+            ));
+        }
+        let mut original = self.project_root.clone();
+        let mut shadow = self.mirror_root.clone();
+        for part in relative.parent().unwrap().components() {
+            original.push(part.as_os_str());
+            shadow.push(part.as_os_str());
+            let metadata = fs::symlink_metadata(&shadow)?;
+            if metadata.file_type().is_symlink() {
+                fs::remove_file(&shadow)?;
+                fs::create_dir(&shadow)?;
+                for entry in fs::read_dir(&original)? {
+                    let entry = entry?;
+                    if entry.file_name() == OsStr::new(PRIVATE_DIRECTORY_NAME) {
+                        continue;
+                    }
+                    mirror_entry(
+                        &entry.path(),
+                        &shadow.join(entry.file_name()),
+                        entry.file_type()?,
+                        MirrorMode::PreferSymlink,
+                    )?;
+                }
+            } else if !metadata.is_dir() {
+                return Err(io::Error::other(
+                    "The source overlay parent is not a directory",
+                ));
+            }
+        }
+        shadow.push(
+            relative
+                .file_name()
+                .ok_or_else(|| io::Error::other("The source overlay has no filename"))?,
+        );
+        let exists = match fs::symlink_metadata(&shadow) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                fs::remove_file(&shadow)?;
+                false
+            }
+            Ok(metadata) if metadata.is_file() => true,
+            Ok(_) => return Err(io::Error::other("The source overlay is not a regular file")),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        write_private_source(&shadow, source, !exists)
+    }
+
     /// Refreshes fallback copies and adds newly created project entries, then
     /// updates the source without replacing its inode. Keeping the inode is
     /// required by Typst's macOS filesystem watcher.
@@ -293,6 +358,21 @@ pub struct AtomicFileWriter;
 impl AtomicFileWriter {
     pub fn write(destination: impl AsRef<Path>, contents: &[u8]) -> io::Result<WriteDurability> {
         Self::write_checked(destination, contents, || Ok(()))
+    }
+
+    /// Publish a new file atomically without replacing another writer's output.
+    pub(crate) fn write_new(
+        destination: impl AsRef<Path>,
+        contents: &[u8],
+    ) -> io::Result<WriteDurability> {
+        crate::resource_lock::with_resource(destination.as_ref(), || {
+            let staging_root = destination_local_staging_root(destination.as_ref())?;
+            let private = PrivateWorkspace::open(staging_root)?;
+            let mut temporary = private.temp_file("write-", ".tmp")?;
+            temporary.write_all(contents)?;
+            temporary.as_file().sync_all()?;
+            commit_new_staged_file(temporary, destination.as_ref(), sync_parent)
+        })
     }
 
     /// Check and persist share the app-owned destination lease. External
@@ -339,6 +419,20 @@ fn commit_staged_file(
 ) -> io::Result<WriteDurability> {
     temporary
         .persist(destination)
+        .map_err(|error| error.error)?;
+    Ok(match sync(destination) {
+        Ok(()) => WriteDurability::Synchronized,
+        Err(error) => WriteDurability::Uncertain(error.to_string()),
+    })
+}
+
+fn commit_new_staged_file(
+    temporary: tempfile::NamedTempFile,
+    destination: &Path,
+    sync: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<WriteDurability> {
+    temporary
+        .persist_noclobber(destination)
         .map_err(|error| error.error)?;
     Ok(match sync(destination) {
         Ok(()) => WriteDurability::Synchronized,
@@ -442,9 +536,10 @@ fn write_private_source(path: &Path, source: &str, create_new: bool) -> io::Resu
         options.mode(0o600);
     }
     let mut file = options.open(path)?;
-    file.write_all(source.as_bytes())?;
-    file.flush()?;
-    file.sync_data()
+    // This inode is disposable compiler/LSP input, not a saved user document.
+    // Writing makes its bytes available to readers without a durability barrier
+    // on every keystroke. AtomicFileWriter retains fsync for real user saves.
+    file.write_all(source.as_bytes())
 }
 
 fn populate_mirror(
@@ -700,6 +795,49 @@ fn sync_parent(destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_overlays_detach_nested_mirror_links_before_writing() {
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("chapters/deep")).unwrap();
+        std::fs::write(root.join("main.tex"), "main disk").unwrap();
+        std::fs::write(root.join("chapters/deep/child.tex"), "child disk").unwrap();
+        std::fs::write(root.join("chapters/asset.txt"), "asset").unwrap();
+        let private = super::PrivateWorkspace::open(&root).unwrap();
+        let mirror = private
+            .mirrored_source(&root, std::ffi::OsStr::new("main.tex"), "main buffer")
+            .unwrap();
+        mirror
+            .overlay_source(&root.join("chapters/deep/child.tex"), "child buffer")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(mirror.mirror_root().join("chapters/deep/child.tex")).unwrap(),
+            "child buffer"
+        );
+        assert_eq!(
+            std::fs::read_to_string(mirror.mirror_root().join("chapters/asset.txt")).unwrap(),
+            "asset"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("chapters/deep/child.tex")).unwrap(),
+            "child disk"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("main.tex")).unwrap(),
+            "main disk"
+        );
+        assert!(
+            mirror
+                .overlay_source(&root.join(".tiptoptyp/forbidden.tex"), "bad")
+                .is_err()
+        );
+        assert!(
+            mirror
+                .overlay_source(&root.parent().unwrap().join("outside.tex"), "bad")
+                .is_err()
+        );
+    }
+
     #[test]
     fn generated_source_paths_map_by_owning_root_and_components() {
         let root = std::path::Path::new("/project");
@@ -1019,6 +1157,74 @@ mod tests {
                 0o640
             );
         }
+    }
+
+    #[test]
+    fn new_atomic_write_keeps_existing_files_and_cleans_private_staging() {
+        let project = tempfile::tempdir().unwrap();
+        let destination = project.path().join("created.pdf");
+        let result = AtomicFileWriter::write_new(&destination, b"first PDF").unwrap();
+        assert!(matches!(result, WriteDurability::Synchronized));
+        assert_eq!(fs::read(&destination).unwrap(), b"first PDF");
+
+        assert!(AtomicFileWriter::write_new(&destination, b"replacement PDF").is_err());
+        assert_eq!(fs::read(&destination).unwrap(), b"first PDF");
+        let private = PrivateWorkspace::open(project.path()).unwrap();
+        assert_eq!(fs::read_dir(private.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn new_atomic_write_cannot_replace_a_destination_created_after_staging() {
+        let project = tempfile::tempdir().unwrap();
+        let destination = project.path().join("raced.pdf");
+        let mut temporary = tempfile::NamedTempFile::new_in(project.path()).unwrap();
+        temporary.write_all(b"generated PDF").unwrap();
+        fs::write(&destination, "A competing publisher's file").unwrap();
+        let synchronized = std::cell::Cell::new(false);
+
+        assert!(
+            commit_new_staged_file(temporary, &destination, |_| {
+                synchronized.set(true);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert!(!synchronized.get());
+        assert_eq!(
+            fs::read(&destination).unwrap(),
+            b"A competing publisher's file"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_atomic_write_does_not_follow_or_replace_an_existing_symlink() {
+        let project = tempfile::tempdir().unwrap();
+        let original = project.path().join("original.pdf");
+        fs::write(&original, "Original PDF").unwrap();
+        let destination = project.path().join("linked.pdf");
+        std::os::unix::fs::symlink(&original, &destination).unwrap();
+
+        assert!(AtomicFileWriter::write_new(&destination, b"generated PDF").is_err());
+
+        assert!(fs::symlink_metadata(&destination).unwrap().is_symlink());
+        assert_eq!(fs::read(original).unwrap(), b"Original PDF");
+    }
+
+    #[test]
+    fn new_atomic_write_reports_uncertain_durability_after_publication() {
+        let project = tempfile::tempdir().unwrap();
+        let destination = project.path().join("created.pdf");
+        let mut temporary = tempfile::NamedTempFile::new_in(project.path()).unwrap();
+        temporary.write_all(b"generated PDF").unwrap();
+
+        let result = commit_new_staged_file(temporary, &destination, |_| {
+            Err(io::Error::other("injected directory sync failure"))
+        })
+        .unwrap();
+
+        assert!(matches!(result, WriteDurability::Uncertain(error) if error.contains("injected")));
+        assert_eq!(fs::read(destination).unwrap(), b"generated PDF");
     }
 
     #[test]

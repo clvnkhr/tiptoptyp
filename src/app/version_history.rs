@@ -327,7 +327,7 @@ impl Dialog {
 impl EditorApp {
     pub(super) fn begin_version_history(&mut self, context: &egui::Context) {
         if self.document_flow_busy()
-            || self.save_job.is_running()
+            || self.local_save.is_running()
             || !self.native_command_enabled(AppCommand::RevertTo)
         {
             return;
@@ -408,7 +408,7 @@ impl EditorApp {
             let path = dialog.path.clone();
             if self.document().key() != key
                 || self.document().path().as_ref() != Some(&path)
-                || self.save_job.is_running()
+                || self.local_save.is_running()
             {
                 self.version_history.as_mut().unwrap().error = Some("The document changed while the version was loading. Close and reopen Revert To.".into());
                 return;

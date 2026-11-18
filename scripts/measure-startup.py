@@ -52,6 +52,21 @@ def save_measurements(output, result):
     temporary.replace(output / "measurement.json")
 
 
+def validate_fixture_snapshot(response, fixture, path):
+    document = response["document"]
+    if fixture == "empty":
+        required = ("tabs", "path", "source_bytes", "active_tab_id", "preview_tab_id", "dirty")
+        if (not all(field in document for field in required)
+                or type(document["tabs"]) is not int or document["tabs"] != 0 or document["path"] is not None
+                or type(document["source_bytes"]) is not int or document["source_bytes"] != 0
+                or document.get("active_tab_id") is not None
+                or document.get("preview_tab_id") is not None or document.get("dirty") is not False):
+            raise RuntimeError("fresh empty-workspace snapshot contained a document")
+    elif ("editor.source" not in response["targets"] or document["path"] != str(path)
+          or document["source_bytes"] != path.stat().st_size):
+        raise RuntimeError("fresh snapshot did not contain the requested fixture editor")
+
+
 def measure(binary, fixture, evidence, ordinal, sample=False):
     with tempfile.TemporaryDirectory(prefix="ttt-start-", dir="/tmp") as temporary:
         directory = Path(temporary).resolve()
@@ -97,13 +112,11 @@ def measure(binary, fixture, evidence, ordinal, sample=False):
                     time.sleep(0.01)
                 elapsed = (time.perf_counter() - started) * 1000
                 document = response["document"]
-                if "editor.source" not in response["targets"]:
-                    raise RuntimeError("fresh snapshot did not contain an editor")
-                if fixture != "empty" and (document["path"] != str(path) or document["source_bytes"] != path.stat().st_size):
-                    raise RuntimeError("fresh snapshot did not contain the requested fixture")
+                validate_fixture_snapshot(response, fixture, path)
                 return {"milliseconds": elapsed, "frame": document["frame"],
                         "native_size": document["native_size"], "dark": document["dark"],
-                        "backend": document["preview_backend"], "source_bytes": document["source_bytes"]}
+                        "backend": document["preview_backend"], "source_bytes": document["source_bytes"],
+                        "tabs": document["tabs"], "workload": "empty workspace" if fixture == "empty" else "explicit document"}
             finally:
                 try:
                     if sampler is not None:
@@ -127,7 +140,8 @@ def main():
     binaries = [args.binary.resolve(), *([args.compare.resolve()] if args.compare else [])]
     driver = prepare_driver()
     preflight = json.loads(subprocess.check_output([str(driver), "preflight"], text=True))
-    result = {"desktop": preflight, "ui_scale_percent": 100, "metric": "process spawn to first fresh editor-state snapshot; excludes preview readiness and screen presentation",
+    result = {"desktop": preflight, "ui_scale_percent": 100, "metric": "process spawn to first fresh workspace/document snapshot; excludes preview readiness and screen presentation",
+              "workload": "empty workspace without an open document" if args.fixture == "empty" else "explicit named document",
               "cache": "fresh process and fresh settings/workspace; filesystem caches are not flushed",
               "platform": platform.platform(), "fixture": args.fixture, "sampled": args.sample,
               "compiler": subprocess.check_output(["rustc", "--version"], text=True).strip(),

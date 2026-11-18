@@ -1,4 +1,6 @@
 use super::*;
+
+mod save_journal;
 const ID: &str = "0123456789abcdef01234567";
 fn entry(id: &str, path: &str, kind: EntryKind) -> Entry {
     Entry {
@@ -43,6 +45,42 @@ fn edit(model: &mut Model, source: &str) -> u64 {
         panic!("expected edit")
     };
     request
+}
+
+#[test]
+fn oversized_browser_conflict_cannot_consume_a_save_or_create_uncheckpointable_state() {
+    let mut state = model();
+    let request = edit(&mut state, "saved local");
+    let document = state.document("a").unwrap().clone();
+    let pending = state.in_flight().unwrap().clone();
+    assert!(
+        state
+            .apply(BrowserEvent::Conflict {
+                epoch: 7,
+                id: "a".into(),
+                request,
+                source: "server revision".into(),
+                message: "x".repeat(MAX_CONFLICT_MESSAGE_BYTES + 1),
+            })
+            .is_err()
+    );
+    assert_eq!(state.document("a"), Some(&document));
+    assert_eq!(state.in_flight(), Some(&pending));
+
+    state
+        .apply(BrowserEvent::Conflict {
+            epoch: 7,
+            id: "a".into(),
+            request,
+            source: "server revision".into(),
+            message: "x".repeat(MAX_CONFLICT_MESSAGE_BYTES),
+        })
+        .unwrap();
+    let saved = state.document("a").unwrap();
+    assert_eq!(saved.source(), "saved local");
+    assert_eq!(saved.baseline, "server revision");
+    assert!(saved.conflict().is_some());
+    assert!(state.in_flight().is_none());
 }
 #[test]
 fn project_url_is_exact_and_separates_self_hosted_origins() {
@@ -192,69 +230,7 @@ fn serialized_publish_keeps_old_receipt_and_coalesces_newer_drafts() {
     assert!(!state.has_unsynced());
     assert!(state.in_flight().is_none());
 }
-#[test]
-fn undo_to_old_baseline_is_retained_while_publish_is_in_flight() {
-    let mut state = model();
-    let request = edit(&mut state, "first");
-    state.set_draft("a", "old".into()).unwrap();
-    state
-        .apply(BrowserEvent::Ack {
-            epoch: 7,
-            id: "a".into(),
-            request,
-            source: "first".into(),
-        })
-        .unwrap();
-    assert!(
-        matches!(state.publish("a"), Some(BrowserCommand::Edit { base, source, .. }) if base == "first" && source == "old")
-    );
-}
-#[test]
-fn local_mirror_and_optimistic_browser_snapshot_do_not_acknowledge_a_save() {
-    let mut state = model();
-    edit(&mut state, "new");
-    assert_eq!(
-        state.apply(snapshot(7, "a", "new")).unwrap(),
-        ModelChange::Ignored
-    );
-    assert_eq!(state.document("a").unwrap().baseline, "old");
-    assert!(state.has_unsynced());
-    assert!(state.in_flight().is_some());
-}
-#[test]
-fn mismatched_request_owner_and_epoch_cannot_complete_a_publish() {
-    let mut state = model();
-    let request = edit(&mut state, "new");
-    for (epoch, id, request) in [(6, "a", request), (7, "b", request), (7, "a", request + 1)] {
-        assert_eq!(
-            state
-                .apply(BrowserEvent::Ack {
-                    epoch,
-                    id: id.into(),
-                    request,
-                    source: "new".into()
-                })
-                .unwrap(),
-            ModelChange::Ignored
-        );
-        assert_eq!(state.document("a").unwrap().baseline, "old");
-    }
-    state.reconnect(8);
-    assert_eq!(state.epoch(), 8);
-    assert!(state.in_flight().is_none());
-    assert_eq!(state.document("a").unwrap().source(), "new");
-    assert_eq!(
-        state
-            .apply(BrowserEvent::Ack {
-                epoch: 7,
-                id: "a".into(),
-                request,
-                source: "new".into()
-            })
-            .unwrap(),
-        ModelChange::Ignored
-    );
-}
+
 #[test]
 fn concurrent_remote_changes_preserve_draft_and_stop_automatic_overwrite() {
     let mut state = model();
@@ -266,7 +242,7 @@ fn concurrent_remote_changes_preserve_draft_and_stop_automatic_overwrite() {
     let document = state.document("a").unwrap();
     assert_eq!(document.baseline, "remote");
     assert_eq!(document.source(), "local");
-    assert_eq!(document.conflict.as_ref().unwrap().remote, "remote");
+    assert_eq!(document.conflict().unwrap().remote, "remote");
     assert!(state.publish("a").is_none());
     let review = state.conflict_review("a").unwrap();
     assert_eq!(review.base, "old");
@@ -325,7 +301,7 @@ fn conflicts_and_unexpected_ack_bytes_never_discard_newer_drafts() {
         let document = state.document("a").unwrap();
         assert_eq!(document.baseline, "server");
         assert_eq!(document.source(), "newer local");
-        assert!(document.conflict.is_some());
+        assert!(document.conflict().is_some());
         assert!(state.publish("a").is_none());
     }
 }
@@ -343,7 +319,7 @@ fn deleted_document_draft_is_retained_without_recreating_remote_file() {
         })
         .unwrap();
     assert_eq!(state.document("a").unwrap().source(), "local");
-    assert!(state.document("a").unwrap().conflict.is_some());
+    assert!(state.document("a").unwrap().conflict().is_some());
     assert!(state.publish("a").is_none());
 }
 #[test]
@@ -464,25 +440,6 @@ fn malformed_asset_data_never_touches_existing_mirror_file() {
 }
 
 #[test]
-fn publishing_requested_document_cannot_consume_another_tabs_save_request() {
-    let mut state = model();
-    state.apply(snapshot(7, "b", "chapter old")).unwrap();
-    state.set_draft("a", "main draft".into()).unwrap();
-    state.set_draft("b", "chapter draft".into()).unwrap();
-    let Some(BrowserCommand::Edit {
-        id, base, source, ..
-    }) = state.publish("b")
-    else {
-        panic!("expected requested chapter publish");
-    };
-    assert_eq!(
-        (id.as_str(), base.as_str(), source.as_str()),
-        ("b", "chapter old", "chapter draft")
-    );
-    assert!(state.publish("a").is_none());
-    assert_eq!(state.document("a").unwrap().source(), "main draft");
-}
-#[test]
 fn remote_changes_cannot_erase_undo_to_baseline_while_a_publish_is_in_flight() {
     let mut state = model();
     edit(&mut state, "first");
@@ -496,60 +453,18 @@ fn remote_changes_cannot_erase_undo_to_baseline_while_a_publish_is_in_flight() {
 }
 
 #[test]
-fn explicit_unchanged_save_gets_a_fresh_receipt_without_background_noop_uploads() {
-    let mut state = model();
-    assert!(state.in_flight().is_none());
-    assert!(!state.has_unsynced());
-    let Some(BrowserCommand::Edit {
-        id,
-        base,
-        source,
-        request,
-        epoch,
-    }) = state.publish("a")
-    else {
-        panic!("explicit unchanged save must reach the browser acknowledgement boundary");
-    };
-    assert_eq!(
-        (id.as_str(), base.as_str(), source.as_str(), epoch),
-        ("a", "old", "old", 7)
-    );
-    assert!(state.in_flight().is_some());
-    assert!(state.has_unsynced());
-    assert!(state.publish("a").is_none());
-    assert_eq!(
-        state
-            .apply(BrowserEvent::Ack {
-                epoch,
-                id: id.clone(),
-                request,
-                source: source.clone()
-            })
-            .unwrap(),
-        ModelChange::Acknowledged {
-            id,
-            request,
-            source,
-            dirty: false
-        }
-    );
-    assert!(!state.has_unsynced());
-    assert!(state.in_flight().is_none());
-}
-
-#[test]
 fn releasing_last_native_draft_removes_phantom_conflicts_on_reopen() {
     let mut state = model();
     state
         .set_draft("a", "discarded local draft".into())
         .unwrap();
     state.apply(snapshot(7, "a", "server revision")).unwrap();
-    assert!(state.document("a").unwrap().conflict.is_some());
+    assert!(state.document("a").unwrap().conflict().is_some());
     assert!(state.release_native_draft("a"));
     assert!(!state.has_unsynced());
     let document = state.document("a").unwrap();
     assert_eq!(document.baseline, "server revision");
-    assert!(document.draft.is_none() && document.conflict.is_none());
+    assert!(document.draft().is_none() && document.conflict().is_none());
     // Reopening uses current Overleaf contents, rather than resurrecting the
     // draft the user closed/discarded or exported to a separate local file.
     assert!(matches!(
@@ -566,25 +481,6 @@ fn releasing_last_native_draft_removes_phantom_conflicts_on_reopen() {
         "server after reopening"
     );
     assert!(!state.has_unsynced());
-}
-
-#[test]
-fn last_native_binding_cannot_release_a_document_still_being_published() {
-    let mut state = model();
-    let request = edit(&mut state, "publishing draft");
-    assert!(!state.release_native_draft("a"));
-    assert_eq!(state.in_flight().unwrap().request, request);
-    assert_eq!(state.document("a").unwrap().source(), "publishing draft");
-    state
-        .apply(BrowserEvent::Ack {
-            epoch: 7,
-            id: "a".into(),
-            request,
-            source: "publishing draft".into(),
-        })
-        .unwrap();
-    assert!(state.release_native_draft("a"));
-    assert_eq!(state.document("a").unwrap().baseline, "publishing draft");
 }
 
 #[test]
@@ -708,7 +604,7 @@ fn reconnect_merges_separate_changes_but_waits_for_explicit_save_acknowledgement
     let document = state.document("a").unwrap();
     assert_eq!(document.baseline, remote);
     assert_eq!(document.source(), merged);
-    assert!(document.conflict.is_none());
+    assert!(document.conflict().is_none());
     assert!(state.in_flight().is_none(), "merging cannot publish");
     assert!(state.has_unsynced());
     let Some(BrowserCommand::Edit {
@@ -892,10 +788,7 @@ fn concurrent_snapshot_matching_newer_draft_cannot_retire_an_older_save() {
         ModelChange::Document { conflict: true, .. }
     ));
     assert_eq!(state.in_flight().unwrap().request, request);
-    assert_eq!(
-        state.document("a").unwrap().draft.as_deref(),
-        Some("newer local")
-    );
+    assert_eq!(state.document("a").unwrap().draft(), Some("newer local"));
     state
         .apply(BrowserEvent::Ack {
             epoch: 7,

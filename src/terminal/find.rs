@@ -591,7 +591,7 @@ mod tests {
                 serde_json::json!({
                     "fixture": if unicode {"unicode_256k"} else {"ascii_512k"},
                     "rows": rows, "bytes": dump.iter().map(String::len).sum::<usize>(),
-                    "sha256": format!("{:x}", hash.finalize()),
+                    "sha256": hex::encode(hash.finalize()),
                     "warmup_query_sets": 5, "samples": 7, "queries_per_sample": 32,
                     "first_call_ns": first_ns, "mean_ns_per_query_samples": samples,
                     "first_query_allocated_bytes": allocated,

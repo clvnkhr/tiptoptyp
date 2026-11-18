@@ -394,6 +394,22 @@ mod tests {
     }
 
     #[test]
+    fn ltex_presets_preserve_explicit_enabled_and_disabled_choices() {
+        for enabled in [false, true] {
+            let mut settings = AppSettings::default();
+            settings.ltex.enabled = enabled;
+            for profile in [ToolProfile::Verbose, ToolProfile::Normal] {
+                apply(ReferenceId::Ltex, profile, &mut settings).unwrap();
+                assert_eq!(settings.ltex.enabled, enabled);
+                assert!(!settings.english_grammar);
+                apply_all(profile, &mut settings).unwrap();
+                assert_eq!(settings.ltex.enabled, enabled);
+                assert!(!settings.english_grammar);
+            }
+        }
+    }
+
+    #[test]
     fn verbose_adds_diagnostics_without_changing_logging_or_build_scheduling() {
         let mut settings = AppSettings::default();
         let before = settings.clone();
@@ -443,7 +459,7 @@ mod tests {
         assert_eq!(settings.tex.bibtex, before.tex.bibtex);
         assert_eq!(settings.tex.biber, before.tex.biber);
         assert_eq!(settings.latexdiff, before.latexdiff);
-        assert!(!settings.ltex.enabled);
+        assert_eq!(settings.ltex.enabled, before.ltex.enabled);
         assert_eq!(settings.english_grammar, before.english_grammar);
         assert!(!apply_all(ToolProfile::Verbose, &mut settings).unwrap());
         apply_all(ToolProfile::Normal, &mut settings).unwrap();

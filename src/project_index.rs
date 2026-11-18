@@ -1,3 +1,4 @@
+mod magic;
 mod tex;
 use std::{
     borrow::Cow,
@@ -52,6 +53,7 @@ pub struct ReferenceEntry {
 pub enum DependencyKind {
     Import,
     Include,
+    Bibliography,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +156,7 @@ impl ProjectIndex {
                         .extension()
                         .is_some_and(|extension| !extension.eq_ignore_ascii_case("typ"))
                 }) {
-                    warning.push_str("\nExplorer follows literal TeX inputs inside the workspace, such as \\input{chapter}, without expanding macros. Computed, external, or conflicting import contexts are not indexed; compilation still resolves them. Entries from those files may be absent from Explorer.");
+                    warning.push_str("\nExplorer follows literal TeX inputs and bibliography files inside the workspace, such as \\input{chapter} and \\bibliography{references}, without expanding macros. Computed, external, or conflicting import contexts are not indexed; compilation still resolves them. Entries from those files may be absent from Explorer.");
                 } else {
                     warning.push_str("\nExplorer can follow literal paths, such as #include \"chapter.typ\", but cannot evaluate these expressions. Keep computed paths if intentional; compilation still resolves them. Entries from those files may be absent from Explorer.");
                 }
@@ -200,10 +202,8 @@ pub(crate) fn analyze_project_cancellable(
     }
     let mut paths = PathNormalizer::default();
     let root = paths.normalize(root);
-    let main = paths.normalize(main);
-    let tex = main
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("tex"));
+    let mut main = paths.normalize(main);
+    let tex = crate::document::is_tex_path(&main);
     if !main.starts_with(&root)
         || main
             .extension()
@@ -219,18 +219,44 @@ pub(crate) fn analyze_project_cancellable(
         .rev()
         .map(|(path, source)| (paths.normalize(path), source.as_str()))
         .collect();
+    let mut entry_source = None;
+    let mut redirected = false;
+    if tex {
+        match magic::resolve(&root, &main, &overrides, &mut paths, &mut cancelled)? {
+            Ok(entry) => {
+                main = entry.path;
+                entry_source = Some(entry.source);
+                redirected = entry.redirected;
+                index.unresolved_dependencies.extend(entry.unresolved);
+            }
+            Err(error) => {
+                index.completeness.unreadable_files.push(IndexReadFailure {
+                    path: main,
+                    kind: error.kind(),
+                });
+                index.update_warning();
+                return Some(index);
+            }
+        }
+    }
     let mut visited = HashSet::new();
     let mut pending = vec![main.clone()];
     // Saved TeX entries compile beside their source; untitled entries compile
     // from their real workspace, not the virtual .tiptoptyp identity directory.
     // Match that explicit compiler directory, keeping containment independent.
     let tex_base = if tex {
-        paths.normalize(source_directory)
+        paths.normalize(if redirected {
+            main.parent().unwrap_or(source_directory)
+        } else {
+            source_directory
+        })
     } else {
         root.clone()
     };
     let mut tex_contexts = HashMap::from([(main.clone(), tex_base.clone())]);
     let mut tex_limit_reached = false;
+    let mut bibliography_paths = BTreeSet::new();
+    let mut bibliography_limit_reached = false;
     let mut packages = BTreeSet::new();
 
     while visited.len() < MAX_PROJECT_FILES
@@ -242,7 +268,13 @@ pub(crate) fn analyze_project_cancellable(
         if !visited.insert(path.clone()) {
             continue;
         }
-        let source = match source_for(&path, &overrides) {
+        let source = match if path == main {
+            entry_source
+                .take()
+                .map_or_else(|| source_for(&path, &overrides), Ok)
+        } else {
+            source_for(&path, &overrides)
+        } {
             Ok(source) => source,
             Err(error) => {
                 index.completeness.unreadable_files.push(IndexReadFailure {
@@ -265,13 +297,26 @@ pub(crate) fn analyze_project_cancellable(
                 &source,
                 &mut index,
                 &mut packages,
-                |target, subfile| {
+                |target, dependency| {
+                    if matches!(dependency, tex::LocalDependency::Bibliography) {
+                        let Some(resolved) =
+                            tex::resolve_bibliography(&root, &context, target, &mut paths)
+                        else {
+                            return false;
+                        };
+                        remember_bibliography(
+                            &mut bibliography_paths,
+                            &mut bibliography_limit_reached,
+                            resolved,
+                        );
+                        return true;
+                    }
                     let Some(resolved) = tex::resolve(&root, &context, target, &mut paths) else {
                         return false;
                     };
                     // subfiles uses subimport: nested inputs inherit the new
                     // directory until that subfile returns to its caller.
-                    let next_context = if subfile {
+                    let next_context = if matches!(dependency, tex::LocalDependency::Subfile) {
                         resolved.parent().unwrap_or(&root).to_owned()
                     } else {
                         context.clone()
@@ -297,14 +342,22 @@ pub(crate) fn analyze_project_cancellable(
                 &source,
                 &mut index,
                 &mut packages,
-                |target| {
-                    let Some(resolved) = resolve_local_typst_path(&root, &path, target, &mut paths)
+                |target, dependency| {
+                    let Some(resolved) =
+                        resolve_local_project_path(&root, &path, target, dependency, &mut paths)
                     else {
-                        return;
+                        return false;
                     };
-                    if !visited.contains(&resolved) {
+                    if dependency == DependencyKind::Bibliography {
+                        remember_bibliography(
+                            &mut bibliography_paths,
+                            &mut bibliography_limit_reached,
+                            resolved,
+                        );
+                    } else if !visited.contains(&resolved) {
                         pending.push(resolved);
                     }
+                    true
                 },
                 &mut cancelled,
             )
@@ -314,9 +367,48 @@ pub(crate) fn analyze_project_cancellable(
         }
     }
 
+    // Bibliographies are leaf dependencies, not source programs. Do not load
+    // potentially large databases or interpret their text as headings/macros.
+    // Sources take priority and both kinds share the same traversal budget.
+    for path in bibliography_paths {
+        if cancelled() {
+            return None;
+        }
+        if visited.contains(&path) {
+            continue;
+        }
+        if visited.len() >= MAX_PROJECT_FILES {
+            bibliography_limit_reached = true;
+            break;
+        }
+        visited.insert(path.clone());
+        let readable = if overrides.contains_key(&path) {
+            Ok(())
+        } else {
+            fs::metadata(&path).and_then(|metadata| {
+                if metadata.is_file() {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "bibliography path is not a file",
+                    ))
+                }
+            })
+        };
+        match readable {
+            Ok(()) => index.subfiles.push(path),
+            Err(error) => index.completeness.unreadable_files.push(IndexReadFailure {
+                path,
+                kind: error.kind(),
+            }),
+        }
+    }
+
     // Duplicate/cyclic pending entries do not mean that anything was omitted.
-    index.completeness.file_limit_reached =
-        tex_limit_reached || pending.iter().any(|path| !visited.contains(path));
+    index.completeness.file_limit_reached = tex_limit_reached
+        || bibliography_limit_reached
+        || pending.iter().any(|path| !visited.contains(path));
     index
         .completeness
         .unreadable_files
@@ -331,6 +423,17 @@ pub(crate) fn analyze_project_cancellable(
     index.packages = packages.into_iter().collect();
     index.rebuild_tag_references();
     Some(index)
+}
+
+fn remember_bibliography(paths: &mut BTreeSet<PathBuf>, limited: &mut bool, path: PathBuf) {
+    if paths.contains(&path) {
+        return;
+    }
+    if paths.len() < MAX_PROJECT_FILES {
+        paths.insert(path);
+    } else {
+        *limited = true;
+    }
 }
 
 fn source_for<'a>(
@@ -350,7 +453,7 @@ fn visit_source(
     source: &str,
     index: &mut ProjectIndex,
     packages: &mut BTreeSet<String>,
-    local_file: impl FnMut(&str),
+    local_file: impl FnMut(&str, DependencyKind) -> bool,
 ) {
     let _ = visit_source_cancellable(path, source, index, packages, local_file, &mut || false);
 }
@@ -360,7 +463,7 @@ fn visit_source_cancellable(
     source: &str,
     index: &mut ProjectIndex,
     packages: &mut BTreeSet<String>,
-    mut local_file: impl FnMut(&str),
+    mut local_file: impl FnMut(&str, DependencyKind) -> bool,
     cancelled: &mut impl FnMut() -> bool,
 ) -> bool {
     let parsed = Source::detached(source);
@@ -389,8 +492,8 @@ struct ProjectVisitor<'a, F, C> {
     nodes_since_check: usize,
 }
 
-impl<F: FnMut(&str), C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
-    fn visit(&mut self, node: LinkedNode<'_>) -> bool {
+impl<F: FnMut(&str, DependencyKind) -> bool, C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
+    fn check_cancelled(&mut self) -> bool {
         self.nodes_since_check += 1;
         if self.nodes_since_check >= 256 {
             self.nodes_since_check = 0;
@@ -398,11 +501,19 @@ impl<F: FnMut(&str), C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
                 return false;
             }
         }
+        true
+    }
+
+    fn visit(&mut self, node: LinkedNode<'_>) -> bool {
+        if !self.check_cancelled() {
+            return false;
+        }
         match node.kind() {
             SyntaxKind::Heading => self.heading(&node),
             SyntaxKind::LetBinding => self.binding(&node),
             SyntaxKind::ModuleImport => self.dependency(&node, DependencyKind::Import),
             SyntaxKind::ModuleInclude => self.dependency(&node, DependencyKind::Include),
+            SyntaxKind::FuncCall if !self.bibliography(&node) => return false,
             SyntaxKind::Label | SyntaxKind::RefMarker => self.reference(&node),
             _ => {}
         }
@@ -461,6 +572,7 @@ impl<F: FnMut(&str), C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
                 .get()
                 .cast::<ast::ModuleInclude>()
                 .map(ast::ModuleInclude::source),
+            DependencyKind::Bibliography => return,
         };
         let Some(expression) = expression else {
             return;
@@ -473,7 +585,7 @@ impl<F: FnMut(&str), C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
                 .rsplit_once('.')
                 .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("typ"))
             {
-                (self.local_file)(&target);
+                (self.local_file)(&target, kind);
             }
         } else {
             self.index
@@ -484,6 +596,65 @@ impl<F: FnMut(&str), C: FnMut() -> bool> ProjectVisitor<'_, F, C> {
                     kind,
                     expression: self.source[node.range()].trim().to_owned(),
                 });
+        }
+    }
+
+    fn bibliography(&mut self, node: &LinkedNode<'_>) -> bool {
+        let Some(call) = node.get().cast::<ast::FuncCall>() else {
+            return true;
+        };
+        let is_bibliography = match call.callee() {
+            ast::Expr::Ident(name) => name.as_str() == "bibliography",
+            ast::Expr::FieldAccess(field) => {
+                field.field().as_str() == "bibliography"
+                    && matches!(field.target(), ast::Expr::Ident(name) if name.as_str() == "std")
+            }
+            _ => false,
+        };
+        if !is_bibliography {
+            return true;
+        }
+        let Some(argument) = call
+            .args()
+            .items()
+            .find(|argument| !matches!(argument, ast::Arg::Named(_)))
+        else {
+            return true;
+        };
+        let mut complete = true;
+        match argument {
+            ast::Arg::Pos(ast::Expr::Array(array)) => {
+                for item in array.items() {
+                    if !self.check_cancelled() {
+                        return false;
+                    }
+                    match item {
+                        ast::ArrayItem::Pos(value) => complete &= self.bibliography_target(value),
+                        ast::ArrayItem::Spread(_) => complete = false,
+                    }
+                }
+            }
+            ast::Arg::Pos(value) => complete = self.bibliography_target(value),
+            _ => complete = false,
+        }
+        if !complete {
+            self.index
+                .unresolved_dependencies
+                .push(UnresolvedDependency {
+                    path: self.path.to_owned(),
+                    line: self.lines.line_at(node.offset()),
+                    kind: DependencyKind::Bibliography,
+                    expression: self.source[node.range()].trim().to_owned(),
+                });
+        }
+        true
+    }
+
+    fn bibliography_target(&mut self, target: ast::Expr<'_>) -> bool {
+        if let ast::Expr::Str(target) = target {
+            (self.local_file)(&target.get(), DependencyKind::Bibliography)
+        } else {
+            false
         }
     }
 
@@ -528,23 +699,45 @@ impl LineIndex {
     }
 }
 
-fn resolve_local_typst_path(
+fn resolve_local_project_path(
     root: &Path,
     source: &Path,
     target: &str,
+    dependency: DependencyKind,
     paths: &mut PathNormalizer,
 ) -> Option<PathBuf> {
     let target = Path::new(target);
-    let candidate = if target.is_absolute() {
-        root.join(target.strip_prefix(Component::RootDir.as_os_str()).ok()?)
+    let (base, target) = if target.is_absolute() {
+        (
+            root,
+            target.strip_prefix(Component::RootDir.as_os_str()).ok()?,
+        )
     } else {
-        source.parent()?.join(target)
+        (source.parent()?, target)
     };
-    let candidate = paths.normalize(&candidate);
+    // Unsaved sources may have parents that do not exist yet. Normalize their
+    // literal `..` components before filesystem canonicalization, preserving
+    // override identity and rejecting lexical workspace escapes.
+    let mut relative = base.strip_prefix(root).ok()?.to_owned();
+    for component in target.components() {
+        match component {
+            Component::Normal(name) => relative.push(name),
+            Component::CurDir => {}
+            Component::ParentDir if relative.pop() => {}
+            _ => return None,
+        }
+    }
+    let candidate = paths.normalize(&root.join(relative));
     (candidate.starts_with(root)
-        && candidate
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("typ")))
+        && candidate.extension().is_some_and(|extension| {
+            if dependency == DependencyKind::Bibliography {
+                ["bib", "yml", "yaml"]
+                    .iter()
+                    .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+            } else {
+                extension.eq_ignore_ascii_case("typ")
+            }
+        }))
     .then_some(candidate)
 }
 
@@ -552,17 +745,21 @@ fn resolve_local_typst_path(
 struct PathNormalizer {
     // Per traversal, bounded independently of the number of missing imports.
     parents: HashMap<PathBuf, PathBuf>,
+    resolved: HashMap<PathBuf, PathBuf>,
     #[cfg(test)]
     attempts: usize,
 }
 
 impl PathNormalizer {
     fn normalize(&mut self, path: &Path) -> PathBuf {
+        if let Some(resolved) = self.resolved.get(path) {
+            return resolved.clone();
+        }
         #[cfg(test)]
         {
             self.attempts += 1;
         }
-        path.canonicalize().unwrap_or_else(|_| {
+        let resolved = path.canonicalize().unwrap_or_else(|_| {
             // Missing/unsaved files must use the same workspace identity as existing
             // files, including aliases such as /var -> /private/var on macOS.
             match (path.parent(), path.file_name()) {
@@ -578,9 +775,16 @@ impl PathNormalizer {
                 }
                 _ => path.to_owned(),
             }
-        })
+        });
+        if self.resolved.len() < MAX_PROJECT_FILES {
+            self.resolved.insert(path.to_owned(), resolved.clone());
+        }
+        resolved
     }
 }
+
+#[cfg(test)]
+mod bibliography_tests;
 
 #[cfg(test)]
 mod tests {
@@ -604,9 +808,32 @@ mod tests {
             paths.normalize(&root.join(format!("missing-dir-{index}/file.typ")));
         }
         assert_eq!(paths.parents.len(), MAX_PROJECT_FILES);
+        assert_eq!(paths.resolved.len(), MAX_PROJECT_FILES);
         assert!(
             PathNormalizer::default().parents.is_empty(),
             "no cache survives an indexing pass"
+        );
+    }
+
+    #[test]
+    fn repeated_dependencies_reuse_resolution_without_filesystem_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let bibliography = directory.path().join("references.bib");
+        fs::write(&bibliography, "@article{reference}").unwrap();
+        let mut paths = PathNormalizer::default();
+        let expected = paths.normalize(&bibliography);
+        assert_eq!(paths.attempts, 1);
+        for _ in 0..10000 {
+            assert_eq!(paths.normalize(&bibliography), expected);
+        }
+        assert_eq!(
+            paths.attempts, 1,
+            "duplicate declarations must not re-canonicalize paths"
+        );
+        assert_eq!(paths.resolved.len(), 1);
+        assert!(
+            PathNormalizer::default().resolved.is_empty(),
+            "resolution caches never survive an indexing pass"
         );
     }
 
@@ -857,7 +1084,7 @@ See @chapter and @figure. #link(<appendix>)[Appendix]
             "// @comment <comment>\n/* @block <block> */\n#let s = \"@string <string>\"\n`@raw <raw>`\n= Chapter <real>\nSee @real.",
             &mut index,
             &mut packages,
-            |_| {},
+            |_, _| true,
         );
         assert_eq!(
             index
@@ -877,7 +1104,7 @@ See @chapter and @figure. #link(<appendix>)[Appendix]
             "// <comment>\n`<raw>`\n#let s = \"<string>\"\n= Chapter <real>\nSee @real.",
             &mut index,
             &mut BTreeSet::new(),
-            |_| {},
+            |_, _| true,
         );
         assert_eq!(
             index

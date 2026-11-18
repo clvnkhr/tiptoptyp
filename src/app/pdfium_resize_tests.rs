@@ -80,8 +80,7 @@ fn seeded() -> (egui::Context, PdfiumView, RequestKey) {
         worker: Some(Worker::idle_for_tests()),
         bytes: Some(Arc::from(&b"deterministic PDF placeholder"[..])),
         revision: initial.revision,
-        requested: Some(initial.clone()),
-        desired: Some(initial.clone()),
+        rendering: Rendering::fixture(initial.clone()),
         ..Default::default()
     };
     let mut prepared = Some(batch(&initial));
@@ -106,7 +105,7 @@ fn seeded() -> (egui::Context, PdfiumView, RequestKey) {
 fn a_hundred_held_widths_keep_the_same_texture_and_dispatch_only_on_release() {
     let (context, mut view, initial) = seeded();
     let texture = view.residents[&0].texture.id();
-    view.pending_reply = Some(reply(&initial));
+    view.rendering.receive(reply(&initial));
     for step in 1..=100 {
         let desired = key(100 + step);
         assert_eq!(
@@ -121,11 +120,11 @@ fn a_hundred_held_widths_keep_the_same_texture_and_dispatch_only_on_release() {
             0,
             "held divider changes must not allocate or upload textures"
         );
-        assert_eq!(view.requested.as_ref(), Some(&initial));
-        assert_eq!(view.desired.as_ref(), Some(&desired));
+        assert_eq!(view.rendering.requested(), Some(&initial));
+        assert_eq!(view.rendering.target(), Some(&desired));
         assert_eq!(view.active_scale, initial.scale);
         assert_eq!(view.residents[&0].texture.id(), texture);
-        assert!(view.pending_reply.is_some());
+        assert!(view.rendering.reply().is_some());
         assert!(!view.ready());
     }
     let final_key = key(200);
@@ -133,13 +132,16 @@ fn a_hundred_held_widths_keep_the_same_texture_and_dispatch_only_on_release() {
         frame(&context, &mut view, &final_key, 1100.0, false, 0.101),
         0
     );
-    assert_eq!(view.requested.as_ref(), Some(&final_key));
-    assert!(view.pending_reply.is_none(), "the old-width reply is stale");
+    assert_eq!(view.rendering.requested(), Some(&final_key));
+    assert!(
+        view.rendering.reply().is_none(),
+        "the old-width reply is stale"
+    );
     assert_eq!(view.residents[&0].texture.id(), texture);
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     assert_eq!((view.render_requests, view.render_admissions), (1, 1));
 
-    view.pending_reply = Some(reply(&final_key));
+    view.rendering.receive(reply(&final_key));
     assert_eq!(
         frame(&context, &mut view, &final_key, 1100.0, false, 0.102),
         1
@@ -160,7 +162,7 @@ fn a_hundred_held_widths_keep_the_same_texture_and_dispatch_only_on_release() {
             0
         );
         assert_eq!(view.residents[&0].texture.id(), admitted);
-        assert_eq!(view.requested.as_ref(), Some(&final_key));
+        assert_eq!(view.rendering.requested(), Some(&final_key));
     }
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     assert_eq!((view.render_requests, view.render_admissions), (1, 2));
@@ -179,14 +181,14 @@ fn wrong_width_palette_and_revision_replies_never_replace_resident_pixels() {
             1 => stale.palette = DARK,
             _ => stale.revision += 1,
         }
-        view.pending_reply = Some(reply(&stale));
+        view.rendering.receive(reply(&stale));
         assert_eq!(frame(&context, &mut view, &desired, 1100.0, false, 0.02), 0);
         assert_eq!(view.residents[&0].texture.id(), texture);
         assert_eq!(view.active_revision, initial.revision);
         assert_eq!(view.active_scale, initial.scale);
         assert_eq!(view.palette, initial.palette);
-        assert_eq!(view.requested.as_ref(), Some(&desired));
-        assert!(view.pending_reply.is_none());
+        assert_eq!(view.rendering.requested(), Some(&desired));
+        assert!(view.rendering.reply().is_none());
         assert!(!view.ready());
     }
 }
@@ -197,11 +199,11 @@ fn a_matching_reply_survives_a_stationary_held_drag_until_release() {
     let texture = view.residents[&0].texture.id();
     let desired = key(200);
     // This render was dispatched before the user grabbed the divider.
-    view.requested = Some(desired.clone());
-    view.pending_reply = Some(reply(&desired));
+    view.rendering.request(&desired.clone());
+    view.rendering.receive(reply(&desired));
     for now in [0.01, 0.1, 1.0, 600.0] {
         assert_eq!(frame(&context, &mut view, &desired, 1100.0, true, now), 0);
-        assert_eq!(view.pending_reply.as_ref().unwrap().key, desired);
+        assert_eq!(view.rendering.reply().unwrap().key, desired);
         assert_eq!(view.residents[&0].texture.id(), texture);
         assert!(!view.ready());
     }
@@ -209,7 +211,7 @@ fn a_matching_reply_survives_a_stationary_held_drag_until_release() {
         frame(&context, &mut view, &desired, 1100.0, false, 600.01),
         1
     );
-    assert!(view.pending_reply.is_none());
+    assert!(view.rendering.reply().is_none());
     assert!(view.ready());
     assert_ne!(view.residents[&0].texture.id(), texture);
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -234,14 +236,14 @@ fn missing_pages_new_revisions_and_new_palettes_bypass_dispatch_and_admission_de
             _ => desired.palette = DARK,
         }
         assert_eq!(frame(&context, &mut view, &desired, 1100.0, true, 0.01), 0);
-        assert_eq!(view.requested.as_ref(), Some(&desired));
+        assert_eq!(view.rendering.requested(), Some(&desired));
         assert_eq!(view.residents[&0].texture.id(), texture);
         assert_eq!(
             view.palette, initial.palette,
             "dispatch cannot claim new colors are displayed"
         );
         assert!(!view.ready());
-        view.pending_reply = Some(reply(&desired));
+        view.rendering.receive(reply(&desired));
         assert_eq!(
             frame(&context, &mut view, &desired, 1100.0, true, 0.02),
             desired.pages.len(),
@@ -268,14 +270,14 @@ fn readiness_follows_desired_pixels_instead_of_the_last_dispatched_request() {
             2 => desired.revision += 1,
             _ => desired.pages.push(1),
         }
-        view.desired = Some(desired);
-        assert_eq!(view.requested.as_ref(), Some(&initial));
+        view.rendering.set_target(desired);
+        assert_eq!(view.rendering.requested(), Some(&initial));
         assert!(
             !view.ready(),
             "the previous request cannot claim changed desired pixels are ready"
         );
     }
-    view.desired = Some(initial);
+    view.rendering.set_target(initial);
     assert!(view.ready());
 }
 
@@ -344,7 +346,7 @@ fn find_edits_and_clear_keep_ready_pixels_and_the_same_texture() {
             0
         );
         assert_eq!(
-            view.requested.as_ref(),
+            view.rendering.requested(),
             Some(&initial),
             "Find edits must not dispatch a replacement raster"
         );
@@ -396,7 +398,7 @@ fn search_results_survive_viewport_changes_but_never_old_queries_or_documents() 
         "norm".to_owned(),
     ));
     frame(&context, &mut view, &initial, 1000.0, false, 1.0);
-    let search = view.search_requested.clone().unwrap();
+    let search = view.search.requested().cloned().unwrap();
     for stale in [
         SearchKey {
             query: "old".into(),
@@ -408,41 +410,93 @@ fn search_results_survive_viewport_changes_but_never_old_queries_or_documents() 
         },
     ] {
         view.accept_search(stale, vec![0]);
-        assert!(view.search_pending);
-        assert!(view.search_pages.is_empty());
-        assert!(view.goto.is_none());
+        assert!(view.search.pending());
+        assert!(view.search.pages().is_empty());
+        assert!(view.navigation.page().is_none());
     }
     let desired = RequestKey {
         pages: vec![1],
         ..initial
     };
     frame(&context, &mut view, &desired, 1000.0, false, 2.0);
-    assert_eq!(view.search_requested.as_ref(), Some(&search));
+    assert_eq!(view.search.requested(), Some(&search));
     view.accept_search(search.clone(), vec![1]);
-    assert!(!view.search_pending);
-    assert_eq!(view.search_pages, [1]);
-    assert_eq!(view.goto, Some(1));
-    view.goto = None;
+    assert!(!view.search.pending());
+    assert_eq!(view.search.pages(), [1]);
+    assert_eq!(view.navigation.page(), Some(1));
+    view.navigation.clear_page();
     view.controls_action(super::super::preview_controls::Action::Find(String::new()));
     view.accept_search(search, vec![0]);
-    assert!(view.search_pages.is_empty());
-    assert!(!view.search_pending);
-    assert!(view.goto.is_none());
+    assert!(view.search.pages().is_empty());
+    assert!(!view.search.pending());
+    assert!(view.navigation.page().is_none());
+}
+
+#[test]
+fn returning_to_the_previous_find_query_before_dispatch_requests_fresh_results() {
+    let (context, mut view, initial) = seeded();
+    view.controls_action(super::super::preview_controls::Action::Find("norm".into()));
+    frame(&context, &mut view, &initial, 1000.0, false, 1.0);
+    let search = view.search.requested().cloned().unwrap();
+    view.accept_search(search, vec![1]);
+    let issued = view.worker.as_ref().unwrap().search_requests_for_test();
+    view.controls_action(super::super::preview_controls::Action::Find("other".into()));
+    view.controls_action(super::super::preview_controls::Action::Find("norm".into()));
+    frame(&context, &mut view, &initial, 1000.0, false, 2.0);
+    assert_eq!(
+        view.worker.as_ref().unwrap().search_requests_for_test(),
+        issued + 1,
+        "a cleared result set needs a new receipt even when the query returns to its previous text"
+    );
+}
+
+#[test]
+fn a_source_jump_keeps_its_horizontal_coordinate_during_old_pdf_reflow() {
+    let (context, mut view, _) = seeded();
+    let path = PathBuf::from("main.tex");
+    view.path = path.clone();
+    let incoming: Arc<[u8]> = Arc::from(&b"replacement PDF placeholder"[..]);
+    view.reveal_position_for_pdf(0, 50.0, 75.0, false, Some(incoming.clone()));
+    context
+        .run_ui(
+            egui::RawInput {
+                screen_rect: Some(available(1000.0)),
+                time: Some(1.0),
+                ..Default::default()
+            },
+            |ui| {
+                let _ = view.show(
+                    ui,
+                    path.clone(),
+                    incoming.clone(),
+                    LIGHT,
+                    false,
+                    crate::settings::RevealAnimation::default(),
+                );
+            },
+        )
+        .drop_without_applying_deltas();
+    assert_eq!(view.navigation.pending_position(), Some((0, 75.0)));
+    assert_eq!(
+        view.navigation.point(),
+        Some(egui::vec2(50.0, 75.0)),
+        "layout of retained pixels cannot consume a source jump bound to the incoming PDF"
+    );
 }
 
 #[test]
 fn a_find_edit_does_not_reject_an_already_completed_pixel_replacement() {
     let (context, mut view, _) = seeded();
     let desired = key(200);
-    view.requested = Some(desired.clone());
-    view.pending_reply = Some(reply(&desired));
+    view.rendering.request(&desired.clone());
+    view.rendering.receive(reply(&desired));
     assert_eq!(frame(&context, &mut view, &desired, 1100.0, true, 0.01), 0);
     view.controls_action(super::super::preview_controls::Action::Find(
         "norm".to_owned(),
     ));
     assert_eq!(frame(&context, &mut view, &desired, 1100.0, false, 0.02), 1);
     assert!(view.ready());
-    assert!(view.search_pending);
+    assert!(view.search.pending());
     assert_eq!(view.active_scale, desired.scale);
 }
 
@@ -691,7 +745,7 @@ fn real_pdfium_widget_keeps_its_painted_page_point_under_pinch() {
                 .drop_without_applying_deltas();
             view.zoom = 2.7;
             view.fit = false;
-            view.goto = Some(page);
+            view.navigation.go_to_page(page);
             let texture = view.residents[&page].texture.id();
             let mut pointer = egui::pos2(550.0, 200.0);
             painted_widget_frame(

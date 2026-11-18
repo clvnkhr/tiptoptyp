@@ -120,7 +120,7 @@ impl EditorApp {
             .overleaf
             .connection
             .as_ref()
-            .filter(|connection| connection.online)
+            .filter(|connection| connection.online())
         else {
             return;
         };

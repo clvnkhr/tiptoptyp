@@ -20,7 +20,7 @@ fn action(uri: &str, diagnostic: &Value, replacement: &str) -> Value {
 fn settings_are_explicit_local_and_validate_types_and_owned_mode() {
     let settings = LtexSettings::default();
     settings.validate().unwrap();
-    assert!(!settings.enabled);
+    assert!(settings.enabled);
     assert!(
         settings
             .configuration
@@ -56,7 +56,7 @@ fn settings_are_explicit_local_and_validate_types_and_owned_mode() {
 fn academic_defaults_are_visible_and_preserve_spelling_and_grammar() {
     let settings = LtexSettings::default();
     settings.validate().unwrap();
-    assert!(!settings.enabled);
+    assert!(settings.enabled);
     assert!(settings.follow_document_language);
     assert_eq!(settings.configuration["language"], "en-GB");
     assert_eq!(settings.configuration["checkFrequency"], "manual");
@@ -127,6 +127,116 @@ fn edited_ltex_profile_round_trips_without_hidden_dictionary_or_rule_additions()
     let error = serde_json::from_value::<LtexSettings>(json!({"follow_document_language":"yes"}))
         .unwrap_err();
     assert!(error.to_string().contains("boolean"));
+}
+
+#[test]
+fn valid_oxford_spelling_variants_are_quiet_by_default_and_explicitly_opt_in() {
+    let source = "The generalised equation.";
+    let request = snapshot(1, source);
+    let raw = json!({"range":{"start":{"line":0,"character":4},"end":{"line":0,"character":15}},"message":"Both spellings are correct.","code":"OXFORD_SPELLING_Z_NOT_S"});
+    assert!(!LtexSettings::default().oxford_spelling);
+    assert!(
+        convert_diagnostics(&request, std::slice::from_ref(&raw), &Value::Null, None).is_empty()
+    );
+    assert_eq!(
+        convert_diagnostics_with_prose(&request, &[raw], &Value::Null, None, None, true).len(),
+        1
+    );
+    let settings = LtexSettings {
+        oxford_spelling: true,
+        ..Default::default()
+    };
+    let encoded = serde_json::to_value(&settings).unwrap();
+    assert!(
+        serde_json::from_value::<LtexSettings>(encoded)
+            .unwrap()
+            .oxford_spelling
+    );
+}
+
+#[test]
+fn typst_syntax_diagnostics_are_rejected_but_real_prose_errors_and_corrections_remain() {
+    let source = "#align(center)[This are a test.] $nabla + frac(1,2)$";
+    let mut request = snapshot(1, source);
+    request.language_id = "typst".into();
+    let diagnostic = |word: &str, code: &str| {
+        let byte = source.find(word).unwrap();
+        let start = source[..byte].encode_utf16().count();
+        json!({"range":{"start":{"line":0,"character":start},"end":{"line":0,"character":start+word.encode_utf16().count()}},"message":"fixture","code":code})
+    };
+    let grammar = diagnostic("are", "SUBJECT_VERB_AGREEMENT");
+    let raw = [
+        diagnostic("center", "MORFOLOGIK_RULE_EN_GB"),
+        diagnostic("nabla", "MORFOLOGIK_RULE_EN_GB"),
+        diagnostic("frac", "MORFOLOGIK_RULE_EN_GB"),
+        grammar.clone(),
+    ];
+    let actions = json!([action(&request.uri, &grammar, "is")]);
+    let findings = convert_diagnostics(&request, &raw, &actions, Some(1));
+    assert_eq!(findings.len(), 1);
+    let correction = findings[0].correction.as_ref().unwrap();
+    assert_eq!(correction.original, "are");
+    assert_eq!(correction.replacements, vec!["is"]);
+}
+
+#[test]
+#[ignore = "requires TIPTOPTYP_LTEX_TEST_EXECUTABLE pointing to a local LTeX+ launcher"]
+fn official_server_filters_typst_mathematical_template_false_positives_and_keeps_grammar() {
+    let settings = LtexSettings {
+        executable: std::env::var("TIPTOPTYP_LTEX_TEST_EXECUTABLE").expect("LTeX+ executable"),
+        mode: crate::settings::ToolMode::Custom,
+        ..Default::default()
+    };
+    let service = LtexService::spawn(settings, std::env::temp_dir(), egui::Context::default());
+    let mut request = snapshot(
+        1,
+        include_str!("../../tests/fixtures/ltex/typst-mathematical-prose.typ"),
+    );
+    request.language_id = "typst".into();
+    request.uri = "file:///tmp/ttt-ltex-mathematical-prose.typ".into();
+    service.update(request.clone());
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "LTeX+ did not return the mathematical fixture"
+        );
+        match service.try_recv() {
+            Some(LtexEvent::Error(error)) => panic!("{error}"),
+            Some(LtexEvent::Diagnostics {
+                key, diagnostics, ..
+            }) if key == request.key
+                && diagnostics.iter().any(|diagnostic| {
+                    diagnostic
+                        .correction
+                        .as_ref()
+                        .is_some_and(|correction| !correction.replacements.is_empty())
+                }) =>
+            {
+                assert!(
+                    !diagnostics.is_empty(),
+                    "real grammar mistakes must remain visible"
+                );
+                for diagnostic in &diagnostics {
+                    let correction = diagnostic
+                        .correction
+                        .as_ref()
+                        .expect("source-bound correction");
+                    assert!(
+                        matches!(correction.original.as_str(), "This" | "are" | "has"),
+                        "unexpected false positive: {diagnostic:?}"
+                    );
+                }
+                eprintln!(
+                    "mathematical Typst fixture: {} genuine grammar diagnostics; no syntax/name/Oxford false positives",
+                    diagnostics.len()
+                );
+                break;
+            }
+            _ => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+    service.shutdown();
 }
 
 #[test]
@@ -259,6 +369,27 @@ fn explicit_ltex_language_override_ignores_document_and_shared_language() {
 }
 
 #[test]
+fn tex_magic_spellcheck_selects_document_language_without_changing_preferences() {
+    let mut settings = LtexSettings::default();
+    let saved = settings.clone();
+    for (source, expected) in [
+        ("% !TeX spellcheck = en_US\nText", "en-US"),
+        ("%!TEX spellcheck=de-DE\nText", "de-DE"),
+        ("% !TeX spellcheck = fr_FR\nText", "fr-FR"),
+    ] {
+        let mut request = snapshot(1, source);
+        request.writing_language = crate::settings::WritingLanguage::British;
+        assert_eq!(settings.language_for_snapshot(&request), expected);
+    }
+    assert_eq!(settings, saved);
+    settings.follow_document_language = false;
+    assert_eq!(
+        settings.language_for_snapshot(&snapshot(1, "% !TeX spellcheck = de-DE\nText")),
+        "en-GB"
+    );
+}
+
+#[test]
 fn configuration_pulls_keep_nested_language_maps_and_sections() {
     let settings = json!({"language":"en-US","dictionary":{"en-US":["semigroup"]},"latex":{"commands":{"\\foo{}":"ignore"}}});
     assert_eq!(
@@ -274,7 +405,7 @@ fn diagnostics_map_utf16_strictly_and_keep_safe_corrections() {
     let snapshot = snapshot(5, "😀 We are wrong.");
     let diagnostic = raw_diagnostic(6, 9);
     let actions = json!([action(&snapshot.uri, &diagnostic, "is")]);
-    let converted = convert_diagnostics(&snapshot, &[diagnostic], &actions);
+    let converted = convert_diagnostics(&snapshot, &[diagnostic], &actions, Some(1));
     assert_eq!(
         converted[0].location,
         Some(DiagnosticLocation { line: 1, column: 6 })
@@ -285,17 +416,19 @@ fn diagnostics_map_utf16_strictly_and_keep_safe_corrections() {
     assert_eq!(correction.replacements, ["is"]);
     assert_eq!(correction.document, Some(snapshot.key));
     assert!(
-        convert_diagnostics(&snapshot, &[raw_diagnostic(1, 2)], &Value::Null).is_empty(),
+        convert_diagnostics(&snapshot, &[raw_diagnostic(1, 2)], &Value::Null, None).is_empty(),
         "split surrogate must be rejected"
     );
-    assert!(convert_diagnostics(&snapshot, &[raw_diagnostic(40, 41)], &Value::Null).is_empty());
+    assert!(
+        convert_diagnostics(&snapshot, &[raw_diagnostic(40, 41)], &Value::Null, None).is_empty()
+    );
 }
 #[test]
 fn suggestions_never_execute_commands_bulk_edits_or_cross_markup() {
     let snapshot = snapshot(1, r"a \emph{bad} are");
     let diagnostic = raw_diagnostic(2, 12);
     let actions = json!([action(&snapshot.uri, &diagnostic, "good")]);
-    let converted = convert_diagnostics(&snapshot, &[diagnostic], &actions);
+    let converted = convert_diagnostics(&snapshot, &[diagnostic], &actions, Some(1));
     assert!(
         converted[0]
             .correction
@@ -311,7 +444,7 @@ fn suggestions_never_execute_commands_bulk_edits_or_cross_markup() {
         .unwrap()
         .push(json!({"kind":"delete","uri":"file:///tmp/other.tex"}));
     let actions = json!([bulk, {"command":{"command":"dangerous"}}]);
-    let converted = convert_diagnostics(&snapshot, &[diagnostic], &actions);
+    let converted = convert_diagnostics(&snapshot, &[diagnostic], &actions, Some(1));
     assert!(
         converted[0]
             .correction
@@ -447,6 +580,205 @@ fn real_scheduler_checks_before_opening_and_enriches_current_diagnostics() {
     worker.join().unwrap().unwrap();
 }
 #[test]
+fn focused_action_batch_uses_only_visible_findings_and_preserves_atomic_fixes() {
+    let source = "#align(center)[This are a test. We has two result.]";
+    let mut request = snapshot(1, source);
+    request.language_id = "typst".into();
+    let diagnostic = |word: &str| {
+        let start = source.find(word).unwrap() as u32;
+        raw_diagnostic(start, start + word.len() as u32)
+    };
+    let hidden = diagnostic("center");
+    let first = diagnostic("are");
+    let second = diagnostic("has");
+    let mut oxford = first.clone();
+    oxford["code"] = "OXFORD_SPELLING_Z_NOT_S".into();
+    let state = shared(request.clone());
+    let observed = Arc::new(Mutex::new(0));
+    let requests = observed.clone();
+    let (release, delayed) = mpsc::sync_channel(1);
+    let mut delayed = Some(delayed);
+    let mut session = mock_session(move |message, responses| {
+        if initialize(&message, responses) {
+            return;
+        }
+        match message["method"].as_str().unwrap_or("") {
+            "workspace/executeCommand" => {
+                responses.send(Ok(json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":request.uri,"diagnostics":[hidden,first,oxford,second]}}))).unwrap();
+                responses
+                    .send(Ok(
+                        json!({"jsonrpc":"2.0","id":message["id"],"result":{"success":true}}),
+                    ))
+                    .unwrap();
+            }
+            "textDocument/codeAction" => {
+                let mut requests = requests.lock().unwrap();
+                *requests += 1;
+                let (diagnostic, replacement) = match *requests {
+                    1 => (&first, "is"),
+                    2 => (&second, "have"),
+                    _ => panic!("hidden findings must not request suggestions"),
+                };
+                assert_eq!(message["params"]["range"], diagnostic["range"]);
+                assert_eq!(
+                    message["params"]["context"]["diagnostics"],
+                    json!([diagnostic])
+                );
+                assert_eq!(message["params"]["context"]["only"], json!(["quickfix"]));
+                if let Some(delayed) = delayed.take() {
+                    drop(requests);
+                    delayed.recv().unwrap();
+                }
+                let mut bulk = action(&request.uri, diagnostic, "bulk must stay atomic");
+                bulk["edit"]["documentChanges"][0]["edits"].as_array_mut().unwrap()
+                    .push(action(&request.uri, &hidden, "hidden")["edit"]["documentChanges"][0]["edits"][0].clone());
+                responses.send(Ok(json!({"jsonrpc":"2.0","id":message["id"],"result":[bulk,action(&request.uri,diagnostic,replacement)]}))).unwrap();
+            }
+            _ => {}
+        }
+    });
+    let worker_state = state.clone();
+    let (_wake, receiver) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        run_session(
+            &LtexSettings::default(),
+            std::path::Path::new("/tmp"),
+            &worker_state,
+            receiver,
+            &egui::Context::default(),
+            &mut session,
+        )
+    });
+    wait_until(|| *observed.lock().unwrap() == 1);
+    {
+        let state = state.lock().unwrap();
+        let Some(LtexEvent::Diagnostics { diagnostics, .. }) = &state.result else {
+            panic!("initial findings must publish before suggestions finish");
+        };
+        assert_eq!(diagnostics.len(), 2);
+        assert!(
+            diagnostics
+                .iter()
+                .all(|d| d.correction.as_ref().unwrap().replacements.is_empty())
+        );
+    }
+    release.send(()).unwrap();
+    wait_until(|| {
+        matches!(state.lock().unwrap().result.as_ref(),
+        Some(LtexEvent::Diagnostics { diagnostics, .. })
+        if diagnostics.len() == 2
+            && diagnostics[0].correction.as_ref().unwrap().replacements == ["is"]
+            && diagnostics[1].correction.as_ref().unwrap().replacements == ["have"])
+    });
+    assert_eq!(*observed.lock().unwrap(), 2);
+    state.lock().unwrap().stop.store(true, Ordering::Release);
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn superseded_action_batch_cancels_current_request_and_does_not_start_the_next() {
+    let state = shared(snapshot(1, "old are are"));
+    let observed = Arc::new(Mutex::new(0));
+    let requests = observed.clone();
+    let canceled = Arc::new(AtomicBool::new(false));
+    let cancellation = canceled.clone();
+    let mut delayed = None;
+    let mut session = mock_session(move |message, responses| {
+        if initialize(&message, responses) {
+            return;
+        }
+        match message["method"].as_str().unwrap_or("") {
+            "workspace/executeCommand" => {
+                let diagnostics = if message["params"]["arguments"][0]["text"] == "old are are" {
+                    json!([raw_diagnostic(4, 7), raw_diagnostic(8, 11)])
+                } else {
+                    json!([])
+                };
+                responses.send(Ok(json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///tmp/paper.tex","diagnostics":diagnostics}}))).unwrap();
+                responses
+                    .send(Ok(
+                        json!({"jsonrpc":"2.0","id":message["id"],"result":{"success":true}}),
+                    ))
+                    .unwrap();
+            }
+            "textDocument/codeAction" => {
+                *requests.lock().unwrap() += 1;
+                assert!(
+                    delayed.is_none(),
+                    "a superseded batch must not request its second finding"
+                );
+                delayed = Some(message["id"].clone());
+            }
+            "$/cancelRequest" => {
+                let id = delayed.take().expect("cancel the outstanding action");
+                assert_eq!(message["params"]["id"], id);
+                cancellation.store(true, Ordering::Release);
+                // Even a late successful response may not enrich the old revision.
+                responses.send(Ok(json!({"jsonrpc":"2.0","id":id,"result":[action("file:///tmp/paper.tex",&raw_diagnostic(4,7),"is")]}))).unwrap();
+            }
+            _ => {}
+        }
+    });
+    let worker_state = state.clone();
+    let (_wake, receiver) = mpsc::sync_channel(1);
+    let worker = thread::spawn(move || {
+        run_session(
+            &LtexSettings::default(),
+            std::path::Path::new("/tmp"),
+            &worker_state,
+            receiver,
+            &egui::Context::default(),
+            &mut session,
+        )
+    });
+    wait_until(|| *observed.lock().unwrap() == 1);
+    {
+        let mut state = state.lock().unwrap();
+        state.desired = Some(snapshot(2, "new is"));
+        state.serial = 2;
+        state.changed = Instant::now() - DEBOUNCE;
+    }
+    wait_until(|| {
+        matches!(state.lock().unwrap().result.as_ref(),
+        Some(LtexEvent::Diagnostics { key, diagnostics, .. }) if key.revision == 2 && diagnostics.is_empty())
+    });
+    assert!(canceled.load(Ordering::Acquire));
+    assert_eq!(*observed.lock().unwrap(), 1);
+    state.lock().unwrap().stop.store(true, Ordering::Release);
+    worker.join().unwrap().unwrap();
+}
+
+#[test]
+fn focused_action_queue_is_bounded_and_uses_original_utf16_coordinates() {
+    let mut request = snapshot(1, "😀 are".repeat(100).as_str());
+    request.language_id = "latex".into();
+    let raw: Vec<_> = (0..100)
+        .map(|i| raw_diagnostic(i * 6 + 3, i * 6 + 6))
+        .collect();
+    let converted = convert_diagnostics(&request, &raw, &Value::Null, None);
+    let queued = visible_action_diagnostics(&request, &raw, &converted);
+    assert_eq!(queued.len(), ACTION_REQUEST_LIMIT);
+    assert_eq!(queued[0], raw[0]);
+    assert_eq!(
+        queued[ACTION_REQUEST_LIMIT - 1],
+        raw[ACTION_REQUEST_LIMIT - 1]
+    );
+}
+
+#[test]
+fn focused_action_results_are_bounded_across_responses() {
+    let mut collected = Vec::new();
+    let response = Value::Array((0..400).map(|i| json!({"title":i})).collect());
+    collect_actions(&mut collected, &response);
+    assert_eq!(collected.len(), 400);
+    collect_actions(&mut collected, &response);
+    assert_eq!(collected.len(), ACTION_RESULT_LIMIT);
+    collect_actions(&mut collected, &response);
+    assert_eq!(collected.len(), ACTION_RESULT_LIMIT);
+    assert_eq!(collected.last(), Some(&json!({"title":111})));
+}
+
+#[test]
 fn sequential_checks_pull_each_document_language_without_automatic_checks() {
     let mut first = snapshot(
         1,
@@ -457,6 +789,7 @@ fn sequential_checks_pull_each_document_language_without_automatic_checks() {
     let languages = Arc::new(Mutex::new(Vec::new()));
     let received = languages.clone();
     let mut pending_request = None;
+    let mut checks = 0;
     let mut session = mock_session(move |message, responses| {
         if initialize(&message, responses) {
             return;
@@ -468,11 +801,10 @@ fn sequential_checks_pull_each_document_language_without_automatic_checks() {
             "workspace/executeCommand" => {
                 let id = message["id"].as_u64().unwrap();
                 let text = message["params"]["arguments"][0]["text"].as_str().unwrap();
-                let expected = if text.contains("region: \"us\"") {
-                    "en-US"
-                } else {
-                    "en-GB"
-                };
+                assert!(!text.contains("#set"));
+                assert!(text.contains("This is a result."));
+                checks += 1;
+                let expected = if checks == 1 { "en-US" } else { "en-GB" };
                 pending_request = Some((id, expected));
                 responses.send(Ok(json!({"jsonrpc":"2.0","id":100 + id,"method":"workspace/configuration","params":{"items":[{"section":"ltex.language"},{"section":"ltex.dictionary"},{"section":"ltex.disabledRules"}]}}))).unwrap();
             }
@@ -623,23 +955,230 @@ fn diagnostic_endpoint_mapping_is_one_forward_scan_for_long_lines() {
 }
 
 #[test]
-fn grouped_quick_fixes_become_individual_replacements_only() {
+fn grouped_quick_fixes_remain_atomic_and_independent_choices_stay_available() {
     let snapshot = snapshot(1, "are are");
     let first = raw_diagnostic(0, 3);
     let second = raw_diagnostic(4, 7);
-    let mut grouped = action(&snapshot.uri, &first, "is");
-    grouped["edit"]["documentChanges"]
+    let first_action = action(&snapshot.uri, &first, "is");
+    let second_action = action(&snapshot.uri, &second, "is");
+    let mut multiple_documents = first_action.clone();
+    multiple_documents["edit"]["documentChanges"]
         .as_array_mut()
         .unwrap()
-        .push(action(&snapshot.uri, &second, "is")["edit"]["documentChanges"][0].clone());
-    let diagnostics = convert_diagnostics(&snapshot, &[first, second], &json!([grouped]));
-    assert_eq!(diagnostics.len(), 2);
-    for diagnostic in diagnostics {
-        let correction = diagnostic.correction.unwrap();
-        assert_eq!(correction.original, "are");
-        assert_eq!(correction.replacements, ["is"]);
-        assert_eq!(correction.range.len(), 3);
+        .push(second_action["edit"]["documentChanges"][0].clone());
+    let mut multiple_edits = first_action.clone();
+    multiple_edits["edit"]["documentChanges"][0]["edits"]
+        .as_array_mut()
+        .unwrap()
+        .push(second_action["edit"]["documentChanges"][0]["edits"][0].clone());
+    let mut legacy = json!({"kind":"quickfix","edit":{"changes":{}}});
+    legacy["edit"]["changes"][snapshot.uri.as_str()] = json!([
+        first_action["edit"]["documentChanges"][0]["edits"][0],
+        second_action["edit"]["documentChanges"][0]["edits"][0],
+    ]);
+    for grouped in [multiple_documents, multiple_edits, legacy] {
+        let diagnostics = convert_diagnostics(
+            &snapshot,
+            &[first.clone(), second.clone()],
+            &json!([grouped]),
+            Some(1),
+        );
+        assert_eq!(diagnostics.len(), 2);
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic
+                .correction
+                .as_ref()
+                .unwrap()
+                .replacements
+                .is_empty()
+        }));
     }
+    let mut legacy = json!({"kind":"quickfix","edit":{"changes":{}}});
+    legacy["edit"]["changes"][snapshot.uri.as_str()] =
+        json!([second_action["edit"]["documentChanges"][0]["edits"][0],]);
+    let diagnostics = convert_diagnostics(
+        &snapshot,
+        &[first.clone(), second],
+        &json!([
+            first_action.clone(),
+            action(&snapshot.uri, &first, "was"),
+            first_action,
+            legacy
+        ]),
+        Some(1),
+    );
+    assert_eq!(
+        diagnostics[0].correction.as_ref().unwrap().replacements,
+        ["is", "was"]
+    );
+    assert_eq!(
+        diagnostics[1].correction.as_ref().unwrap().replacements,
+        ["is"]
+    );
+}
+
+#[test]
+fn malformed_disabled_command_or_resource_actions_never_offer_partial_fixes() {
+    let snapshot = snapshot(1, "We are wrong.");
+    let diagnostic = raw_diagnostic(3, 6);
+    let valid = action(&snapshot.uri, &diagnostic, "is");
+    let invalid_fields = [
+        ("/disabled", json!({"reason":"Unavailable"})),
+        ("/disabled", Value::Null),
+        ("/command", json!({"command":"_ltex.requiredSideEffect"})),
+        ("/kind", json!("source.fixAll")),
+        ("/kind", json!(false)),
+        ("/edit/documentChanges", json!([])),
+        ("/edit/documentChanges", json!(false)),
+        ("/edit/documentChanges/0/kind", json!("delete")),
+        (
+            "/edit/documentChanges/0/textDocument/uri",
+            json!("file:///tmp/other.tex"),
+        ),
+        ("/edit/documentChanges/0/textDocument/uri", Value::Null),
+        ("/edit/documentChanges/0/edits", json!([])),
+        ("/edit/documentChanges/0/edits", json!(false)),
+        ("/edit/documentChanges/0/edits/0/newText", Value::Null),
+        (
+            "/edit/documentChanges/0/edits/0/range",
+            json!({"start":{"line":0,"character":6},"end":{"line":0,"character":3}}),
+        ),
+        (
+            "/edit/documentChanges/0/edits/0/annotationId",
+            json!("requires-confirmation"),
+        ),
+        (
+            "/edit/changeAnnotations",
+            json!({"requires-confirmation":{"label":"Review first","needsConfirmation":true}}),
+        ),
+        ("/edit/changes", json!({})),
+    ];
+    for (path, value) in invalid_fields {
+        let mut invalid = valid.clone();
+        // Optional fields are not necessarily present in the valid baseline.
+        let (parent, field) = path.rsplit_once('/').unwrap();
+        invalid.pointer_mut(parent).unwrap()[field] = value;
+        let converted = convert_diagnostics(
+            &snapshot,
+            std::slice::from_ref(&diagnostic),
+            &json!([invalid]),
+            Some(1),
+        );
+        assert!(
+            converted[0]
+                .correction
+                .as_ref()
+                .unwrap()
+                .replacements
+                .is_empty(),
+            "{path}"
+        );
+    }
+    for invalid in [
+        Value::Null,
+        json!([]),
+        json!({"title":"Command only","command":"_ltex.changeSettings"}),
+        json!({"edit":{"documentChanges":[{"kind":"delete","uri":snapshot.uri}]}}),
+    ] {
+        let converted = convert_diagnostics(
+            &snapshot,
+            std::slice::from_ref(&diagnostic),
+            &json!([invalid]),
+            Some(1),
+        );
+        assert!(
+            converted[0]
+                .correction
+                .as_ref()
+                .unwrap()
+                .replacements
+                .is_empty()
+        );
+    }
+    let mut other_file = json!({"edit":{"changes":{}}});
+    other_file["edit"]["changes"][snapshot.uri.as_str()] =
+        json!([valid["edit"]["documentChanges"][0]["edits"][0],]);
+    other_file["edit"]["changes"]["file:///tmp/other.tex"] = json!([]);
+    let converted = convert_diagnostics(&snapshot, &[diagnostic], &json!([other_file]), Some(1));
+    assert!(
+        converted[0]
+            .correction
+            .as_ref()
+            .unwrap()
+            .replacements
+            .is_empty()
+    );
+}
+
+#[test]
+fn versioned_actions_match_the_exact_wire_version_not_the_document_revision() {
+    let snapshot = snapshot(99, "We are wrong.");
+    let diagnostic = raw_diagnostic(3, 6);
+    let mut action = action(&snapshot.uri, &diagnostic, "is");
+    for version in [
+        json!(1),
+        json!(6),
+        json!(8),
+        json!(99),
+        json!(7.0),
+        json!("7"),
+        json!(false),
+    ] {
+        action["edit"]["documentChanges"][0]["textDocument"]["version"] = version;
+        let converted = convert_diagnostics(
+            &snapshot,
+            std::slice::from_ref(&diagnostic),
+            &json!([action.clone()]),
+            Some(7),
+        );
+        assert!(
+            converted[0]
+                .correction
+                .as_ref()
+                .unwrap()
+                .replacements
+                .is_empty()
+        );
+    }
+    for version in [json!(7), Value::Null] {
+        action["edit"]["documentChanges"][0]["textDocument"]["version"] = version;
+        let converted = convert_diagnostics(
+            &snapshot,
+            std::slice::from_ref(&diagnostic),
+            &json!([action.clone()]),
+            Some(7),
+        );
+        assert_eq!(
+            converted[0].correction.as_ref().unwrap().replacements,
+            ["is"]
+        );
+    }
+    for version in [json!(7), json!("7"), json!(false)] {
+        action["edit"]["documentChanges"][0]["textDocument"]["version"] = version;
+        let converted = convert_diagnostics(
+            &snapshot,
+            std::slice::from_ref(&diagnostic),
+            &json!([action.clone()]),
+            None,
+        );
+        assert!(
+            converted[0]
+                .correction
+                .as_ref()
+                .unwrap()
+                .replacements
+                .is_empty()
+        );
+    }
+    action["edit"]["documentChanges"][0]["textDocument"]
+        .as_object_mut()
+        .unwrap()
+        .remove("version");
+    let converted = convert_diagnostics(&snapshot, &[diagnostic], &json!([action]), None);
+    assert_eq!(
+        converted[0].correction.as_ref().unwrap().replacements,
+        ["is"]
+    );
 }
 
 #[test]
@@ -915,4 +1454,62 @@ fn bundled_launch_uses_its_java_and_explicit_custom_environment_still_wins() {
     settings.executable = "/custom/ltex".into();
     let command = launch_command(&settings, std::path::Path::new("/tmp"), None).unwrap();
     assert_eq!(command.get_program(), std::ffi::OsStr::new("/custom/ltex"));
+}
+
+#[test]
+fn check_phases_keep_suggestion_provenance_and_superseded_drain_policy() {
+    let mut check = Pending {
+        id: 3,
+        serial: 9,
+        snapshot: snapshot(1, "He are here."),
+        prose: None,
+        oxford_spelling: true,
+        diagnostics: Vec::new(),
+        started: Instant::now(),
+        validity: CheckValidity::Current,
+        phase: CheckPhase::Checking,
+    };
+    assert!(check.checking());
+    assert_eq!(check.action_version(), None);
+    assert!(
+        !check.supersede(),
+        "explicit checks drain rather than cancel"
+    );
+    assert_eq!(check.validity, CheckValidity::Superseded);
+    assert!(!check.supersede(), "supersession is idempotent");
+
+    check.validity = CheckValidity::Current;
+    check.phase = CheckPhase::Suggestions {
+        document_version: 7,
+        remaining: VecDeque::from([raw_diagnostic(0, 2)]),
+        collected: Vec::new(),
+    };
+    assert!(!check.checking());
+    assert_eq!(check.action_version(), Some(7));
+    assert!(
+        check.supersede(),
+        "only suggestions own a cancellable request"
+    );
+    assert!(!check.supersede(), "cancel is sent at most once");
+    assert_eq!(
+        check.action_version(),
+        Some(7),
+        "supersession cannot relabel an action"
+    );
+}
+
+#[test]
+fn worker_initialization_owns_open_document_lifetime() {
+    let mut phase = WorkerPhase::Initializing {
+        started: Instant::now(),
+    };
+    assert!(!phase.is_ready());
+    assert!(phase.opened().is_none());
+    phase.initialized();
+    phase.open_document(snapshot(1, "first"));
+    phase.initialized();
+    assert_eq!(phase.opened().unwrap().source.as_ref(), "first");
+    phase.close_document();
+    assert!(phase.is_ready());
+    assert!(phase.opened().is_none());
 }

@@ -47,6 +47,61 @@ use crate::{
 // ----------------------------------------------------------------------------
 // Types:
 
+fn next_native_route_trace_sequence(
+    counter: &std::sync::atomic::AtomicU64,
+    limit: u64,
+) -> Option<u64> {
+    counter
+        .fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |count| count.checked_add(1).filter(|next| *next <= limit),
+        )
+        .ok()
+        .map(|previous| previous + 1)
+}
+
+/// Bounded opt-in receipts at the native/viewport boundary, before input is
+/// handled. No default logging, source contents, routing changes or repaint.
+fn trace_native_event_route(
+    incoming: WindowId,
+    mapped: Option<ViewportId>,
+    current: impl FnOnce() -> Option<WindowId>,
+    event: &winit::event::WindowEvent,
+) {
+    use std::sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    };
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    static STARTED: OnceLock<Instant> = OnceLock::new();
+    static WHEELS: AtomicU64 = AtomicU64::new(0);
+    static LIFECYCLE: AtomicU64 = AtomicU64::new(0);
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let counter = match event {
+        winit::event::WindowEvent::MouseWheel { .. } => (&WHEELS, 512),
+        winit::event::WindowEvent::Focused(_)
+        | winit::event::WindowEvent::CursorLeft { .. }
+        | winit::event::WindowEvent::Destroyed => (&LIFECYCLE, 256),
+        _ => return,
+    };
+    if !*ENABLED.get_or_init(|| std::env::var_os("TIPTOPTYP_UI_TRACE").is_some())
+        || next_native_route_trace_sequence(counter.0, counter.1).is_none()
+    {
+        return;
+    }
+    let current = current();
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+    let elapsed = STARTED.get_or_init(Instant::now).elapsed().as_secs_f64();
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0.0, |duration| duration.as_secs_f64());
+    eprintln!(
+        "ui.native.event_route sequence={sequence} elapsed={elapsed:.6} unix={unix:.6} incoming={incoming:?} mapped={mapped:?} current={current:?} matches={:?} event={event:?}",
+        current.map(|current| current == incoming)
+    );
+}
+
 pub struct GlowWinitApp<'app> {
     repaint_proxy: Arc<egui::mutex::Mutex<EventLoopProxy<UserEvent>>>,
     app_name: String,
@@ -925,6 +980,16 @@ impl GlowWinitRunning<'_> {
     ) -> EventResult {
         let mut glutin = self.glutin.borrow_mut();
         let viewport_id = glutin.viewport_from_window.get(&window_id).copied();
+        trace_native_event_route(
+            window_id,
+            viewport_id,
+            || {
+                viewport_id
+                    .and_then(|id| glutin.viewports.get(&id))
+                    .and_then(|viewport| viewport.window.as_ref().map(|window| window.id()))
+            },
+            event,
+        );
 
         // On Windows, if a window is resized by the user, it should repaint synchronously, inside the
         // event handler.

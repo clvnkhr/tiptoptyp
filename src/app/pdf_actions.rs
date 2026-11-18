@@ -130,6 +130,39 @@ mod tests {
     use egui_kittest::{Harness, kittest::Queryable as _};
 
     #[test]
+    fn tex_magic_cached_root_pdf_uses_the_root_name_and_keeps_explicit_export_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let chapter = directory.path().join("chapter.tex");
+        let main = directory.path().join("main.tex");
+        app.document_mut().replace_loaded_unprojected(
+            "% !TeX root = main.tex".into(),
+            chapter.clone(),
+            DocumentKind::Tex,
+            None,
+        );
+        app.preview.set_requested_backend(PreviewPreference::Pdfium);
+        app.accept_tex_build_info(crate::compiler::TexBuildInfo {
+            entry: main.clone(),
+            engine: crate::tex::settings::BuildEngine::XeLatex,
+        });
+        let pdf: Arc<[u8]> = crate::pdf::test_pdf().into();
+        app.preview.accept_artifact(
+            ArtifactKey::unversioned(app.preview_document_revision()),
+            pdf.clone(),
+        );
+        app.preview.status = PreviewStatus::Ready(Duration::ZERO);
+        app.compile_deadline = None;
+        app.compile_pdf(None);
+        assert_eq!(fs::read(main.with_extension("pdf")).unwrap(), pdf.as_ref());
+        assert!(!chapter.with_extension("pdf").exists());
+        let chosen = directory.path().join("chosen-output.pdf");
+        app.finish_pdf_output(chosen.clone(), PdfWriteIntent::Export);
+        assert_eq!(fs::read(chosen).unwrap(), pdf.as_ref());
+    }
+
+    #[test]
     fn preview_artifact_is_not_a_saved_pdf_and_pdf_button_confirms_the_disk_write() {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();

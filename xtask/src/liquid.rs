@@ -238,7 +238,7 @@ fn compress_file(source: &Path, archive: &Path, asset: &mut manifest::Asset) -> 
             .write_all(&buffer[..count])
             .map_err(|error| error.to_string())?;
     }
-    if actual != asset.bytes || format!("{:x}", hash.finalize()) != asset.sha256 {
+    if actual != asset.bytes || hex::encode(hash.finalize()) != asset.sha256 {
         return Err(format!(
             "Liquid input changed while packaging: {}",
             asset.relative_path()
@@ -688,7 +688,7 @@ mod tests {
     fn production_parity_requires_complete_reference_and_dynamic_boundaries() {
         let actual_fixture = include_bytes!("../../assets/liquid/correction-cases.json");
         assert_eq!(
-            format!("{:x}", Sha256::digest(actual_fixture)),
+            hex::encode(Sha256::digest(actual_fixture)),
             PARITY_FIXTURE_SHA256
         );
         let actual: serde_json::Value = serde_json::from_slice(actual_fixture).unwrap();
@@ -751,7 +751,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, content.as_bytes()).unwrap();
             file.bytes = content.len() as u64;
-            file.sha256 = format!("{:x}", Sha256::digest(content.as_bytes()));
+            file.sha256 = hex::encode(Sha256::digest(content.as_bytes()));
         }
         fs::write(
             directory.join("LICENSE.txt"),

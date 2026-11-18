@@ -3,6 +3,7 @@ use super::*;
 use tiptoptyp::save_transaction::WriteDurability;
 
 pub(super) struct PendingSave {
+    operation: crate::workflow::SaveOperationId,
     pub tab: u64,
     pub key: DocumentKey,
     continuation: Option<tiptoptyp_core::workflow::SaveContinuationToken>,
@@ -11,6 +12,71 @@ pub(super) struct PendingSave {
     path_changed: bool,
     format_after: bool,
     started: Instant,
+}
+
+/// The local write and its routing context share one lifetime. There is no
+/// worker without an owner and no pending receipt without an admitted worker.
+#[derive(Default)]
+pub(super) enum State {
+    #[default]
+    Idle,
+    Writing(Box<Active>),
+}
+
+pub(super) struct Active {
+    pending: PendingSave,
+    job: crate::worker::ExclusiveJob<crate::save_io::SaveResult>,
+}
+
+impl State {
+    fn start(
+        &mut self,
+        pending: PendingSave,
+        context: &egui::Context,
+        work: impl FnOnce() -> Result<crate::save_io::SaveResult, String> + Send + 'static,
+    ) -> Result<(), String> {
+        if self.is_running() {
+            return Err("A document save is already running".into());
+        }
+        let mut job = crate::worker::ExclusiveJob::default();
+        job.start_and_repaint("Save document", context, work)?;
+        *self = Self::Writing(Box::new(Active { pending, job }));
+        Ok(())
+    }
+
+    pub(super) fn is_running(&self) -> bool {
+        matches!(self, Self::Writing(_))
+    }
+
+    pub(super) fn pending(&self) -> Option<&PendingSave> {
+        match self {
+            Self::Idle => None,
+            Self::Writing(active) => Some(&active.pending),
+        }
+    }
+
+    pub(super) fn activity(&self) -> crate::activity::Activity {
+        match self {
+            Self::Idle => crate::activity::Activity::Idle,
+            Self::Writing(active) => active.job.activity(),
+        }
+    }
+
+    fn poll(&mut self) -> Option<(PendingSave, Result<crate::save_io::SaveResult, String>)> {
+        let Self::Writing(active) = self else {
+            return None;
+        };
+        let result = match active.job.poll() {
+            LatestJobPoll::Pending => return None,
+            LatestJobPoll::Ready(result) => Ok(result),
+            LatestJobPoll::Failed(error) => Err(error),
+            LatestJobPoll::Idle => unreachable!("a writing phase owns an admitted save"),
+        };
+        let Self::Writing(active) = std::mem::take(self) else {
+            unreachable!()
+        };
+        Some((active.pending, result))
+    }
 }
 
 impl EditorApp {
@@ -41,14 +107,14 @@ impl EditorApp {
         format_after: bool,
         context: &egui::Context,
     ) -> bool {
-        if self.document_workflow.save_in_flight {
+        if self.document_workflow.save_in_flight() {
             return false;
         }
         if self.is_overleaf_path(&path) {
             return self.submit_overleaf_save(tab, &path, context);
         }
         let started = Instant::now();
-        if self.snapshot_scene.is_some() || self.save_job.is_running() {
+        if self.snapshot_scene.is_some() || self.local_save.is_running() {
             return false;
         }
         self.activity.save_error = None;
@@ -115,12 +181,35 @@ impl EditorApp {
             .then(|| self.document_workflow.continuation_token())
             .flatten();
         let input = SaveInput::new(request, expected, intent, continuation);
-        if let Err(error) = self
-            .save_job
-            .start_and_repaint("Save document", context, move || {
-                Ok(crate::save_io::execute(input))
-            })
+        let operation = match self
+            .document_workflow
+            .begin_save(key, crate::workflow::SaveDomain::Local)
         {
+            Ok(operation) => operation,
+            Err(error) => {
+                self.notice = Some(Notice {
+                    message: error.into(),
+                    kind: NoticeKind::Error,
+                });
+                return false;
+            }
+        };
+        let pending = PendingSave {
+            operation,
+            tab,
+            key,
+            continuation,
+            path,
+            previous_sync_path,
+            path_changed,
+            format_after: format_after && continuation.is_none(),
+            started,
+        };
+        if let Err(error) = self
+            .local_save
+            .start(pending, context, move || Ok(crate::save_io::execute(input)))
+        {
+            self.document_workflow.end_save(operation);
             if intent != SaveIntent::Auto {
                 self.document_workflow.cancel_continuation();
             }
@@ -130,17 +219,6 @@ impl EditorApp {
             });
             return false;
         }
-        self.pending_save = Some(PendingSave {
-            tab,
-            key,
-            continuation,
-            path,
-            previous_sync_path,
-            path_changed,
-            format_after: format_after && continuation.is_none(),
-            started,
-        });
-        self.document_workflow.save_in_flight = true;
         self.set_tab_autosave(tab, None);
         self.notice = Some(Notice {
             message: "Saving…".into(),
@@ -155,19 +233,16 @@ impl EditorApp {
     }
 
     fn poll_save_inner(&mut self, context: &egui::Context) {
-        let result = match self.save_job.poll() {
-            LatestJobPoll::Idle | LatestJobPoll::Pending => return,
-            LatestJobPoll::Ready(result) => Ok(result),
-            LatestJobPoll::Failed(error) => Err(error),
-        };
-        self.document_workflow.save_in_flight = false;
-        let Some(pending) = self.pending_save.take() else {
+        let Some((pending, result)) = self.local_save.poll() else {
             return;
         };
+        let owns_operation = self.document_workflow.end_save(pending.operation);
         let result = match result {
             Ok(result) => result,
             Err(error) => {
-                if pending.continuation == self.document_workflow.continuation_token() {
+                if owns_operation
+                    && pending.continuation == self.document_workflow.continuation_token()
+                {
                     self.show_file_error(error);
                 } else {
                     self.notice = Some(Notice {
@@ -179,8 +254,8 @@ impl EditorApp {
             }
         };
         let active = self.tabs.active_id() == Some(pending.tab);
-        let token_matches =
-            result.completion.continuation == self.document_workflow.continuation_token();
+        let token_matches = owns_operation
+            && result.completion.continuation == self.document_workflow.continuation_token();
         let current = self.document_for_tab(pending.tab).is_some_and(|doc| {
             doc.key().owner == pending.key.owner && doc.epoch() == pending.key.epoch
         });
@@ -219,8 +294,8 @@ impl EditorApp {
                                 _ => None,
                             },
                         });
-                        self.document_workflow.modal_had_focus = false;
-                        self.document_workflow.modal_suspended = false;
+                        self.document_workflow.modal_focus =
+                            crate::child_view::ModalFocus::default();
                         return;
                     }
                 } else if intent == SaveIntent::Auto {
@@ -250,7 +325,7 @@ impl EditorApp {
             result.completion.continuation,
             document,
             committed.receipt,
-            active && synchronized,
+            active && synchronized && owns_operation,
         );
         let continuation = match continuation {
             Ok(action) => action,
@@ -276,7 +351,15 @@ impl EditorApp {
                 .tab_workspace(pending.tab)
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| self.workspace_root.clone());
-            let workspace = if pending.path.starts_with(&previous_workspace) {
+            let workspace = if self
+                .workspace_switch
+                .keeps_save_workspace(pending.tab, &self.workspace_root)
+            {
+                // This Save As answers a departure prompt. The pending
+                // workspace transaction still owns this page until every
+                // draft is approved, including when another prompt cancels.
+                self.workspace_root.clone()
+            } else if pending.path.starts_with(&previous_workspace) {
                 previous_workspace
             } else {
                 pending
@@ -370,8 +453,11 @@ impl EditorApp {
             && self.document().kind().typesetting_language().is_some()
         {
             if pending.path_changed {
-                self.format_when_service_ready =
-                    save_as_format_handoff(true, self.document().kind(), self.document().key());
+                if let Some(key) =
+                    save_as_format_handoff(true, self.document().kind(), self.document().key())
+                {
+                    self.formatting = formatting::State::WaitingForSavedDocument(key);
+                }
             } else {
                 self.request_format_after_manual_save();
             }
@@ -382,7 +468,7 @@ impl EditorApp {
     #[cfg(test)]
     pub(crate) fn finish_save_for_test(&mut self, context: &egui::Context) {
         let deadline = Instant::now() + Duration::from_secs(10);
-        while self.save_job.is_running() {
+        while self.local_save.is_running() {
             self.poll_save(context);
             assert!(Instant::now() < deadline, "save never completed");
             std::thread::yield_now();
@@ -396,11 +482,57 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
+    fn an_old_local_completion_cannot_release_a_newer_shared_save() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        let key = app.document().key();
+        let operation = app
+            .document_workflow
+            .begin_save(key, crate::workflow::SaveDomain::Local)
+            .unwrap();
+        app.local_save
+            .start(
+                PendingSave {
+                    operation,
+                    tab: app.tabs.active_id().unwrap(),
+                    key,
+                    continuation: None,
+                    path: root.path().join("old.typ"),
+                    previous_sync_path: app.tinymist_document_path(),
+                    path_changed: false,
+                    format_after: false,
+                    started: Instant::now(),
+                },
+                &context,
+                || Err("old worker failed".into()),
+            )
+            .unwrap();
+        assert!(app.document_workflow.end_save(operation));
+        let current = app
+            .document_workflow
+            .begin_save(key, crate::workflow::SaveDomain::Overleaf)
+            .unwrap();
+        app.finish_save_for_test(&context);
+        assert!(app.local_save.pending().is_none());
+        assert_eq!(app.document_workflow.current_save().unwrap().id, current);
+        assert!(app.document_workflow.end_save(current));
+        app.poll_save(&context);
+        assert!(!app.document_workflow.save_in_flight());
+    }
+
+    #[test]
     fn failed_save_worker_does_not_cancel_a_newer_close_request() {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
-        app.pending_save = Some(PendingSave {
+        let operation_key = app.document().key();
+        let operation = app
+            .document_workflow
+            .begin_save(operation_key, crate::workflow::SaveDomain::Local)
+            .unwrap();
+        let pending = PendingSave {
+            operation,
             continuation: None,
             tab: app.tabs.active_id().unwrap(),
             key: app.document().key(),
@@ -409,11 +541,9 @@ mod tests {
             path_changed: true,
             format_after: false,
             started: Instant::now(),
-        });
-        app.save_job
-            .start_and_repaint("failed save worker", &context, || {
-                Err("worker failed".into())
-            })
+        };
+        app.local_save
+            .start(pending, &context, || Err("worker failed".into()))
             .unwrap();
         app.document_workflow
             .continue_after_save(PendingDocumentAction {
@@ -465,7 +595,13 @@ mod tests {
         let mut result = crate::save_io::execute(input);
         result.completion.result.as_mut().unwrap().durability =
             WriteDurability::Uncertain("injected directory sync failure".into());
-        app.pending_save = Some(PendingSave {
+        let operation_key = app.document().key();
+        let operation = app
+            .document_workflow
+            .begin_save(operation_key, crate::workflow::SaveDomain::Local)
+            .unwrap();
+        let pending = PendingSave {
+            operation,
             tab,
             key,
             continuation: app.document_workflow.continuation_token(),
@@ -474,9 +610,9 @@ mod tests {
             path_changed: true,
             format_after: true,
             started: Instant::now(),
-        });
-        app.save_job
-            .start_and_repaint("uncertain save", &context, || Ok(result))
+        };
+        app.local_save
+            .start(pending, &context, || Ok(result))
             .unwrap();
         app.finish_save_for_test(&context);
         assert!(
@@ -490,7 +626,7 @@ mod tests {
         assert!(!app.document().is_dirty());
         assert!(!app.document_workflow.has_continuation());
         assert!(app.document_workflow.take_action().is_none());
-        assert!(app.format_when_service_ready.is_none());
+        assert!(app.formatting.saved_document().is_none());
         assert!(
             app.notice
                 .as_ref()
@@ -511,6 +647,50 @@ mod tests {
         });
         ready.recv_timeout(Duration::from_secs(5)).unwrap();
         (release, thread)
+    }
+
+    #[test]
+    fn rename_cannot_race_an_admitted_source_save() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().canonicalize().unwrap().join("note.txt");
+        fs::write(&path, "old").unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.document_mut().replace_loaded_unprojected(
+            "submitted".into(),
+            path.clone(),
+            DocumentKind::Text,
+            Some(fingerprint(b"old")),
+        );
+        let (release, holder) = hold_destination(path.clone());
+        assert!(app.save_to(path.clone(), &context));
+
+        // Explorer can dispatch Rename after the save was admitted. It must
+        // not retarget the document while its immutable write owns this path.
+        app.begin_rename(path.clone());
+        assert!(app.rename_dialog.is_none());
+        app.commit_rename(path.clone(), "renamed.txt".into(), &context);
+        assert_eq!(app.document().path().as_ref(), Some(&path));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+        assert!(!path.with_file_name("renamed.txt").exists());
+        app.delete_workspace_file(path.clone(), &context);
+        assert_eq!(app.document().path().as_ref(), Some(&path));
+        assert_eq!(app.document().source(), "submitted");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+
+        release.send(()).unwrap();
+        holder.join().unwrap();
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "submitted");
+        app.begin_rename(path.clone());
+        assert_eq!(app.rename_dialog.take().unwrap().path, path);
+        app.commit_rename(path.clone(), "renamed.txt".into(), &context);
+        assert_eq!(
+            fs::read_to_string(path.with_file_name("renamed.txt")).unwrap(),
+            "submitted"
+        );
+        assert!(!path.exists());
     }
 
     #[test]
@@ -557,7 +737,7 @@ mod tests {
         assert!(app.document().is_dirty());
         assert!(!app.document_workflow.has_continuation());
         assert!(app.document_workflow.take_action().is_none());
-        assert!(app.manual_format_revision.is_none());
+        assert!(!app.formatting.saves_after_reply());
     }
 
     #[test]
@@ -637,23 +817,23 @@ mod tests {
                 .edit(CCursorRange::default(), |source| source.push_str("hello"));
             let (release, holder) = hold_destination(path.clone());
             assert!(app.save_to(path.clone(), &context));
-            assert!(app.format_when_service_ready.is_none());
+            assert!(app.formatting.saved_document().is_none());
             assert!(app.document().path().is_none());
             release.send(()).unwrap();
             holder.join().unwrap();
             app.finish_save_for_test(&context);
             assert_eq!(
-                app.format_when_service_ready,
+                app.formatting.saved_document(),
                 Some(app.document().key()),
                 "{kind:?}"
             );
-            app.format_when_service_ready = None;
+            app.formatting.cancel();
             app.document_mut()
                 .edit(CCursorRange::default(), |source| source.push('!'));
             assert!(app.save_to_with_intent(path, SaveIntent::Auto, &context));
             app.finish_save_for_test(&context);
-            assert!(app.format_when_service_ready.is_none());
-            assert!(app.manual_format_revision.is_none());
+            assert!(app.formatting.saved_document().is_none());
+            assert!(!app.formatting.saves_after_reply());
         }
     }
 

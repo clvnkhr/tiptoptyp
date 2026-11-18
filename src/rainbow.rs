@@ -137,6 +137,24 @@ pub(crate) fn apply(
     apply_spans(job, spans(root), settings, dark);
 }
 
+/// TeX uses the same palettes with its own comment/literal-aware paired index.
+/// The caller invokes this only on a source/style cache miss.
+pub(crate) fn apply_tex(job: &mut LayoutJob, settings: RainbowBrackets, dark: bool) {
+    if !settings.enabled {
+        return;
+    }
+    let index = crate::delimiters::TexDelimiterIndex::new(&job.text);
+    let brackets = index
+        .brackets()
+        .map(|(bytes, family, depth)| BracketSpan {
+            bytes,
+            family,
+            depth,
+        })
+        .collect();
+    apply_spans(job, brackets, settings, dark);
+}
+
 fn apply_spans(
     job: &mut LayoutJob,
     brackets: Vec<BracketSpan>,
@@ -347,5 +365,80 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn tex_rainbow_preserves_utf8_sections_and_non_color_decoration() {
+        let text = "\\textbf{α (x [y])} $\\left\\{z\\right\\}$ % {ignored}\n\\verb|[raw]|";
+        let mut job = LayoutJob::default();
+        let original = eframe::egui::TextFormat {
+            color: Color32::WHITE,
+            italics: true,
+            underline: eframe::egui::Stroke::new(1.0, Color32::RED),
+            ..Default::default()
+        };
+        job.append(text, 3.0, original.clone());
+        apply_tex(&mut job, RainbowBrackets::default(), false);
+        assert_eq!(job.text, text);
+        assert_eq!(job.sections.first().unwrap().leading_space, 3.0);
+        let mut end = 0;
+        let mut colored = Vec::new();
+        for section in &job.sections {
+            assert_eq!(section.byte_range.start.0, end);
+            end = section.byte_range.end.0;
+            assert!(text.is_char_boundary(end));
+            let mut expected = original.clone();
+            expected.color = section.format.color;
+            assert_eq!(section.format, expected);
+            if section.format.color != original.color {
+                colored.push(text[section.byte_range.start.0..end].to_owned());
+            }
+        }
+        assert_eq!(end, text.len());
+        assert_eq!(colored, ["{", "(", "[", "]", ")", "}", "\\{", "\\}"]);
+    }
+
+    #[test]
+    fn tex_environment_rainbow_colors_whole_tokens_with_nested_depth_and_literal_outer_markers() {
+        let source = "λ \\begin{document}\\begin{quote}Text\\end{quote}\\end{document}\n\\begin{verbatim}{[fake]}\\begin{fake}\\end{fake}\\end{verbatim}";
+        let mut job = LayoutJob::simple(
+            source.into(),
+            eframe::egui::FontId::monospace(14.0),
+            Color32::WHITE,
+            f32::INFINITY,
+        );
+        let settings = RainbowBrackets::default();
+        apply_tex(&mut job, settings, false);
+        let colored: Vec<_> = job
+            .sections
+            .iter()
+            .filter(|section| section.format.color != Color32::WHITE)
+            .map(|section| {
+                (
+                    &source[section.byte_range.start.0..section.byte_range.end.0],
+                    section.format.color,
+                )
+            })
+            .collect();
+        let palette = settings.palettes[BracketFamily::Curly as usize].colors(false);
+        assert_eq!(
+            colored,
+            [
+                ("\\begin{document}", palette[0]),
+                ("\\begin{quote}", palette[1]),
+                ("\\end{quote}", palette[1]),
+                ("\\end{document}", palette[0]),
+                ("\\begin{verbatim}", palette[0]),
+                ("\\end{verbatim}", palette[0]),
+            ]
+        );
+        assert_eq!(job.text, source);
+        assert_eq!(
+            job.sections
+                .iter()
+                .map(|section| section.byte_range.end.0 - section.byte_range.start.0)
+                .sum::<usize>(),
+            source.len()
+        );
     }
 }

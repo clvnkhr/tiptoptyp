@@ -272,7 +272,7 @@ impl EditorApp {
     pub(super) fn navigate_editor_range(&mut self, range: Range<usize>) {
         self.editor_attention = Some(EditorAttention::arm(range.start));
         self.pending_editor_selection = Some(EditorSelection::Focus(range));
-        self.find_bar.focus = false;
+        self.find_bar.clear_focus_request();
         if self.document().kind().is_typst() {
             self.view_mode = ViewMode::Split;
         }

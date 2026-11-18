@@ -160,6 +160,58 @@ fn packages_ship_compressed_payload_trees_without_duplicate_raw_binaries_or_asse
     }
 }
 
+fn direct_dependency_version(lock: &toml::Value, parent: &str, name: &str) -> String {
+    let packages = lock["package"].as_array().unwrap();
+    let parents = packages
+        .iter()
+        .filter(|package| package["name"].as_str() == Some(parent))
+        .collect::<Vec<_>>();
+    assert_eq!(parents.len(), 1, "ambiguous runtime package: {parent}");
+    let edge = parents[0]["dependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .find(|edge| edge.split_whitespace().next() == Some(name))
+        .unwrap_or_else(|| panic!("{parent} does not directly depend on {name}"));
+    let explicit_version = edge.split_whitespace().nth(1);
+    let versions = packages
+        .iter()
+        .filter(|package| {
+            package["name"].as_str() == Some(name)
+                && explicit_version
+                    .is_none_or(|version| package["version"].as_str() == Some(version))
+        })
+        .map(|package| package["version"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        versions.len(),
+        1,
+        "unresolved runtime edge: {parent} -> {edge}"
+    );
+    versions[0].to_owned()
+}
+
+#[test]
+fn runtime_version_follows_the_direct_edge_when_transitive_versions_differ() {
+    let lock: toml::Value = toml::from_str(
+        r#"
+        [[package]]
+        name = "runtime"
+        version = "0.1.0"
+        dependencies = ["nix 0.28.0"]
+        [[package]]
+        name = "nix"
+        version = "0.31.3"
+        [[package]]
+        name = "nix"
+        version = "0.28.0"
+        "#,
+    )
+    .unwrap();
+    assert_eq!(direct_dependency_version(&lock, "runtime", "nix"), "0.28.0");
+}
+
 #[test]
 fn liquid_measurements_use_the_production_engine_and_optimized_profile() {
     let app: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
@@ -168,24 +220,13 @@ fn liquid_measurements_use_the_production_engine_and_optimized_profile() {
     let app_lock: toml::Value = toml::from_str(include_str!("../Cargo.lock")).unwrap();
     let probe_lock: toml::Value =
         toml::from_str(include_str!("../scripts/liquid-native-probe/Cargo.lock")).unwrap();
-    for name in ["tokenizers", "nix", "sha2"] {
-        let version = |lock: &toml::Value| {
-            lock["package"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|package| package["name"].as_str() == Some(name))
-                .map(|package| package["version"].as_str().unwrap().to_owned())
-                .collect::<Vec<_>>()
+    for name in ["tokenizers", "nix", "sha2", "hex", "zstd"] {
+        let version = |lock: &toml::Value, manifest: &toml::Value| {
+            direct_dependency_version(lock, manifest["package"]["name"].as_str().unwrap(), name)
         };
         assert_eq!(
-            version(&app_lock).len(),
-            1,
-            "missing production runtime: {name}"
-        );
-        assert_eq!(
-            version(&app_lock),
-            version(&probe_lock),
+            version(&app_lock, &app),
+            version(&probe_lock, &probe),
             "measurement runtime drifted: {name}"
         );
         let dependency = |manifest: &toml::Value| {
@@ -207,18 +248,33 @@ fn liquid_measurements_use_the_production_engine_and_optimized_profile() {
             "measurement dependency options drifted: {name}"
         );
     }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let patch = |manifest: &toml::Value, directory: &Path| {
+        directory
+            .join(
+                manifest["patch"]["crates-io"]["tokenizers"]["path"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .canonicalize()
+            .unwrap()
+    };
+    assert_eq!(
+        patch(&app, root),
+        patch(&probe, &root.join("scripts/liquid-native-probe")),
+        "measurement must use the same patched tokenizer implementation"
+    );
     let task: toml::Value = toml::from_str(include_str!("../xtask/Cargo.toml")).unwrap();
     assert_eq!(
         app["dependencies"]["sha2"], task["dependencies"]["sha2"],
         "package verification must use the same hardware hashing implementation"
     );
-    assert!(
-        app["dependencies"]["sha2"]["features"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|feature| feature.as_str() == Some("asm"))
+    assert_eq!(
+        app["dependencies"]["hex"], task["dependencies"]["hex"],
+        "package verification must use the same hash encoding implementation"
     );
+    // sha2 0.11 selects accelerated hardware backends by default. Matching
+    // dependency options keeps all three consumers on the same implementation.
     for manifest in [&app, &probe, &task] {
         assert_eq!(
             manifest["profile"]["dev"]["package"]["sha2"]["opt-level"].as_integer(),

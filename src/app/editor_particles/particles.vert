@@ -8,38 +8,77 @@ out float v_seed;
 out float v_kind;
 flat out float v_style;
 const vec2 corners[PARTICLE_VERTEX_COUNT] = vec2[PARTICLE_VERTEX_COUNT](vec2(-1.,-1.),vec2(1.,-1.),vec2(-1.,1.),vec2(1.,1.));
+float lifetime(float style) {
+    if (style == 5.) return SMOKE_LIFETIME;
+    if (style == 6.) return EMBER_LIFETIME;
+    if (style == 7.) return AFTERBURNER_LIFETIME;
+    return PARTICLE_LIFETIME;
+}
 void main() {
     float age = max(0., u_time - a_shape.y);
-    float life = clamp(1. - age / PARTICLE_LIFETIME, 0., 1.);
     float kind = mod(a_shape.w, 4.);
     float style = floor(a_shape.w * .25);
+    float life = clamp(1. - age / lifetime(style), 0., 1.);
     vec2 uv = corners[gl_VertexID];
     float drag = 2.8;
     vec2 gravity = vec2(0., 220.);
-    if (style == 2.) { drag = 1.5; gravity.y = -45.; }
+    if (style == 2.) { drag = 3.2; gravity.y = -95.; }
     else if (style == 3.) { drag = 4.5; gravity.y = 0.; }
     else if (style == 4.) { drag = 3.2; gravity.y = 0.; }
-    float travel = (1. - exp(-drag * age)) / drag;
+    else if (style == 5.) { drag = 1.8; gravity.y = -22.; }
+    else if (style == 6.) { drag = 1.5; gravity.y = 18.; }
+    else if (style == 7.) { drag = 4.; gravity.y = 0.; }
+    float decay = exp(-drag * age);
+    float travel = (1. - decay) / drag;
     vec2 displacement = a_motion.zw * travel;
     if (style == 4.) {
         float turn = age * (3. + a_shape.z * 3.);
         displacement = vec2(displacement.x * cos(turn) - displacement.y * sin(turn),
                             displacement.x * sin(turn) + displacement.y * cos(turn));
     }
-    vec2 center = a_motion.xy + displacement + gravity * age * age;
-    if (style == 2.) center.x += sin(age * 15. + a_shape.z * 6.28) * age * 18.;
-    vec2 velocity = a_motion.zw * exp(-drag * age) + gravity * 2. * age;
+    // Flames and trails integrate constant force through the same drag as
+    // launch velocity. They retain their launch direction before rising.
+    bool damped = style == 2. || style >= 5.;
+    vec2 center = a_motion.xy + displacement
+                + gravity * (damped ? (age - travel) / drag : age * age);
+    vec2 velocity = a_motion.zw * decay
+                  + gravity * (damped ? travel : 2. * age);
     vec2 direction = normalize(velocity + vec2(.0001, 0.));
     vec2 normal = vec2(-direction.y, direction.x);
+    float phase = a_shape.z * 6.283185;
+    if (style == 2.) {
+        // Curl grows downstream rather than shaking the entire jet at birth.
+        // Subtract the initial phase so every particle starts at its origin.
+        float curl = sin(phase + age * 13.) - sin(phase);
+        center += normal * curl * age * age * 24.;
+    } else if (style == 5.) {
+        center.x += (sin(phase + age * 2.4) - sin(phase)) * (2. + age * 2.);
+    } else if (style == 6. || style == 7.) {
+        center += normal * (sin(phase + age * 11.) - sin(phase)) * age * 3.;
+    }
     float tail = length(velocity) * (style == 3. ? .045 : .018) * life;
     vec2 extent = vec2(a_shape.x + tail, max(.75, a_shape.x * .65));
     center -= direction * tail * .45;
     vec2 offset = direction * uv.x * extent.x + normal * uv.y * extent.y;
-    if (kind > 2.5) {
+    if (style == 5.) {
+        float size = a_shape.x * (1. + age * .9) + age * 2.;
+        float turn = phase + age * .25;
+        vec2 rotated = vec2(uv.x * cos(turn) - uv.y * sin(turn),
+                            uv.x * sin(turn) + uv.y * cos(turn));
+        offset = rotated * size * vec2(1.15, 1.);
+    } else if (style == 6.) {
+        offset = direction * uv.x * (a_shape.x + tail * .45)
+               + normal * uv.y * max(.65, a_shape.x * .6);
+    } else if (style == 7.) {
+        // No fixed upward acceleration: this plume follows the supplied
+        // opposite-to-cursor velocity in any direction, including downward.
+        offset = direction * uv.x * (a_shape.x * (1. + life * .5) + tail)
+               + normal * uv.y * a_shape.x * (.7 + age * 2.);
+    } else if (kind > 2.5) {
         center = a_motion.xy + a_motion.zw * travel * .12 - vec2(0., age * 20.);
         offset = uv * (3. + age * 15.) * (1. + a_shape.z * .4);
     } else if (kind > 1.5) {
-        float angle = a_shape.z * 6.283185 + age * (a_shape.z - .5) * 18.;
+        float angle = phase + age * (a_shape.z - .5) * 18.;
         vec2 rotated = vec2(uv.x * cos(angle) - uv.y * sin(angle), uv.x * sin(angle) + uv.y * cos(angle));
         offset = rotated * a_shape.x * (.75 + life * .25);
     } else if (kind > .5) {
@@ -50,8 +89,8 @@ void main() {
         else if (style == 3.) { center.x += 66.; offset *= vec2(4.8, .16); }
         else if (style == 4.) offset *= 1. + age * 7.;
     } else if (style == 2.) {
-        offset = direction * uv.x * (a_shape.x * (1. + age * 4.) + tail * .4)
-               + normal * uv.y * a_shape.x * (1. + age * 3.);
+        offset = direction * uv.x * (a_shape.x * (1.4 + age * 5.) + tail * .4)
+               + normal * uv.y * a_shape.x * (.8 + age * 4.);
     } else if (style == 4.) {
         offset = uv * a_shape.x * (1.2 + life * .8);
     }

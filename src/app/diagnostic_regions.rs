@@ -1,19 +1,27 @@
 //! One non-destructive visibility mask shared by every diagnostics consumer.
 use super::*;
-use crate::diagnostic_suppression::Suppression;
+#[cfg(test)]
+use crate::comment_controls::Markers;
+use crate::comment_controls::{Feature, Regions, Settings};
 use std::collections::{HashMap, HashSet};
 
 struct Source {
     key: DocumentKey,
     kind: DocumentKind,
     path: Option<PathBuf>,
-    suppression: Suppression,
+    suppression: Regions,
     line_starts: Vec<usize>,
 }
 impl Source {
-    fn new(document: &DocumentSession) -> Self {
+    fn new(document: &DocumentSession, settings: &Settings) -> Self {
         let source = document.source();
-        let line_starts = if source.contains("ttt:") {
+        let suppression = Regions::parse(
+            source,
+            source_kind(document.kind(), document.path().as_deref()),
+            settings,
+            Feature::Diagnostics,
+        );
+        let line_starts = if !suppression.is_empty() {
             std::iter::once(0)
                 .chain(
                     source
@@ -29,10 +37,7 @@ impl Source {
             key: document.key(),
             kind: document.kind(),
             path: document.path().clone(),
-            suppression: Suppression::parse(
-                source,
-                source_kind(document.kind(), document.path().as_deref()),
-            ),
+            suppression,
             line_starts,
         }
     }
@@ -41,7 +46,7 @@ impl Source {
     }
     fn suppresses_char(&self, index: usize) -> bool {
         let line = self.line_starts.partition_point(|&start| start <= index);
-        self.suppression.contains_line(line)
+        hidden_line(&self.suppression, line)
     }
 }
 
@@ -51,11 +56,12 @@ pub(super) struct State {
     pub(super) suppressed: Vec<bool>,
     raw_generation: Option<u64>,
     main_path: Option<PathBuf>,
+    markers: Option<Settings>,
     sources: HashMap<u64, Source>,
-    external: HashMap<PathBuf, Option<Suppression>>,
+    external: HashMap<PathBuf, Option<Regions>>,
     external_epoch: u64,
     external_needed: Vec<PathBuf>,
-    external_job: LatestJob<(u64, HashMap<PathBuf, Option<Suppression>>)>,
+    external_job: LatestJob<(u64, HashMap<PathBuf, Option<Regions>>)>,
     invalidated: bool,
     #[cfg(test)]
     rebuilds: usize,
@@ -92,7 +98,10 @@ fn source_kind(kind: DocumentKind, path: Option<&Path>) -> DocumentKind {
         _ => kind,
     }
 }
-fn read_external(paths: Vec<PathBuf>) -> HashMap<PathBuf, Option<Suppression>> {
+fn hidden_line(regions: &Regions, line: usize) -> bool {
+    regions.contains_line(line) || regions.contains_marker_line(line)
+}
+fn read_external(paths: Vec<PathBuf>, settings: &Settings) -> HashMap<PathBuf, Option<Regions>> {
     paths
         .into_iter()
         .map(|path| {
@@ -101,7 +110,7 @@ fn read_external(paths: Vec<PathBuf>) -> HashMap<PathBuf, Option<Suppression>> {
                 .then(|| {
                     std::fs::read_to_string(&path)
                         .ok()
-                        .map(|source| Suppression::parse(&source, kind))
+                        .map(|source| Regions::parse(&source, kind, settings, Feature::Diagnostics))
                 })
                 .flatten();
             (path, suppression)
@@ -127,6 +136,16 @@ impl EditorApp {
     /// Unopened includes are read off-thread, with at most one reader at a time.
     pub(super) fn prepare_diagnostic_visibility(&mut self, context: Option<&egui::Context>) {
         let mut state = std::mem::take(&mut self.diagnostic_regions);
+        let settings = &self.settings.comment_controls;
+        let markers_changed = state.markers.as_ref() != Some(settings);
+        if markers_changed {
+            state.sources.clear();
+            state.external.clear();
+            state.markers = Some(settings.clone());
+            // A reader owns the marker pair it started with. Its results must
+            // never hide findings after a Settings change, even on this frame.
+            state.external_epoch = state.external_epoch.wrapping_add(1);
+        }
         let mut external_changed = false;
         if let LatestJobPoll::Ready((epoch, results)) = state.external_job.poll()
             && epoch == state.external_epoch
@@ -137,6 +156,7 @@ impl EditorApp {
         let main_path = self.preview_document_path();
         let published = state.raw_generation != Some(self.preview.diagnostics_generation);
         let changed = published
+            || markers_changed
             || state.invalidated
             || state.main_path.as_ref() != Some(&main_path)
             || state.sources.len() != self.tabs.len()
@@ -159,10 +179,10 @@ impl EditorApp {
                         .get(&id)
                         .is_some_and(|source| source.matches(document))
                 {
-                    state.sources.insert(id, Source::new(document));
+                    state.sources.insert(id, Source::new(document, settings));
                 }
             }
-            if published || state.invalidated {
+            if (published || state.invalidated) && !markers_changed {
                 // A new publication/file event may describe changed disk bytes.
                 // Advance acceptance even while the previous reader finishes.
                 state.external_epoch = state.external_epoch.wrapping_add(1);
@@ -191,14 +211,14 @@ impl EditorApp {
                         Target::Open(id) => state
                             .sources
                             .get(id)
-                            .is_some_and(|source| source.suppression.contains_line(location.line)),
+                            .is_some_and(|source| hidden_line(&source.suppression, location.line)),
                         Target::External(path) => {
                             external_paths.insert(path.clone());
                             state
                                 .external
                                 .get(path)
                                 .and_then(Option::as_ref)
-                                .is_some_and(|source| source.contains_line(location.line))
+                                .is_some_and(|source| hidden_line(source, location.line))
                         }
                         Target::Unknown => false,
                     }
@@ -232,12 +252,13 @@ impl EditorApp {
         {
             let paths = std::mem::take(&mut state.external_needed);
             let epoch = state.external_epoch;
+            let settings = settings.clone();
             // Failure leaves unknown files visible; never spin retrying on idle.
             let _ =
                 state
                     .external_job
                     .start_and_repaint("diagnostic-regions", context, move || {
-                        Ok((epoch, read_external(paths)))
+                        Ok((epoch, read_external(paths, &settings)))
                     });
         }
         self.diagnostic_regions = state;

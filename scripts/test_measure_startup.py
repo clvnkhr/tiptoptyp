@@ -13,6 +13,30 @@ SPEC.loader.exec_module(runner)
 
 
 class StartupRunnerTests(unittest.TestCase):
+    def test_empty_workload_requires_no_document_and_needs_no_editor_target(self):
+        document = dict(tabs=0, active_tab_id=None, preview_tab_id=None, path=None, source_bytes=0, dirty=False)
+        response = dict(document=document, targets={})
+        runner.validate_fixture_snapshot(response, 'empty', Path('/unused'))
+        for field, value in (('tabs', 1), ('tabs', False), ('active_tab_id', 0), ('preview_tab_id', 0),
+                             ('path', '/demo.typ'), ('source_bytes', 300), ('source_bytes', False), ('dirty', True)):
+            with self.subTest(field=field, value=value), self.assertRaises(RuntimeError):
+                runner.validate_fixture_snapshot({**response, 'document': {**document, field: value}}, 'empty', Path('/unused'))
+        for field in document:
+            missing = dict(document)
+            del missing[field]
+            with self.subTest(missing=field), self.assertRaises(RuntimeError):
+                runner.validate_fixture_snapshot({**response, 'document': missing}, 'empty', Path('/unused'))
+
+    def test_named_workloads_still_require_the_requested_real_file_editor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'startup.typ'
+            path.write_text('= Explicit fixture\n')
+            response = dict(document=dict(path=str(path), source_bytes=path.stat().st_size),
+                            targets={'editor.source': {}})
+            runner.validate_fixture_snapshot(response, 'typ', path)
+            with self.assertRaises(RuntimeError):
+                runner.validate_fixture_snapshot({**response, 'targets': {}}, 'typ', path)
+
     def exercise_failure(self, sampler=None, spawn_error=None, quit_error=None):
         process = Mock(pid=123)
         process.poll.return_value = None

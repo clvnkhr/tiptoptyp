@@ -8,55 +8,108 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct Job {
-    started: bool,
+    phase: Phase,
+    locked: BTreeMap<crate::editor_features::CellPosition, String>,
+}
+#[derive(Default)]
+enum Phase {
+    #[default]
+    Unrequested,
+    NotNeeded,
+    Sampling(Sampling),
+    Ready(crate::table_sampling::Grid),
+    Failed(String),
+}
+struct Sampling {
     cancel: Arc<AtomicBool>,
     worker: crate::worker::LatestJob<crate::table_sampling::Grid>,
-    view: View,
+}
+impl Drop for Sampling {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
 }
 impl Job {
     pub(super) fn activity(&self) -> crate::activity::Activity {
         use crate::activity::Activity;
-        if !self.started {
-            Activity::Inactive("Not requested")
-        } else if self.worker.is_running() || self.view.pending {
-            Activity::Running
-        } else if let Some(error) = &self.view.error {
-            Activity::Failed(error.clone())
-        } else if self.view.locked.is_empty() {
-            Activity::Inactive("No computed cells")
-        } else {
-            self.worker.activity()
+        match &self.phase {
+            Phase::Unrequested => Activity::Inactive("Not requested"),
+            Phase::NotNeeded => Activity::Inactive("No computed cells"),
+            Phase::Sampling(_) => Activity::Running,
+            Phase::Ready(_) => Activity::Idle,
+            Phase::Failed(error) => Activity::Failed(error.clone()),
         }
     }
-
+    fn view(&self) -> View {
+        View {
+            locked: self.locked.clone(),
+            grid: match &self.phase {
+                Phase::Ready(grid) => Some(grid.clone()),
+                _ => None,
+            },
+            pending: matches!(self.phase, Phase::Sampling(_)),
+        }
+    }
+    fn publish(&self, context: &egui::Context, viewport: egui::ViewportId) {
+        crate::table_sampling::publish(context, viewport, Arc::new(self.view()));
+    }
+    fn start(&mut self, request: Request, context: &egui::Context) {
+        assert!(
+            matches!(self.phase, Phase::NotNeeded),
+            "samples are requested once per workbench"
+        );
+        let cancel = Arc::<AtomicBool>::default();
+        let token = cancel.clone();
+        let mut worker = crate::worker::LatestJob::default();
+        self.phase = match worker.start_and_repaint("table-values", context, move || {
+            crate::table_sampling::sample(request, &token)
+        }) {
+            Ok(()) => Phase::Sampling(Sampling { worker, cancel }),
+            Err(error) => Phase::Failed(error),
+        };
+    }
+    fn poll(&mut self) -> bool {
+        let Phase::Sampling(sampling) = &mut self.phase else {
+            return false;
+        };
+        self.phase = match sampling.worker.poll() {
+            crate::worker::LatestJobPoll::Ready(grid) => Phase::Ready(grid),
+            crate::worker::LatestJobPoll::Failed(error) => Phase::Failed(error),
+            crate::worker::LatestJobPoll::Pending | crate::worker::LatestJobPoll::Idle => {
+                return false;
+            }
+        };
+        true
+    }
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     pub(super) fn inspect(&self) -> serde_json::Value {
-        serde_json::json!({"pending":self.view.pending,"failed":self.view.error.is_some(),
-        "locked":self.view.locked.keys().collect::<Vec<_>>(),
-        "grid":self.view.grid.as_ref().map(|grid| serde_json::json!({
+        let view = self.view();
+        let phase = match self.phase {
+            Phase::Unrequested => "unrequested",
+            Phase::NotNeeded => "not_needed",
+            Phase::Sampling(_) => "sampling",
+            Phase::Ready(_) => "ready",
+            Phase::Failed(_) => "failed",
+        };
+        serde_json::json!({"phase":phase,"pending":view.pending,"failed":matches!(self.phase, Phase::Failed(_)),
+        "locked":view.locked.keys().collect::<Vec<_>>(),
+        "grid":view.grid.as_ref().map(|grid| serde_json::json!({
             "columns":grid.columns,"rows":grid.rows,
             "values":grid.cells.iter().map(|cell| serde_json::json!({"position":cell.position,"fingerprint":crate::desktop_test::fingerprint(&cell.value)})).collect::<Vec<_>>()
         }))})
     }
     pub(super) fn ready_for_snapshot(&self) -> bool {
-        self.started && !self.view.pending
+        !matches!(self.phase, Phase::Unrequested | Phase::Sampling(_))
     }
-
     pub(super) fn reset(&mut self) {
-        self.cancel.store(true, Ordering::Release);
         *self = Self::default();
-    }
-}
-impl Drop for Job {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
     }
 }
 impl EditorApp {
     pub(super) fn prepare_table_samples(&mut self, context: &egui::Context) {
         let viewport = scoped_child_viewport_id(context, "tiptoptyp-table-editor");
-        if !self.table_samples.started {
-            self.table_samples.started = true;
+        if matches!(self.table_samples.phase, Phase::Unrequested) {
+            self.table_samples.phase = Phase::NotNeeded;
             let mut locked = BTreeMap::new();
             let (range, call, engine, program) = match self.table_editor.as_ref() {
                 Some(TableEditorDialog::Typst(dialog)) if dialog.insertion_prefix.is_none() => {
@@ -97,13 +150,9 @@ impl EditorApp {
                     let call = match crate::table_sampling::tex_instrument(&dialog.table, &locked) {
                         Ok(call) => call,
                         Err(error) => {
-                            self.table_samples.view.locked = locked;
-                            self.table_samples.view.error = Some(error);
-                            crate::table_sampling::publish(
-                                context,
-                                viewport,
-                                Arc::new(self.table_samples.view.clone()),
-                            );
+                            self.table_samples.locked = locked;
+                            self.table_samples.phase = Phase::Failed(error);
+                            self.table_samples.publish(context, viewport);
                             return;
                         }
                     };
@@ -159,11 +208,7 @@ impl EditorApp {
             let Some(range) = char_range_to_byte_range(self.document().source(), range) else {
                 return;
             };
-            self.table_samples.view = View {
-                locked,
-                pending: true,
-                ..Default::default()
-            };
+            self.table_samples.locked = locked;
             let request = Request {
                 root,
                 source_dir,
@@ -174,44 +219,18 @@ impl EditorApp {
                 program,
                 engine,
             };
-            let cancel = self.table_samples.cancel.clone();
-            if let Err(error) =
-                self.table_samples
-                    .worker
-                    .start_and_repaint("table-values", context, move || {
-                        crate::table_sampling::sample(request, &cancel)
-                    })
-            {
-                self.table_samples.view.pending = false;
-                self.table_samples.view.error = Some(error);
-            }
-            crate::table_sampling::publish(
-                context,
-                viewport,
-                Arc::new(self.table_samples.view.clone()),
-            );
+            self.table_samples.start(request, context);
+            self.table_samples.publish(context, viewport);
         }
-        match self.table_samples.worker.poll() {
-            crate::worker::LatestJobPoll::Ready(grid) => {
-                self.table_samples.view.grid = Some(grid);
-                self.table_samples.view.pending = false;
-            }
-            crate::worker::LatestJobPoll::Failed(error) => {
-                self.table_samples.view.error = Some(error);
-                self.table_samples.view.pending = false;
-            }
-            _ => return,
+        if !self.table_samples.poll() {
+            return;
         }
-        crate::table_sampling::publish(
-            context,
-            viewport,
-            Arc::new(self.table_samples.view.clone()),
-        );
+        self.table_samples.publish(context, viewport);
         context.request_repaint_of(viewport);
     }
     pub(super) fn validate_table_sample_locks(&self) -> Result<(), String> {
         if let Some(TableEditorDialog::Typst(dialog)) = &self.table_editor {
-            for (&(r, c), source) in &self.table_samples.view.locked {
+            for (&(r, c), source) in &self.table_samples.locked {
                 if dialog.table.cells.get(r).and_then(|row| row.get(c)) != Some(source) {
                     return Err(
                         "A sampled cell is locked. Change its variable in the code editor instead."
@@ -221,7 +240,7 @@ impl EditorApp {
             }
         }
         if let Some(TableEditorDialog::Tex(dialog)) = &self.table_editor {
-            for (&(r, c), source) in &self.table_samples.view.locked {
+            for (&(r, c), source) in &self.table_samples.locked {
                 if dialog
                     .table
                     .cells
@@ -735,36 +754,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn activity_distinguishes_unrequested_literal_pending_failed_and_ready_tables() {
+    fn activity_and_view_are_projections_of_one_sample_phase() {
         use crate::activity::Activity;
         let mut job = Job::default();
         assert_eq!(job.activity(), Activity::Inactive("Not requested"));
-        job.started = true;
+        assert!(!job.ready_for_snapshot());
+        job.phase = Phase::NotNeeded;
         assert_eq!(job.activity(), Activity::Inactive("No computed cells"));
-        job.view.locked.insert((0, 0), "#price".into());
-        job.view.pending = true;
-        job.view.error = Some("previous sample failed".into());
-        assert_eq!(job.activity(), Activity::Running);
-        assert_eq!(job.activity(), Activity::Running);
-        assert!(job.view.pending);
-        assert!(
-            !job.worker.is_running(),
-            "reading activity started a worker"
-        );
-        job.view.pending = false;
-        assert_eq!(
-            job.activity(),
-            Activity::Failed("previous sample failed".into())
-        );
-        job.view.error = None;
-        job.view.grid = Some(crate::table_sampling::Grid {
+        job.locked.insert((0, 0), "#price".into());
+        job.phase = Phase::Failed("sample failed".into());
+        assert_eq!(job.activity(), Activity::Failed("sample failed".into()));
+        assert!(!job.view().pending);
+        assert!(job.view().grid.is_none());
+        job.phase = Phase::Ready(crate::table_sampling::Grid {
             columns: 1,
             rows: 1,
             cells: Vec::new(),
         });
         assert_eq!(job.activity(), Activity::Idle);
+        assert!(!job.view().pending);
+        assert!(job.ready_for_snapshot());
         job.reset();
         assert_eq!(job.activity(), Activity::Inactive("Not requested"));
+        assert!(job.locked.is_empty());
+    }
+
+    #[test]
+    fn sampling_reset_cancels_one_owned_worker_and_cannot_publish_its_late_reply() {
+        let mut job = Job::default();
+        let cancel = Arc::<AtomicBool>::default();
+        let token = cancel.clone();
+        let (release, released) = std::sync::mpsc::channel();
+        let mut worker = crate::worker::LatestJob::default();
+        worker
+            .start("controlled sample", move || {
+                released.recv().unwrap();
+                Ok(crate::table_sampling::Grid::default())
+            })
+            .unwrap();
+        job.phase = Phase::Sampling(Sampling { cancel, worker });
+        assert_eq!(job.activity(), crate::activity::Activity::Running);
+        assert!(job.view().pending);
+        assert!(!job.ready_for_snapshot());
+        job.reset();
+        assert!(token.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        assert!(!job.poll());
+        assert!(!job.view().pending);
+        assert!(job.view().grid.is_none());
     }
     #[test]
     fn table_samples_apply_refuses_programmatic_overwrite_of_computed_cells() {
@@ -781,10 +818,7 @@ mod tests {
         app.begin_table_target(
             TableTarget::at(source, source.find("table(").unwrap(), DocumentKind::Typst).unwrap(),
         );
-        app.table_samples
-            .view
-            .locked
-            .insert((0, 1), "#price".into());
+        app.table_samples.locked.insert((0, 1), "#price".into());
         assert!(app.validate_table_sample_locks().is_ok());
         let Some(TableEditorDialog::Typst(dialog)) = &mut app.table_editor else {
             unreachable!()
@@ -820,7 +854,6 @@ mod tests {
         );
         app.begin_table_target(TableTarget::at(source, 2, DocumentKind::Tex).unwrap());
         app.table_samples
-            .view
             .locked
             .insert((0, 1), r"\textbf{\revenue}".into());
         assert!(app.validate_table_sample_locks().is_ok());

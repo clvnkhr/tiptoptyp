@@ -8,8 +8,12 @@ use std::sync::{
     mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
 };
 
-const RAW_CAPACITY: usize = 4;
-const TYPED_CAPACITY: usize = 8;
+// A normal lazy-editor activation can publish six authoritative events before
+// either consumer is scheduled. Bound both burst length and retained wire size.
+const RAW_CAPACITY: usize = 64;
+const TYPED_CAPACITY: usize = 64;
+const RAW_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
+const TYPED_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const RAW_OVERFLOW: u8 = 1;
 const TYPED_OVERFLOW: u8 = 2;
@@ -17,7 +21,7 @@ const TOO_LARGE: u8 = 3;
 const START_FAILED: u8 = 4;
 const WORKER_STOPPED: u8 = 5;
 type Decoded = Result<BrowserEvent, String>;
-type Typed = (u64, Decoded);
+type Typed = (u64, usize, Decoded);
 #[derive(Default)]
 struct Ingress {
     sequence: u64,
@@ -28,6 +32,7 @@ struct Ingress {
 struct TypedState {
     presence: Option<(u64, BrowserEvent)>,
     reliable_pending: usize,
+    reliable_bytes: usize,
 }
 
 enum Raw {
@@ -43,10 +48,15 @@ struct Shared {
     // Ephemeral full snapshots never displace authoritative source/save events.
     ingress: Mutex<Ingress>,
     raw_messages: AtomicUsize,
+    raw_bytes: AtomicUsize,
     wake_pending: AtomicBool,
     typed: Mutex<TypedState>,
 }
 impl Shared {
+    fn release_raw(&self, bytes: usize) {
+        self.raw_bytes.fetch_sub(bytes, Ordering::AcqRel);
+        self.raw_messages.fetch_sub(1, Ordering::AcqRel);
+    }
     fn wake(&self, raw: &SyncSender<Raw>) {
         if !self.wake_pending.swap(true, Ordering::AcqRel) && raw.try_send(Raw::Wake).is_err() {
             self.wake_pending.store(false, Ordering::Release);
@@ -129,18 +139,32 @@ impl Sender {
             self.shared.fail(RAW_OVERFLOW);
             return Err(failure_message(RAW_OVERFLOW).into());
         }
+        let bytes = message.len();
+        if self
+            .shared
+            .raw_bytes
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                used.checked_add(bytes)
+                    .filter(|&next| next <= RAW_BYTE_CAPACITY)
+            })
+            .is_err()
+        {
+            self.shared.raw_messages.fetch_sub(1, Ordering::AcqRel);
+            self.shared.fail(RAW_OVERFLOW);
+            return Err(failure_message(RAW_OVERFLOW).into());
+        }
         match self.raw.try_send(Raw::Message { sequence, message }) {
             Ok(()) => {
                 ingress.reliable_sequence = sequence;
                 Ok(())
             }
             Err(TrySendError::Full(_)) => {
-                self.shared.raw_messages.fetch_sub(1, Ordering::AcqRel);
+                self.shared.release_raw(bytes);
                 self.shared.fail(RAW_OVERFLOW);
                 Err(failure_message(RAW_OVERFLOW).into())
             }
             Err(TrySendError::Disconnected(_)) => {
-                self.shared.raw_messages.fetch_sub(1, Ordering::AcqRel);
+                self.shared.release_raw(bytes);
                 self.shared.fail(WORKER_STOPPED);
                 Err(failure_message(WORKER_STOPPED).into())
             }
@@ -179,6 +203,7 @@ impl Inbox {
             repaint: RepaintTarget::current(context),
             ingress: Mutex::default(),
             raw_messages: AtomicUsize::new(0),
+            raw_bytes: AtomicUsize::new(0),
             wake_pending: AtomicBool::new(false),
             typed: Mutex::default(),
         });
@@ -214,8 +239,17 @@ impl Inbox {
             return Some(Err(failure_message(failure).into()));
         }
         match self.typed.try_recv() {
-            Ok((_, result)) => {
-                self.shared.typed.lock().unwrap().reliable_pending -= 1;
+            Ok((_, bytes, result)) => {
+                let mut state = self.shared.typed.lock().unwrap();
+                state.reliable_pending -= 1;
+                state.reliable_bytes -= bytes;
+                drop(state);
+                if result.is_err() {
+                    // A dropped authoritative event invalidates the stream;
+                    // buffered Ready/Project messages cannot repair its gap.
+                    self.stopped = true;
+                    self.shared.senders_closed.store(true, Ordering::Release);
+                }
                 Some(result)
             }
             Err(TryRecvError::Empty) => self.poll_presence(),
@@ -277,7 +311,7 @@ fn decode_loop(
         };
         let message = match next {
             Raw::Message { sequence, message } => {
-                shared.raw_messages.fetch_sub(1, Ordering::AcqRel);
+                shared.release_raw(message.len());
                 reliable_sequence = sequence;
                 Some((sequence, message))
             }
@@ -287,7 +321,7 @@ fn decode_loop(
             }
         };
         if let Some((sequence, message)) = message
-            && !deliver_decoded(sequence, decode(&message), &typed, &shared)
+            && !deliver_decoded(sequence, message.len(), decode(&message), &typed, &shared)
         {
             return;
         }
@@ -300,7 +334,7 @@ fn decode_loop(
                 .flatten()
         };
         if let Some((sequence, message)) = presence
-            && !deliver_decoded(sequence, decode(&message), &typed, &shared)
+            && !deliver_decoded(sequence, message.len(), decode(&message), &typed, &shared)
         {
             return;
         }
@@ -309,6 +343,7 @@ fn decode_loop(
 
 fn deliver_decoded(
     sequence: u64,
+    bytes: usize,
     decoded: Decoded,
     typed: &SyncSender<Typed>,
     shared: &Shared,
@@ -317,8 +352,9 @@ fn deliver_decoded(
     {
         return false;
     }
+    let invalid = decoded.is_err();
     let mut state = shared.typed.lock().unwrap();
-    if decoded.is_err()
+    if invalid
         || matches!(&decoded, Ok(BrowserEvent::Status { state, .. }) if !matches!(state.as_str(), "connected" | "saving"))
         || matches!(&decoded, Ok(BrowserEvent::Error { .. }))
     {
@@ -348,12 +384,22 @@ fn deliver_decoded(
         }
         return true;
     }
-    match typed.try_send((sequence, decoded)) {
+    if bytes > TYPED_BYTE_CAPACITY - state.reliable_bytes {
+        shared.fail(TYPED_OVERFLOW);
+        return false;
+    }
+    match typed.try_send((sequence, bytes, decoded)) {
         Ok(()) => {
             state.reliable_pending += 1;
+            state.reliable_bytes += bytes;
             drop(state);
             shared.repaint.request_repaint();
-            true
+            if invalid {
+                // Deliver exactly one ordered error, then require a new inbox
+                // for reconnect. Never decode later buffered publications.
+                shared.senders_closed.store(true, Ordering::Release);
+            }
+            !invalid
         }
         Err(TrySendError::Full(_)) => {
             shared.fail(TYPED_OVERFLOW);
@@ -407,6 +453,157 @@ mod tests {
     }
 
     #[test]
+    fn lazy_editor_startup_fits_before_decoder_and_ui_are_scheduled() {
+        let (mut inbox, raw, typed) = Inbox::channels(&egui::Context::default());
+        let sender = inbox.sender();
+        // Exact event order emitted by the bridge when synchronous store
+        // watchers mount a lazy editor and doc:after-opened overlaps hydration.
+        let startup = [
+            r#"{"event":"project","epoch":7,"project_id":"aaaaaaaaaaaaaaaaaaaaaaaa","name":"Paper","entries":[]}"#,
+            r#"{"event":"fileaccess","epoch":7,"writable":true}"#,
+            r#"{"event":"status","epoch":7,"state":"connected"}"#,
+            r#"{"event":"document","epoch":7,"id":"cccccccccccccccccccccccc","path":"main.txt","source":"Main"}"#,
+            r#"{"event":"document","epoch":7,"id":"eeeeeeeeeeeeeeeeeeeeeeee","path":"other.txt","source":"Other"}"#,
+            r#"{"event":"document","epoch":7,"id":"cccccccccccccccccccccccc","path":"main.txt","source":"Main"}"#,
+        ];
+        sender.send(presence_message(7)).unwrap();
+        for message in startup {
+            sender.send(message.to_owned()).unwrap();
+        }
+        let bytes: usize = startup.iter().map(|message| message.len()).sum();
+        assert_eq!(inbox.shared.raw_messages.load(Ordering::Acquire), 6);
+        assert_eq!(inbox.shared.raw_bytes.load(Ordering::Acquire), bytes);
+        assert_eq!(inbox.shared.failure.load(Ordering::Acquire), 0);
+        let shared = Arc::clone(&inbox.shared);
+        let worker = thread::spawn(move || decode_loop(raw, typed, shared, decode_message));
+        // Keep the UI consumer idle until the complete startup has decoded.
+        wait_for(|| inbox.shared.typed.lock().unwrap().reliable_pending == 6);
+        assert_eq!(inbox.shared.raw_messages.load(Ordering::Acquire), 0);
+        assert_eq!(inbox.shared.raw_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(inbox.shared.typed.lock().unwrap().reliable_bytes, bytes);
+        for message in startup {
+            assert_eq!(next(&mut inbox), decode_message(message));
+        }
+        assert!(matches!(
+            next(&mut inbox),
+            Ok(BrowserEvent::Presence { epoch: 7, .. })
+        ));
+        assert_eq!(inbox.shared.typed.lock().unwrap().reliable_bytes, 0);
+        assert_eq!(inbox.shared.failure.load(Ordering::Acquire), 0);
+        drop(sender);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn raw_byte_budget_accepts_exact_limit_then_rejects_without_leaking_a_slot() {
+        let (mut inbox, _raw, _typed) = Inbox::channels(&egui::Context::default());
+        let sender = inbox.sender();
+        for epoch in 0..RAW_BYTE_CAPACITY / MAX_MESSAGE_BYTES {
+            let mut padded = message(epoch as u64);
+            padded.extend(std::iter::repeat_n(' ', MAX_MESSAGE_BYTES - padded.len()));
+            sender.send(padded).unwrap();
+        }
+        let count = RAW_BYTE_CAPACITY / MAX_MESSAGE_BYTES;
+        assert!(
+            count < RAW_CAPACITY,
+            "bytes must bound the queue before its event count"
+        );
+        assert_eq!(inbox.shared.raw_messages.load(Ordering::Acquire), count);
+        assert_eq!(
+            inbox.shared.raw_bytes.load(Ordering::Acquire),
+            RAW_BYTE_CAPACITY
+        );
+        assert!(sender.send(message(99)).is_err());
+        assert_eq!(inbox.shared.raw_messages.load(Ordering::Acquire), count);
+        assert_eq!(
+            inbox.shared.raw_bytes.load(Ordering::Acquire),
+            RAW_BYTE_CAPACITY
+        );
+        assert_eq!(inbox.shared.failure.load(Ordering::Acquire), RAW_OVERFLOW);
+        assert!(inbox.poll().unwrap().unwrap_err().contains("queue is full"));
+        assert!(inbox.poll().is_none());
+    }
+
+    #[test]
+    fn rejected_raw_channel_admission_releases_both_count_and_bytes() {
+        let (inbox, raw, _typed) = Inbox::channels(&egui::Context::default());
+        let sender = inbox.sender();
+        drop(raw);
+        assert!(sender.send(message(1)).is_err());
+        assert_eq!(inbox.shared.raw_messages.load(Ordering::Acquire), 0);
+        assert_eq!(inbox.shared.raw_bytes.load(Ordering::Acquire), 0);
+        assert_eq!(inbox.shared.failure.load(Ordering::Acquire), WORKER_STOPPED);
+    }
+
+    #[test]
+    fn typed_byte_budget_is_released_by_receipt_and_reused_without_overflow() {
+        let (mut inbox, _raw, typed) = Inbox::channels(&egui::Context::default());
+        let count = TYPED_BYTE_CAPACITY / MAX_MESSAGE_BYTES;
+        assert!(count < TYPED_CAPACITY);
+        for epoch in 0..count {
+            assert!(deliver_decoded(
+                epoch as u64,
+                MAX_MESSAGE_BYTES,
+                decode_message(&message(epoch as u64)),
+                &typed,
+                &inbox.shared
+            ));
+        }
+        assert_eq!(
+            inbox.shared.typed.lock().unwrap().reliable_bytes,
+            TYPED_BYTE_CAPACITY
+        );
+        assert_eq!(next(&mut inbox).unwrap().epoch(), 0);
+        assert_eq!(
+            inbox.shared.typed.lock().unwrap().reliable_bytes,
+            TYPED_BYTE_CAPACITY - MAX_MESSAGE_BYTES
+        );
+        assert!(deliver_decoded(
+            99,
+            MAX_MESSAGE_BYTES,
+            decode_message(&message(99)),
+            &typed,
+            &inbox.shared
+        ));
+        for epoch in (1..count).map(|epoch| epoch as u64).chain([99]) {
+            assert_eq!(next(&mut inbox).unwrap().epoch(), epoch);
+        }
+        let state = inbox.shared.typed.lock().unwrap();
+        assert_eq!(state.reliable_bytes, 0);
+        assert_eq!(state.reliable_pending, 0);
+        assert_eq!(inbox.shared.failure.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn typed_byte_overflow_is_terminal_and_does_not_charge_rejected_messages() {
+        let (mut inbox, _raw, typed) = Inbox::channels(&egui::Context::default());
+        let count = TYPED_BYTE_CAPACITY / MAX_MESSAGE_BYTES;
+        for epoch in 0..count {
+            assert!(deliver_decoded(
+                epoch as u64,
+                MAX_MESSAGE_BYTES,
+                decode_message(&message(epoch as u64)),
+                &typed,
+                &inbox.shared
+            ));
+        }
+        assert!(!deliver_decoded(
+            99,
+            message(99).len(),
+            decode_message(&message(99)),
+            &typed,
+            &inbox.shared
+        ));
+        let state = inbox.shared.typed.lock().unwrap();
+        assert_eq!(state.reliable_bytes, TYPED_BYTE_CAPACITY);
+        assert_eq!(state.reliable_pending, count);
+        drop(state);
+        assert_eq!(inbox.shared.failure.load(Ordering::Acquire), TYPED_OVERFLOW);
+        assert!(inbox.poll().unwrap().unwrap_err().contains("queue is full"));
+        assert!(inbox.poll().is_none());
+    }
+
+    #[test]
     fn raw_presence_bursts_keep_only_latest_and_reserve_all_reliable_slots() {
         let (inbox, raw, _typed) = Inbox::channels(&egui::Context::default());
         let sender = inbox.sender();
@@ -452,6 +649,7 @@ mod tests {
         for epoch in 0..1000 {
             assert!(deliver_decoded(
                 epoch,
+                presence_message(epoch).len(),
                 decode_message(&presence_message(epoch)),
                 &typed,
                 &inbox.shared
@@ -460,6 +658,7 @@ mod tests {
         for epoch in 0..TYPED_CAPACITY as u64 {
             assert!(deliver_decoded(
                 1000 + epoch,
+                message(epoch).len(),
                 decode_message(&message(epoch)),
                 &typed,
                 &inbox.shared
@@ -485,12 +684,14 @@ mod tests {
         sender.send(presence_message(1)).unwrap();
         assert!(deliver_decoded(
             1,
+            presence_message(1).len(),
             decode_message(&presence_message(1)),
             &typed,
             &inbox.shared
         ));
         assert!(deliver_decoded(
             2,
+            r#"{"event":"status","epoch":1,"state":"disconnected"}"#.len(),
             decode_message(r#"{"event":"status","epoch":1,"state":"disconnected"}"#),
             &typed,
             &inbox.shared
@@ -568,6 +769,7 @@ mod tests {
         let (mut inbox, _raw, typed) = Inbox::channels(&egui::Context::default());
         assert!(deliver_decoded(
             1,
+            presence_message(7).len(),
             decode_message(&presence_message(7)),
             &typed,
             &inbox.shared
@@ -577,6 +779,7 @@ mod tests {
         // after poll observed Empty but before it takes the presence mailbox.
         assert!(deliver_decoded(
             2,
+            message(8).len(),
             decode_message(&message(8)),
             &typed,
             &inbox.shared
@@ -603,27 +806,51 @@ mod tests {
         let error = next(&mut inbox).unwrap_err();
         assert!(error.contains("invalid bridge message"));
         assert!(!error.contains("private"));
-        sender.send(presence_message(4)).unwrap();
+        assert!(sender.send(presence_message(4)).is_err());
+        assert!(inbox.poll().is_none());
+        // Only an explicitly rebuilt decoder can accept a fresh connection.
+        let mut fresh = Inbox::new(&egui::Context::default());
+        let fresh_sender = fresh.sender();
+        fresh_sender.send(presence_message(4)).unwrap();
         assert!(matches!(
-            next(&mut inbox).unwrap(),
+            next(&mut fresh).unwrap(),
             BrowserEvent::Presence { epoch: 4, .. }
         ));
     }
 
     #[test]
-    fn decoder_preserves_order_and_reports_bad_json_without_echoing_payload() {
-        let mut inbox = Inbox::new(&egui::Context::default());
+    fn decoder_preserves_order_then_stops_after_bad_json_without_echoing_payload() {
+        let (mut inbox, raw, typed) = Inbox::channels(&egui::Context::default());
         let sender = inbox.sender();
         sender.send(message(7)).unwrap();
         sender
             .send(r#"{"event":"secret manuscript text"}"#.into())
             .unwrap();
         sender.send(message(8)).unwrap();
+        let shared = Arc::clone(&inbox.shared);
+        let decoded = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&decoded);
+        let worker = thread::spawn(move || {
+            decode_loop(raw, typed, shared, |text| {
+                count.fetch_add(1, Ordering::Relaxed);
+                decode_message(text)
+            })
+        });
         assert_eq!(next(&mut inbox).unwrap().epoch(), 7);
         let error = next(&mut inbox).unwrap_err();
         assert!(error.contains("invalid bridge message"));
         assert!(!error.contains("secret"));
-        assert_eq!(next(&mut inbox).unwrap().epoch(), 8);
+        worker.join().unwrap();
+        assert_eq!(
+            decoded.load(Ordering::Relaxed),
+            2,
+            "the stale tail is not even decoded"
+        );
+        assert!(
+            inbox.poll().is_none(),
+            "buffered connected cannot revive the stream"
+        );
+        assert!(sender.send(message(9)).is_err());
     }
 
     #[test]

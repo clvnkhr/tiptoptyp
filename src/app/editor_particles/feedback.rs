@@ -220,6 +220,7 @@ pub(super) fn inspected(
     let frame = pulse.map_or(Frame::default(), |p| p.sample(now));
     let active = pulse.filter(|p| p.alive(now)).map_or_else(Vec::new, |p| {
         names(ActionEffectSettings {
+            lingering: None,
             particles: None,
             shake: p.settings.shake && now - p.born < SHAKE_SECONDS,
             flash: frame.flash > 0.0,
@@ -246,6 +247,7 @@ mod tests {
     use super::*;
     fn effects() -> ActionEffectSettings {
         ActionEffectSettings {
+            lingering: None,
             particles: None,
             shake: true,
             flash: true,
@@ -409,6 +411,7 @@ mod tests {
                         let pulse = Pulse::new(
                             clip.min + egui::vec2(135.0, 164.0),
                             ActionEffectSettings {
+                                lingering: None,
                                 particles: None,
                                 shake: name == "Shake",
                                 flash: name == "Flash",

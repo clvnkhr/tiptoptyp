@@ -18,8 +18,8 @@ use crate::{
     screenshot::{CaptureController, CaptureThemeProfile, UiSnapshotScene},
     settings::{
         ActionEffectSettings, AppSettings, ColorThemeChoice, DocumentTheme, EditorAction,
-        EditorEffectSettings, GitDiffStyle, InterfaceTheme, ParticleDensity, ParticleStyle,
-        PreviewPreference, RevealAnimation, RevealStyle, SourcePreviewTrigger,
+        EditorEffectSettings, GitDiffStyle, InterfaceTheme, LingeringStyle, ParticleDensity,
+        ParticleStyle, PreviewPreference, RevealAnimation, RevealStyle, SourcePreviewTrigger,
     },
     shortcuts::ShortcutAction,
     theme::{self, METRICS},
@@ -28,12 +28,19 @@ use crate::{
 use eframe::egui::{self, Align, Layout, Rect, RichText, Vec2};
 use std::path::Path;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SettingsMode {
+    #[default]
+    Form,
+    Json,
+    Help,
+}
+
 #[derive(Default)]
 pub(super) struct SettingsUiState {
     pub(super) category: SettingsSection,
     pub(super) colors_open: bool,
-    pub(super) json_mode: bool,
-    pub(super) help_mode: bool,
+    pub(super) mode: SettingsMode,
     pub(super) json_search: bool,
     pub(super) json_query: String,
     pub(super) json_match: Option<usize>,
@@ -45,8 +52,143 @@ pub(super) struct SettingsUiState {
     pub(super) scroll_target: Option<SettingsTarget>,
     pub(super) snippet_library: super::settings_snippets::LibraryState,
     harper_dictionary_draft: Option<(String, String)>,
+    comment_controls_draft: Option<CommentControlsDraft>,
     pub(super) staged_ui_font_weight: Option<u16>,
     pub(super) staged_code_font_weight: Option<u16>,
+    /// Incomplete form values belong to the form, never the active preferences.
+    pub(super) form_draft: Option<SettingsFormDraft>,
+}
+
+impl SettingsUiState {
+    pub(super) fn shows_json(&self) -> bool {
+        self.mode == SettingsMode::Json
+    }
+    pub(super) fn shows_help(&self) -> bool {
+        self.mode == SettingsMode::Help
+    }
+    pub(super) fn toggle_mode(&mut self, mode: SettingsMode) {
+        self.mode = if self.mode == mode {
+            SettingsMode::Form
+        } else {
+            mode
+        };
+    }
+    pub(super) fn hide_help(&mut self) {
+        if self.shows_help() {
+            self.mode = SettingsMode::Form;
+        }
+    }
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+
+    #[test]
+    fn switching_settings_modes_keeps_unfinished_drafts_and_has_one_visible_mode() {
+        let settings = AppSettings::default();
+        let mut state = SettingsUiState {
+            json_draft: Some(crate::settings_json::Draft::new(&settings)),
+            form_draft: Some(SettingsFormDraft {
+                base: settings.clone(),
+                edited: settings,
+                validation: Err("unfinished form".into()),
+            }),
+            ..Default::default()
+        };
+        for _ in 0..10 {
+            for target in [SettingsMode::Json, SettingsMode::Help, SettingsMode::Form] {
+                state.toggle_mode(target);
+                assert_eq!(state.mode, target);
+                assert!(!(state.shows_json() && state.shows_help()));
+                assert!(state.json_draft.is_some());
+                assert_eq!(
+                    state
+                        .form_draft
+                        .as_ref()
+                        .unwrap()
+                        .validation
+                        .as_ref()
+                        .err()
+                        .map(String::as_str),
+                    Some("unfinished form")
+                );
+            }
+        }
+        state.toggle_mode(SettingsMode::Help);
+        state.hide_help();
+        assert_eq!(state.mode, SettingsMode::Form);
+        state.toggle_mode(SettingsMode::Json);
+        state.hide_help();
+        assert_eq!(state.mode, SettingsMode::Json);
+        state.toggle_mode(SettingsMode::Json);
+        assert_eq!(state.mode, SettingsMode::Form);
+    }
+}
+
+pub(super) struct SettingsFormDraft {
+    base: AppSettings,
+    pub(super) edited: AppSettings,
+    pub(super) validation: Result<(), String>,
+}
+
+impl SettingsFormDraft {
+    fn rebase(&mut self, current: &AppSettings) {
+        if self.base == *current {
+            return;
+        }
+        let mut merged = current.clone();
+        merged.apply_edits(&self.base, self.edited.clone());
+        merged.tex =
+            super::tool_drafts::rebase_tex(&self.base.tex, &current.tex, self.edited.tex.clone());
+        merged.ltex = super::tool_drafts::rebase_ltex(
+            &self.base.ltex,
+            &current.ltex,
+            self.edited.ltex.clone(),
+        );
+        // Browsing for a binary is delivered asynchronously. A draft that
+        // changed only the mode must not restore the old empty path over it.
+        for (base, current, draft, merged) in [
+            (
+                &self.base.typst,
+                &current.typst,
+                &self.edited.typst,
+                &mut merged.typst,
+            ),
+            (
+                &self.base.tinymist,
+                &current.tinymist,
+                &self.edited.tinymist,
+                &mut merged.tinymist,
+            ),
+        ] {
+            *merged = draft.clone();
+            if base.mode != current.mode {
+                merged.mode = current.mode;
+            }
+            if base.custom_path != current.custom_path {
+                merged.custom_path = current.custom_path.clone();
+            }
+            merged.command = super::tool_drafts::rebase_command(
+                &base.command,
+                &current.command,
+                merged.command.clone(),
+            );
+        }
+        if merged != self.edited {
+            self.validation = merged.validate();
+            self.edited = merged;
+        }
+        self.base = current.clone();
+    }
+
+    fn validation_for(&self, edited: &AppSettings) -> Result<(), String> {
+        if self.edited == *edited {
+            self.validation.clone()
+        } else {
+            edited.validate()
+        }
+    }
 }
 
 pub(super) enum SettingsAction {
@@ -62,6 +204,7 @@ pub(super) enum SettingsAction {
     RestartLtex,
     RedownloadLtex,
     DownloadLiquid,
+    DownloadDiagnosticFix,
     CancelResourceRepair,
     ClearBiberCache,
     Update(Box<AppSettings>),
@@ -280,11 +423,11 @@ impl SettingsPanel<'_> {
             return;
         }
         ui.set_min_width(ui.available_width());
-        if self.state.help_mode {
+        if self.state.shows_help() {
             super::help::show(ui, self.settings);
             return;
         }
-        if self.state.json_mode {
+        if self.state.shows_json() {
             self.show_json(ui);
             return;
         }
@@ -369,11 +512,26 @@ impl SettingsPanel<'_> {
             ui.style_mut().scroll_animation = egui::style::ScrollAnimation::none();
         }
         let original = self.pending_settings.unwrap_or(self.settings);
+        let mut form_draft = if deterministic_settings {
+            None
+        } else {
+            self.state.form_draft.take()
+        };
+        if let Some(draft) = &mut form_draft {
+            draft.rebase(original);
+        }
         let mut edited = if deterministic_settings {
             AppSettings::default()
         } else {
-            original.clone()
+            form_draft
+                .as_ref()
+                .map_or_else(|| original.clone(), |draft| draft.edited.clone())
         };
+        if let Some(draft) = &form_draft
+            && let Err(error) = &draft.validation
+        {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
         let mut settings_scroll_target = self.state.scroll_target.take();
         if wide {
             let rail_width = super::settings_navigation::rail_width(ui);
@@ -408,8 +566,31 @@ impl SettingsPanel<'_> {
         self.state.scroll_target = settings_scroll_target;
         super::tool_reference::apply_requested(ui.ctx(), &mut edited);
 
-        if !deterministic_settings && &edited != original {
-            self.actions.push(SettingsAction::Update(Box::new(edited)));
+        if !deterministic_settings {
+            let validation = if let Some(draft) = &form_draft {
+                draft.validation_for(&edited)
+            } else if &edited == original {
+                Ok(())
+            } else {
+                edited.validate()
+            };
+            if validation.is_ok() {
+                if &edited != original {
+                    self.actions.push(SettingsAction::Update(Box::new(edited)));
+                }
+            } else {
+                if form_draft
+                    .as_ref()
+                    .is_none_or(|draft| draft.validation != validation)
+                {
+                    ui.ctx().request_repaint();
+                }
+                self.state.form_draft = Some(SettingsFormDraft {
+                    base: form_draft.map_or_else(|| original.clone(), |draft| draft.base),
+                    edited,
+                    validation,
+                });
+            }
         }
     }
     fn show_category_scroll(
@@ -927,7 +1108,7 @@ impl SettingsPanel<'_> {
                     &mut settings_scroll_target,
                 );
                 ui.checkbox(&mut edited.auto_pair_delimiters, SettingsTarget::AutoPairDelimiters.label())
-                    .on_hover_text("Typing an opening bracket, quote, dollar, asterisk, underscore or backtick surrounds selected text. Typst also pairs delimiters at an empty caret. Paste stays unchanged.");
+                    .on_hover_text("Pair delimiters, complete TeX environments on Enter and surround selections. Paste stays unchanged.");
                 settings_target_anchor(
                     ui,
                     SettingsTarget::Indentation,
@@ -1043,6 +1224,18 @@ impl SettingsPanel<'_> {
                     );
                 });
             }
+            SettingsSection::CommentControls => {
+                settings_target_anchor(
+                    ui,
+                    SettingsTarget::CommentControls,
+                    &mut settings_scroll_target,
+                );
+                comment_control_preferences(
+                    ui,
+                    &mut edited.comment_controls,
+                    &mut self.state.comment_controls_draft,
+                );
+            }
             SettingsSection::Grammar => {
                 let reveal_harper = matches!(
                     settings_scroll_target,
@@ -1100,7 +1293,7 @@ impl SettingsPanel<'_> {
                     #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
                     let _ = names;
                     ui.label(
-                        RichText::new("Leray, MacDonald — spelling only; grammar checks stay on.")
+                        RichText::new("Leray, MacDonald — spelling only. Sentence-initial words and grammar stay checked.")
                             .weak(),
                     );
                     settings_target_anchor(
@@ -1182,6 +1375,47 @@ impl SettingsPanel<'_> {
                     &mut settings_scroll_target,
                 );
                 super::settings_writing::prose_rules(ui, edited, self.settings);
+                settings_target_anchor(ui, SettingsTarget::LiquidFix, &mut settings_scroll_target);
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(SettingsTarget::LiquidFix.label());
+                    let download = ui.add_enabled(
+                        !self.status.resource_repair_busy,
+                        egui::Button::new("Download fix model"),
+                    );
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.diagnostic_fix.download", &download);
+                    if download.clicked() {
+                        self.actions.push(SettingsAction::DownloadDiagnosticFix);
+                    }
+                    let repair_active = self.status.resource_repair_component
+                        == Some(crate::resource_repair::Component::DiagnosticFix);
+                    if self.status.resource_repair_busy && repair_active {
+                        let cancel = ui.small_button("Cancel");
+                        cancel.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                "Cancel fix model download",
+                            )
+                        });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe(
+                            "settings.diagnostic_fix.cancel_download",
+                            &cancel,
+                        );
+                        if cancel.clicked() {
+                            self.actions.push(SettingsAction::CancelResourceRepair);
+                        }
+                    }
+                    if repair_active
+                        && let Some(status) = self.status.resource_repair_status.as_deref()
+                    {
+                        ui.weak(status);
+                    }
+                });
+                ui.weak("LFM3 1.7B · about 1.1 GB");
+                ui.label("Right-click a diagnostic → Suggest fix. Downloads on first use; review changes before accepting.");
                 settings_target_anchor(
                     ui,
                     SettingsTarget::LiquidGrammar,
@@ -1229,6 +1463,7 @@ impl SettingsPanel<'_> {
                 });
                 ui.label("Select text, right-click → Check selection with Liquid. Review changes before applying.");
                 ui.weak("Downloads automatically on first use. Later checks work offline.");
+                ui.weak("Model folder and CPU threads apply to both Liquid models.");
                 settings_control_row(ui, "Model folder", |ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut edited.liquid_cache_directory)
@@ -1725,6 +1960,95 @@ impl SettingsPanel<'_> {
     }
 }
 
+struct CommentControlsDraft {
+    observed: crate::comment_controls::Settings,
+    value: crate::comment_controls::Settings,
+}
+
+impl CommentControlsDraft {
+    fn refresh(&mut self, configured: &crate::comment_controls::Settings) {
+        if self.observed != *configured {
+            // A settings publication acknowledges our edit or replaces it
+            // with a newer JSON/sibling-window edit. Invalid local text never
+            // prevents an explicit external settings change from appearing.
+            if self.value != *configured {
+                self.value = configured.clone();
+            }
+            self.observed = configured.clone();
+        }
+    }
+
+    fn apply_valid(&self, configured: &mut crate::comment_controls::Settings) {
+        if self.value.validate().is_ok() && self.value != *configured {
+            *configured = self.value.clone();
+        }
+    }
+}
+
+fn comment_control_preferences(
+    ui: &mut egui::Ui,
+    configured: &mut crate::comment_controls::Settings,
+    state: &mut Option<CommentControlsDraft>,
+) {
+    let draft = state.get_or_insert_with(|| CommentControlsDraft {
+        observed: configured.clone(),
+        value: configured.clone(),
+    });
+    draft.refresh(configured);
+    let reset = ui.button("Reset comment controls");
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    if ui.is_rect_visible(reset.rect) {
+        crate::desktop_test::observe("settings.comments.reset", &reset);
+    }
+    if reset.clicked() {
+        draft.value = crate::comment_controls::Settings::default();
+    }
+    ui.label("Standalone comments: %ttt:off in TeX or //ttt:off in Typst. Whitespace is ignored. Off disables; on resumes.");
+    if let Err(error) = draft.value.validate() {
+        let response = ui.colored_label(ui.visuals().error_fg_color, error);
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        if ui.is_rect_visible(response.rect) {
+            crate::desktop_test::observe("settings.comments.error", &response);
+        }
+        let _ = response;
+    }
+    for (name, id, markers) in [
+        ("Both", "both", &mut draft.value.both),
+        ("Formatting", "formatting", &mut draft.value.formatting),
+        ("Diagnostics", "diagnostics", &mut draft.value.diagnostics),
+    ] {
+        ui.push_id(id, |ui| {
+            ui.strong(name);
+            for (switch, value) in [("off", &mut markers.off), ("on", &mut markers.on)] {
+                let label = format!("{name} {switch} marker");
+                settings_control_row(ui, &format!("{switch} marker"), |ui| {
+                    let field = ui.add(
+                        egui::TextEdit::singleline(value)
+                            .id_salt(switch)
+                            .desired_width(ui.available_width().max(1.0)),
+                    );
+                    field.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, &label)
+                    });
+                    if field.changed() {
+                        // Invalid drafts do not publish settings, so explicitly
+                        // update feedback above the rows after this input frame.
+                        ui.ctx().request_repaint();
+                    }
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if ui.is_rect_visible(field.rect) {
+                        crate::desktop_test::observe(
+                            &format!("settings.comments.{id}.{switch}"),
+                            &field,
+                        );
+                    }
+                });
+            }
+        });
+    }
+    draft.apply_valid(configured);
+}
+
 fn reveal_animation_controls(ui: &mut egui::Ui, label: &str, animation: &mut RevealAnimation) {
     ui.push_id(label, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -1797,6 +2121,32 @@ fn editor_effect_controls(ui: &mut egui::Ui, effects: &mut EditorEffectSettings)
         }
         let _ = (enabled, density);
     });
+    ui.horizontal_wrapped(|ui| {
+        let unified = ui.checkbox(&mut effects.same_for_all, "Same effects for all actions");
+        let afterburner = ui.checkbox(&mut effects.cursor_afterburner, "Cursor afterburner");
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        {
+            crate::desktop_test::observe("settings.editor.effects.same_for_all", &unified);
+            crate::desktop_test::observe(
+                "settings.editor.effects.cursor_afterburner",
+                &afterburner,
+            );
+        }
+        let _ = (unified, afterburner);
+    });
+    let actions = if effects.same_for_all {
+        &EditorAction::ALL[..1]
+    } else {
+        &EditorAction::ALL[..]
+    };
+    let same_for_all = effects.same_for_all;
+    let action_label = |action: EditorAction| {
+        if same_for_all {
+            "All actions"
+        } else {
+            action.label()
+        }
+    };
     let spacing = Vec2::new(12.0, 3.0);
     let body_font = egui::TextStyle::Body.resolve(ui.style());
     let button_font = egui::TextStyle::Button.resolve(ui.style());
@@ -1809,9 +2159,10 @@ fn editor_effect_controls(ui: &mut egui::Ui, effects: &mut EditorEffectSettings)
                 .x
         };
         let action_heading = width("Action", &body_font);
-        let action = EditorAction::ALL
-            .into_iter()
-            .map(|action| width(action.label(), &body_font))
+        let action = actions
+            .iter()
+            .copied()
+            .map(|action| width(action_label(action), &body_font))
             .fold(action_heading, f32::max);
         let off = width("Off", &button_font);
         let particles = ParticleStyle::ALL
@@ -1825,30 +2176,41 @@ fn editor_effect_controls(ui: &mut egui::Ui, effects: &mut EditorEffectSettings)
             .into_iter()
             .map(|label| width(label, &body_font).max(ui.spacing().interact_size.y))
             .sum();
-        action + particles.max(128.0) + toggles + 4.0 * spacing.x
+        let lingering = LingeringStyle::ALL
+            .into_iter()
+            .map(|style| width(style.label(), &button_font))
+            .fold(off, f32::max)
+            + ui.spacing().icon_width
+            + ui.spacing().icon_spacing
+            + 2.0 * ui.spacing().button_padding.x;
+        action + particles.max(128.0) + lingering.max(94.0) + toggles + 5.0 * spacing.x
     });
     if required_width > ui.available_width() {
-        for action in EditorAction::ALL {
+        for &action in actions {
+            let name = action_label(action);
             let value = effects.actions.get_mut(action);
             ui.horizontal_wrapped(|ui| {
-                let label = ui.label(action.label());
+                let label = ui.label(name);
                 editor_action_particles(ui, action, value, label.id);
+                editor_action_lingering(ui, action, name, value);
             });
-            ui.horizontal_wrapped(|ui| editor_action_toggles(ui, action, value, true));
+            ui.horizontal_wrapped(|ui| editor_action_toggles(ui, action, name, value, true));
         }
     } else {
         egui::Grid::new("editor-action-effects")
             .spacing(spacing)
             .show(ui, |ui| {
-                for heading in ["Action", "Particles", "Shake", "Flash", "Glow"] {
+                for heading in ["Action", "Particles", "Linger", "Shake", "Flash", "Glow"] {
                     ui.weak(heading);
                 }
                 ui.end_row();
-                for action in EditorAction::ALL {
-                    let label = ui.label(action.label());
+                for &action in actions {
+                    let name = action_label(action);
+                    let label = ui.label(name);
                     let value = effects.actions.get_mut(action);
                     editor_action_particles(ui, action, value, label.id);
-                    editor_action_toggles(ui, action, value, false);
+                    editor_action_lingering(ui, action, name, value);
+                    editor_action_toggles(ui, action, name, value, false);
                     ui.end_row();
                 }
             });
@@ -1886,12 +2248,52 @@ fn editor_action_particles(
     let _ = particles;
 }
 
+fn editor_action_lingering(
+    ui: &mut egui::Ui,
+    action: EditorAction,
+    name: &str,
+    value: &mut ActionEffectSettings,
+) {
+    let lingering = egui::ComboBox::from_id_salt(("lingering", action.key()))
+        .width(94.0)
+        .selected_text(value.lingering.map_or("Off", LingeringStyle::label))
+        .show_ui(ui, |ui| {
+            for style in [None].into_iter().chain(LingeringStyle::ALL.map(Some)) {
+                let label = style.map_or("Off", LingeringStyle::label);
+                let response = ui.selectable_value(&mut value.lingering, style, label);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                crate::desktop_test::observe(
+                    &format!("settings.editor.effects.{}.lingering.{label}", action.key()),
+                    &response,
+                );
+                let _ = response;
+            }
+        })
+        .response;
+    lingering.widget_info(|| {
+        let mut info = egui::WidgetInfo::labeled(
+            egui::WidgetType::ComboBox,
+            ui.is_enabled(),
+            format!("{name} lingering"),
+        );
+        info.current_text_value = Some(value.lingering.map_or("Off", LingeringStyle::label).into());
+        info
+    });
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe(
+        &format!("settings.editor.effects.{}.lingering", action.key()),
+        &lingering,
+    );
+}
+
 fn editor_action_toggles(
     ui: &mut egui::Ui,
     action: EditorAction,
+    name: &str,
     value: &mut ActionEffectSettings,
     labelled: bool,
 ) {
+    let _ = action;
     for (kind, label, enabled) in [
         ("shake", "Shake", &mut value.shake),
         ("flash", "Flash", &mut value.flash),
@@ -1903,7 +2305,7 @@ fn editor_action_toggles(
                 egui::WidgetType::Checkbox,
                 ui.is_enabled(),
                 *enabled,
-                format!("{} {}", action.label(), kind),
+                format!("{name} {kind}"),
             )
         });
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
@@ -2406,7 +2808,7 @@ fn configuration_editor(
     let (example, docs) = match kind {
         ToolKind::Tinymist => (
             r#"{"formatterPrintWidth":100,"typstExtraArgs":["--input=mode=draft"]}"#,
-            "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.2/crates/tinymist/src/config.rs",
+            "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.12/crates/tinymist/src/config.rs",
         ),
         ToolKind::Texlab => (
             r#"{"texlab":{"diagnosticsDelay":500}}"#,
@@ -2414,7 +2816,7 @@ fn configuration_editor(
         ),
         ToolKind::Badness => (
             r#"{"lineWidth":100,"indentWidth":4}"#,
-            "https://github.com/jolars/badness/blob/v0.24.0/docs/src/guide/editor-setup.md",
+            "https://github.com/jolars/badness/blob/v0.29.0/docs/src/guide/editor-setup.md",
         ),
         _ => unreachable!("only language servers have JSON configuration"),
     };
@@ -2505,6 +2907,380 @@ mod tests {
     use egui::{Color32, Pos2};
     use egui_kittest::{Harness, kittest::Queryable as _};
     use std::time::Duration;
+
+    #[test]
+    fn form_draft_rebases_browsed_binary_paths_without_losing_unfinished_fields() {
+        use crate::settings::ToolMode;
+        let base = AppSettings::default();
+        let mut edited = base.clone();
+        edited.theme_invert = true;
+        edited.liquid_cache_directory = "unfinished".into();
+        for tool in [
+            &mut edited.typst,
+            &mut edited.tinymist,
+            &mut edited.tex.tectonic,
+            &mut edited.tex.texlab,
+            &mut edited.tex.badness,
+            &mut edited.tex.tex_fmt,
+        ] {
+            tool.mode = ToolMode::Custom;
+        }
+        let mut draft = SettingsFormDraft {
+            base: base.clone(),
+            validation: edited.validate(),
+            edited,
+        };
+        let mut current = base;
+        current.line_wrap = false;
+        current
+            .last_opened_files
+            .insert("workspace".into(), "current.typ".into());
+        for tool in [
+            &mut current.typst,
+            &mut current.tinymist,
+            &mut current.tex.tectonic,
+            &mut current.tex.texlab,
+            &mut current.tex.badness,
+            &mut current.tex.tex_fmt,
+        ] {
+            tool.mode = ToolMode::Custom;
+            tool.custom_path = "/selected/executable".into();
+            tool.command.environment = r#"{"SELECTED":"yes"}"#.into();
+        }
+        current.validate().unwrap();
+        draft.rebase(&current);
+        assert!(draft.edited.theme_invert);
+        assert!(!draft.edited.line_wrap);
+        assert_eq!(draft.edited.last_opened_files, current.last_opened_files);
+        assert_eq!(draft.edited.liquid_cache_directory, "unfinished");
+        assert!(
+            draft
+                .validation
+                .as_ref()
+                .unwrap_err()
+                .contains("liquid_cache_directory")
+        );
+        for tool in [
+            &draft.edited.typst,
+            &draft.edited.tinymist,
+            &draft.edited.tex.tectonic,
+            &draft.edited.tex.texlab,
+            &draft.edited.tex.badness,
+            &draft.edited.tex.tex_fmt,
+        ] {
+            assert_eq!(tool.mode, ToolMode::Custom);
+            assert_eq!(tool.custom_path, "/selected/executable");
+            assert_eq!(tool.command.environment, r#"{"SELECTED":"yes"}"#);
+        }
+        // An unchanged frame retains both the values and cached validation.
+        let before = draft.edited.clone();
+        let validation = draft.validation.clone();
+        draft.rebase(&current);
+        assert_eq!(draft.edited, before);
+        assert_eq!(draft.validation_for(&before), validation);
+    }
+
+    #[test]
+    fn unfinished_form_rebase_preserves_independent_tex_and_nested_ltex_changes() {
+        let base = AppSettings::default();
+        let mut edited = base.clone();
+        edited.liquid_cache_directory = "unfinished".into();
+        edited.tex.lint = false;
+        edited.tex.texlab_configuration["texlab"]["diagnosticsDelay"] = 750.into();
+        edited.ltex.follow_document_language = false;
+        edited.ltex.configuration["dictionary"] = serde_json::json!({"en-GB":["Localword"]});
+        edited.ltex.configuration["ltex-ls"]["logLevel"] = "fine".into();
+        let mut draft = SettingsFormDraft {
+            base: base.clone(),
+            validation: edited.validate(),
+            edited,
+        };
+        let mut current = base;
+        current.tex.build_engine = crate::tex::settings::BuildEngine::PdfLatex;
+        current.tex.texlab_configuration["texlab"]["completion"]["matcher"] = "prefix".into();
+        current.ltex.configuration["disabledRules"] =
+            serde_json::json!({"en-GB":["WHITESPACE_RULE"]});
+        current.ltex.configuration["ltex-ls"]["logLevel"] = "info".into();
+        assert_ne!(
+            draft.base.ltex.configuration["ltex-ls"]["logLevel"],
+            current.ltex.configuration["ltex-ls"]["logLevel"],
+            "the external edit must actually change the committed leaf"
+        );
+        current.validate().unwrap();
+
+        draft.rebase(&current);
+        assert!(!draft.edited.tex.lint);
+        assert_eq!(draft.edited.tex.build_engine, current.tex.build_engine);
+        assert_eq!(
+            draft.edited.tex.texlab_configuration["texlab"]["diagnosticsDelay"],
+            750
+        );
+        assert_eq!(
+            draft.edited.tex.texlab_configuration["texlab"]["completion"]["matcher"],
+            "prefix"
+        );
+        assert!(!draft.edited.ltex.follow_document_language);
+        assert_eq!(
+            draft.edited.ltex.configuration["dictionary"]["en-GB"],
+            serde_json::json!(["Localword"])
+        );
+        assert_eq!(
+            draft.edited.ltex.configuration["disabledRules"],
+            current.ltex.configuration["disabledRules"]
+        );
+        assert_eq!(
+            draft.edited.ltex.configuration["ltex-ls"]["logLevel"],
+            "info"
+        );
+        assert_eq!(draft.edited.liquid_cache_directory, "unfinished");
+        assert!(
+            draft
+                .validation
+                .as_ref()
+                .unwrap_err()
+                .contains("liquid_cache_directory")
+        );
+        let mut completed = draft.edited.clone();
+        completed.liquid_cache_directory = "/finished/models".into();
+        assert!(draft.validation_for(&completed).is_ok());
+    }
+
+    fn comment_controls_harness(
+        width: f32,
+    ) -> Harness<
+        'static,
+        (
+            crate::comment_controls::Settings,
+            Option<CommentControlsDraft>,
+        ),
+    > {
+        Harness::builder()
+            .with_size(Vec2::new(width, 460.0))
+            .build_ui_state(
+                |ui,
+                 state: &mut (
+                    crate::comment_controls::Settings,
+                    Option<CommentControlsDraft>,
+                )| {
+                    comment_control_preferences(ui, &mut state.0, &mut state.1);
+                },
+                (crate::comment_controls::Settings::default(), None),
+            )
+    }
+
+    #[test]
+    fn comment_control_fields_preserve_invalid_drafts_and_apply_only_valid_independent_pairs() {
+        let mut harness = comment_controls_harness(600.0);
+        harness.run();
+        let original = harness.state().0.clone();
+        harness.get_by_label("Formatting off marker").click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.key_press(egui::Key::Backspace);
+        harness.run();
+        assert_eq!(harness.state().0, original);
+        assert!(
+            harness
+                .state()
+                .1
+                .as_ref()
+                .unwrap()
+                .value
+                .formatting
+                .off
+                .is_empty()
+        );
+        harness
+            .get_by_label("Formatting off marker")
+            .type_text("layout: pause");
+        harness.run();
+        assert_eq!(harness.state().0.formatting.off, "layout: pause");
+        assert_eq!(harness.state().0.diagnostics, original.diagnostics);
+        let valid = harness.state().0.clone();
+        harness.get_by_label("Formatting on marker").click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness
+            .get_by_label("Formatting on marker")
+            .type_text("layout: pause");
+        harness.run();
+        assert_eq!(harness.state().0, valid);
+        assert_eq!(
+            harness.state().1.as_ref().unwrap().value.formatting.on,
+            "layout: pause"
+        );
+        harness.get_by_label("Reset comment controls").click();
+        harness.run();
+        assert_eq!(harness.state().0, original);
+        assert_eq!(harness.state().1.as_ref().unwrap().value, original);
+    }
+
+    #[test]
+    fn comment_control_validation_is_visible_above_rows_in_a_constrained_viewport() {
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(600.0, 230.0))
+            .build_ui_state(
+                |ui,
+                 state: &mut (
+                    crate::comment_controls::Settings,
+                    Option<CommentControlsDraft>,
+                )| {
+                    comment_control_preferences(ui, &mut state.0, &mut state.1);
+                },
+                (crate::comment_controls::Settings::default(), None),
+            );
+        harness.run();
+        let configured = harness.state().0.clone();
+        harness.get_by_label("Formatting off marker").click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.key_press(egui::Key::Backspace);
+        harness.run();
+        let error = harness
+            .state()
+            .1
+            .as_ref()
+            .unwrap()
+            .value
+            .validate()
+            .unwrap_err();
+        let message = harness.get_by_label(&error).rect();
+        assert!(
+            message.top() >= 0.0 && message.bottom() <= 230.0,
+            "{message:?}"
+        );
+        assert!(message.right() <= 600.0, "{message:?}");
+        assert!(message.bottom() <= harness.get_by_label("Both off marker").rect().top());
+        assert_eq!(
+            harness.state().0,
+            configured,
+            "invalid input cannot be published"
+        );
+        // No input or settings publication is needed to keep the feedback
+        // current once the single requested follow-up frame has painted it.
+        harness.run();
+        assert_eq!(harness.get_by_label(&error).rect(), message);
+        assert_eq!(harness.state().0, configured);
+    }
+
+    #[test]
+    fn comment_control_whitespace_equivalent_duplicates_stay_local_and_valid_text_is_preserved() {
+        let mut harness = comment_controls_harness(600.0);
+        harness.run();
+        let original = harness.state().0.clone();
+        let field = "Formatting off marker";
+        harness.get_by_label(field).click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.get_by_label(field).type_text("t t t : o f f");
+        harness.run();
+        assert_eq!(harness.state().0, original);
+        let draft = &harness.state().1.as_ref().unwrap().value;
+        assert_eq!(draft.formatting.off, "t t t : o f f");
+        harness.get_by_label(&draft.validate().unwrap_err());
+
+        harness.get_by_label(field).click();
+        harness.run();
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.get_by_label(field).type_text("layout :  pause");
+        harness.run();
+        assert_eq!(harness.state().0.formatting.off, "layout :  pause");
+        assert_eq!(harness.state().0.both, original.both);
+        assert_eq!(harness.state().0.diagnostics, original.diagnostics);
+        harness.run();
+        assert_eq!(
+            harness.state().1.as_ref().unwrap().value.formatting.off,
+            "layout :  pause"
+        );
+    }
+
+    #[test]
+    fn comment_control_drafts_follow_explicit_external_settings_without_publishing_invalid_text() {
+        let mut harness = comment_controls_harness(600.0);
+        harness.run();
+        harness
+            .state_mut()
+            .1
+            .as_mut()
+            .unwrap()
+            .value
+            .formatting
+            .off
+            .clear();
+        harness.run();
+        assert_eq!(
+            harness.state().0,
+            crate::comment_controls::Settings::default()
+        );
+        let external = crate::comment_controls::Settings {
+            both: crate::comment_controls::Markers {
+                off: "all: pause".into(),
+                on: "all: resume".into(),
+            },
+            formatting: crate::comment_controls::Markers {
+                off: "fmt: pause".into(),
+                on: "fmt: resume".into(),
+            },
+            diagnostics: crate::comment_controls::Markers {
+                off: "check: pause".into(),
+                on: "check: resume".into(),
+            },
+        };
+        harness.state_mut().0 = external.clone();
+        harness.run();
+        assert_eq!(harness.state().0, external);
+        assert_eq!(harness.state().1.as_ref().unwrap().value, external);
+        assert_eq!(harness.state().1.as_ref().unwrap().observed, external);
+    }
+
+    #[test]
+    fn comment_controls_are_searchable_and_marker_fields_fit_narrow_settings() {
+        for query in [
+            "ttt",
+            "fmt off",
+            "diagnostic marker",
+            "comment controls",
+            "ttt: off",
+            "%ttt:off",
+            "//diag:off",
+            "fmt: off/on",
+            "%fmt:on",
+            "diag: off",
+        ] {
+            assert!(settings_search_results(query).contains(&SettingsTarget::CommentControls));
+        }
+        assert_eq!(
+            SettingsTarget::CommentControls.section(),
+            SettingsSection::CommentControls
+        );
+        for width in [280.0, 360.0, 600.0] {
+            let mut harness = comment_controls_harness(width);
+            harness.run();
+            let mut previous = None;
+            for label in [
+                "Both off marker",
+                "Both on marker",
+                "Formatting off marker",
+                "Formatting on marker",
+                "Diagnostics off marker",
+                "Diagnostics on marker",
+            ] {
+                let rect = harness.get_by_label(label).rect();
+                assert!(
+                    rect.left() >= 0.0 && rect.right() <= width + 1.0,
+                    "{label}: {rect:?}"
+                );
+                assert!(
+                    rect.height() > 0.0 && rect.bottom() <= 460.0,
+                    "{label}: {rect:?}"
+                );
+                if let Some(bottom) = previous {
+                    assert!(rect.top() >= bottom, "marker fields overlap");
+                }
+                previous = Some(rect.bottom());
+            }
+        }
+    }
 
     #[test]
     fn liquid_input_controls_edit_the_projection_policy_and_show_real_examples() {
@@ -2683,10 +3459,68 @@ mod tests {
     }
 
     #[test]
+    fn unified_effect_controls_keep_individual_preferences_and_allow_lingering_only() {
+        let mut initial = AppSettings::default();
+        initial.editor_effects.actions.paste.particles = Some(ParticleStyle::Railgun);
+        initial.editor_effects.actions.paste.lingering = Some(LingeringStyle::Embers);
+        let paste = initial.editor_effects.actions.paste;
+        let mut harness = Harness::builder()
+            .with_size(Vec2::new(680.0, 620.0))
+            .build_ui_state(
+                |ui, settings: &mut AppSettings| {
+                    editor_effect_controls(ui, &mut settings.editor_effects);
+                },
+                initial,
+            );
+        harness.run();
+        harness.get_by_label("Same effects for all actions").click();
+        harness.run();
+        assert!(harness.query_by_label("Paste lingering").is_none());
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "All actions lingering")
+            .click();
+        harness.run();
+        harness.get_by_label("Smoke").click();
+        harness.run();
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::ComboBox, "All actions")
+            .click();
+        harness.run();
+        harness.get_by_label("Off").click();
+        harness.run();
+        harness.get_by_label("Cursor afterburner").click();
+        harness.run();
+        let effects = harness.state().editor_effects;
+        assert!(effects.same_for_all && effects.cursor_afterburner);
+        assert!(!effects.enabled);
+        for action in EditorAction::ALL {
+            assert_eq!(effects.effect(action).particles, None);
+            assert_eq!(
+                effects.effect(action).lingering,
+                Some(LingeringStyle::Smoke)
+            );
+            assert!(effects.effect(action).gpu_enabled());
+        }
+        assert_eq!(effects.actions.paste, paste);
+        harness.get_by_label("Same effects for all actions").click();
+        harness.run();
+        harness.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Paste lingering");
+        assert_eq!(
+            *harness.state().editor_effects.effect(EditorAction::Paste),
+            paste
+        );
+        let serialized = serde_json::to_string(harness.state()).unwrap();
+        assert_eq!(
+            crate::settings_json::parse(&serialized).unwrap(),
+            *harness.state()
+        );
+    }
+
+    #[test]
     fn narrow_effect_controls_keep_every_action_and_toggle_inside_the_window() {
         for font_size in [14.0, 20.0] {
             let mut harness = Harness::builder()
-                .with_size(Vec2::new(360.0, 900.0))
+                .with_size(Vec2::new(360.0, 1400.0))
                 .build_ui_state(
                     move |ui, settings: &mut AppSettings| {
                         for font in ui.style_mut().text_styles.values_mut() {
@@ -2704,6 +3538,17 @@ mod tests {
                 assert!(
                     particles.left() >= 0.0 && particles.right() <= 360.0,
                     "{} particle selector at {font_size}: {particles:?}",
+                    action.label()
+                );
+                let lingering = harness
+                    .get_by_role_and_label(
+                        egui::accesskit::Role::ComboBox,
+                        &format!("{} lingering", action.label()),
+                    )
+                    .rect();
+                assert!(
+                    lingering.left() >= 0.0 && lingering.right() <= 360.0,
+                    "{} lingering selector at {font_size}: {lingering:?}",
                     action.label()
                 );
                 for kind in ["shake", "flash", "glow"] {
@@ -3363,6 +4208,21 @@ mod tests {
         assert!(
             harness.state().2.is_empty(),
             "idle Settings must not emit updates"
+        );
+        category(&mut harness, SettingsSection::CommentControls);
+        for label in [
+            "Both off marker",
+            "Both on marker",
+            "Formatting off marker",
+            "Formatting on marker",
+            "Diagnostics off marker",
+            "Diagnostics on marker",
+        ] {
+            harness.get_by_label(label);
+        }
+        assert!(
+            harness.state().2.is_empty(),
+            "opening comment controls must not change settings"
         );
         category(&mut harness, SettingsSection::Snippets);
         harness.get_by_label("Edit snippets…").click();

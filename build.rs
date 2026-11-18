@@ -1,5 +1,7 @@
 #[path = "build_support/locked_versions.rs"]
 mod locked_versions;
+#[path = "build_support/tinymist_configuration.rs"]
+mod tinymist_configuration;
 #[path = "build_support/tool_versions.rs"]
 mod tool_versions;
 
@@ -11,10 +13,19 @@ fn main() {
     println!("cargo:rustc-env=TIPTOPTYP_HARPER_VERSION={harper}");
     println!("cargo:rerun-if-changed=toolchain/manifest.tsv");
     println!("cargo:rerun-if-changed=build_support/tool_versions.rs");
+    println!("cargo:rerun-if-changed=build_support/tinymist_configuration.rs");
     println!("cargo:rerun-if-changed=build.rs");
     let manifest =
         std::fs::read_to_string("toolchain/manifest.tsv").expect("read bundled toolchain manifest");
     let versions = tool_versions::versions(&manifest).expect("valid bundled toolchain versions");
+    let tinymist_version = versions["tinymist"];
+    assert!(
+        tinymist_configuration::supports_version(tinymist_version),
+        "Tinymist {tinymist_version} has no reviewed settings contract (reviewed: {}). Review build_support/tinymist_configuration.rs before updating the bundled server",
+        tinymist_configuration::REVIEWED_VERSION,
+    );
+    tinymist_configuration::validate(&tinymist_configuration::defaults())
+        .expect("built-in Tinymist defaults violate their configuration contract");
     for (tool, version) in versions {
         println!(
             "cargo:rustc-env=TIPTOPTYP_BUNDLED_{}_VERSION={version}",

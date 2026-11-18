@@ -69,11 +69,9 @@ pub(super) struct State {
     client: Arc<std::sync::Mutex<Client>>,
     job: crate::worker::ExclusiveJob<Reply>,
     next: u64,
-    active: Option<u64>,
+    request: RequestAdmission,
     last_error: Option<String>,
     dialog: Option<Dialog>,
-    progress: Option<crate::worker::LatestReceiver<Progress>>,
-    cancel: Arc<AtomicBool>,
 }
 #[derive(Clone, Copy, Debug)]
 struct ChunkStatus {
@@ -120,17 +118,15 @@ impl Default for State {
             client: crate::liquid_runtime::shared_client(),
             job: Default::default(),
             next: 0,
-            active: None,
+            request: RequestAdmission::Idle,
             last_error: None,
             dialog: None,
-            progress: None,
-            cancel: Arc::default(),
         }
     }
 }
 impl Drop for State {
     fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+        self.request.cancel();
     }
 }
 
@@ -212,14 +208,250 @@ fn byte_ranges(source: &str, ranges: &[Range<usize>]) -> Result<Vec<Range<usize>
         .collect()
 }
 
+#[derive(Default)]
+enum RequestAdmission {
+    #[default]
+    Idle,
+    Running {
+        owner: RequestOwner,
+        progress: crate::worker::LatestReceiver<Progress>,
+    },
+    Cancelled(RequestOwner),
+}
+struct RequestOwner {
+    id: u64,
+    cancel: Arc<AtomicBool>,
+}
+impl Drop for RequestOwner {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
+impl RequestAdmission {
+    fn id(&self) -> Option<u64> {
+        match self {
+            Self::Idle => None,
+            Self::Running { owner, .. } | Self::Cancelled(owner) => Some(owner.id),
+        }
+    }
+    fn accepts(&self, id: u64) -> bool {
+        matches!(self, Self::Running { owner, .. } if owner.id == id && !owner.cancel.load(Ordering::Acquire))
+    }
+    fn finish(&mut self, id: u64) -> bool {
+        if self.id() != Some(id) {
+            return false;
+        }
+        let accepted = self.accepts(id);
+        *self = Self::Idle;
+        accepted
+    }
+    fn cancel(&mut self) {
+        *self = match std::mem::take(self) {
+            Self::Running { owner, .. } => {
+                owner.cancel.store(true, Ordering::Release);
+                Self::Cancelled(owner)
+            }
+            other => other,
+        };
+    }
+    fn latest(&self) -> Option<Progress> {
+        if let Self::Running { progress, .. } = self {
+            progress.try_recv().ok()
+        } else {
+            None
+        }
+    }
+    #[cfg(test)]
+    fn cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled(_))
+    }
+    #[cfg(test)]
+    fn fixture(id: u64) -> Self {
+        let (_, progress) = crate::worker::latest_channel();
+        Self::Running {
+            owner: RequestOwner {
+                id,
+                cancel: Arc::default(),
+            },
+            progress,
+        }
+    }
+}
+
 struct Dialog {
     id: u64,
     target: BoundSelection,
+    state: ReviewState,
+    sent_open: bool,
+}
+#[derive(Default)]
+struct PartialReview {
     review: Option<Arc<Review>>,
     sent: Option<Arc<SentInput>>,
     progress: Option<ChunkStatus>,
-    sent_open: bool,
-    error: Option<String>,
+}
+enum ReviewState {
+    Preparing(PartialReview),
+    Ready {
+        review: Arc<Review>,
+        sent: Arc<SentInput>,
+        progress: Option<ChunkStatus>,
+    },
+    Failed {
+        message: String,
+        retained: PartialReview,
+    },
+    Stale(PartialReview),
+}
+impl ReviewState {
+    fn initial(error: Option<String>) -> Self {
+        match error {
+            Some(message) => Self::Failed {
+                message,
+                retained: PartialReview::default(),
+            },
+            None => Self::Preparing(PartialReview::default()),
+        }
+    }
+    fn review(&self) -> Option<&Arc<Review>> {
+        match self {
+            Self::Ready { review, .. } => Some(review),
+            Self::Preparing(data) | Self::Stale(data) | Self::Failed { retained: data, .. } => {
+                data.review.as_ref()
+            }
+        }
+    }
+    fn ready_review(&self) -> Option<&Arc<Review>> {
+        if let Self::Ready { review, .. } = self {
+            Some(review)
+        } else {
+            None
+        }
+    }
+    fn sent(&self) -> Option<&Arc<SentInput>> {
+        match self {
+            Self::Ready { sent, .. } => Some(sent),
+            Self::Preparing(data) | Self::Stale(data) | Self::Failed { retained: data, .. } => {
+                data.sent.as_ref()
+            }
+        }
+    }
+    fn progress(&self) -> Option<ChunkStatus> {
+        match self {
+            Self::Ready { progress, .. } => *progress,
+            Self::Preparing(data) | Self::Stale(data) | Self::Failed { retained: data, .. } => {
+                data.progress
+            }
+        }
+    }
+    fn error(&self) -> Option<&str> {
+        match self {
+            Self::Failed { message, .. } => Some(message),
+            Self::Stale(_) => {
+                Some("The document changed; close this review and check the selection again.")
+            }
+            _ => None,
+        }
+    }
+    fn take_data(&mut self) -> PartialReview {
+        match std::mem::replace(self, Self::initial(None)) {
+            Self::Preparing(data) | Self::Stale(data) | Self::Failed { retained: data, .. } => data,
+            Self::Ready {
+                review,
+                sent,
+                progress,
+            } => PartialReview {
+                review: Some(review),
+                sent: Some(sent),
+                progress,
+            },
+        }
+    }
+    fn finish(&mut self, sent: Arc<SentInput>, result: Result<Review, String>) {
+        let progress = self.progress();
+        *self = match result {
+            Ok(review) => Self::Ready {
+                review: Arc::new(review),
+                sent,
+                progress,
+            },
+            Err(message) => Self::Failed {
+                message,
+                retained: PartialReview {
+                    review: None,
+                    sent: Some(sent),
+                    progress,
+                },
+            },
+        };
+    }
+    fn fail(&mut self, message: String) {
+        let retained = self.take_data();
+        *self = Self::Failed { message, retained };
+    }
+    fn stale(&mut self) {
+        let mut retained = self.take_data();
+        retained.review = None;
+        *self = Self::Stale(retained);
+    }
+    fn progress_update(&mut self, progress: Progress) {
+        *self = Self::Preparing(PartialReview {
+            review: progress.review,
+            sent: Some(progress.sent),
+            progress: Some(progress.status),
+        });
+    }
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn phase(&self) -> &'static str {
+        match self {
+            Self::Preparing(_) => "preparing",
+            Self::Ready { .. } => "reviewing",
+            Self::Failed { .. } => "failed",
+            Self::Stale(_) => "stale",
+        }
+    }
+    #[cfg(test)]
+    fn fixture_parts(
+        review: Option<Arc<Review>>,
+        sent: Option<Arc<SentInput>>,
+        progress: Option<ChunkStatus>,
+        error: Option<String>,
+    ) -> Self {
+        let mut data = PartialReview {
+            review,
+            sent,
+            progress,
+        };
+        if let Some(message) = error {
+            Self::Failed {
+                message,
+                retained: data,
+            }
+        } else if data.review.is_some() && data.sent.is_some() {
+            Self::Ready {
+                review: data.review.take().unwrap(),
+                sent: data.sent.take().unwrap(),
+                progress: data.progress,
+            }
+        } else {
+            Self::Preparing(data)
+        }
+    }
+    #[cfg(test)]
+    fn set_review_for_test(&mut self, review: Option<Arc<Review>>) {
+        let data = self.take_data();
+        *self = Self::fixture_parts(review, data.sent, data.progress, None);
+    }
+    #[cfg(test)]
+    fn set_sent_for_test(&mut self, sent: Option<Arc<SentInput>>) {
+        let data = self.take_data();
+        *self = Self::fixture_parts(data.review, sent, data.progress, None);
+    }
+    #[cfg(test)]
+    fn clear_error_for_test(&mut self) {
+        let data = self.take_data();
+        *self = Self::fixture_parts(data.review, data.sent, data.progress, None);
+    }
 }
 impl State {
     pub(super) fn activity(&self) -> crate::activity::Activity {
@@ -231,8 +463,7 @@ impl State {
     }
 
     fn accepts_reply(&self, id: u64, current: Option<DocumentKey>) -> bool {
-        self.active == Some(id)
-            && !self.cancel.load(Ordering::Acquire)
+        self.request.accepts(id)
             && self.dialog.as_ref().is_some_and(|dialog| {
                 dialog.id == id && current.is_some_and(|key| dialog.target.current(key))
             })
@@ -240,39 +471,33 @@ impl State {
 
     fn accept_reply(&mut self, reply: Reply, current: Option<DocumentKey>) {
         let accepted = self.accepts_reply(reply.id, current);
-        self.active = None;
-        self.progress = None;
-        if !accepted {
+        if !self.request.finish(reply.id) || !accepted {
             return;
         }
-        let dialog = self.dialog.as_mut().expect("accepted reply has a review");
-        dialog.sent = Some(reply.sent);
-        match reply.result {
-            Ok(review) => {
-                dialog.review = Some(Arc::new(review));
-                dialog.error = None;
-            }
-            Err(error) => {
-                self.last_error = Some(error.clone());
-                dialog.review = None;
-                dialog.error = Some(error);
-            }
+        if let Err(error) = &reply.result {
+            self.last_error = Some(error.clone());
         }
+        self.dialog
+            .as_mut()
+            .expect("accepted reply has a review")
+            .state
+            .finish(reply.sent, reply.result);
     }
 
     fn fail_request(&mut self, error: String, current: Option<DocumentKey>) {
-        let accepted = self
-            .active
-            .is_some_and(|id| self.accepts_reply(id, current));
-        self.active = None;
-        self.progress = None;
-        if accepted {
-            self.last_error = Some(error.clone());
-            self.dialog
-                .as_mut()
-                .expect("accepted failure has a review")
-                .error = Some(error);
+        let Some(id) = self.request.id() else {
+            return;
+        };
+        let accepted = self.accepts_reply(id, current);
+        if !self.request.finish(id) || !accepted {
+            return;
         }
+        self.last_error = Some(error.clone());
+        self.dialog
+            .as_mut()
+            .expect("accepted failure has a review")
+            .state
+            .fail(error);
     }
 
     pub(super) fn busy(&self) -> bool {
@@ -293,7 +518,7 @@ fn liquid_activity(
     if running {
         Activity::Running
     } else if let Some(error) = dialog
-        .and_then(|dialog| dialog.error.as_deref())
+        .and_then(|dialog| dialog.state.error())
         .or(last_error)
     {
         Activity::Failed(error.into())
@@ -312,7 +537,7 @@ enum Action {
 
 impl EditorApp {
     pub(super) fn begin_liquid_check(&mut self, target: BoundSelection, context: &egui::Context) {
-        if self.overleaf_source_locked() {
+        if self.reject_read_only_edit(context) {
             return;
         }
         if self.document_flow_busy() || self.liquid.busy() {
@@ -341,27 +566,28 @@ impl EditorApp {
             id,
             target: target.clone(),
 
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(config.as_ref().err().cloned()),
             sent_open: false,
-            error: config.as_ref().err().cloned(),
         });
         let Ok(config) = config else {
             self.liquid.last_error = self
                 .liquid
                 .dialog
                 .as_ref()
-                .and_then(|dialog| dialog.error.clone());
+                .and_then(|dialog| dialog.state.error().map(str::to_owned));
             context.request_repaint();
             return;
         };
         self.liquid.last_error = None;
-        self.liquid.active = Some(id);
-        self.liquid.cancel = Arc::default();
-        let cancel = self.liquid.cancel.clone();
+        let cancel = Arc::<AtomicBool>::default();
         let (updates, progress) = crate::worker::latest_channel();
-        self.liquid.progress = Some(progress);
+        self.liquid.request = RequestAdmission::Running {
+            owner: RequestOwner {
+                id,
+                cancel: cancel.clone(),
+            },
+            progress,
+        };
         let repaint = crate::worker::RepaintTarget::current(context);
         let client = Arc::clone(&self.liquid.client);
         let input_options = self.settings.liquid_input.clone();
@@ -447,21 +673,14 @@ impl EditorApp {
                     Ok(Reply { id, sent, result })
                 })
         {
-            self.liquid.active = None;
-            self.liquid.progress = None;
-            self.liquid.cancel.store(true, Ordering::Release);
+            self.liquid.request = RequestAdmission::Idle;
             self.liquid.last_error = Some(error.clone());
-            self.liquid.dialog.as_mut().unwrap().error = Some(error);
+            self.liquid.dialog.as_mut().unwrap().state.fail(error);
         }
     }
 
     pub(super) fn update_liquid(&mut self) {
-        if let Some(progress) = self
-            .liquid
-            .progress
-            .as_ref()
-            .and_then(|receiver| receiver.try_recv().ok())
-        {
+        if let Some(progress) = self.liquid.request.latest() {
             self.accept_liquid_progress(progress);
         }
         let current = (!self.tabs.is_empty()).then(|| self.document().key());
@@ -476,18 +695,13 @@ impl EditorApp {
                     .target
                     .current(self.tabs.current_record().document.key()))
         {
-            self.liquid.cancel.store(true, Ordering::Release);
-            self.liquid.progress = None;
-            dialog.review = None;
-            dialog.error = Some(
-                "The document changed; close this review and check the selection again.".into(),
-            );
+            self.liquid.request.cancel();
+            dialog.state.stale();
         }
     }
 
     fn accept_liquid_progress(&mut self, progress: Progress) {
-        if self.liquid.active != Some(progress.id)
-            || self.liquid.cancel.load(Ordering::Acquire)
+        if !self.liquid.request.accepts(progress.id)
             || progress.status.passage == 0
             || progress.status.passage > progress.status.passages
             || progress.status.chunk == 0
@@ -503,17 +717,14 @@ impl EditorApp {
                 .target
                 .current(self.tabs.current_record().document.key())
         {
-            dialog.sent = Some(progress.sent);
-            dialog.progress = Some(progress.status);
-            dialog.review = progress.review;
+            dialog.state.progress_update(progress);
         }
     }
 
     pub(super) fn close_liquid(&mut self, context: &egui::Context) {
         // Retain the tracked operation after closing. A second check must wait,
         // and process shutdown waits for preparation/inference cleanup.
-        self.liquid.cancel.store(true, Ordering::Release);
-        self.liquid.progress = None;
+        self.liquid.request.cancel();
         self.liquid.dialog = None;
         ChildViewHost::close(context, SALT);
         crate::window_host::return_focus(context);
@@ -627,12 +838,21 @@ impl EditorApp {
         );
         match action {
             Some(Action::Close) => self.close_liquid(context),
-            Some(Action::Apply) if !busy && current => {
+            Some(Action::Apply)
+                if !busy
+                    && current
+                    && self.liquid.dialog.as_ref().is_some_and(|dialog| {
+                        dialog
+                            .state
+                            .ready_review()
+                            .is_some_and(|review| !review.edits.is_empty())
+                    }) =>
+            {
                 let dialog = self.liquid.dialog.as_ref().unwrap();
                 let target = dialog.target.clone();
                 let edits = dialog
-                    .review
-                    .as_ref()
+                    .state
+                    .ready_review()
                     .map(|review| review.edits.clone())
                     .unwrap_or_default();
                 match self.apply_liquid_edits(&target, &edits, context) {
@@ -640,7 +860,7 @@ impl EditorApp {
                         self.close_liquid(context);
                         self.focus_source_editor(context);
                     }
-                    Err(error) => self.liquid.dialog.as_mut().unwrap().error = Some(error),
+                    Err(error) => self.liquid.dialog.as_mut().unwrap().state.fail(error),
                 }
             }
             _ => {}
@@ -651,20 +871,21 @@ impl EditorApp {
     pub(super) fn liquid_inspection(&self) -> serde_json::Value {
         serde_json::json!({"visible": self.liquid.visible(), "busy": self.liquid.busy(),
             "input_options": self.settings.liquid_input,
-            "progress": self.liquid.dialog.as_ref().and_then(|dialog| dialog.progress).map(|progress| serde_json::json!({
+            "phase": self.liquid.dialog.as_ref().map(|dialog| dialog.state.phase()).unwrap_or("closed"),
+            "progress": self.liquid.dialog.as_ref().and_then(|dialog| dialog.state.progress()).map(|progress| serde_json::json!({
                 "passage": progress.passage, "passages": progress.passages,
                 "chunk": progress.chunk, "chunks": progress.chunks, "model_tokens": progress.model_tokens,
             })),
-            "sent": self.liquid.dialog.as_ref().and_then(|dialog| dialog.sent.as_ref()).map(|sent| sent.fragments.iter().map(|text| serde_json::json!({ "fingerprint": crate::desktop_test::fingerprint(text), "chars": text.chars().count() })).collect::<Vec<_>>()),
+            "sent": self.liquid.dialog.as_ref().and_then(|dialog| dialog.state.sent()).map(|sent| sent.fragments.iter().map(|text| serde_json::json!({ "fingerprint": crate::desktop_test::fingerprint(text), "chars": text.chars().count() })).collect::<Vec<_>>()),
             "sent_open": self.liquid.dialog.as_ref().is_some_and(|dialog| dialog.sent_open),
-            "changes": self.liquid.dialog.as_ref().and_then(|dialog| dialog.review.as_ref()).map(|review| review.edits.len()),
-            "comparison": self.liquid.dialog.as_ref().and_then(|dialog| dialog.review.as_ref()).map(|review| serde_json::json!({
+            "changes": self.liquid.dialog.as_ref().and_then(|dialog| dialog.state.review()).map(|review| review.edits.len()),
+            "comparison": self.liquid.dialog.as_ref().and_then(|dialog| dialog.state.review()).map(|review| serde_json::json!({
                 "before": crate::desktop_test::fingerprint(&review.diff.before),
                 "after": crate::desktop_test::fingerprint(&review.diff.current),
                 "before_chars": review.diff.before.chars().count(), "after_chars": review.diff.current.chars().count(),
                 "style": self.settings.git_diff_style,
             })),
-            "error": self.liquid.dialog.as_ref().and_then(|dialog| dialog.error.as_ref()),
+            "error": self.liquid.dialog.as_ref().and_then(|dialog| dialog.state.error()),
             "current": self.liquid.dialog.as_ref().is_some_and(|dialog| !self.tabs.is_empty() && dialog.target.current(self.tabs.current_record().document.key()))})
     }
 }
@@ -723,7 +944,7 @@ fn review_ui(
     settings: &AppSettings,
 ) -> Option<Action> {
     let mut action = None;
-    let sent_state = dialog.sent.as_ref().map(|_| {
+    let sent_state = dialog.state.sent().map(|_| {
         egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
             ui.make_persistent_id(("liquid-sent-input", dialog.id)),
@@ -741,8 +962,8 @@ fn review_ui(
     let sent_body = 120.0
         + ui.spacing().item_spacing.y
         + if dialog
-            .sent
-            .as_ref()
+            .state
+            .sent()
             .is_some_and(|sent| sent.fragments.len() > 1)
         {
             ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y
@@ -762,7 +983,7 @@ fn review_ui(
     if busy {
         ui.horizontal(|ui| {
             ui.spinner();
-            if let Some(progress) = dialog.progress {
+            if let Some(progress) = dialog.state.progress() {
                 ui.label(format!(
                     "Passage {}/{} · chunk {}/{}",
                     progress.passage, progress.passages, progress.chunk, progress.chunks
@@ -772,9 +993,9 @@ fn review_ui(
             }
         });
     }
-    if let Some(error) = &dialog.error {
+    if let Some(error) = dialog.state.error() {
         ui.colored_label(ui.visuals().error_fg_color, error);
-    } else if let Some(review) = &dialog.review {
+    } else if let Some(review) = dialog.state.review() {
         if review.edits.is_empty() && !busy {
             ui.label("No corrections suggested.");
         }
@@ -796,7 +1017,7 @@ fn review_ui(
             let _ = viewport;
         });
     }
-    if let (Some(sent), Some(state)) = (&dialog.sent, sent_state) {
+    if let (Some(sent), Some(state)) = (dialog.state.sent(), sent_state) {
         let mut clicked = false;
         let mut header = state.show_header(ui, |ui| {
             let response = ui.add(egui::Button::new("Liquid input").frame(false));
@@ -830,10 +1051,9 @@ fn review_ui(
         let apply = ui.add_enabled(
             current
                 && !busy
-                && dialog.error.is_none()
                 && dialog
-                    .review
-                    .as_ref()
+                    .state
+                    .ready_review()
                     .is_some_and(|review| !review.edits.is_empty()),
             egui::Button::new("Apply"),
         );
@@ -854,7 +1074,7 @@ fn review_ui(
     action
 }
 
-fn comparison_headers(ui: &mut egui::Ui, style: crate::settings::GitDiffStyle) {
+pub(super) fn comparison_headers(ui: &mut egui::Ui, style: crate::settings::GitDiffStyle) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme::SPACE.small;
         match style {
@@ -888,6 +1108,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_unrelated_reply_cannot_retire_the_current_liquid_request() {
+        let mut state = State::default();
+        state.request = RequestAdmission::fixture(2);
+        state.accept_reply(
+            Reply {
+                id: 1,
+                sent: SentInput::new(vec!["She go.".into()]),
+                result: Err("obsolete reply".into()),
+            },
+            None,
+        );
+        assert_eq!(state.request.id(), Some(2));
+        assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn streaming_output_is_read_only_until_a_final_review_arrives() {
+        let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(42), 1, 1);
+        let target = BoundSelection::new(
+            crate::document::DocumentSnapshot::fixture(key, "She go."),
+            DocumentKind::Typst,
+            CCursorRange::two(CCursor::new(0), CCursor::new(7)),
+        )
+        .unwrap();
+        let edits = vec![SourceEdit {
+            range: 4..6,
+            replacement: "goes".into(),
+        }];
+        let sent = SentInput::new(vec!["She go.".into()]);
+        let mut state = ReviewState::initial(None);
+        state.progress_update(Progress {
+            id: 1,
+            sent: sent.clone(),
+            review: Some(Arc::new(prepare_review(&target, edits.clone()).unwrap())),
+            status: ChunkStatus {
+                passage: 1,
+                passages: 1,
+                chunk: 1,
+                chunks: 2,
+                model_tokens: 8,
+            },
+        });
+        assert!(state.review().is_some());
+        assert!(
+            state.ready_review().is_none(),
+            "a partial comparison cannot become an edit"
+        );
+        state.finish(sent, Ok(prepare_review(&target, edits).unwrap()));
+        assert!(state.ready_review().is_some());
+        state.stale();
+        assert!(state.review().is_none());
+        assert!(state.ready_review().is_none());
+        assert_eq!(state.sent().unwrap().fragments, ["She go."]);
+    }
+
+    #[test]
     fn activity_observes_selection_errors_and_cancelled_workers_without_starting_work() {
         use crate::activity::Activity;
         let mut state = State::default();
@@ -905,11 +1181,8 @@ mod tests {
         state.dialog = Some(Dialog {
             id: 1,
             target,
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(Some("The model could not correct this selection".into())),
             sent_open: false,
-            error: Some("The model could not correct this selection".into()),
         });
         assert_eq!(
             state.activity(),
@@ -920,13 +1193,13 @@ mod tests {
             liquid_activity(true, state.dialog.as_ref(), state.last_error.as_deref()),
             Activity::Running
         );
-        state.dialog.as_mut().unwrap().error = None;
+        state.dialog.as_mut().unwrap().state.clear_error_for_test();
         assert_eq!(
             state.activity(),
             Activity::Idle,
             "an open ready review is healthy"
         );
-        state.cancel.store(true, Ordering::Release);
+        state.request.cancel();
         state.dialog = None;
         assert_eq!(
             liquid_activity(true, state.dialog.as_ref(), state.last_error.as_deref()),
@@ -956,11 +1229,8 @@ mod tests {
         let dialog = || Dialog {
             id: 7,
             target: target.clone(),
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(None),
             sent_open: false,
-            error: None,
         };
         let reply = |id| Reply {
             id,
@@ -968,7 +1238,7 @@ mod tests {
             result: Err("The model input was rejected".into()),
         };
         let mut state = State::default();
-        state.active = Some(7);
+        state.request = RequestAdmission::fixture(7);
         state.dialog = Some(dialog());
         state.accept_reply(reply(7), Some(key));
         assert_eq!(
@@ -976,7 +1246,7 @@ mod tests {
             Activity::Failed("The model input was rejected".into())
         );
         state.dialog = None;
-        state.cancel.store(true, Ordering::Release);
+        state.request.cancel();
         assert_eq!(
             state.activity(),
             Activity::Failed("The model input was rejected".into())
@@ -997,9 +1267,11 @@ mod tests {
             (false, Some(key), 7, false),
         ] {
             let mut state = State::default();
-            state.active = Some(7);
+            state.request = RequestAdmission::fixture(7);
             state.dialog = open.then(dialog);
-            state.cancel.store(cancelled, Ordering::Release);
+            if cancelled {
+                state.request.cancel();
+            }
             state.accept_reply(reply(id), current);
             assert!(
                 state.last_error.is_none(),
@@ -1009,16 +1281,16 @@ mod tests {
                 state
                     .dialog
                     .as_ref()
-                    .is_none_or(|dialog| dialog.error.is_none())
+                    .is_none_or(|dialog| dialog.state.error().is_none())
             );
         }
         let mut state = State::default();
-        state.active = Some(7);
+        state.request = RequestAdmission::fixture(7);
         state.dialog = Some(dialog());
         state.fail_request("worker stopped".into(), Some(key));
         assert_eq!(state.last_error.as_deref(), Some("worker stopped"));
-        state.active = Some(7);
-        state.cancel.store(true, Ordering::Release);
+        state.request = RequestAdmission::fixture(7);
+        state.request.cancel();
         state.fail_request("Liquid check cancelled.".into(), Some(key));
         assert_eq!(
             state.last_error.as_deref(),
@@ -1140,11 +1412,8 @@ mod tests {
             id: 1,
             target: selected,
 
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(None),
             sent_open: false,
-            error: None,
         });
         app.close_liquid(&context);
         assert!(!app.liquid.visible());
@@ -1162,16 +1431,13 @@ mod tests {
             .replace_unprojected_untitled("This result hold.");
         let selected = target(&app, 0..app.document().source().chars().count());
         app.liquid.next = 1;
-        app.liquid.active = Some(1);
+        app.liquid.request = RequestAdmission::fixture(1);
         app.liquid.dialog = Some(Dialog {
             id: 1,
             target: selected.clone(),
 
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(None),
             sent_open: false,
-            error: None,
         });
         let (release, wait) = std::sync::mpsc::channel();
         let worker_target = selected.clone();
@@ -1234,11 +1500,8 @@ mod tests {
             id: 1,
             target: selected,
 
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(None),
             sent_open: false,
-            error: None,
         });
         app.execute_app_command(AppCommand::Undo, &context, None);
         assert_eq!(app.document().source(), "A result. More.");
@@ -1246,6 +1509,50 @@ mod tests {
         assert!(!app.liquid.visible());
         assert!(!app.tabs.is_empty());
         assert_eq!(app.document().source(), "A result. More.");
+    }
+
+    #[test]
+    fn pending_formatter_reply_cannot_edit_source_while_liquid_review_owns_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.document_mut().replace_unprojected_untitled("A result.");
+        let key = app.document().key();
+        let selected = target(&app, 0..9);
+        let selection = CCursorRange::two(CCursor::new(8), CCursor::new(2));
+        app.store_editor_cursor(&context, selection);
+        app.tinymist_sync
+            .fixture_session(Generation(91), Some("file:///format.typ".into()), None);
+        app.formatting.request(key, formatting::Intent::Save);
+        app.liquid.dialog = Some(Dialog {
+            id: 1,
+            target: selected,
+            state: ReviewState::initial(None),
+            sent_open: false,
+        });
+        let edit = LspTextEdit {
+            range: LspRange {
+                start: lsp_position_at_scalar("A result.", ScalarOffset::new(0)),
+                end: lsp_position_at_scalar("A result.", ScalarOffset::new(9)),
+            },
+            new_text: "A formatted result.".into(),
+        };
+        app.receive_formatted_document(
+            &context,
+            Generation(91),
+            "file:///format.typ",
+            revision_as_i32(key.revision),
+            app.formatting.request_token().unwrap_or(0),
+            vec![edit],
+        );
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.document().source(), "A result.");
+        assert_eq!(app.editor_snapshot(&context).cursor, selection);
+        assert!(app.formatting.request_key().is_none());
+        assert!(!app.formatting.saves_after_reply());
+        assert!(app.liquid.visible());
+        assert!(app.liquid.dialog.as_ref().unwrap().target.current(key));
+        assert!(!app.local_save.is_running());
     }
 
     #[test]
@@ -1267,11 +1574,8 @@ mod tests {
                 id: 1,
                 target: selected,
 
-                review: None,
-                sent: None,
-                progress: None,
+                state: ReviewState::initial(Some(error.into())),
                 sent_open: false,
-                error: Some(error.into()),
             };
             let mut harness = egui_kittest::Harness::builder()
                 .with_size(Vec2::new(640.0, 320.0))
@@ -1391,13 +1695,10 @@ outside";
             id: 1,
             target: target(&app, 0..app.document().source().chars().count()),
 
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(None),
             sent_open: false,
-            error: None,
         });
-        app.liquid.active = Some(1);
+        app.liquid.request = RequestAdmission::fixture(1);
         app.liquid.job.start_and_repaint("test-liquid-failure", &context, || Ok(Reply {
             id: 1, sent: SentInput::new(vec!["She go.".into()]), result: Err("Liquid’s local files are unavailable. Check its data folder in Settings → Grammar & spelling.".into()),
         })).unwrap();
@@ -1408,10 +1709,10 @@ outside";
             std::thread::sleep(Duration::from_millis(1));
         }
         let dialog = app.liquid.dialog.as_ref().unwrap();
-        assert_eq!(dialog.sent.as_ref().unwrap().fragments, ["She go."]);
-        assert_eq!(dialog.sent.as_ref().unwrap().display, "She go.");
-        assert!(dialog.error.as_ref().unwrap().contains("local files"));
-        assert!(dialog.review.is_none());
+        assert_eq!(dialog.state.sent().unwrap().fragments, ["She go."]);
+        assert_eq!(dialog.state.sent().unwrap().display, "She go.");
+        assert!(dialog.state.error().unwrap().contains("local files"));
+        assert!(dialog.state.review().is_none());
         assert_eq!(app.document().source(), "#emph[She go.]");
         let failure = app.liquid.activity();
         assert!(matches!(failure, crate::activity::Activity::Failed(_)));
@@ -1437,11 +1738,13 @@ outside";
             id: 1,
             target: selected,
 
-            review: None,
-            sent: Some(SentInput::new(vec!["We estimate x.".into()])),
-            progress: None,
+            state: ReviewState::fixture_parts(
+                None,
+                Some(SentInput::new(vec!["We estimate x.".into()])),
+                None,
+                Some("Runtime unavailable".into()),
+            ),
             sent_open: false,
-            error: Some("Runtime unavailable".into()),
         };
         let mut harness = egui_kittest::Harness::builder()
             .with_size(Vec2::new(640.0, 400.0))
@@ -1461,7 +1764,7 @@ outside";
         harness.key_press(egui::Key::A);
         harness.run();
         assert_eq!(
-            harness.state().sent.as_ref().unwrap().display,
+            harness.state().state.sent().unwrap().display,
             "We estimate x."
         );
     }
@@ -1503,14 +1806,16 @@ outside";
             id: 1,
             target: selected,
 
-            review: Some(Arc::new(review)),
-            sent: Some(SentInput::new(vec![
-                "First fragment. ".repeat(30),
-                "Second fragment. ".repeat(30),
-            ])),
-            progress: None,
+            state: ReviewState::fixture_parts(
+                Some(Arc::new(review)),
+                Some(SentInput::new(vec![
+                    "First fragment. ".repeat(30),
+                    "Second fragment. ".repeat(30),
+                ])),
+                None,
+                None,
+            ),
             sent_open: false,
-            error: None,
         };
         let mut harness = egui_kittest::Harness::builder()
             .with_size(Vec2::new(900.0, 600.0))
@@ -1571,11 +1876,8 @@ outside";
             id: 1,
             target: selected,
 
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(None),
             sent_open: false,
-            error: None,
         };
         let owner = Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 883.0));
         let mut harness = egui_kittest::Harness::builder()
@@ -1609,19 +1911,27 @@ outside";
         harness.run_steps(5);
         let selected = harness.state().0.target.clone();
         let typo = source[..source.find("go to").unwrap()].chars().count();
-        harness.state_mut().0.review = Some(Arc::new(
-            prepare_review(
-                &selected,
-                vec![SourceEdit {
-                    range: typo..typo + 2,
-                    replacement: "goes".into(),
-                }],
-            )
-            .unwrap(),
-        ));
-        harness.state_mut().0.sent = Some(SentInput::new(vec![
-            "This is fine. She go to school every day.".into(),
-        ]));
+        harness
+            .state_mut()
+            .0
+            .state
+            .set_review_for_test(Some(Arc::new(
+                prepare_review(
+                    &selected,
+                    vec![SourceEdit {
+                        range: typo..typo + 2,
+                        replacement: "goes".into(),
+                    }],
+                )
+                .unwrap(),
+            )));
+        harness
+            .state_mut()
+            .0
+            .state
+            .set_sent_for_test(Some(SentInput::new(vec![
+                "This is fine. She go to school every day.".into(),
+            ])));
         harness.state_mut().1 = false;
         harness.run_steps(4);
         for name in ["sent", "apply"] {
@@ -1712,17 +2022,19 @@ outside";
         let dialog = Dialog {
             id: 7,
             target: selected.clone(),
-            review: Some(review.clone()),
-            sent: Some(SentInput::new(vec!["She go. He go.".into()])),
-            progress: Some(ChunkStatus {
-                passage: 1,
-                passages: 1,
-                chunk: 1,
-                chunks: 2,
-                model_tokens: 8,
-            }),
+            state: ReviewState::fixture_parts(
+                Some(review.clone()),
+                Some(SentInput::new(vec!["She go. He go.".into()])),
+                Some(ChunkStatus {
+                    passage: 1,
+                    passages: 1,
+                    chunk: 1,
+                    chunks: 2,
+                    model_tokens: 8,
+                }),
+                None,
+            ),
             sent_open: false,
-            error: None,
         };
         let mut fonts_ready = false;
         let mut harness = egui_kittest::Harness::builder()
@@ -1752,21 +2064,34 @@ outside";
         harness.get_by_label("Before → After");
         assert!(harness.get_by_label("Apply").accesskit_node().is_disabled());
         harness.state_mut().1 = false;
-        harness.state_mut().0.error = Some("The final chunk failed.".into());
+        harness
+            .state_mut()
+            .0
+            .state
+            .fail("The final chunk failed.".into());
         harness.run();
         assert!(
             harness.get_by_label("Apply").accesskit_node().is_disabled(),
             "a failed final chunk cannot make the partial correction applyable"
         );
-        harness.state_mut().0.error = None;
-        harness.state_mut().0.review =
-            Some(Arc::new(prepare_review(&selected, Vec::new()).unwrap()));
+        harness.state_mut().0.state.clear_error_for_test();
+        harness
+            .state_mut()
+            .0
+            .state
+            .set_review_for_test(Some(Arc::new(
+                prepare_review(&selected, Vec::new()).unwrap(),
+            )));
         harness.run();
         assert!(
             harness.get_by_label("Apply").accesskit_node().is_disabled(),
             "an empty complete result cannot reuse partial suggestions"
         );
-        harness.state_mut().0.review = Some(review);
+        harness
+            .state_mut()
+            .0
+            .state
+            .set_review_for_test(Some(review));
         harness.run();
         assert!(!harness.get_by_label("Apply").accesskit_node().is_disabled());
         assert_eq!(app.document().source(), "She go. He go.");
@@ -1780,15 +2105,12 @@ outside";
         app.document_mut()
             .replace_unprojected_untitled("She go. He go.");
         let selected = target(&app, 0..14);
-        app.liquid.active = Some(7);
+        app.liquid.request = RequestAdmission::fixture(7);
         app.liquid.dialog = Some(Dialog {
             id: 7,
             target: selected.clone(),
-            review: None,
-            sent: None,
-            progress: None,
+            state: ReviewState::initial(None),
             sent_open: false,
-            error: None,
         });
         let progress = |id| Progress {
             id,
@@ -1812,16 +2134,16 @@ outside";
             },
         };
         app.accept_liquid_progress(progress(6));
-        assert!(app.liquid.dialog.as_ref().unwrap().review.is_none());
+        assert!(app.liquid.dialog.as_ref().unwrap().state.review().is_none());
         app.accept_liquid_progress(progress(7));
-        assert!(app.liquid.dialog.as_ref().unwrap().review.is_some());
+        assert!(app.liquid.dialog.as_ref().unwrap().state.review().is_some());
         app.document_mut()
             .replace_unprojected_untitled("Edited source.");
         app.update_liquid();
-        assert!(app.liquid.cancel.load(Ordering::Acquire));
-        assert!(app.liquid.dialog.as_ref().unwrap().review.is_none());
+        assert!(app.liquid.request.cancelled());
+        assert!(app.liquid.dialog.as_ref().unwrap().state.review().is_none());
         app.accept_liquid_progress(progress(7));
-        assert!(app.liquid.dialog.as_ref().unwrap().review.is_none());
+        assert!(app.liquid.dialog.as_ref().unwrap().state.review().is_none());
         app.close_liquid(&context);
         app.accept_liquid_progress(progress(7));
         assert!(!app.liquid.visible());

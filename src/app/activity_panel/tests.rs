@@ -495,7 +495,8 @@ fn activity_diagnostics_ignore_old_replies_after_typing() {
     let mut app =
         EditorApp::dormant_window_for_tests(&context, root.path().into(), egui::ViewportId::ROOT);
     let uri = "file:///fixture.typ";
-    app.tinymist_sync.current_uri = Some(uri.into());
+    app.tinymist_sync
+        .fixture_session(crate::tinymist::Generation(0), Some(uri.into()), None);
     let old = revision_as_i32(app.document().revision());
     app.receive_editor_diagnostics(uri, Some(old), vec![]);
     assert_eq!(
@@ -572,5 +573,5 @@ fn newer_services_are_in_the_live_and_snapshot_activity_inventory() {
     );
     assert_eq!(app.document().key(), key);
     assert!(!app.file_import.is_running());
-    assert!(!app.save_job.is_running());
+    assert!(!app.local_save.is_running());
 }

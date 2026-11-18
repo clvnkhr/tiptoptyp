@@ -1,4 +1,11 @@
 use super::*;
+
+#[test]
+fn stale_source_index_rejects_missing_or_non_boundary_line_offsets_without_panicking() {
+    let index = SourceIndex::new("abcd\nz");
+    assert_eq!(index.scalar_at_utf16("abc", 5), None);
+    assert_eq!(index.scalar_at_utf16("ééé", 5), None);
+}
 use crate::overleaf::{BrowserEvent, Entry, Model, ModelChange};
 fn tree() -> Tree {
     Tree::new(

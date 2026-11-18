@@ -1,5 +1,6 @@
 //! Finite TeX builds; the shared compiler owns publication and PDF inspection.
 use super::{CompileRequest, EngineEvent, EngineResult};
+pub(crate) mod magic;
 use crate::{
     diagnostics::{
         Diagnostic, DiagnosticLocation, DiagnosticReport, DiagnosticSeverity, DiagnosticSource,
@@ -23,6 +24,7 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TexOptions {
+    pub(crate) magic: Option<Arc<magic::MagicContext>>,
     pub(crate) engine: crate::tex::settings::BuildEngine,
     pub(crate) command: std::sync::Arc<crate::tool_command::CommandCustomization>,
     pub(crate) executable: PathBuf,
@@ -32,7 +34,40 @@ pub(crate) struct TexOptions {
     pub(crate) system: Option<Box<crate::tex::tools::SystemBuildOptions>>,
 }
 
+impl TexOptions {
+    pub(crate) fn configured(
+        settings: &crate::tex::settings::TexSettings,
+        tools: &crate::tex::tools::TexTools,
+    ) -> Self {
+        use crate::tex::settings::BuildEngine;
+        Self {
+            magic: None,
+            command: if settings.build_engine == BuildEngine::Tectonic {
+                tools.tectonic.command.clone()
+            } else {
+                settings.system_command.clone()
+            }
+            .into(),
+            engine: settings.build_engine,
+            executable: if settings.build_engine == BuildEngine::Tectonic {
+                tools.tectonic.program.clone()
+            } else {
+                tools
+                    .distribution(settings.build_engine)
+                    .unwrap_or_else(|| Path::new(settings.build_engine.executable()))
+                    .to_owned()
+            },
+            only_cached: settings.only_cached,
+            synctex: settings.synctex,
+            show_underfull_box_warnings: settings.show_underfull_box_warnings,
+            system: tools.build_options(settings),
+        }
+    }
+}
+
 struct Session {
+    entry: PathBuf,
+    redirected: bool,
     // Stop the process before its mirror and output are removed.
     child: crate::process::OwnedChild,
     mirror: PrivateSourceMirror,
@@ -44,53 +79,105 @@ struct Session {
     source: String,
     started: Instant,
     command: Command,
-    pass: u8,
-    standard: bool,
-    latexmk: bool,
+    execution: Execution,
     engine: crate::tex::settings::BuildEngine,
     synctex: bool,
     show_underfull_box_warnings: bool,
 }
 
 pub(super) struct Backend {
-    session: Option<Session>,
-    started: bool,
+    state: BuildState,
+}
+
+/// Admission owns the process before its one Started notification is emitted.
+/// Moving to Running consumes that notification without a separate flag.
+enum BuildState {
+    Idle,
+    Admitted(Session),
+    Running(Session),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectPass {
+    First,
+    Second,
+    Final,
+}
+
+/// Tectonic and latexmk own their dependency graph. A direct engine has an
+/// explicit finite pass budget rather than a counter valid only below three.
+enum Execution {
+    Tectonic,
+    Latexmk,
+    Direct(DirectPass),
+}
+
+impl Execution {
+    fn needs_rerun_check(&self) -> bool {
+        matches!(self, Self::Direct(DirectPass::First | DirectPass::Second))
+    }
+
+    fn next_pass(&self, log: &str) -> Option<DirectPass> {
+        match self {
+            Self::Direct(DirectPass::First) => Some(DirectPass::Second),
+            Self::Direct(DirectPass::Second)
+                if log.contains("Rerun to get") || log.contains("Label(s) may have changed") =>
+            {
+                Some(DirectPass::Final)
+            }
+            _ => None,
+        }
+    }
 }
 impl Backend {
     pub(super) fn new() -> Self {
         Self {
-            session: None,
-            started: false,
+            state: BuildState::Idle,
         }
     }
     pub(super) fn is_running(&self) -> bool {
-        self.session.is_some()
+        !matches!(self.state, BuildState::Idle)
     }
     pub(super) fn submit(
         &mut self,
         request: &CompileRequest,
         options: &TexOptions,
     ) -> Result<(), String> {
-        self.session = None;
-        self.started = false;
-        self.session = Some(
+        self.state = BuildState::Idle;
+        self.state = BuildState::Admitted(
             Session::start(request, options)
                 .map_err(|e| format!("Could not start TeX build: {e}"))?,
         );
-        self.started = true;
         Ok(())
     }
     pub(super) fn poll(&mut self) -> Vec<EngineResult> {
-        let Some(session) = self.session.as_mut() else {
+        if matches!(self.state, BuildState::Admitted(_)) {
+            let BuildState::Admitted(session) =
+                std::mem::replace(&mut self.state, BuildState::Idle)
+            else {
+                unreachable!()
+            };
+            let started = vec![
+                EngineResult {
+                    revision: session.revision,
+                    elapsed: Duration::ZERO,
+                    event: EngineEvent::TexResolved(super::TexBuildInfo {
+                        entry: session.entry.clone(),
+                        engine: session.engine,
+                    }),
+                },
+                EngineResult {
+                    revision: session.revision,
+                    elapsed: Duration::ZERO,
+                    event: EngineEvent::Started,
+                },
+            ];
+            self.state = BuildState::Running(session);
+            return started;
+        }
+        let BuildState::Running(session) = &mut self.state else {
             return Vec::new();
         };
-        if std::mem::take(&mut self.started) {
-            return vec![EngineResult {
-                revision: session.revision,
-                elapsed: Duration::ZERO,
-                event: EngineEvent::Started,
-            }];
-        }
         let status = match session.child.try_wait() {
             Ok(None)
                 if session.started.elapsed() < BUILD_TIMEOUT
@@ -106,18 +193,14 @@ impl Backend {
             Err(error) => Err(format!("Could not wait for TeX build: {error}")),
         };
         if status.as_ref().is_ok_and(|status| status.success())
-            && session.standard
-            && session.pass < 3
+            && session.execution.needs_rerun_check()
         {
             let log = read_limited(&session.log, MAX_LOG).unwrap_or_default();
-            if session.pass == 1
-                || log.contains("Rerun to get")
-                || log.contains("Label(s) may have changed")
-            {
+            if let Some(next) = session.execution.next_pass(&log) {
                 match crate::process::OwnedChild::spawn(&mut session.command) {
                     Ok(child) => {
                         session.child = child;
-                        session.pass += 1;
+                        session.execution = Execution::Direct(next);
                         return Vec::new();
                     }
                     Err(error) => {
@@ -126,16 +209,19 @@ impl Backend {
                             elapsed: session.started.elapsed(),
                             event: EngineEvent::Failed(DiagnosticReport::error(error.to_string())),
                         };
-                        self.session = None;
+                        self.state = BuildState::Idle;
                         return vec![result];
                     }
                 }
             }
         }
-        let session = self.session.take().unwrap();
+        let BuildState::Running(session) = std::mem::replace(&mut self.state, BuildState::Idle)
+        else {
+            unreachable!()
+        };
         let console = read_limited(&session.log, MAX_LOG).unwrap_or_default();
-        let final_log = session
-            .latexmk
+        let latexmk = matches!(session.execution, Execution::Latexmk);
+        let final_log = latexmk
             .then(|| read_limited(&session.pdf.with_extension("log"), MAX_LOG).ok())
             .flatten();
         let mut report = diagnostics(
@@ -147,7 +233,7 @@ impl Backend {
         if let Some(log) = final_log.as_deref() {
             append_raw_log(&mut report.raw, "Final TeX log", log);
         }
-        if session.latexmk {
+        if latexmk {
             let bibliography =
                 read_limited(&session.pdf.with_extension("blg"), MAX_LOG).unwrap_or_default();
             report
@@ -161,6 +247,9 @@ impl Backend {
         for diagnostic in &mut report.diagnostics {
             if diagnostic.provider.as_deref() == Some("Tectonic") {
                 diagnostic.provider = Some(session.engine.label().into());
+            }
+            if session.redirected && matches!(diagnostic.source, DiagnosticSource::Main) {
+                diagnostic.source = DiagnosticSource::File(session.entry.clone());
             }
             if let DiagnosticSource::File(path) = &mut diagnostic.source {
                 let candidate = if path.is_absolute() {
@@ -230,9 +319,28 @@ impl Backend {
             event,
         }]
     }
+
+    #[cfg(test)]
+    fn session(&self) -> Option<&Session> {
+        match &self.state {
+            BuildState::Admitted(session) | BuildState::Running(session) => Some(session),
+            BuildState::Idle => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn session_mut(&mut self) -> Option<&mut Session> {
+        match &mut self.state {
+            BuildState::Admitted(session) | BuildState::Running(session) => Some(session),
+            BuildState::Idle => None,
+        }
+    }
 }
 impl Session {
     fn start(request: &CompileRequest, options: &TexOptions) -> std::io::Result<Self> {
+        let prepared = magic::prepare(request, options).map_err(std::io::Error::other)?;
+        let request = prepared.request.as_ref();
+        let options = prepared.options.as_ref();
         let standard_engine = options.engine != crate::tex::settings::BuildEngine::Tectonic;
         if !standard_engine {
             options
@@ -249,6 +357,9 @@ impl Session {
             &request.input.display_name,
             &request.input.source,
         )?;
+        for (path, source) in &prepared.overlays {
+            mirror.overlay_source(path, source)?;
+        }
         let output = mirror.session_dir().join("output");
         fs::create_dir(&output)?;
         let log = mirror.session_dir().join("tex-output.log");
@@ -321,11 +432,17 @@ impl Session {
             .stderr(logs);
         let child = crate::process::OwnedChild::spawn(&mut command)?;
         Ok(Self {
+            entry: prepared.entry,
+            redirected: prepared.redirected,
             child,
             command,
-            pass: 1,
-            standard: standard_engine && !latexmk,
-            latexmk,
+            execution: if latexmk {
+                Execution::Latexmk
+            } else if standard_engine {
+                Execution::Direct(DirectPass::First)
+            } else {
+                Execution::Tectonic
+            },
             engine: options.engine,
             synctex: options.synctex,
             show_underfull_box_warnings: options.show_underfull_box_warnings,
@@ -596,6 +713,29 @@ fn wrapper_error(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_engine_passes_are_finite_and_driver_owned_graphs_never_rerun() {
+        let mut execution = Execution::Direct(DirectPass::First);
+        assert!(execution.needs_rerun_check());
+        assert_eq!(execution.next_pass(""), Some(DirectPass::Second));
+        execution = Execution::Direct(DirectPass::Second);
+        assert_eq!(execution.next_pass(""), None);
+        for log in [
+            "Rerun to get cross-references right",
+            "Label(s) may have changed",
+        ] {
+            assert_eq!(execution.next_pass(log), Some(DirectPass::Final));
+            for terminal in [
+                Execution::Direct(DirectPass::Final),
+                Execution::Tectonic,
+                Execution::Latexmk,
+            ] {
+                assert!(!terminal.needs_rerun_check());
+                assert_eq!(terminal.next_pass(log), None);
+            }
+        }
+    }
     #[cfg(unix)]
     #[test]
     fn replacing_a_build_cancels_and_cleans_outputs_with_dotted_entry_names() {
@@ -620,6 +760,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let options = TexOptions {
+            magic: None,
             engine: crate::tex::settings::BuildEngine::Tectonic,
             command: crate::tool_command::CommandCustomization::for_tool(
                 crate::toolchain::ToolKind::Tectonic,
@@ -644,7 +785,27 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
         };
         let mut backend = Backend::new();
         backend.submit(&request, &options).unwrap();
-        let old = backend.session.as_mut().unwrap();
+        assert!(matches!(backend.state, BuildState::Admitted(_)));
+        let admitted = backend.poll();
+        assert!(matches!(
+            admitted.as_slice(),
+            [
+                EngineResult {
+                    event: EngineEvent::TexResolved(_),
+                    ..
+                },
+                EngineResult {
+                    event: EngineEvent::Started,
+                    ..
+                }
+            ]
+        ));
+        assert!(matches!(backend.state, BuildState::Running(_)));
+        assert!(
+            backend.poll().is_empty(),
+            "admission is emitted only once while the child waits"
+        );
+        let old = backend.session_mut().unwrap();
         let old_pid = old.child.child_mut().id();
         let old_directory = old.mirror.session_dir().to_owned();
         request.revision = 2;
@@ -703,6 +864,7 @@ printf 'warning: main.draft.tex:1: fixture warning\n'
             tools::{SystemBuildOptions, SystemProgram},
         };
         TexOptions {
+            magic: None,
             engine: BuildEngine::PdfLatex,
             command: Default::default(),
             executable: root.join("fake engine"),
@@ -790,9 +952,9 @@ printf '%s:1: fixture failure should map to original source\n' "$entry"
         let request = system_request(project.path(), &options, "unsaved source");
         let mut backend = Backend::new();
         backend.submit(&request, &options).unwrap();
-        let session = backend.session.as_ref().unwrap();
+        let session = backend.session().unwrap();
         assert!(
-            !session.standard,
+            matches!(session.execution, Execution::Latexmk),
             "latexmk reruns are not repeated by the adapter"
         );
         let private = session.mirror.session_dir().to_owned();
@@ -873,9 +1035,9 @@ printf '%s:1: fixture failure should map to original source\n' "$entry"
         backend
             .submit(&system_request(project.path(), &options, "first"), &options)
             .unwrap();
-        let session = backend.session.as_ref().unwrap();
+        let session = backend.session().unwrap();
         let private = session.mirror.session_dir().to_owned();
-        let pid = backend.session.as_mut().unwrap().child.child_mut().id();
+        let pid = backend.session_mut().unwrap().child.child_mut().id();
         let mut invalid = options.clone();
         invalid.system.as_mut().unwrap().latexmk = None;
         assert!(
@@ -921,6 +1083,7 @@ printf '%s:1: fixture failure should map to original source\n' "$entry"
                 };
                 let tools = TexTools::resolve(&settings);
                 let options = TexOptions {
+                    magic: None,
                     engine,
                     command: Default::default(),
                     executable: tools.distribution(engine).expect("installed engine").into(),
@@ -938,7 +1101,7 @@ printf '%s:1: fixture failure should map to original source\n' "$entry"
                 // before the backend snapshots output and retires its mirror.
                 let deadline = Instant::now() + Duration::from_secs(60);
                 let final_output = loop {
-                    let session = backend.session.as_mut().unwrap();
+                    let session = backend.session_mut().unwrap();
                     if session.child.try_wait().unwrap().is_some() {
                         break session.pdf.clone();
                     }
@@ -1222,6 +1385,7 @@ LOG
             let project = tempfile::tempdir().unwrap();
             let source = "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nA short paragraph for source navigation.\n\\end{document}\n";
             let options = TexOptions {
+                magic: None,
                 engine,
                 executable,
                 command: Default::default(),
@@ -1346,6 +1510,7 @@ LOG
             let source = fs::read_to_string(&entry).unwrap();
             for (engine, executable) in &engines {
                 let options = TexOptions {
+                    magic: None,
                     engine: *engine,
                     executable: executable.clone(),
                     command: if *engine == crate::tex::settings::BuildEngine::Tectonic {
@@ -1423,6 +1588,7 @@ LOG
                 display_name: "main.tex".into(),
             },
             engine: super::super::EngineConfig::Tex(TexOptions {
+                magic: None,
                 engine: crate::tex::settings::BuildEngine::Tectonic,
                 command: crate::tool_command::CommandCustomization::for_tool(
                     crate::toolchain::ToolKind::Tectonic,

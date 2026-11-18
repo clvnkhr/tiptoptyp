@@ -542,28 +542,84 @@ fn decorate_child_viewport(viewport: egui::ViewportBuilder) -> egui::ViewportBui
 
 pub(crate) const POPUP_BLUR_GRACE: Duration = Duration::from_millis(120);
 
-pub(crate) fn popup_focus_should_close(
-    had_focus: &mut bool,
-    blur_started: &mut Option<Instant>,
-    focused: Option<bool>,
-    now: Instant,
-) -> bool {
-    match focused {
-        Some(true) => {
-            *had_focus = true;
-            *blur_started = None;
-            false
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum PopupFocus {
+    #[default]
+    AwaitingFocus,
+    Focused,
+    BlurGrace(Instant),
+}
+
+impl PopupFocus {
+    pub(crate) fn observe(&mut self, focused: Option<bool>, now: Instant) -> bool {
+        match (focused, *self) {
+            (Some(true), _) => {
+                *self = Self::Focused;
+                false
+            }
+            (Some(false), Self::Focused) => {
+                *self = Self::BlurGrace(now);
+                false
+            }
+            (Some(false), Self::BlurGrace(since)) => {
+                now.saturating_duration_since(since) >= POPUP_BLUR_GRACE
+            }
+            _ => false,
         }
-        Some(false) if *had_focus => {
-            let started = *blur_started.get_or_insert(now);
-            now.saturating_duration_since(started) >= POPUP_BLUR_GRACE
+    }
+
+    pub(crate) fn blur_started(self) -> Option<Instant> {
+        match self {
+            Self::BlurGrace(since) => Some(since),
+            _ => None,
         }
-        Some(false) | None => false,
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ModalFocus {
+    #[default]
+    AwaitingFocus,
+    Focused,
+    Suspended,
+}
+
+impl ModalFocus {
+    pub(crate) fn observe(&mut self, focused: Option<bool>) {
+        *self = match (*self, focused) {
+            (Self::AwaitingFocus, Some(true)) => Self::Focused,
+            (Self::Focused, Some(false)) => Self::Suspended,
+            (state, _) => state,
+        };
+    }
+    pub(crate) fn suspended(self) -> bool {
+        self == Self::Suspended
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn modal_focus_requires_initial_admission_and_explicit_resume_after_suspension() {
+        use super::ModalFocus;
+        let mut focus = ModalFocus::default();
+        focus.observe(Some(false));
+        assert!(!focus.suspended());
+        focus.observe(Some(true));
+        focus.observe(None);
+        assert_eq!(focus, ModalFocus::Focused);
+        focus.observe(Some(false));
+        assert!(focus.suspended());
+        focus.observe(Some(true));
+        assert!(
+            focus.suspended(),
+            "only the owner may resume a suspended modal"
+        );
+        focus = ModalFocus::default();
+        focus.observe(Some(true));
+        assert_eq!(focus, ModalFocus::Focused);
+    }
+
     #[test]
     fn modeless_popups_hide_when_application_deactivates_without_closing() {
         let spec = super::ChildViewSpec::modeless_popup(

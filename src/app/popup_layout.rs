@@ -129,6 +129,13 @@ pub(super) fn editor_menu_row_specs(
             right: String::new(),
         },
     );
+    rows.insert(
+        rows.len() - 2,
+        EditorMenuRow {
+            label: super::diagnostic_fix::MENU_LABEL,
+            right: String::new(),
+        },
+    );
     if can_format {
         rows.push(EditorMenuRow {
             label: "Format Document",

@@ -7,6 +7,13 @@ use typst_syntax::{
 
 pub(super) struct TypstProse;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProsePolicy {
+    Writing,
+    SkipFormatting,
+    SkipCodeStrings,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct TextLanguage {
     pub lang: Option<String>,
@@ -28,14 +35,18 @@ impl TypstProse {
     /// Share our syntax tree between prose masking and language detection.
     /// Harper's underlying Typst parser still owns its separate parse.
     pub(super) fn parse_with_language(source: &[char]) -> Parsed {
-        Self::parse_with_formatting(source, false)
+        Self::parse_with_policy(source, ProsePolicy::Writing)
     }
 
     pub(super) fn parse_skipping_formatting(source: &[char]) -> Vec<Token> {
-        Self::parse_with_formatting(source, true).tokens
+        Self::parse_with_policy(source, ProsePolicy::SkipFormatting).tokens
     }
 
-    fn parse_with_formatting(source: &[char], skip_formatted: bool) -> Parsed {
+    pub(super) fn parse_for_ltex(source: &[char]) -> Vec<Token> {
+        Self::parse_with_policy(source, ProsePolicy::SkipCodeStrings).tokens
+    }
+
+    fn parse_with_policy(source: &[char], policy: ProsePolicy) -> Parsed {
         let text: String = source.iter().collect();
         let syntax = typst_syntax::Source::detached(text.as_str());
         let mut offsets = vec![0; text.len() + 1];
@@ -50,7 +61,9 @@ impl TypstProse {
             .children()
             .filter_map(|node| node.cast::<typst_syntax::ast::LetBinding>())
             .flat_map(|binding| binding.kind().bindings())
-            .filter(|name| name.as_str() == "std" || is_inline_formatter(name.as_str()))
+            .filter(|name| {
+                matches!(name.as_str(), "std" | "heading") || is_inline_formatter(name.as_str())
+            })
             .map(|name| name.as_str().to_owned())
             .collect();
         shadowed.sort_unstable();
@@ -65,7 +78,7 @@ impl TypstProse {
             &mut formatting,
             &mut structural_edges,
             &shadowed,
-            skip_formatted,
+            policy,
         );
         merge_syntax_ranges(&mut formatting);
         structural_edges.sort_unstable();
@@ -132,7 +145,7 @@ fn collect_regions(
     formatting: &mut Vec<Span<char>>,
     structural_edges: &mut Vec<usize>,
     shadowed: &[String],
-    skip_formatted: bool,
+    policy: ProsePolicy,
 ) -> bool {
     let equation = node.kind() == SyntaxKind::Equation;
     let technical_argument = node.get().cast::<Named>().is_some_and(|arg| {
@@ -141,7 +154,10 @@ fn collect_regions(
             "body" | "title" | "caption" | "alt" | "description"
         )
     });
-    if equation || technical_argument {
+    let code_string = policy == ProsePolicy::SkipCodeStrings
+        && node.kind() == SyntaxKind::Str
+        && !rendered_string(&node, shadowed);
+    if equation || technical_argument || code_string {
         let range = node.range();
         let (punctuation, terminal) = if equation {
             equation_punctuation(&node, offsets)
@@ -155,7 +171,7 @@ fn collect_regions(
         });
         return false;
     }
-    if skip_formatted
+    if policy == ProsePolicy::SkipFormatting
         && (matches!(node.kind(), SyntaxKind::Strong | SyntaxKind::Emph)
             || inline_body(&node, shadowed).is_some())
     {
@@ -194,7 +210,7 @@ fn collect_regions(
             formatting,
             structural_edges,
             shadowed,
-            skip_formatted,
+            policy,
         );
     }
     let body = inline_body(&node, shadowed);
@@ -213,6 +229,40 @@ fn collect_regions(
     // A formatter containing a block or an unknown call stays isolated. This
     // flag is computed in the existing traversal, not by rescanning each body.
     structural || (node.kind() == SyntaxKind::FuncCall && body.is_none())
+}
+
+/// Strings used as explicit rendered content remain prose. Arbitrary values in
+/// configuration, author tuples and user-defined calls do not have that role.
+fn rendered_string(node: &LinkedNode<'_>, shadowed: &[String]) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if let Some(named) = parent.get().cast::<Named>() {
+        return matches!(
+            named.name().as_str(),
+            "body" | "title" | "caption" | "alt" | "description"
+        );
+    }
+    if parent.kind() != SyntaxKind::Args {
+        return false;
+    }
+    let Some(call) = parent
+        .parent()
+        .and_then(|call| call.get().cast::<typst_syntax::ast::FuncCall>())
+    else {
+        return false;
+    };
+    let name = match call.callee() {
+        Expr::Ident(name) if !shadowed.iter().any(|bound| bound == name.as_str()) => name,
+        Expr::FieldAccess(access)
+            if !shadowed.iter().any(|bound| bound == "std")
+                && matches!(access.target(), Expr::Ident(namespace) if namespace.as_str() == "std") =>
+        {
+            access.field()
+        }
+        _ => return false,
+    };
+    is_inline_formatter(name.as_str()) || name.as_str() == "heading"
 }
 
 /// Known inline content formatters can be erased for Harper's parser without
@@ -842,7 +892,7 @@ mod tests {
                 &mut formatting,
                 &mut Vec::new(),
                 &[],
-                false,
+                ProsePolicy::Writing,
             );
             assert!(
                 formatting.is_empty(),

@@ -9,28 +9,28 @@ pub enum Failure<T> {
     Ignored,
     Waiting { deadline: T, failures: u8 },
     Exhausted,
+    Permanent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum Phase<T> {
+enum Phase<G, T> {
     #[default]
     Offline,
-    Running,
+    Running(G),
     Waiting(T),
     Exhausted,
+    Permanent,
 }
 
 /// One failure per attempt, four delayed retries, then fallback on failure five.
 pub struct Recovery<G, T> {
-    generation: Option<G>,
     failures: u8,
-    phase: Phase<T>,
+    phase: Phase<G, T>,
 }
 
 impl<G, T> Default for Recovery<G, T> {
     fn default() -> Self {
         Self {
-            generation: None,
             failures: 0,
             phase: Phase::Offline,
         }
@@ -45,12 +45,17 @@ impl<G: Copy + Eq, T: Copy + Ord + Add<Duration, Output = T>> Recovery<G, T> {
 
     /// Starting a retry preserves its failure budget.
     pub fn started(&mut self, generation: G) {
-        self.generation = Some(generation);
-        self.phase = Phase::Running;
+        // Exhaustion is terminal until an explicit restart resets the budget.
+        // An extra service-start notification cannot bypass fallback, create
+        // unbounded retries, or eventually overflow the failure counter.
+        if matches!(self.phase, Phase::Exhausted | Phase::Permanent) {
+            return;
+        }
+        self.phase = Phase::Running(generation);
     }
 
     pub fn accepts(&self, generation: G) -> bool {
-        self.generation == Some(generation) && self.phase == Phase::Running
+        matches!(self.phase, Phase::Running(active) if active == generation)
     }
 
     pub fn recovered(&mut self, generation: G) -> bool {
@@ -79,6 +84,16 @@ impl<G: Copy + Eq, T: Copy + Ord + Add<Duration, Output = T>> Recovery<G, T> {
         }
     }
 
+    /// Invalid configuration cannot recover unchanged. Stop immediately without
+    /// spending a transient retry or allowing a later start event to reopen it.
+    pub fn failed_permanently(&mut self, generation: G) -> Failure<T> {
+        if !self.accepts(generation) {
+            return Failure::Ignored;
+        }
+        self.phase = Phase::Permanent;
+        Failure::Permanent
+    }
+
     pub fn deadline(&self) -> Option<T> {
         match self.phase {
             Phase::Waiting(deadline) => Some(deadline),
@@ -90,7 +105,6 @@ impl<G: Copy + Eq, T: Copy + Ord + Add<Duration, Output = T>> Recovery<G, T> {
     pub fn take_retry(&mut self, now: T) -> bool {
         if self.deadline().is_some_and(|deadline| now >= deadline) {
             self.phase = Phase::Offline;
-            self.generation = None;
             true
         } else {
             false
@@ -101,6 +115,36 @@ impl<G: Copy + Eq, T: Copy + Ord + Add<Duration, Output = T>> Recovery<G, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn permanent_failures_do_not_spend_or_schedule_transient_retries() {
+        let mut recovery = Recovery::<u64, Duration>::default();
+        recovery.started(1);
+        assert_eq!(recovery.failed_permanently(0), Failure::Ignored);
+        assert!(recovery.accepts(1));
+        assert_eq!(recovery.failed_permanently(1), Failure::Permanent);
+        assert_eq!(recovery.failures, 0);
+        assert_eq!(recovery.deadline(), None);
+        for generation in 1..=10 {
+            recovery.started(generation);
+            assert!(!recovery.accepts(generation));
+            assert_eq!(
+                recovery.failed(generation, Duration::ZERO),
+                Failure::Ignored
+            );
+            assert_eq!(recovery.failed_permanently(generation), Failure::Ignored);
+            assert!(!recovery.recovered(generation));
+            assert!(!recovery.take_retry(Duration::from_secs(60)));
+        }
+        recovery.reset();
+        recovery.started(11);
+        assert!(recovery.accepts(11));
+        assert!(recovery.recovered(11));
+        assert!(matches!(
+            recovery.failed(11, Duration::ZERO),
+            Failure::Waiting { failures: 1, .. }
+        ));
+    }
 
     #[test]
     fn five_failed_attempts_have_four_delayed_restarts_then_exhaust() {
@@ -151,6 +195,31 @@ mod tests {
         recovery.started(3);
         assert!(matches!(
             recovery.failed(3, RETRY_DELAY),
+            Failure::Waiting { failures: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn exhausted_budget_cannot_be_reopened_without_an_explicit_reset() {
+        let mut recovery = Recovery::default();
+        for generation in 1..=5 {
+            recovery.started(generation);
+            recovery.failed(generation, Duration::ZERO);
+            if generation < 5 {
+                assert!(recovery.take_retry(RETRY_DELAY));
+            }
+        }
+        for generation in 6..=300 {
+            recovery.started(generation);
+            assert!(!recovery.accepts(generation));
+            assert_eq!(recovery.failed(generation, RETRY_DELAY), Failure::Ignored);
+            assert_eq!(recovery.deadline(), None);
+        }
+        recovery.reset();
+        recovery.started(301);
+        assert!(recovery.accepts(301));
+        assert!(matches!(
+            recovery.failed(301, RETRY_DELAY),
             Failure::Waiting { failures: 1, .. }
         ));
     }

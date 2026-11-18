@@ -140,12 +140,19 @@ impl Transform {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RenderFlight {
+    request: Request,
+    // The admitted raster used for this render may be retired independently.
+    token: Option<String>,
+}
+
 /// At most one vector request plus one replacement, regardless of input rate.
 #[derive(Default)]
 struct Pipeline {
     scale: f64,
     revision: u64,
-    flight: Option<Request>,
+    flight: Option<RenderFlight>,
     latest: Option<Request>,
     pending_transform: Transform,
     pending_base: Option<f64>,
@@ -168,9 +175,11 @@ impl Pipeline {
         if (next_scale - self.scale).abs() < 1e-12 {
             return None;
         }
-        let base = self
-            .pending_base
-            .unwrap_or_else(|| self.flight.map_or(self.scale, |flight| flight.scale));
+        let base = self.pending_base.unwrap_or_else(|| {
+            self.flight
+                .as_ref()
+                .map_or(self.scale, |flight| flight.request.scale)
+        });
         self.pending_base = Some(base);
         self.scale = next_scale;
         self.revision += 1;
@@ -219,15 +228,34 @@ impl Pipeline {
         if self.flight.is_some() {
             return None;
         }
-        self.flight = self.latest.take();
+        let request = self.latest.take()?;
+        self.flight = Some(RenderFlight {
+            request,
+            token: None,
+        });
         self.pending_transform = Transform::default();
         self.pending_base = None;
-        self.flight
+        Some(request)
     }
 
+    fn bind_source(&mut self, revision: u64, token: Option<String>) {
+        if let Some(flight) = &mut self.flight
+            && flight.request.revision == revision
+        {
+            flight.token = token;
+        }
+    }
+    fn flight_token(&self) -> Option<&str> {
+        self.flight
+            .as_ref()
+            .and_then(|flight| flight.token.as_deref())
+    }
+    fn acknowledge(&mut self, revision: u64, scale: f64, token: Option<&str>) -> bool {
+        self.flight_token() == token && self.ready(revision, scale)
+    }
     fn ready(&mut self, revision: u64, scale: f64) -> bool {
-        if !self.flight.is_some_and(|request| {
-            request.revision == revision && (request.scale - scale).abs() < 1e-9
+        if !self.flight.as_ref().is_some_and(|flight| {
+            flight.request.revision == revision && (flight.request.scale - scale).abs() < 1e-9
         }) {
             return false;
         }
@@ -529,6 +557,64 @@ struct PreparedImage {
     pixels: (usize, usize),
 }
 
+#[derive(Default)]
+enum Admission {
+    #[default]
+    Empty,
+    Awaiting(PreparedImage),
+    Deferred {
+        image: PreparedImage,
+        scale: f64,
+    },
+}
+impl Admission {
+    fn as_ref(&self) -> Option<&PreparedImage> {
+        match self {
+            Self::Empty => None,
+            Self::Awaiting(image) | Self::Deferred { image, .. } => Some(image),
+        }
+    }
+    fn is_some(&self) -> bool {
+        self.as_ref().is_some()
+    }
+    fn take(&mut self) -> Option<PreparedImage> {
+        match std::mem::take(self) {
+            Self::Empty => None,
+            Self::Awaiting(image) | Self::Deferred { image, .. } => Some(image),
+        }
+    }
+    fn defer(&mut self, token: &str, scale: f64) -> bool {
+        if self
+            .as_ref()
+            .is_none_or(|image| image.capture.token != token)
+        {
+            return false;
+        }
+        let image = self.take().expect("matching admission owns its image");
+        *self = Self::Deferred { image, scale };
+        true
+    }
+    fn resume(&mut self) -> Option<(String, f64)> {
+        if !matches!(self, Self::Deferred { .. }) {
+            return None;
+        }
+        let Self::Deferred { image, scale } = std::mem::take(self) else {
+            unreachable!("deferred admission was just checked");
+        };
+        let token = image.capture.token.clone();
+        *self = Self::Awaiting(image);
+        Some((token, scale))
+    }
+    #[cfg(any(test, feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+    fn phase(&self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Awaiting(_) => "awaiting",
+            Self::Deferred { .. } => "deferred",
+        }
+    }
+}
+
 fn image_slices(geometry: Option<&Geometry>, origin: NSPoint, size: NSSize) -> Vec<ImageSlice> {
     let paper = geometry
         .map(|g| {
@@ -636,6 +722,171 @@ struct Capture {
     buffered: bool,
 }
 
+/// One capture owns each asynchronous stage and its retained bitmap. A late
+/// snapshot cannot complete again after raster preparation has taken ownership.
+#[derive(Default)]
+enum CaptureWork {
+    #[default]
+    Idle,
+    AwaitingSnapshot(Capture),
+    Snapshotting(Capture),
+    PreparingRaster(Capture),
+    DeferredRaster {
+        capture: Capture,
+        prepared: raster::Prepared,
+    },
+}
+impl CaptureWork {
+    fn capture(&self) -> Option<&Capture> {
+        match self {
+            Self::Idle => None,
+            Self::AwaitingSnapshot(capture)
+            | Self::Snapshotting(capture)
+            | Self::PreparingRaster(capture)
+            | Self::DeferredRaster { capture, .. } => Some(capture),
+        }
+    }
+    fn is_some(&self) -> bool {
+        self.capture().is_some()
+    }
+    #[cfg(test)]
+    fn is_none(&self) -> bool {
+        !self.is_some()
+    }
+    fn awaiting(&self) -> Option<&Capture> {
+        match self {
+            Self::AwaitingSnapshot(capture) => Some(capture),
+            _ => None,
+        }
+    }
+    fn snapshotting(&self, token: &str) -> Option<&Capture> {
+        match self {
+            Self::Snapshotting(capture) if capture.token == token => Some(capture),
+            _ => None,
+        }
+    }
+    fn preparing(&self, token: &str, revision: u64) -> Option<&Capture> {
+        match self {
+            Self::PreparingRaster(capture)
+                if capture.token == token && capture.revision == revision =>
+            {
+                Some(capture)
+            }
+            _ => None,
+        }
+    }
+    fn begin_snapshot(&mut self) -> bool {
+        if !matches!(self, Self::AwaitingSnapshot(_)) {
+            return false;
+        }
+        let Self::AwaitingSnapshot(capture) = std::mem::take(self) else {
+            unreachable!("awaiting capture was just checked");
+        };
+        *self = Self::Snapshotting(capture);
+        true
+    }
+    fn begin_raster(&mut self, token: &str) -> bool {
+        if self.snapshotting(token).is_none() {
+            return false;
+        }
+        let Self::Snapshotting(capture) = std::mem::take(self) else {
+            unreachable!("snapshot owner was just checked");
+        };
+        *self = Self::PreparingRaster(capture);
+        true
+    }
+    fn retain(&mut self, prepared: raster::Prepared) {
+        if self.preparing(&prepared.token, prepared.revision).is_none() {
+            return;
+        }
+        let Self::PreparingRaster(capture) = std::mem::take(self) else {
+            unreachable!("raster owner was just checked");
+        };
+        *self = Self::DeferredRaster { capture, prepared };
+    }
+    fn resume(&mut self) -> Option<raster::Prepared> {
+        if !matches!(self, Self::DeferredRaster { .. }) {
+            return None;
+        }
+        let Self::DeferredRaster { capture, prepared } = std::mem::take(self) else {
+            unreachable!("retained raster was just checked");
+        };
+        *self = Self::PreparingRaster(capture);
+        Some(prepared)
+    }
+    fn fail_preparation(&mut self) -> Option<Capture> {
+        if self.is_preparing() {
+            self.take()
+        } else {
+            None
+        }
+    }
+    fn is_preparing(&self) -> bool {
+        matches!(self, Self::PreparingRaster(_))
+    }
+    fn take(&mut self) -> Option<Capture> {
+        match std::mem::take(self) {
+            Self::Idle => None,
+            Self::AwaitingSnapshot(capture)
+            | Self::Snapshotting(capture)
+            | Self::PreparingRaster(capture)
+            | Self::DeferredRaster { capture, .. } => Some(capture),
+        }
+    }
+    #[cfg(any(test, feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+    fn phase(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::AwaitingSnapshot(_) => "awaiting-snapshot",
+            Self::Snapshotting(_) => "snapshotting",
+            Self::PreparingRaster(_) => "preparing-raster",
+            Self::DeferredRaster { .. } => "deferred-raster",
+        }
+    }
+}
+
+#[derive(Default)]
+enum MirrorNavigation {
+    #[default]
+    Parked,
+    Loading(Retained<WKNavigation>),
+    Ready(Retained<WKNavigation>),
+}
+impl MirrorNavigation {
+    fn active(&self) -> Option<&WKNavigation> {
+        match self {
+            Self::Parked => None,
+            Self::Loading(navigation) | Self::Ready(navigation) => Some(navigation),
+        }
+    }
+    fn matches(&self, navigation: Option<&WKNavigation>) -> bool {
+        self.active()
+            .zip(navigation)
+            .is_some_and(|(a, b)| std::ptr::eq(a, b))
+    }
+    fn complete(&mut self, navigation: Option<&WKNavigation>) -> bool {
+        if !matches!(self, Self::Loading(_)) || !self.matches(navigation) {
+            return false;
+        }
+        let Self::Loading(navigation) = std::mem::take(self) else {
+            unreachable!("loading navigation was just checked");
+        };
+        *self = Self::Ready(navigation);
+        true
+    }
+    fn is_ready(&self) -> bool {
+        matches!(self, Self::Ready(_))
+    }
+    #[cfg(any(feature = "desktop-ui-tests", feature = "native-ui-tests"))]
+    fn phase(&self) -> &'static str {
+        match self {
+            Self::Parked => "parked",
+            Self::Loading(_) => "loading",
+            Self::Ready(_) => "ready",
+        }
+    }
+}
+
 // A bare, inert WKWebView avoids Wry's unconditional NSApplication.activate()
 // on creation. The delegate retains only a weak owner and never takes focus.
 define_class!(
@@ -652,11 +903,7 @@ define_class!(
             if let Some(owner) = self.ivars().upgrade() {
                 let current = {
                     let mut native = owner.borrow_mut();
-                    native.mirror.as_mut().is_some_and(|mirror| {
-                        if !mirror.matches(navigation) { return false; }
-                        mirror.ready = true;
-                        true
-                    })
+                    native.mirror.as_mut().is_some_and(|mirror| mirror.navigation.complete(navigation))
                 };
                 if current { CaptureState(owner).capture_ready(); }
             }
@@ -682,12 +929,10 @@ impl SnapshotNavigation {
             {
                 return;
             }
-            let capture = native.busy.take();
-            native.deferred_raster = None;
+            let capture = native.capture.take();
             if let Some(mirror) = native.mirror.as_mut() {
                 mirror.park();
             }
-            native.rasterizing = false;
             let web = native.web.clone();
             drop(native);
             if let Some((capture, web)) = capture.zip(web) {
@@ -699,8 +944,7 @@ impl SnapshotNavigation {
 struct Mirror {
     web: Retained<WKWebView>,
     _navigation: Retained<SnapshotNavigation>,
-    active: Option<Retained<WKNavigation>>,
-    ready: bool,
+    navigation: MirrorNavigation,
 }
 impl Mirror {
     fn new(
@@ -729,23 +973,18 @@ impl Mirror {
             let mut mirror = Self {
                 web,
                 _navigation: navigation,
-                active: None,
-                ready: false,
+                navigation: MirrorNavigation::Parked,
             };
             mirror.load(size, html).then_some(mirror)
         }
     }
     fn matches(&self, navigation: Option<&WKNavigation>) -> bool {
-        self.active
-            .as_deref()
-            .zip(navigation)
-            .is_some_and(|(a, b)| std::ptr::eq(a, b))
+        self.navigation.matches(navigation)
     }
     fn park(&mut self) {
         // The admitted CGImage owns its pixels independently of WebKit. Drop
         // the copied SVG DOM and its large backing surface between captures.
-        self.active = None;
-        self.ready = false;
+        self.navigation = MirrorNavigation::Parked;
         unsafe {
             self.web.stopLoading();
             self.web
@@ -757,14 +996,15 @@ impl Mirror {
         }
     }
     fn load(&mut self, size: NSSize, html: &str) -> bool {
-        self.ready = false;
+        self.navigation = MirrorNavigation::Parked;
         unsafe {
             self.web
                 .setFrame(NSRect::new(NSPoint::new(-100_000.0, 0.0), size));
-            self.active = self
+            self.navigation = self
                 .web
-                .loadHTMLString_baseURL(&NSString::from_str(html), None);
-            self.active.is_some()
+                .loadHTMLString_baseURL(&NSString::from_str(html), None)
+                .map_or(MirrorNavigation::Parked, MirrorNavigation::Loading);
+            !matches!(self.navigation, MirrorNavigation::Parked)
         }
     }
 }
@@ -806,24 +1046,20 @@ struct Native {
     enabled: bool,
     allowed: bool,
     initialized: bool,
-    busy: Option<Capture>,
+    capture: CaptureWork,
     mirror: Option<Mirror>,
-    rasterizing: bool,
     capture_deferred: bool,
-    preparing_raster: bool,
     raster_worker: Option<raster::Worker>,
     repaint: Option<(Context, ViewportId)>,
-    deferred_raster: Option<(String, raster::Prepared)>,
-    deferred_admission: Option<(String, f64)>,
+
     geometry: Option<Geometry>,
     image_origin: NSPoint,
     image_size: NSSize,
     layout_size: NSSize,
     anchor: NSPoint,
-    candidate: Option<PreparedImage>,
+    candidate: Admission,
     overlay_visible: bool,
     token: Option<String>,
-    flight_token: Option<String>,
     base_scale: f64,
     fit_width: f64,
     size: NSSize,
@@ -861,7 +1097,6 @@ impl Native {
     fn finish_handoff(&mut self) {
         self.stop_timer();
         self.gate.clear();
-        self.flight_token = None;
         self.hide_feedback();
         // The sharp SVG is visible, but keep this valid raster and transform
         // ready for another input while a fresh idle capture is being prepared.
@@ -870,7 +1105,7 @@ impl Native {
     fn admit(&mut self, scale: f64, web: &WKWebView) -> bool {
         let parent: Option<Retained<AnyObject>> = unsafe { msg_send![web, layer] };
         let Some(parent) = parent else {
-            self.candidate = None;
+            self.candidate = Admission::Empty;
             return false;
         };
         let Some(image) = self.candidate.take() else {
@@ -994,9 +1229,8 @@ impl Native {
     }
 
     fn discard_image(&mut self) {
-        self.deferred_admission = None;
         self.token = None;
-        self.candidate = None;
+        self.candidate = Admission::Empty;
         self.transform = Transform::default();
         self.overlay_visible = false;
         if let Some(layer) = &self.clip {
@@ -1029,14 +1263,14 @@ impl Native {
         self.pipeline.latest = None;
         self.pipeline.pending_transform = Transform::default();
         self.pipeline.pending_base = None;
-        self.flight_token = None;
     }
 
     fn reject_request(&mut self, revision: u64) -> bool {
         if !self
             .pipeline
             .flight
-            .is_some_and(|request| request.revision == revision)
+            .as_ref()
+            .is_some_and(|flight| flight.request.revision == revision)
         {
             return false;
         }
@@ -1055,7 +1289,8 @@ impl Native {
             || !self
                 .pipeline
                 .flight
-                .is_some_and(|request| request.revision == revision)
+                .as_ref()
+                .is_some_and(|flight| flight.request.revision == revision)
         {
             return false;
         }
@@ -1070,15 +1305,12 @@ impl Native {
     }
 
     fn stop_capture(&mut self) {
-        self.deferred_raster = None;
-        self.preparing_raster = false;
-        if let Some(capture) = self.busy.take()
+        if let Some(capture) = self.capture.take()
             && let Some(web) = &self.web
         {
             CaptureState::resolve_failure(web, &capture.token);
         }
         self.mirror = None;
-        self.rasterizing = false;
     }
 
     fn stop_timer(&mut self) {
@@ -1133,7 +1365,8 @@ impl Native {
     }
 
     fn send(&mut self, request: Request) {
-        self.flight_token = self.token.clone();
+        self.pipeline
+            .bind_source(request.revision, self.token.clone());
         let Some(web) = &self.web else {
             return;
         };
@@ -1227,7 +1460,7 @@ impl Native {
         }
         self.inputs += 1;
         // Never admit a screenshot captured across input, even a scale round trip.
-        self.candidate = None;
+        self.candidate = Admission::Empty;
         if self.token.is_some() {
             self.draw_image(bounds, x, y, false);
         }
@@ -1330,7 +1563,7 @@ impl Native {
         if self.layout_size == bounds.size || !self.allowed || !self.enabled || !self.initialized {
             return;
         }
-        self.candidate = None;
+        self.candidate = Admission::Empty;
         let deferred = self.token.is_some();
         if deferred {
             let y = self.geometry.as_ref().map_or(0.0, |g| g.viewport[1]);
@@ -1436,14 +1669,6 @@ fn target_color_space(web: &WKWebView) -> Option<CFRetained<CGColorSpace>> {
         .or_else(|| {
             CGColorSpace::with_name(Some(unsafe { objc2_core_graphics::kCGColorSpaceSRGB }))
         })
-}
-
-// A completed raster remains one bounded slot and belongs to exactly the
-// capture which produced it; a canceled token can never claim its successor.
-fn take_current_capture<T>(pending: &mut Option<(String, T)>, token: &str) -> Option<T> {
-    pending
-        .take()
-        .and_then(|(owner, image)| (owner == token).then_some(image))
 }
 
 impl CaptureState {
@@ -1648,12 +1873,7 @@ impl CaptureState {
                 Some(Ok(prepared)) => (prepared, None),
                 Some(Err(())) => {
                     native.raster_worker = None;
-                    let failed = if native.preparing_raster {
-                        native.busy.take()
-                    } else {
-                        None
-                    };
-                    native.preparing_raster = false;
+                    let failed = native.capture.fail_preparation();
                     (
                         None,
                         failed
@@ -1683,7 +1903,7 @@ impl CaptureState {
             let admission = if deferred {
                 None
             } else {
-                native.deferred_admission.take()
+                native.candidate.resume()
             };
             (native.web.clone(), admission)
         };
@@ -1867,7 +2087,7 @@ impl CaptureState {
             Some("reject") => {
                 if let Some(token) = value["token"].as_str() {
                     if native.candidate_token() == Some(token) {
-                        native.candidate = None;
+                        native.candidate = Admission::Empty;
                     } else if native.token.as_deref() == Some(token) {
                         native.discard_image();
                         native.flush(true);
@@ -1891,11 +2111,11 @@ impl CaptureState {
                 native.zoom(factor, value["reset"] == true, point);
             }
             Some("ready")
-                if value["token"].as_str() == native.flight_token.as_deref()
-                    && native.pipeline.ready(
-                        value["revision"].as_u64().unwrap_or(0),
-                        value["scale"].as_f64().unwrap_or(0.0),
-                    ) =>
+                if native.pipeline.acknowledge(
+                    value["revision"].as_u64().unwrap_or(0),
+                    value["scale"].as_f64().unwrap_or(0.0),
+                    value["token"].as_str(),
+                ) =>
             {
                 if native.pipeline.latest.is_some() {
                     native.flush(false);
@@ -1913,9 +2133,8 @@ impl CaptureState {
         let mut native = self.0.borrow_mut();
         if native.capture_deferred
             && let (Some(token), Some(scale)) = (token, scale)
-            && native.candidate_token() == Some(token)
+            && native.candidate.defer(token, scale)
         {
-            native.deferred_admission = Some((token.to_owned(), scale));
             return;
         }
         let accepted = native.enabled
@@ -1998,7 +2217,7 @@ impl CaptureState {
         if !allowed
             || !valid
             || snapshot_width(size.width, size.height, 1.0, density).is_none()
-            || native.busy.is_some()
+            || native.capture.is_some()
             || native.candidate.is_some()
             || native.pipeline.flight.is_some()
             || native.pipeline.latest.is_some()
@@ -2034,7 +2253,7 @@ impl CaptureState {
             })
             .filter(|v| v.iter().all(|c| c.is_finite() && (0.0..=1.0).contains(c)))
             .unwrap_or(background);
-        native.busy = Some(Capture {
+        native.capture = CaptureWork::AwaitingSnapshot(Capture {
             token: token.to_owned(),
             revision: native.pipeline.revision,
             viewport: bounds.size,
@@ -2054,7 +2273,7 @@ impl CaptureState {
             let html = buffer["html"].as_str().unwrap();
             if let Some(mirror) = native.mirror.as_mut() {
                 if !mirror.load(size, html) {
-                    native.busy = None;
+                    native.capture = CaptureWork::Idle;
                     drop(native);
                     Self::resolve_failure(&web, token);
                 }
@@ -2065,7 +2284,7 @@ impl CaptureState {
             if let Some(mirror) = mirror {
                 native.mirror = Some(mirror);
             } else {
-                native.busy = None;
+                native.capture = CaptureWork::Idle;
                 drop(native);
                 Self::resolve_failure(&web, token);
             }
@@ -2090,25 +2309,25 @@ impl CaptureState {
 
     fn capture_ready(&self) {
         let mut native = self.0.borrow_mut();
-        if native.capture_deferred || native.rasterizing || native.preparing_raster {
+        if native.capture_deferred {
             return;
         }
-        let Some(capture) = native.busy.clone() else {
+        if let Some(prepared) = native.capture.resume() {
+            drop(native);
+            self.raster_finished(prepared);
+            return;
+        }
+        let Some(capture) = native.capture.awaiting().cloned() else {
             return;
         };
         let Some(web) = native.web.clone() else {
             return;
         };
-        if let Some(prepared) = take_current_capture(&mut native.deferred_raster, &capture.token) {
-            drop(native);
-            self.raster_finished(prepared);
-            return;
-        }
         let capture_web = if capture.buffered {
             let Some(mirror) = &native.mirror else {
                 return;
             };
-            if !mirror.ready {
+            if !mirror.navigation.is_ready() {
                 return;
             }
             mirror.web.clone()
@@ -2124,7 +2343,7 @@ impl CaptureState {
         ) else {
             return;
         };
-        native.rasterizing = true;
+        native.capture.begin_snapshot();
         drop(native);
         let configuration =
             unsafe { WKSnapshotConfiguration::new(MainThreadMarker::new().unwrap()) };
@@ -2152,15 +2371,9 @@ impl CaptureState {
     }
     fn capture_finished(&self, token: &str, image: Option<Retained<NSImage>>) {
         let mut native = self.0.borrow_mut();
-        let Some(capture) = native
-            .busy
-            .as_ref()
-            .filter(|capture| capture.token == token)
-            .cloned()
-        else {
+        let Some(capture) = native.capture.snapshotting(token).cloned() else {
             return;
         };
-        native.rasterizing = false;
         let Some(web) = native.web.clone() else {
             return;
         };
@@ -2192,14 +2405,14 @@ impl CaptureState {
                 .as_ref()
                 .is_some_and(|worker| worker.request(request))
             {
-                native.preparing_raster = true;
+                native.capture.begin_raster(token);
                 if let Some(mirror) = native.mirror.as_mut() {
                     mirror.park();
                 }
                 return;
             }
         }
-        native.busy = None;
+        native.capture = CaptureWork::Idle;
         if let Some(mirror) = native.mirror.as_mut() {
             mirror.park();
         }
@@ -2210,18 +2423,14 @@ impl CaptureState {
     fn raster_finished(&self, prepared: raster::Prepared) {
         let mut native = self.0.borrow_mut();
         let Some(capture) = native
-            .busy
-            .as_ref()
-            .filter(|capture| {
-                capture.token == prepared.token && capture.revision == prepared.revision
-            })
+            .capture
+            .preparing(&prepared.token, prepared.revision)
             .cloned()
         else {
             return;
         };
-        native.preparing_raster = false;
         if native.capture_deferred {
-            native.deferred_raster = Some((prepared.token.clone(), prepared));
+            native.capture.retain(prepared);
             return;
         }
         let Some(web) = native.web.clone() else {
@@ -2252,7 +2461,6 @@ impl CaptureState {
                     .as_ref()
                     .is_some_and(|worker| worker.request(request))
                 {
-                    native.preparing_raster = true;
                     return;
                 }
             } else {
@@ -2313,7 +2521,7 @@ impl CaptureState {
                         let _: () = msg_send![&*outline_layer,setFrame:NSRect::new(NSPoint::new(0.0,0.0),clip_bounds(web.bounds()).size)];
                         let _: () = msg_send![&*clip,addSublayer:&*outline_layer];
                         let _: () = msg_send![class!(CATransaction), commit];
-                        native.candidate = Some(PreparedImage {
+                        native.candidate = Admission::Awaiting(PreparedImage {
                             capture: capture.clone(),
                             clip,
                             layers,
@@ -2326,7 +2534,7 @@ impl CaptureState {
                 }
             }
         }
-        native.busy = None;
+        native.capture = CaptureWork::Idle;
         unsafe {
             web.evaluateJavaScript_completionHandler(
                 &NSString::from_str(&format!(
@@ -2425,7 +2633,7 @@ impl CaptureState {
             .map(|web| [web.bounds().size.width, web.bounds().size.height]);
         let input = native.input_observation.get();
         let window = native.web.as_ref().and_then(|web| web.window());
-        serde_json::json!({"initialized":native.initialized,"allowed":native.allowed,
+        let mut inspection = serde_json::json!({"initialized":native.initialized,"allowed":native.allowed,
             "monitor":native.monitor.is_some(),"native_window":window.as_ref().map(|window|window.windowNumber()),
             "native_key_window":window.as_ref().is_some_and(|window|window.isKeyWindow()),
             "last_input":{"count":input.count,"window":input.window,"point":input.point,"stage":input.stage},
@@ -2433,17 +2641,164 @@ impl CaptureState {
             "token":native.token.as_deref(),"source_pages":native.geometry.as_ref().map(|g|&g.pages),
             "source_scale":native.geometry.as_ref().map(|g|g.source_scale),
             "inputs":native.inputs,"render_failures":native.render_failures,"hits":native.hits,"handoffs":native.handoffs,"scale":native.pipeline.scale,
-            "revision":native.pipeline.revision,"in_flight":native.pipeline.flight.map(|request|request.revision),
-            "pending":native.pipeline.latest.map(|request|request.revision),"deferred":native.gate.due.is_some(),"pinch":native.gate.pinch,"pixels":[native.pixels.0,native.pixels.1],"base_scale":native.base_scale,"source_paper":native.geometry.as_ref().map(|g|g.paper),
+            "revision":native.pipeline.revision,"in_flight":native.pipeline.flight.as_ref().map(|flight|flight.request.revision),
+            "pending":native.pipeline.latest.map(|request|request.revision)});
+        let mut presentation = serde_json::json!({"deferred":native.gate.due.is_some(),"pinch":native.gate.pinch,"pixels":[native.pixels.0,native.pixels.1],"base_scale":native.base_scale,"source_paper":native.geometry.as_ref().map(|g|g.paper),
             "transform":[native.transform.ratio,native.transform.dx,native.transform.dy],
             "source_anchor":native.geometry.as_ref().filter(|_|native.token.is_some()).and_then(|g|g.point(transform,native.anchor)),
-            "target_scroll":native.geometry.as_ref().filter(|_|native.token.is_some()).map(|g|g.target(transform,native.layout_size)),"image_origin":[native.image_origin.x,native.image_origin.y],"image_size":[native.image_size.width,native.image_size.height],"image_layers":native.image_layers.len(),"prepared":native.candidate.is_some(),"capturing":native.busy.is_some(),"capture_deferred":native.capture_deferred,"retained_capture":native.deferred_raster.is_some(),"raster_worker":native.raster_worker.is_some(),"preparing_raster":native.preparing_raster,"capture_view":native.mirror.as_ref().map(|m|[m.web.frame().size.width,m.web.frame().size.height])})
+            "target_scroll":native.geometry.as_ref().filter(|_|native.token.is_some()).map(|g|g.target(transform,native.layout_size)),"image_origin":[native.image_origin.x,native.image_origin.y],"image_size":[native.image_size.width,native.image_size.height],"image_layers":native.image_layers.len(),"prepared":native.candidate.is_some(),"capturing":native.capture.is_some(),"capture_deferred":native.capture_deferred,"capture_phase":native.capture.phase(),"admission_phase":native.candidate.phase(),"mirror_phase":native.mirror.as_ref().map(|mirror|mirror.navigation.phase()),"retained_capture":matches!(native.capture,CaptureWork::DeferredRaster { .. }),"raster_worker":native.raster_worker.is_some(),"preparing_raster":native.capture.is_preparing(),"capture_view":native.mirror.as_ref().map(|m|[m.web.frame().size.width,m.web.frame().size.height])});
+        inspection
+            .as_object_mut()
+            .expect("inspection object literal")
+            .append(
+                presentation
+                    .as_object_mut()
+                    .expect("presentation object literal"),
+            );
+        inspection
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn capture_fixture(token: &str, revision: u64) -> Capture {
+        let size = NSSize::new(640.0, 420.0);
+        Capture {
+            token: token.into(),
+            revision,
+            viewport: size,
+            origin: NSPoint::new(0.0, 0.0),
+            size,
+            fit_width: size.width,
+            density: 1.0,
+            geometry: None,
+            background: [1.0; 4],
+            paper_background: [1.0; 4],
+            buffered: false,
+        }
+    }
+
+    fn prepared_fixture(token: &str, revision: u64) -> raster::Prepared {
+        use objc2_core_graphics::{
+            CGBitmapContextCreate, CGBitmapContextCreateImage, CGImageAlphaInfo,
+            CGImageByteOrderInfo, kCGColorSpaceSRGB,
+        };
+        let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })).unwrap();
+        let context = unsafe {
+            CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                1,
+                1,
+                8,
+                64,
+                Some(&space),
+                CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0,
+            )
+        }
+        .unwrap();
+        let source = CGBitmapContextCreateImage(Some(&context)).unwrap();
+        raster::Prepared {
+            token: token.into(),
+            revision,
+            source,
+            space,
+            image: None,
+        }
+    }
+
+    fn admission_fixture(token: &str) -> PreparedImage {
+        PreparedImage {
+            capture: capture_fixture(token, 1),
+            clip: NSObject::new().into_super(),
+            layers: Vec::new(),
+            paper_layer: NSObject::new().into_super(),
+            outline_layer: NSObject::new().into_super(),
+            pixels: (1, 1),
+        }
+    }
+
+    #[test]
+    fn capture_stages_own_their_callback_and_failures_do_not_cancel_other_stages() {
+        let mut work = CaptureWork::AwaitingSnapshot(capture_fixture("current", 4));
+        assert_eq!(work.phase(), "awaiting-snapshot");
+        assert!(work.snapshotting("current").is_none());
+        assert!(work.fail_preparation().is_none());
+        assert!(work.begin_snapshot());
+        assert!(!work.begin_snapshot());
+        assert!(!work.begin_raster("stale"));
+        assert!(work.snapshotting("current").is_some());
+        assert!(work.fail_preparation().is_none());
+        assert!(work.begin_raster("current"));
+        assert!(work.snapshotting("current").is_none());
+        assert!(!work.begin_raster("current"));
+        assert!(work.preparing("current", 3).is_none());
+        assert!(work.preparing("stale", 4).is_none());
+        assert!(work.preparing("current", 4).is_some());
+        assert_eq!(work.fail_preparation().unwrap().token, "current");
+        assert_eq!(work.phase(), "idle");
+        assert!(work.take().is_none());
+    }
+
+    #[test]
+    fn deferred_raster_retains_one_owner_until_resumed_or_cancelled() {
+        let mut work = CaptureWork::PreparingRaster(capture_fixture("current", 4));
+        work.retain(prepared_fixture("stale", 4));
+        assert_eq!(work.phase(), "preparing-raster");
+        work.retain(prepared_fixture("current", 3));
+        assert_eq!(work.phase(), "preparing-raster");
+        work.retain(prepared_fixture("current", 4));
+        assert_eq!(work.phase(), "deferred-raster");
+        assert!(work.fail_preparation().is_none());
+        assert!(work.awaiting().is_none());
+        let prepared = work.resume().unwrap();
+        assert_eq!(prepared.token, "current");
+        assert_eq!(work.phase(), "preparing-raster");
+        assert!(work.resume().is_none());
+        work.retain(prepared);
+        assert_eq!(work.take().unwrap().token, "current");
+        assert_eq!(work.phase(), "idle");
+        assert!(work.resume().is_none());
+    }
+
+    #[test]
+    fn deferred_admission_cannot_outlive_or_replace_its_owned_image() {
+        let mut admission = Admission::Awaiting(admission_fixture("current"));
+        assert!(!admission.defer("stale", 2.0));
+        assert_eq!(admission.phase(), "awaiting");
+        assert!(admission.defer("current", 1.2));
+        assert_eq!(admission.phase(), "deferred");
+        assert!(!admission.defer("stale", 2.0));
+        assert_eq!(admission.resume(), Some(("current".into(), 1.2)));
+        assert_eq!(admission.phase(), "awaiting");
+        assert!(admission.resume().is_none());
+        assert!(admission.defer("current", 1.3));
+        assert_eq!(admission.take().unwrap().capture.token, "current");
+        assert_eq!(admission.phase(), "empty");
+        assert!(admission.resume().is_none());
+    }
+
+    #[test]
+    fn render_receipt_owns_its_raster_identity_until_matching_completion() {
+        let mut pipeline = Pipeline {
+            scale: 1.0,
+            ..Default::default()
+        };
+        let first = pipeline.input(1.1, false, 30.0, 40.0).unwrap();
+        pipeline.bind_source(first.revision, Some("retained".into()));
+        pipeline.bind_source(first.revision + 1, Some("wrong".into()));
+        assert_eq!(pipeline.flight_token(), Some("retained"));
+        assert!(!pipeline.acknowledge(first.revision, first.scale, Some("wrong")));
+        assert!(!pipeline.acknowledge(first.revision + 1, first.scale, Some("retained")));
+        assert!(pipeline.acknowledge(first.revision, first.scale, Some("retained")));
+        assert!(pipeline.flight.is_none());
+        assert!(pipeline.flight_token().is_none());
+        assert!(!pipeline.acknowledge(first.revision, first.scale, Some("retained")));
+        let current = pipeline.input(1.1, false, 30.0, 40.0).unwrap();
+        assert!(!pipeline.acknowledge(first.revision, first.scale, None));
+        assert!(pipeline.acknowledge(current.revision, current.scale, None));
+    }
+
     #[test]
     fn retained_image_uses_completed_svg_position_and_rejects_stale_viewport() {
         let mut native = Native::default();
@@ -2498,7 +2853,10 @@ mod tests {
         let next = native.pipeline.input(1.1, false, 50.0, 70.0).unwrap();
         assert_eq!(next.scale, 1.1);
         assert!(!native.fail_render(failed.revision, native.owner_id, 1.2));
-        assert_eq!(native.pipeline.flight.unwrap().revision, next.revision);
+        assert_eq!(
+            native.pipeline.flight.as_ref().unwrap().request.revision,
+            next.revision
+        );
     }
 
     #[test]
@@ -2514,7 +2872,7 @@ mod tests {
             assert!(native.magnify(0.0, phase, None));
             assert!(!native.gate.pinch && native.gate.due.is_none());
             assert!(native.pipeline.latest.is_none());
-            assert_eq!(native.pipeline.flight.unwrap().scale, 1.1);
+            assert_eq!(native.pipeline.flight.as_ref().unwrap().request.scale, 1.1);
             assert!(
                 !native.magnify(0.0, phase, None),
                 "an unrelated view must not consume the end"
@@ -2541,21 +2899,8 @@ mod tests {
                 state.0.borrow().raster_worker.as_ref().unwrap().thread_id(),
                 worker
             );
-            assert!(state.0.borrow().busy.is_none());
+            assert!(state.0.borrow().capture.is_none());
         }
-    }
-
-    #[test]
-    fn deferred_capture_results_are_consumed_once_and_never_cross_tokens() {
-        let mut pending = Some(("current".into(), 42));
-        assert_eq!(take_current_capture(&mut pending, "current"), Some(42));
-        assert_eq!(take_current_capture(&mut pending, "current"), None);
-        pending = Some(("old".into(), 7));
-        assert_eq!(take_current_capture(&mut pending, "replacement"), None);
-        assert!(
-            pending.is_none(),
-            "a canceled raster must release its bounded slot"
-        );
     }
 
     #[test]
@@ -2566,14 +2911,17 @@ mod tests {
             native.token = Some("accepted-raster".into());
             native.pipeline.scale = 1.2;
             native.pipeline.revision = 7;
-            native.pipeline.flight = Some(Request {
-                revision: 6,
-                scale: 1.1,
-                x: 20.0,
-                y: 30.0,
-                pan_x: 4.0,
-                pan_y: 5.0,
-                resize: false,
+            native.pipeline.flight = Some(RenderFlight {
+                request: Request {
+                    revision: 6,
+                    scale: 1.1,
+                    x: 20.0,
+                    y: 30.0,
+                    pan_x: 4.0,
+                    pan_y: 5.0,
+                    resize: false,
+                },
+                token: None,
             });
             native.pipeline.latest = Some(Request {
                 revision: 7,
@@ -2597,7 +2945,7 @@ mod tests {
             assert_eq!(native.token.as_deref(), Some("accepted-raster"));
             assert_eq!(native.pipeline.scale, 1.2);
             assert_eq!(native.pipeline.revision, 7);
-            assert_eq!(native.pipeline.flight.unwrap().revision, 6);
+            assert_eq!(native.pipeline.flight.as_ref().unwrap().request.revision, 6);
             assert_eq!(native.pipeline.latest.unwrap().revision, 7);
             assert_eq!(native.pipeline.latest.unwrap().x, 40.0);
             assert_eq!(native.pipeline.latest.unwrap().pan_y, 9.0);
@@ -3375,7 +3723,10 @@ mod tests {
         native.gate.pinch = true;
         native.gate.input(Instant::now());
         native.token = Some("obsolete".into());
-        native.flight_token = native.token.clone();
+        native.pipeline.bind_source(
+            native.pipeline.flight.as_ref().unwrap().request.revision,
+            native.token.clone(),
+        );
         native.overlay_visible = true;
         native.transform = Transform {
             ratio: 1.21,
@@ -3392,7 +3743,7 @@ mod tests {
         assert_eq!(native.pipeline.pending_transform.ratio, 0.0);
         assert!(native.gate.due.is_none());
         assert!(!native.gate.pinch);
-        assert!(native.token.is_none() && native.flight_token.is_none());
+        assert!(native.token.is_none() && native.pipeline.flight_token().is_none());
         assert!(!native.overlay_visible);
         assert_eq!(native.transform.ratio, 0.0);
     }
@@ -3403,7 +3754,7 @@ mod tests {
         native.initialized = true;
         native.pipeline.scale = 1.0;
         let size = NSSize::new(640.0, 420.0);
-        native.busy = Some(Capture {
+        native.capture = CaptureWork::AwaitingSnapshot(Capture {
             token: "pre-input-capture".into(),
             revision: native.pipeline.revision,
             viewport: size,
@@ -3416,13 +3767,13 @@ mod tests {
             paper_background: [1.0; 4],
             buffered: false,
         });
-        native.rasterizing = true;
+        native.capture.begin_snapshot();
         let abandoned = native.pipeline.input(1.1, false, 300.0, 200.0).unwrap();
         native.pipeline.queue(1.1, false, 400.0, 300.0, true);
 
         assert!(native.reject_request(abandoned.revision));
-        assert!(native.busy.is_none());
-        assert!(!native.rasterizing);
+        assert!(native.capture.is_none());
+        assert_eq!(native.capture.phase(), "idle");
         assert!(!native.initialized);
         assert!(native.pipeline.flight.is_none() && native.pipeline.latest.is_none());
         assert!(!native.reject_request(abandoned.revision));
@@ -3440,15 +3791,21 @@ mod tests {
         let pending = native.pipeline.latest.unwrap().revision;
         native.gate.input(Instant::now());
         native.token = Some("current".into());
-        native.flight_token = native.token.clone();
+        native.pipeline.bind_source(
+            native.pipeline.flight.as_ref().unwrap().request.revision,
+            native.token.clone(),
+        );
         native.overlay_visible = true;
 
         assert!(!native.reject_request(first.revision));
         assert!(native.initialized && native.overlay_visible);
-        assert_eq!(native.pipeline.flight.unwrap().revision, current.revision);
+        assert_eq!(
+            native.pipeline.flight.as_ref().unwrap().request.revision,
+            current.revision
+        );
         assert_eq!(native.pipeline.latest.unwrap().revision, pending);
         assert_eq!(native.token.as_deref(), Some("current"));
-        assert_eq!(native.flight_token.as_deref(), Some("current"));
+        assert_eq!(native.pipeline.flight_token(), Some("current"));
         assert!(native.gate.due.is_some());
         assert!(native.pipeline.ready(current.revision, current.scale));
         assert_eq!(native.pipeline.dispatch().unwrap().revision, pending);
@@ -3487,7 +3844,10 @@ mod tests {
         for _ in 0..10_000 {
             assert!(queue.input(1.00001, false, 300.0, 200.0).is_none());
         }
-        assert_eq!(queue.flight.unwrap().revision, first.revision);
+        assert_eq!(
+            queue.flight.as_ref().unwrap().request.revision,
+            first.revision
+        );
         assert_eq!(queue.latest.unwrap().revision, 10_001);
         assert!(!queue.ready(first.revision + 1, first.scale));
         assert!(!queue.ready(first.revision, 1.0));
@@ -3582,17 +3942,22 @@ mod tests {
         let first = native.pipeline.input(1.1, false, 300.0, 200.0).unwrap();
         native.pipeline.input(1.1, false, 300.0, 200.0);
         native.token = Some("image".to_owned());
-        native.flight_token = Some("image".to_owned());
+        native
+            .pipeline
+            .bind_source(first.revision, Some("image".to_owned()));
         native.retire_image();
         assert!(native.token.is_none());
-        assert_eq!(native.flight_token.as_deref(), Some("image"));
-        assert_eq!(native.pipeline.flight.unwrap().revision, first.revision);
+        assert_eq!(native.pipeline.flight_token(), Some("image"));
+        assert_eq!(
+            native.pipeline.flight.as_ref().unwrap().request.revision,
+            first.revision
+        );
         assert!(native.pipeline.latest.is_some());
         assert!(native.pipeline.ready(first.revision, first.scale));
         assert!((native.pipeline.dispatch().unwrap().scale - 1.21).abs() < 1e-9);
         native.clear();
         assert!(native.pipeline.flight.is_none());
-        assert!(native.flight_token.is_none());
+        assert!(native.pipeline.flight_token().is_none());
     }
 
     #[test]

@@ -51,6 +51,7 @@ const INITIALIZE_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const PREVIEW_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const INTERACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FORMAT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const CONFIGURATION_ERROR_STAGE: &str = "configuration";
 
 pub type Result<T> = std::result::Result<T, TinymistError>;
 
@@ -186,106 +187,26 @@ impl PreviewOptions {
     }
 }
 
-/// Editable defaults for bundled Tinymist 0.15.2. Formatting and export retain
-/// the server defaults. Lint stays off, with an on-type trigger ready for opt-in;
-/// this client does not currently send explicit save notifications.
+#[path = "../build_support/tinymist_configuration.rs"]
+mod configuration_contract;
+
+const _: () = assert!(
+    configuration_contract::supports_version(env!("TIPTOPTYP_BUNDLED_TINYMIST_VERSION")),
+    "Bundled Tinymist changed without reviewing its configuration contract",
+);
+
+/// Editable, typed defaults shared with the build-time settings check.
 pub(crate) fn default_server_configuration() -> Value {
-    json!({
-        "formatterMode": "typstyle",
-        "formatterPrintWidth": 120,
-        "formatterIndentSize": 2,
-        "formatterProseWrap": false,
-        "exportPdf": "never",
-        "lint": { "enabled": false, "when": "onType" },
-    })
+    configuration_contract::defaults()
 }
 
-/// Catch invalid known choices before restarting the server. Other server
-/// keys are left available to custom binaries with additional capabilities.
+/// The same contract validates saved settings, form edits and tool startup.
 pub(crate) fn validate_server_configuration(value: &Value) -> std::result::Result<(), String> {
-    let object = value
-        .as_object()
-        .ok_or("Configuration must be a JSON object")?;
-    if object.contains_key("tinymist") {
-        return Err("Use flat Tinymist configuration keys, e.g. {\"formatterPrintWidth\":100}, without a tinymist wrapper".into());
-    }
-    for key in ["preview", "compileStatus", "customizedShowDocument"] {
-        if object.contains_key(key) {
-            return Err(format!(
-                "{key} is managed by the app; use the preview controls instead"
-            ));
-        }
-    }
-    for (key, allowed) in [
-        ("formatterMode", &["typstyle", "typstfmt", "disable"][..]),
-        ("exportPdf", &["never", "onSave", "onType"][..]),
-    ] {
-        if let Some(v) = object.get(key)
-            && !v.as_str().is_some_and(|s| allowed.contains(&s))
-        {
-            return Err(format!("{key}: choose {}", allowed.join(", ")));
-        }
-    }
-    for key in ["formatterProseWrap", "systemFonts"] {
-        if object.get(key).is_some_and(|v| !v.is_boolean()) {
-            return Err(format!("{key}: choose true or false"));
-        }
-    }
-    for key in ["formatterPrintWidth", "formatterIndentSize"] {
-        if object
-            .get(key)
-            .is_some_and(|v| !v.as_u64().is_some_and(|n| n <= u32::MAX as u64))
-        {
-            return Err(format!("{key}: use a non-negative whole number"));
-        }
-    }
-    if let Some(args) = object.get("typstExtraArgs") {
-        compiler_input_arguments(args)?;
-    }
-    if let Some(lint) = object.get("lint") {
-        let lint = lint
-            .as_object()
-            .ok_or("lint: use an object, e.g. {\"enabled\":true}")?;
-        if lint.get("enabled").is_some_and(|v| !v.is_boolean()) {
-            return Err("lint.enabled: choose true or false".into());
-        }
-        if lint
-            .get("when")
-            .is_some_and(|v| !matches!(v.as_str(), Some("never" | "onSave" | "onType")))
-        {
-            return Err("lint.when: choose never, onSave or onType".into());
-        }
-    }
-    Ok(())
+    configuration_contract::validate(value)
 }
 
-/// Accept only template inputs here: a positional path or missing argument can
-/// otherwise consume the app's appended entry as Typst's output filename.
 fn compiler_input_arguments(value: &Value) -> std::result::Result<Vec<Value>, String> {
-    let error =
-        "typstExtraArgs: use --input=KEY=VALUE options only; the app supplies the entry document";
-    let arguments = value.as_array().ok_or(error)?;
-    let mut arguments = arguments.iter();
-    let mut inputs = Vec::new();
-    while let Some(argument) = arguments.next() {
-        let argument = argument.as_str().ok_or(error)?;
-        let input = if argument == "--input" {
-            arguments.next().and_then(Value::as_str).ok_or(error)?
-        } else {
-            argument.strip_prefix("--input=").ok_or(error)?
-        };
-        if input.contains('\0')
-            || !input
-                .split_once('=')
-                .is_some_and(|(key, _)| !key.is_empty())
-        {
-            return Err(error.into());
-        }
-        // Normalize two-token forms so a dash-leading key cannot be mistaken
-        // for another compiler flag by the upstream argument parser.
-        inputs.push(json!(format!("--input={input}")));
-    }
-    Ok(inputs)
+    configuration_contract::compiler_input_arguments(value)
 }
 
 /// Configuration for one Tinymist process.
@@ -323,6 +244,14 @@ impl TinymistConfig {
             arguments: Vec::new(),
             request_timeout_override: None,
         }
+    }
+
+    fn validate(&self) -> std::result::Result<(), String> {
+        validate_server_configuration(&self.configuration)
+            .map_err(|error| format!("tinymist_configuration.{error}"))?;
+        self.command
+            .validate()
+            .map_err(|error| format!("tinymist.command: {error}"))
     }
 
     /// Overrides the executable while retaining the default `lsp` argument.
@@ -419,10 +348,10 @@ impl TextDocument {
 /// a real file. This guard provides that file below the project's private
 /// directory, preserves relative-import layout, and removes the complete
 /// mirror when dropped. The app should retain it until after `didClose`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnsavedTextDocument {
     project_root: PathBuf,
-    backing: PrivateSourceMirror,
+    backing: Arc<PrivateSourceMirror>,
     uri: String,
 }
 
@@ -450,7 +379,7 @@ impl UnsavedTextDocument {
         let uri = path_to_file_uri(backing.path())?;
         Ok(Self {
             project_root,
-            backing,
+            backing: Arc::new(backing),
             uri,
         })
     }
@@ -459,7 +388,6 @@ impl UnsavedTextDocument {
         self.backing.path()
     }
 
-    #[cfg(test)]
     pub fn uri(&self) -> &str {
         &self.uri
     }
@@ -470,7 +398,7 @@ impl UnsavedTextDocument {
 
     /// Keeps the real backing file current before a formatting request. LSP
     /// `didChange` remains the authority for Tinymist's in-memory contents.
-    pub fn update_backing_source(&self, source: &str) -> Result<()> {
+    fn update_backing_source(&self, source: &str) -> Result<()> {
         self.backing
             .update(source)
             .map_err(|error| TinymistError::PrivateDocument {
@@ -532,14 +460,21 @@ pub enum TinymistEvent {
     },
     /// The result of formatting one exact version of an open document.
     ///
-    /// `None` preserves the LSP distinction between a `null` result (formatting
-    /// is unavailable) and `Some(Vec::new())` (the document is already
-    /// formatted). The caller must discard results whose version is stale.
+    /// A successful null/empty response contains no edits. The caller must
+    /// discard replies whose source identity or request token is stale.
     Formatted {
         generation: Generation,
         uri: String,
         version: i32,
-        edits: Option<Vec<LspTextEdit>>,
+        request_token: u64,
+        edits: Vec<LspTextEdit>,
+    },
+    FormatFailed {
+        generation: Generation,
+        uri: String,
+        version: i32,
+        request_token: u64,
+        message: String,
     },
     /// Hover information for one exact document version and UI request.
     Hovered {
@@ -601,6 +536,7 @@ impl TinymistEvent {
             | Self::ShowDocument { generation, .. }
             | Self::PublishDiagnostics { generation, .. }
             | Self::Formatted { generation, .. }
+            | Self::FormatFailed { generation, .. }
             | Self::Hovered { generation, .. }
             | Self::Completed { generation, .. }
             | Self::CompletionFailed { generation, .. }
@@ -696,6 +632,13 @@ pub struct TinymistSidecar {
 
 impl TinymistSidecar {
     pub fn new(context: crate::worker::RepaintTarget) -> Self {
+        Self::with_backing_writer(context, UnsavedTextDocument::update_backing_source)
+    }
+
+    fn with_backing_writer(
+        context: crate::worker::RepaintTarget,
+        backing_writer: impl FnMut(&UnsavedTextDocument, &str) -> Result<()> + Send + 'static,
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let current_generation = Arc::new(AtomicU64::new(0));
@@ -712,6 +655,7 @@ impl TinymistSidecar {
                     context,
                     worker_generation,
                     worker_supervisor,
+                    backing_writer,
                 );
                 let _ = worker_done_tx.send(());
             })
@@ -744,24 +688,34 @@ impl TinymistSidecar {
         Ok(generation)
     }
 
-    pub fn did_open(&self, generation: Generation, document: TextDocument) -> Result<()> {
+    /// Temporary backing files share this command's source allocation and FIFO
+    /// position. Their writes finish before LSP sync and subsequent formatting.
+    pub fn did_open(
+        &self,
+        generation: Generation,
+        document: TextDocument,
+        backings: Vec<UnsavedTextDocument>,
+    ) -> Result<()> {
         self.send_for_generation(
             generation,
             WorkerCommand::DidOpen {
                 generation,
                 document,
+                backings,
             },
         )
     }
 
-    /// Sends a full-buffer LSP change. An identical version and buffer are a
-    /// no-op; actual changes must increase the version monotonically.
+    /// Queue the new source. The worker sends a range change when the server
+    /// supports it, otherwise a full change. Identical version/source is a no-op;
+    /// actual changes must increase the version monotonically.
     pub fn did_change(
         &self,
         generation: Generation,
         uri: impl Into<String>,
         version: i32,
         text: impl Into<String>,
+        backings: Vec<UnsavedTextDocument>,
     ) -> Result<()> {
         self.send_for_generation(
             generation,
@@ -770,6 +724,7 @@ impl TinymistSidecar {
                 uri: uri.into(),
                 version,
                 text: text.into(),
+                backings,
             },
         )
     }
@@ -811,6 +766,7 @@ impl TinymistSidecar {
         generation: Generation,
         uri: impl Into<String>,
         version: i32,
+        request_token: u64,
     ) -> Result<()> {
         self.send_for_generation(
             generation,
@@ -818,6 +774,7 @@ impl TinymistSidecar {
                 generation,
                 uri: uri.into(),
                 version,
+                request_token,
             },
         )
     }
@@ -912,7 +869,14 @@ impl TinymistSidecar {
                     code: None,
                 });
             if self.current_generation() == Some(event.generation()) {
-                if matches!(event, TinymistEvent::Stopped { .. }) {
+                if matches!(
+                    event,
+                    TinymistEvent::Stopped { .. }
+                        | TinymistEvent::Error {
+                            stage: CONFIGURATION_ERROR_STAGE,
+                            ..
+                        }
+                ) {
                     let _ = self.current_generation.compare_exchange(
                         event.generation().0,
                         0,
@@ -987,12 +951,14 @@ enum WorkerCommand {
     DidOpen {
         generation: Generation,
         document: TextDocument,
+        backings: Vec<UnsavedTextDocument>,
     },
     DidChange {
         generation: Generation,
         uri: String,
         version: i32,
         text: String,
+        backings: Vec<UnsavedTextDocument>,
     },
     DidClose {
         generation: Generation,
@@ -1006,6 +972,7 @@ enum WorkerCommand {
         generation: Generation,
         uri: String,
         version: i32,
+        request_token: u64,
     },
     HoverDocument {
         generation: Generation,
@@ -1055,6 +1022,7 @@ enum PendingRequest {
     FormatDocument {
         uri: String,
         version: i32,
+        request_token: u64,
     },
     HoverDocument {
         uri: String,
@@ -1117,6 +1085,8 @@ struct Session {
     next_request_id: u64,
     pending: HashMap<u64, PendingCall>,
     documents: HashMap<String, TextDocument>,
+    backings: HashMap<String, UnsavedTextDocument>,
+    incremental_sync: bool,
     settings: Value,
     start_preview: bool,
     root_uri: String,
@@ -1157,7 +1127,7 @@ impl Session {
             .unwrap_or("workspace")
             .to_owned();
 
-        validate_server_configuration(&config.configuration)?;
+        config.validate()?;
         let mut command = Command::new(&config.program);
         command.args(&config.arguments).current_dir(&root);
         config
@@ -1227,6 +1197,8 @@ impl Session {
             next_request_id: 1,
             pending: HashMap::new(),
             documents: HashMap::new(),
+            backings: HashMap::new(),
+            incremental_sync: false,
             settings: config.server_settings(),
             start_preview: config.start_preview,
             root_uri,
@@ -1236,6 +1208,20 @@ impl Session {
         };
         initialize(&mut session)?;
         Ok(session)
+    }
+
+    fn update_backings(
+        &mut self,
+        backings: Vec<UnsavedTextDocument>,
+        source: &str,
+        writer: &mut impl FnMut(&UnsavedTextDocument, &str) -> Result<()>,
+    ) -> Result<()> {
+        for document in backings {
+            writer(&document, source)?;
+            // Keep the mirror alive through didClose, even after its tab drops.
+            self.backings.insert(document.uri.clone(), document);
+        }
+        Ok(())
     }
 
     fn mark_cleaned_up(&mut self) {
@@ -1409,12 +1395,20 @@ impl Session {
         version: i32,
         text: &str,
     ) -> std::result::Result<(), String> {
+        let change = if self.incremental_sync {
+            self.documents.get(uri).map_or_else(
+                || ContentChange::full(text),
+                |previous| ContentChange::between(&previous.text, text),
+            )
+        } else {
+            ContentChange::full(text)
+        };
         self.write(&Notification {
             jsonrpc: "2.0",
             method: "textDocument/didChange",
             params: DidChangeParams {
                 text_document: VersionedDocument { uri, version },
-                content_changes: [ContentChange { text }],
+                content_changes: [change],
             },
         })
     }
@@ -1515,8 +1509,10 @@ fn worker_loop(
     context: crate::worker::RepaintTarget,
     current_generation: Arc<AtomicU64>,
     process_supervisor: Arc<ProcessSupervisor>,
+    mut backing_writer: impl FnMut(&UnsavedTextDocument, &str) -> Result<()>,
 ) {
     let mut session: Option<Session> = None;
+    let mut pending_command = None;
 
     'worker: loop {
         let mut session_failure = None;
@@ -1620,7 +1616,9 @@ fn worker_loop(
             }
         }
 
-        let next = if session.is_some() {
+        let next = if let Some(command) = pending_command.take() {
+            Ok(command)
+        } else if session.is_some() {
             commands.recv_timeout(WORKER_POLL_INTERVAL)
         } else {
             commands.recv().map_err(|_| RecvTimeoutError::Disconnected)
@@ -1630,6 +1628,21 @@ fn worker_loop(
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         };
+
+        let current_version = if let WorkerCommand::DidChange {
+            generation, uri, ..
+        } = &command
+        {
+            session
+                .as_ref()
+                .filter(|active| active.generation == *generation)
+                .and_then(|active| active.documents.get(uri))
+                .map(|document| document.version)
+        } else {
+            None
+        };
+        let command =
+            coalesce_adjacent_changes(command, current_version, &commands, &mut pending_command);
 
         match command {
             WorkerCommand::Start { generation, config } => {
@@ -1645,6 +1658,20 @@ fn worker_loop(
                         &context,
                         &current_generation,
                     );
+                }
+                if let Err(message) = config.validate() {
+                    emit(
+                        &events,
+                        &context,
+                        &current_generation,
+                        TinymistEvent::Error {
+                            generation,
+                            stage: CONFIGURATION_ERROR_STAGE,
+                            message,
+                            fatal: true,
+                        },
+                    );
+                    continue;
                 }
                 emit(
                     &events,
@@ -1682,6 +1709,7 @@ fn worker_loop(
             WorkerCommand::DidOpen {
                 generation,
                 document,
+                backings,
             } => {
                 let Some(active) = matching_session(session.as_mut(), generation) else {
                     continue;
@@ -1702,6 +1730,19 @@ fn worker_loop(
                             ),
                             fatal: false,
                         },
+                    );
+                    continue;
+                }
+                if let Err(error) =
+                    active.update_backings(backings, &document.text, &mut backing_writer)
+                {
+                    fail_active_session(
+                        &mut session,
+                        "backing",
+                        error.to_string(),
+                        &events,
+                        &context,
+                        &current_generation,
                     );
                     continue;
                 }
@@ -1734,6 +1775,7 @@ fn worker_loop(
                 uri,
                 version,
                 text,
+                backings,
             } => {
                 let Some(active) = matching_session(session.as_mut(), generation) else {
                     continue;
@@ -1752,10 +1794,8 @@ fn worker_loop(
                     );
                     continue;
                 };
-                if version == document.version && text == document.text {
-                    continue;
-                }
-                if version <= document.version {
+                let identical = version == document.version && text == document.text;
+                if !identical && version <= document.version {
                     emit(
                         &events,
                         &context,
@@ -1770,6 +1810,20 @@ fn worker_loop(
                             fatal: false,
                         },
                     );
+                    continue;
+                }
+                if let Err(error) = active.update_backings(backings, &text, &mut backing_writer) {
+                    fail_active_session(
+                        &mut session,
+                        "backing",
+                        error.to_string(),
+                        &events,
+                        &context,
+                        &current_generation,
+                    );
+                    continue;
+                }
+                if identical {
                     continue;
                 }
                 let result = if active.phase.can_sync_documents() {
@@ -1807,6 +1861,8 @@ fn worker_loop(
                         &context,
                         &current_generation,
                     );
+                } else {
+                    active.backings.remove(&uri);
                 }
             }
             WorkerCommand::SetPreviewRefresh {
@@ -1831,6 +1887,7 @@ fn worker_loop(
                 generation,
                 uri,
                 version,
+                request_token,
             } => {
                 let Some(active) = matching_session(session.as_mut(), generation) else {
                     continue;
@@ -1842,13 +1899,14 @@ fn worker_loop(
                         &events,
                         &context,
                         &current_generation,
-                        TinymistEvent::Error {
+                        TinymistEvent::FormatFailed {
                             generation,
-                            stage: "formatting",
+                            uri: uri.clone(),
+                            version,
+                            request_token,
                             message: format!(
                                 "cannot format unopened document {uri} at version {version}"
                             ),
-                            fatal: false,
                         },
                     );
                     continue;
@@ -1858,13 +1916,14 @@ fn worker_loop(
                         &events,
                         &context,
                         &current_generation,
-                        TinymistEvent::Error {
+                        TinymistEvent::FormatFailed {
                             generation,
-                            stage: "formatting",
+                            uri: uri.clone(),
+                            version,
+                            request_token,
                             message: format!(
                                 "ignored stale formatting request for {uri} at version {version}; current version is {current_version}"
                             ),
-                            fatal: false,
                         },
                     );
                     continue;
@@ -1874,11 +1933,12 @@ fn worker_loop(
                         &events,
                         &context,
                         &current_generation,
-                        TinymistEvent::Error {
+                        TinymistEvent::FormatFailed {
                             generation,
-                            stage: "formatting",
+                            uri: uri.clone(),
+                            version,
+                            request_token,
                             message: "Tinymist is not initialized yet".to_owned(),
-                            fatal: false,
                         },
                     );
                     continue;
@@ -1886,7 +1946,11 @@ fn worker_loop(
                 if let Err(error) = active.send_request(
                     "textDocument/formatting",
                     format_document_params(&uri),
-                    PendingRequest::FormatDocument { uri, version },
+                    PendingRequest::FormatDocument {
+                        uri,
+                        version,
+                        request_token,
+                    },
                 ) {
                     fail_active_session(
                         &mut session,
@@ -2061,6 +2125,61 @@ fn worker_loop(
     }
 }
 
+/// Collapse only consecutive, strictly newer snapshots of the same open
+/// document and mirror owners. Formatting, close, another URI, invalid versions
+/// and generation changes are ordering barriers. The drain is bounded so process
+/// messages and cancellation still get a turn during sustained typing.
+fn coalesce_adjacent_changes(
+    mut command: WorkerCommand,
+    current_version: Option<i32>,
+    commands: &Receiver<WorkerCommand>,
+    pending: &mut Option<WorkerCommand>,
+) -> WorkerCommand {
+    let WorkerCommand::DidChange { version, .. } = &command else {
+        return command;
+    };
+    if !current_version.is_some_and(|current| *version > current) {
+        return command;
+    }
+    for _ in 0..63 {
+        let Ok(next) = commands.try_recv() else { break };
+        let replace = match (&command, &next) {
+            (
+                WorkerCommand::DidChange {
+                    generation,
+                    uri,
+                    version,
+                    backings,
+                    ..
+                },
+                WorkerCommand::DidChange {
+                    generation: next_generation,
+                    uri: next_uri,
+                    version: next_version,
+                    backings: next_backings,
+                    ..
+                },
+            ) => {
+                generation == next_generation
+                    && uri == next_uri
+                    && next_version > version
+                    && backings.len() == next_backings.len()
+                    && backings
+                        .iter()
+                        .zip(next_backings)
+                        .all(|(left, right)| Arc::ptr_eq(&left.backing, &right.backing))
+            }
+            _ => false,
+        };
+        if !replace {
+            *pending = Some(next);
+            break;
+        }
+        command = next;
+    }
+    command
+}
+
 fn matching_session(session: Option<&mut Session>, generation: Generation) -> Option<&mut Session> {
     session.filter(|active| active.generation == generation)
 }
@@ -2199,16 +2318,21 @@ fn handle_rpc_message(
                 );
                 return Ok(());
             }
-            PendingRequest::FormatDocument { .. } => {
+            PendingRequest::FormatDocument {
+                uri,
+                version,
+                request_token,
+            } => {
                 emit(
                     events,
                     context,
                     current_generation,
-                    TinymistEvent::Error {
+                    TinymistEvent::FormatFailed {
                         generation: session.generation,
-                        stage: "formatting",
+                        uri,
+                        version,
+                        request_token,
                         message,
-                        fatal: false,
                     },
                 );
                 return Ok(());
@@ -2258,6 +2382,8 @@ fn handle_rpc_message(
     let result = object.get("result").cloned().unwrap_or(Value::Null);
     match pending {
         PendingRequest::Initialize => {
+            protocol::validate_position_encoding(&result["capabilities"])?;
+            session.incremental_sync = protocol::incremental_sync(&result["capabilities"]);
             session.notify("initialized", json!({}))?;
             session.notify(
                 "workspace/didChangeConfiguration",
@@ -2328,32 +2454,36 @@ fn handle_rpc_message(
             }
         }
         PendingRequest::ScrollPreview => {}
-        PendingRequest::FormatDocument { uri, version } => {
-            match parse_format_document_result(result) {
-                Ok(edits) => emit(
-                    events,
-                    context,
-                    current_generation,
-                    TinymistEvent::Formatted {
-                        generation: session.generation,
-                        uri,
-                        version,
-                        edits,
-                    },
-                ),
-                Err(error) => emit(
-                    events,
-                    context,
-                    current_generation,
-                    TinymistEvent::Error {
-                        generation: session.generation,
-                        stage: "formatting",
-                        message: format!("invalid textDocument/formatting response: {error}"),
-                        fatal: false,
-                    },
-                ),
-            }
-        }
+        PendingRequest::FormatDocument {
+            uri,
+            version,
+            request_token,
+        } => match parse_format_document_result(result) {
+            Ok(edits) => emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::Formatted {
+                    generation: session.generation,
+                    uri,
+                    version,
+                    request_token,
+                    edits,
+                },
+            ),
+            Err(error) => emit(
+                events,
+                context,
+                current_generation,
+                TinymistEvent::FormatFailed {
+                    generation: session.generation,
+                    uri,
+                    version,
+                    request_token,
+                    message: format!("invalid textDocument/formatting response: {error}"),
+                },
+            ),
+        },
         PendingRequest::HoverDocument {
             uri,
             version,
@@ -2755,6 +2885,10 @@ fn finish_reader_before<T>(reader: thread::JoinHandle<T>, deadline: Instant) -> 
 }
 
 #[cfg(test)]
+#[path = "tinymist_backing_tests.rs"]
+pub(crate) mod backing_tests;
+
+#[cfg(test)]
 mod tests {
     use std::{
         fs,
@@ -2765,6 +2899,182 @@ mod tests {
     use super::*;
 
     const FAKE_SERVER_TIMEOUT: Duration = Duration::from_secs(10);
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_configuration_never_launches_a_child_and_corrected_restart_initializes() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("fake-tinymist.sh");
+        let receipt = directory.path().join("started.pid");
+        let mut source =
+            String::from("#!/bin/sh\nprintf '%s' \"$$\" > \"$TINYMIST_TEST_RECEIPT\"\n");
+        for message in [
+            json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}}),
+            json!({"jsonrpc":"2.0","id":2,"result":{"staticServerPort":41723}}),
+        ] {
+            let payload = serde_json::to_string(&message).unwrap();
+            source.push_str(&format!(
+                "printf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'\n",
+                payload.len(),
+                payload
+            ));
+        }
+        // Keep the server's stdout pipe open while consuming client requests.
+        // Redirecting cat's stdout to /dev/null would instead signal LSP EOF.
+        source.push_str("while IFS= read -r line || [ -n \"$line\" ]; do :; done\n");
+        fs::write(&script, source).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+        let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
+        let mut controller = crate::preview::PreviewController::new(
+            false,
+            crate::settings::PreviewPreference::InteractivePartial,
+        );
+        controller.tinymist_preview_enabled = true;
+        let mut config = TinymistConfig::new(directory.path())
+            .with_command(&script, std::iter::empty::<OsString>());
+        config.command.environment = json!({"TINYMIST_TEST_RECEIPT":receipt}).to_string();
+        config.configuration["formatterProseWrap"] = json!(false);
+        let failed = sidecar.start_workspace(config.clone()).unwrap();
+        // Match the UI adapter: register the returned generation synchronously,
+        // before draining even a preflight error emitted without Starting.
+        controller.recovery.started(failed);
+        controller.connection.start(failed);
+        let deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
+        let failure = loop {
+            assert!(
+                Instant::now() < deadline,
+                "invalid configuration did not fail promptly"
+            );
+            if let Some(event) = sidecar.try_recv() {
+                break event;
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            matches!(failure, TinymistEvent::Error { generation, stage: CONFIGURATION_ERROR_STAGE, fatal: true, ref message }
+            if generation == failed && message.contains("formatterProseWrap")),
+            "{failure:?}"
+        );
+        assert!(
+            !receipt.exists(),
+            "invalid settings must be rejected before child execution"
+        );
+        assert!(!sidecar.process_supervisor.has_active_process());
+        assert_eq!(
+            sidecar.current_generation(),
+            None,
+            "rejected configuration cannot retain an active workspace"
+        );
+        assert!(
+            sidecar.try_recv().is_none(),
+            "one configuration failure must not emit a second stop/failure"
+        );
+        let transition = controller.transition(crate::preview::PreviewTransitionEvent::Failure(
+            &failure,
+            Instant::now(),
+        ));
+        assert!(
+            transition.handled,
+            "clearing the sidecar generation cannot discard the error"
+        );
+        assert_eq!(
+            transition.effects,
+            vec![
+                crate::preview::PreviewEffect::StopService,
+                crate::preview::PreviewEffect::DiscardLanguageRequests,
+            ]
+        );
+        assert!(
+            matches!(&controller.webview_state, crate::preview::ServiceState::Failed(message)
+            if message.contains("formatterProseWrap"))
+        );
+        assert_eq!(controller.recovery.deadline(), None);
+
+        config.configuration["formatterProseWrap"] = json!("none");
+        controller.transition(crate::preview::PreviewTransitionEvent::Restart {
+            preserve_surface: false,
+        });
+        let corrected = sidecar.start_workspace(config).unwrap();
+        controller.recovery.started(corrected);
+        controller.connection.start(corrected);
+        assert_ne!(corrected, failed);
+        let deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
+        let mut initialized = false;
+        let mut preview = false;
+        while !initialized || !preview {
+            assert!(
+                Instant::now() < deadline,
+                "corrected configuration did not start"
+            );
+            while let Some(event) = sidecar.try_recv() {
+                assert_eq!(
+                    event.generation(),
+                    corrected,
+                    "old configuration emitted a late event"
+                );
+                match event {
+                    TinymistEvent::Initialized { .. } => {
+                        assert!(controller.initialized(corrected));
+                        initialized = true;
+                    }
+                    TinymistEvent::PreviewReady { url, .. } => {
+                        assert_eq!(controller.preview_ready(corrected, &url, false), Ok(true));
+                        preview = true;
+                    }
+                    TinymistEvent::Error { message, .. } => panic!("{message}"),
+                    _ => {}
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            receipt.is_file(),
+            "corrected configuration should execute the server"
+        );
+    }
+
+    #[test]
+    fn invalid_command_configuration_is_classified_before_process_launch() {
+        let mut config = TinymistConfig::new("/workspace");
+        config.command.environment = "{\"TOKEN\": 123}".into();
+        let error = config.validate().unwrap_err();
+        assert!(error.starts_with("tinymist.command:"));
+        assert!(error.contains("Environment"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invariant_initialize_rejects_unsupported_positions_before_opening_documents() {
+        for encoding in [json!("utf-8"), json!("utf-32"), json!(false), json!(null)] {
+            let root = tempfile::tempdir().unwrap();
+            let config = TinymistConfig::new(root.path())
+                .with_command("/bin/sh", ["-c", "exec cat >/dev/null"].map(OsString::from));
+            let mut session = Session::spawn(
+                Generation(7),
+                config,
+                Arc::new(ProcessSupervisor::default()),
+            )
+            .unwrap();
+            let (events, receiver) = mpsc::channel();
+            let result = handle_rpc_message(
+                &mut session,
+                json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"positionEncoding":encoding}}}),
+                &events,
+                &crate::worker::RepaintTarget::test(),
+                &AtomicU64::new(7),
+            );
+            assert!(
+                result.is_err(),
+                "accepted unsupported position encoding: {encoding}"
+            );
+            assert_eq!(session.phase, SessionPhase::Initializing);
+            assert!(
+                receiver.try_recv().is_err(),
+                "invalid server cannot become ready"
+            );
+        }
+    }
 
     fn frame(value: &Value) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -2790,6 +3100,7 @@ mod tests {
         let formatting = PendingRequest::FormatDocument {
             uri: "file:///tmp/main.typ".to_owned(),
             version: 1,
+            request_token: 1,
         };
         let hover = PendingRequest::HoverDocument {
             uri: "file:///tmp/main.typ".to_owned(),
@@ -2864,13 +3175,29 @@ mod tests {
     }
 
     #[test]
+    fn prose_wrap_uses_current_modes_without_changing_the_default_layout() {
+        assert_eq!(default_server_configuration()["formatterProseWrap"], "none");
+        for mode in ["none", "fill", "sentence"] {
+            let mut config = TinymistConfig::new("/workspace");
+            config.configuration = json!({"formatterProseWrap":mode});
+            validate_server_configuration(&config.configuration).unwrap();
+            assert_eq!(config.server_settings()["formatterProseWrap"], mode);
+        }
+    }
+
+    #[test]
     fn server_configuration_rejects_invalid_choices_and_managed_keys() {
         validate_server_configuration(&default_server_configuration()).unwrap();
         for (value, field) in [
             (json!([]), "JSON object"),
             (json!({"formatterMode":"unknown"}), "formatterMode"),
             (json!({"exportPdf":"invalid"}), "exportPdf"),
-            (json!({"formatterProseWrap":"sentence"}), "true or false"),
+            (json!({"formatterProseWrap":false}), "formatterProseWrap"),
+            (json!({"formatterProseWrap":true}), "formatterProseWrap"),
+            (
+                json!({"formatterProseWrap":"unknown"}),
+                "formatterProseWrap",
+            ),
             (json!({"systemFonts":0}), "systemFonts"),
             (json!({"formatterPrintWidth":-1}), "formatterPrintWidth"),
             (json!({"formatterIndentSize":1.5}), "formatterIndentSize"),
@@ -3169,29 +3496,52 @@ mod tests {
     #[test]
     #[ignore = "requires a real Tinymist executable; set TIPTOPTYP_TEST_TINYMIST to override discovery"]
     fn real_tinymist_reports_preview_compile_cycles() {
+        use crate::{
+            settings::ToolPreference,
+            toolchain::{ToolKind, resolve_tool},
+        };
         let program = std::env::var_os("TIPTOPTYP_TEST_TINYMIST")
             .map(PathBuf::from)
-            .expect("set TIPTOPTYP_TEST_TINYMIST for this native integration probe");
+            .or_else(|| {
+                let resolved = resolve_tool(ToolKind::Tinymist, &ToolPreference::default());
+                resolved.is_available().then_some(resolved.program)
+            })
+            .expect("real Tinymist test requires an executable; set TIPTOPTYP_TEST_TINYMIST");
         let project = tempfile::tempdir().unwrap();
         let path = project.path().join("main.typ");
         fs::write(&path, "= Preview status\nHello").unwrap();
         let sidecar = TinymistSidecar::new(crate::worker::RepaintTarget::test());
         let config = TinymistConfig::new(project.path())
             .with_entry_path(&path)
-            .with_executable(program);
+            .with_executable(program.clone());
+        // Verify the exact defaults against both the shared schema and the real
+        // server, rather than proving only that our own validator agrees with us.
+        assert_eq!(config.configuration, default_server_configuration());
+        assert_eq!(config.configuration["formatterProseWrap"], "none");
+        config
+            .validate()
+            .expect("built-in Tinymist configuration must be valid");
         let generation = sidecar.start_workspace(config).unwrap();
         sidecar
             .did_open(
                 generation,
                 TextDocument::from_path(&path, 1, "= Preview status\nHello").unwrap(),
+                Vec::new(),
             )
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + INITIALIZE_REQUEST_TIMEOUT + PREVIEW_REQUEST_TIMEOUT;
+        let mut initialized = false;
+        let mut preview_url = None;
         let mut started = None;
         let mut elapsed = None;
-        while Instant::now() < deadline && elapsed.is_none() {
+        while Instant::now() < deadline
+            && (!initialized || preview_url.is_none() || elapsed.is_none())
+        {
             while let Some(event) = sidecar.try_recv() {
+                assert_eq!(event.generation(), generation);
                 match event {
+                    TinymistEvent::Initialized { .. } => initialized = true,
+                    TinymistEvent::PreviewReady { url, .. } => preview_url = Some(url),
                     TinymistEvent::CompileStatus {
                         generation: g,
                         path,
@@ -3210,20 +3560,41 @@ mod tests {
                                 }
                             }
                             CompileStatus::CompileError => {
-                                panic!("valid fixture failed to compile")
+                                panic!(
+                                    "real Tinymist {} rejected the valid fixture",
+                                    program.display()
+                                )
                             }
                         }
                     }
                     TinymistEvent::Error {
+                        stage,
                         message,
-                        fatal: true,
+                        fatal,
                         ..
-                    } => panic!("{message}"),
+                    } if fatal || stage == "preview" => panic!(
+                        "real Tinymist {} rejected built-in defaults during {stage}: {message}",
+                        program.display()
+                    ),
+                    TinymistEvent::Stopped { reason, .. } => panic!(
+                        "real Tinymist {} stopped before default preview became ready: {reason}",
+                        program.display()
+                    ),
                     _ => {}
                 }
             }
             thread::sleep(Duration::from_millis(10));
         }
+        assert!(
+            initialized,
+            "real Tinymist {} did not initialize with built-in defaults",
+            program.display()
+        );
+        assert!(
+            preview_url.is_some(),
+            "real Tinymist {} did not start its default preview",
+            program.display()
+        );
         assert!(
             elapsed.is_some(),
             "no matching compile start/success notifications"
@@ -3267,7 +3638,9 @@ mod tests {
         let version = 1;
         let document = unsaved.text_document(version, source);
         let uri = document.uri.clone();
-        sidecar.did_open(generation, document).unwrap();
+        sidecar
+            .did_open(generation, document, vec![unsaved.clone()])
+            .unwrap();
 
         let initialize_deadline = Instant::now() + Duration::from_secs(15);
         let mut initialized = false;
@@ -3300,9 +3673,17 @@ mod tests {
             program.display()
         );
 
-        unsaved.update_backing_source(source).unwrap();
         sidecar
-            .format_document(generation, uri.clone(), version)
+            .did_change(
+                generation,
+                uri.clone(),
+                version,
+                source,
+                vec![unsaved.clone()],
+            )
+            .unwrap();
+        sidecar
+            .format_document(generation, uri.clone(), version, 17)
             .unwrap();
         let format_deadline = Instant::now() + Duration::from_secs(15);
         let edits = 'wait_for_format: loop {
@@ -3312,18 +3693,18 @@ mod tests {
                         generation: event_generation,
                         uri: event_uri,
                         version: event_version,
+                        request_token,
                         edits,
                     } if event_generation == generation
                         && event_uri == uri
-                        && event_version == version =>
+                        && event_version == version
+                        && request_token == 17 =>
                     {
                         break 'wait_for_format edits;
                     }
-                    TinymistEvent::Error {
-                        stage: "formatting",
-                        message,
-                        ..
-                    } => panic!("real Tinymist formatting failed: {message}"),
+                    TinymistEvent::FormatFailed { message, .. } => {
+                        panic!("real Tinymist formatting failed: {message}")
+                    }
                     TinymistEvent::Error {
                         message,
                         fatal: true,
@@ -3341,7 +3722,6 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(10));
         };
-        let edits = edits.expect("formatting response must contain edits");
         assert!(
             !edits.is_empty(),
             "real Tinymist returned no edits for deliberately unformatted source"
@@ -3413,11 +3793,14 @@ mod tests {
     }
 
     #[test]
-    fn formatting_results_preserve_null_empty_and_utf16_edits() {
-        assert_eq!(parse_format_document_result(Value::Null).unwrap(), None);
+    fn formatting_results_normalize_successful_null_and_preserve_utf16_edits() {
+        assert_eq!(
+            parse_format_document_result(Value::Null).unwrap(),
+            Vec::<LspTextEdit>::new()
+        );
         assert_eq!(
             parse_format_document_result(json!([])).unwrap(),
-            Some(Vec::new())
+            Vec::<LspTextEdit>::new()
         );
 
         let edits = parse_format_document_result(json!([{
@@ -3427,7 +3810,6 @@ mod tests {
             },
             "newText": "🦀 formatted"
         }]))
-        .unwrap()
         .unwrap();
         assert_eq!(
             edits,
@@ -3458,17 +3840,19 @@ mod tests {
         };
 
         sidecar
-            .format_document(Generation(7), "file:///tmp/chapter.typ", 19)
+            .format_document(Generation(7), "file:///tmp/chapter.typ", 19, 17)
             .unwrap();
         match received_commands.recv().unwrap() {
             WorkerCommand::FormatDocument {
                 generation,
                 uri,
                 version,
+                request_token,
             } => {
                 assert_eq!(generation, Generation(7));
                 assert_eq!(uri, "file:///tmp/chapter.typ");
                 assert_eq!(version, 19);
+                assert_eq!(request_token, 17);
             }
             _ => panic!("format_document queued the wrong worker command"),
         }
@@ -3551,6 +3935,90 @@ mod tests {
                 generation: Generation(2)
             }
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn formatting_terminals_preserve_the_request_identity_and_publish_once() {
+        let root = tempfile::tempdir().unwrap();
+        let config = TinymistConfig::new(root.path())
+            .with_command("/bin/sh", ["-c", "exec cat >/dev/null"].map(OsString::from));
+        let mut session = Session::spawn(
+            Generation(7),
+            config,
+            Arc::new(ProcessSupervisor::default()),
+        )
+        .unwrap();
+        let (events, receiver) = mpsc::channel();
+        let context = crate::worker::RepaintTarget::test();
+        let generation = AtomicU64::new(7);
+        let uri = "file:///test.typ";
+        for (request_token, payload, failed) in [
+            (
+                41,
+                json!({"error":{"code":-32603,"message":"formatting failed"}}),
+                true,
+            ),
+            (42, json!({"result":{"invalid":"edits"}}), true),
+            (43, json!({"result":null}), false),
+            (44, json!({"result":[]}), false),
+        ] {
+            let id = session
+                .send_request(
+                    "textDocument/formatting",
+                    format_document_params(uri),
+                    PendingRequest::FormatDocument {
+                        uri: uri.into(),
+                        version: 19,
+                        request_token,
+                    },
+                )
+                .unwrap();
+            let mut response = payload;
+            response["jsonrpc"] = json!("2.0");
+            response["id"] = json!(id);
+            handle_rpc_message(
+                &mut session,
+                response.clone(),
+                &events,
+                &context,
+                &generation,
+            )
+            .unwrap();
+            match receiver.try_recv().unwrap() {
+                TinymistEvent::FormatFailed {
+                    generation,
+                    uri: received_uri,
+                    version,
+                    request_token: received_token,
+                    ..
+                } if failed => {
+                    assert_eq!(
+                        (generation, received_uri.as_str(), version, received_token),
+                        (Generation(7), uri, 19, request_token)
+                    );
+                }
+                TinymistEvent::Formatted {
+                    generation,
+                    uri: received_uri,
+                    version,
+                    request_token: received_token,
+                    edits,
+                } if !failed => {
+                    assert_eq!(
+                        (generation, received_uri.as_str(), version, received_token),
+                        (Generation(7), uri, 19, request_token)
+                    );
+                    assert!(edits.is_empty());
+                }
+                event => panic!("wrong formatting terminal: {event:?}"),
+            }
+            handle_rpc_message(&mut session, response, &events, &context, &generation).unwrap();
+            assert!(
+                receiver.try_recv().is_err(),
+                "duplicate terminal published twice"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -3806,6 +4274,7 @@ mod tests {
             .did_open(
                 generation,
                 TextDocument::typst("file:///tmp/blocked.typ", 1, "x".repeat(8 * 1024 * 1024)),
+                Vec::new(),
             )
             .unwrap();
         let started = Instant::now();
@@ -4013,12 +4482,19 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn preview_refresh_update_keeps_buffer_sync_and_formatting_live() {
+        for incremental in [false, true] {
+            exercise_preview_refresh_sync(incremental);
+        }
+    }
+
+    #[cfg(unix)]
+    fn exercise_preview_refresh_sync(incremental: bool) {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tempfile::tempdir().unwrap();
         let script = directory.path().join("fake-lsp-only-tinymist.sh");
         let captured_input = directory.path().join("client-input.bin");
-        let initialize = json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{}}});
+        let initialize = json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":if incremental { 2 } else { 1 }}}});
         let payload = serde_json::to_string(&initialize).unwrap();
         let script_source = format!(
             "#!/bin/sh\nprintf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'\nwhile IFS= read -r line || [ -n \"$line\" ]; do printf '%s\\n' \"$line\" >> '{}'; done\n",
@@ -4038,7 +4514,7 @@ mod tests {
         let generation = sidecar.start_workspace(config).unwrap();
         let uri = "file:///tmp/main.typ";
         sidecar
-            .did_open(generation, TextDocument::typst(uri, 7, "Hello"))
+            .did_open(generation, TextDocument::typst(uri, 7, "Hello"), Vec::new())
             .unwrap();
 
         let initialize_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
@@ -4064,20 +4540,22 @@ mod tests {
         // Resuming without edits must not send a duplicate LSP version or
         // degrade the session. Explicit formatting after paused edits must
         // synchronize its requested version first.
-        sidecar.did_change(generation, uri, 7, "Hello").unwrap();
         sidecar
-            .did_change(generation, uri, 8, "Edited while paused")
+            .did_change(generation, uri, 7, "Hello", Vec::new())
             .unwrap();
         sidecar
-            .did_change(generation, uri, 8, "Edited while paused")
+            .did_change(generation, uri, 8, "Hello Edited while paused", Vec::new())
             .unwrap();
         sidecar
-            .did_change(generation, uri, 8, "Conflicting version")
+            .did_change(generation, uri, 8, "Hello Edited while paused", Vec::new())
             .unwrap();
         sidecar
-            .did_change(generation, uri, 7, "Edited while paused")
+            .did_change(generation, uri, 8, "Conflicting version", Vec::new())
             .unwrap();
-        sidecar.format_document(generation, uri, 8).unwrap();
+        sidecar
+            .did_change(generation, uri, 7, "Edited while paused", Vec::new())
+            .unwrap();
+        sidecar.format_document(generation, uri, 8, 17).unwrap();
         sidecar.stop_workspace(generation).unwrap();
 
         let stop_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
@@ -4116,6 +4594,22 @@ mod tests {
         let captured = fs::read_to_string(captured_input).unwrap();
         assert!(captured.contains("textDocument/didOpen"), "{captured:?}");
         assert_eq!(captured.matches("textDocument/didChange").count(), 1);
+        assert_eq!(captured.contains("\"range\":"), incremental, "{captured:?}");
+        if incremental {
+            assert!(
+                captured.contains("\"text\":\" Edited while paused\""),
+                "{captured:?}"
+            );
+            assert!(
+                !captured.contains("Hello Edited while paused"),
+                "{captured:?}"
+            );
+        } else {
+            assert!(
+                captured.contains("Hello Edited while paused"),
+                "{captured:?}"
+            );
+        }
         assert!(captured.contains("Edited while paused"), "{captured:?}");
         assert!(!captured.contains("Conflicting version"), "{captured:?}");
         assert!(captured.contains("textDocument/formatting"), "{captured:?}");
@@ -4161,11 +4655,17 @@ mod tests {
         let uri = "file:///tmp/main.typ";
         let other_uri = "file:///tmp/other.typ";
         sidecar
-            .did_open(generation, TextDocument::typst(uri, 7, "old"))
+            .did_open(generation, TextDocument::typst(uri, 7, "old"), Vec::new())
             .unwrap();
-        sidecar.did_change(generation, uri, 8, "latest").unwrap();
         sidecar
-            .did_open(generation, TextDocument::typst(other_uri, 3, "other"))
+            .did_change(generation, uri, 8, "latest", Vec::new())
+            .unwrap();
+        sidecar
+            .did_open(
+                generation,
+                TextDocument::typst(other_uri, 3, "other"),
+                Vec::new(),
+            )
             .unwrap();
 
         let initialize_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;
@@ -4271,6 +4771,7 @@ mod tests {
             .did_open(
                 generation,
                 TextDocument::typst("file:///tmp/main.typ", 7, "Hello"),
+                Vec::new(),
             )
             .unwrap();
 
@@ -4319,10 +4820,18 @@ mod tests {
         // Add another frame so the shell's line-oriented capture observes the
         // preceding response body even though LSP payloads have no delimiter.
         sidecar
-            .did_change(generation, "file:///tmp/main.typ", 8, "Hello again")
+            .did_change(
+                generation,
+                "file:///tmp/main.typ",
+                8,
+                "Hello again",
+                Vec::new(),
+            )
             .unwrap();
+        // A control frame flushes the capture without inventing a second
+        // source version that may legitimately coalesce with the first.
         sidecar
-            .did_change(generation, "file:///tmp/main.typ", 9, "capture flush")
+            .set_preview_refresh(generation, PreviewRefresh::OnSave)
             .unwrap();
 
         let reply_deadline = Instant::now() + FAKE_SERVER_TIMEOUT;

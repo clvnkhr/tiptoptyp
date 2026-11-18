@@ -4,11 +4,14 @@
 //! equates a local mirror write with acknowledgement from Overleaf.
 mod mirror;
 mod model;
+mod offline;
 mod presence;
 mod storage;
+pub(crate) mod workspace_session;
 
 pub(crate) use mirror::Mirror;
-pub(crate) use model::{ConflictReview, Model, ModelChange};
+pub(crate) use model::{Conflict, ConflictReview, Document, Model, ModelChange};
+pub(crate) use offline::OfflineStore;
 pub(crate) use presence::{Collaborator, PresenceSnapshot, RemoteCursor, SourceIndex};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,6 +24,7 @@ use unicode_normalization::UnicodeNormalization as _;
 pub(crate) const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_ENTRIES: usize = 10_000;
+const MAX_CONFLICT_MESSAGE_BYTES: usize = 8192;
 // The browser IPC envelope is capped at 16 MiB. A retained listing must be
 // readable under the same bound on the next worker/session.
 const MAX_TREE_MANIFEST_BYTES: usize = 16 * 1024 * 1024;
@@ -109,7 +113,9 @@ impl Entry {
 pub(crate) struct Tree {
     pub(crate) name: String,
     pub(crate) main: Option<String>,
-    pub(crate) entries: Vec<Entry>,
+    // Indexed once by new(). Callers may inspect, but cannot reorder or replace
+    // entries independently of the identity/path indexes.
+    entries: Vec<Entry>,
     by_id: BTreeMap<String, usize>,
     by_path: BTreeMap<String, usize>,
 }
@@ -262,6 +268,17 @@ pub(crate) fn validate_path(path: &str) -> Result<PathBuf, String> {
     Ok(value)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum FileAction {
+    CreateFile,
+    CreateFolder,
+    Duplicate,
+    Rename,
+    Delete,
+    Move,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "lowercase")]
 pub(crate) enum BrowserCommand {
@@ -288,6 +305,19 @@ pub(crate) enum BrowserCommand {
         source_fingerprint: String,
         anchor: usize,
         head: usize,
+    },
+    FileAction {
+        epoch: u64,
+        request: u64,
+        action: FileAction,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     Refresh {
         epoch: u64,
@@ -332,6 +362,20 @@ pub(crate) enum BrowserEvent {
         source: String,
         message: String,
     },
+    FileAccess {
+        epoch: u64,
+        writable: bool,
+    },
+    FileAction {
+        epoch: u64,
+        request: u64,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        error: Option<String>,
+    },
     Error {
         epoch: u64,
         message: String,
@@ -356,6 +400,8 @@ impl BrowserEvent {
             | Self::Ack { epoch, .. }
             | Self::File { epoch, .. }
             | Self::Conflict { epoch, .. }
+            | Self::FileAccess { epoch, .. }
+            | Self::FileAction { epoch, .. }
             | Self::Error { epoch, .. }
             | Self::Status { epoch, .. }
             | Self::Presence { epoch, .. } => *epoch,

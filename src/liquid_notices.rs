@@ -174,7 +174,7 @@ mod tests {
             Catalog::parse(include_bytes!("../resources/liquid/notices.json")).unwrap();
         for file in &mut catalog.files {
             file.bytes = 7;
-            file.sha256 = format!("{:x}", Sha256::digest(b"fixture"));
+            file.sha256 = hex::encode(Sha256::digest(b"fixture"));
         }
         catalog
     }

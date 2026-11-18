@@ -100,7 +100,7 @@ impl AppShell {
         launch_mode: LaunchMode,
         open_requests: OpenRequestReceiver,
         native_menu_commands: NativeMenuReceiver,
-    ) -> Self {
+    ) -> Result<Self, crate::settings::SettingsLoadError> {
         // Queue before constructing the document: deterministic preview setup
         // depends on a pending capture, including the first serial batch step.
         let mut remaining = VecDeque::from(capture_steps);
@@ -118,7 +118,7 @@ impl AppShell {
             captures.clone(),
             theme_override,
             snapshot_scene,
-        );
+        )?;
         let shared_settings = primary.settings_snapshot();
         let pending_windows = if crate::performance::take_multi_window_request() {
             (0..3)
@@ -131,7 +131,7 @@ impl AppShell {
             VecDeque::new()
         };
         open_requests.set_repaint_context(context.egui_ctx.clone());
-        Self {
+        Ok(Self {
             particle_renderer: crate::app::ParticleRenderer::for_context(&context.egui_ctx),
             primary: DocumentHost::new(primary),
             closing: Default::default(),
@@ -147,7 +147,7 @@ impl AppShell {
             launch_mode,
             primary_visible: true,
             quit_requested: false,
-        }
+        })
     }
 
     fn advance_capture_batch(&mut self, context: &egui::Context) -> bool {
@@ -227,12 +227,11 @@ impl AppShell {
                         self.primary.borrow_mut().open_global_settings(context);
                         continue;
                     }
-                    // With no document windows, the clean retained root is
-                    // itself the next new window; no invisible parent UI pass
-                    // is needed to instantiate a secondary viewport.
+                    // An open-file panel needs a visible parent. New-window
+                    // requests keep their identity and reuse the empty dormant
+                    // root in logic instead of creating a document.
                     let command = if !self.primary_visible && self.secondary.is_empty() {
                         match command {
-                            AppCommand::NewWindow => AppCommand::New,
                             AppCommand::OpenInNewWindow => AppCommand::Open,
                             command => command,
                         }
@@ -476,7 +475,7 @@ impl AppShell {
             return;
         }
         if self.closing.ready(&self.document_keys()) {
-            if crate::worker::has_active_operations() {
+            if self.prepare_overleaf_exit(context) || crate::worker::has_active_operations() {
                 context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             }
             return;
@@ -496,6 +495,7 @@ impl AppShell {
                 .secondary
                 .iter()
                 .any(|window| window.editor.borrow().is_dirty_for_close())
+            && !self.prepare_overleaf_exit(context)
         {
             return;
         }
@@ -516,6 +516,10 @@ impl AppShell {
             || (self.primary.borrow().is_dirty_for_close()
                 && !self.primary.borrow().close_accepted())
         {
+            return;
+        }
+        if self.primary.borrow_mut().prepare_overleaf_shutdown(context) {
+            context.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             return;
         }
         self.retire_primary_window(context);
@@ -680,21 +684,22 @@ impl AppShell {
     }
     fn commit_process_close(&mut self, context: &egui::Context) {
         let keys = self.document_keys();
-        if !self.closing.ready(&keys)
-            || !self.pending_windows.is_empty()
-            || !self.primary.borrow().close_accepted()
-            || self
+        let approved = self.closing.ready(&keys)
+            && self.pending_windows.is_empty()
+            && self.primary.borrow().close_accepted()
+            && !self
                 .secondary
                 .iter()
-                .any(|window| !window.editor.borrow().close_accepted())
-        {
+                .any(|window| !window.editor.borrow().close_accepted());
+        let sync_busy = approved && self.prepare_overleaf_exit(context);
+        if !approved {
             self.cancel_process_close();
             self.primary.borrow_mut().show_window_notice(
                 "Closing canceled because a document changed during confirmation".to_owned(),
             );
         } else if self
             .closing
-            .can_exit(&keys, crate::worker::has_active_operations())
+            .can_exit(&keys, sync_busy || crate::worker::has_active_operations())
         {
             self.primary.borrow_mut().finish_process_close(true);
             context.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
@@ -703,6 +708,17 @@ impl AppShell {
                 "Waiting for the active background operation before closing".to_owned(),
             );
         }
+    }
+
+    fn prepare_overleaf_exit(&mut self, context: &egui::Context) -> bool {
+        let mut busy = self.primary.borrow_mut().prepare_overleaf_shutdown(context);
+        for window in &mut self.secondary {
+            busy |= window
+                .editor
+                .borrow_mut()
+                .prepare_overleaf_shutdown(context);
+        }
+        busy
     }
 
     fn collect_secondary_events(&mut self) {
@@ -870,7 +886,10 @@ impl eframe::App for AppShell {
         let mut settings = self.shared_settings.clone();
         let active_settings = self.active_editor().settings_snapshot();
         self.merge_all_session_history(&mut settings, &active_settings);
-        persist_shell_settings(self.launch_mode, storage, &settings);
+        if let Err(error) = persist_shell_settings(self.launch_mode, storage, &settings) {
+            self.active_editor_mut()
+                .report_settings_persistence_error(error);
+        }
     }
 
     fn auto_save_interval(&self) -> std::time::Duration {
@@ -972,7 +991,10 @@ const fn command_reveals_primary(command: AppCommand) -> bool {
 const fn command_available_without_document(command: AppCommand) -> bool {
     matches!(
         command,
-        AppCommand::Settings | AppCommand::NewWindow | AppCommand::OpenInNewWindow
+        AppCommand::Settings
+            | AppCommand::NewWindow
+            | AppCommand::OpenInNewWindow
+            | AppCommand::MakeDemoFile
     )
 }
 
@@ -1049,10 +1071,11 @@ fn persist_shell_settings(
     launch_mode: LaunchMode,
     storage: &mut dyn eframe::Storage,
     settings: &AppSettings,
-) {
+) -> Result<(), String> {
     if launch_mode.persists_settings() {
-        settings.save(storage);
+        settings.save(storage)?;
     }
+    Ok(())
 }
 
 const fn shell_persists_egui_memory(launch_mode: LaunchMode, editor_persists_memory: bool) -> bool {
@@ -1354,6 +1377,9 @@ mod tests {
                 .any(|command| matches!(command, egui::ViewportCommand::Visible(true)))
         );
         assert!(!shell.primary_visible);
+        // The fixture starts dormant; model a real document host before its
+        // first close so teardown also removes the fixture document.
+        shell.primary.borrow_mut().request_window_resume();
         for request in [
             NativeMenuRequest::Reopen,
             NativeMenuRequest::Command(AppCommand::NewWindow),
@@ -1365,6 +1391,12 @@ mod tests {
             assert!(shell.primary_visible);
             assert!(shell.primary.borrow().needs_visible_window());
             assert!(shell.secondary.is_empty());
+            assert!(
+                !shell
+                    .primary
+                    .borrow()
+                    .native_command_enabled(AppCommand::Save)
+            );
             assert!(
                 output.viewport_commands[&egui::ViewportId::ROOT]
                     .iter()
@@ -1505,6 +1537,7 @@ mod tests {
             AppCommand::NewWindow,
             AppCommand::OpenInNewWindow,
             AppCommand::Settings,
+            AppCommand::MakeDemoFile,
         ] {
             assert!(command_available_without_document(command));
         }
@@ -1703,7 +1736,7 @@ mod tests {
             },
         ] {
             let mut capture_storage = MemoryStorage::default();
-            persist_shell_settings(mode, &mut capture_storage, &fixture_settings);
+            persist_shell_settings(mode, &mut capture_storage, &fixture_settings).unwrap();
             assert!(capture_storage.0.is_empty());
             assert!(!shell_persists_egui_memory(mode, true));
         }
@@ -1713,7 +1746,8 @@ mod tests {
             LaunchMode::Interactive,
             &mut interactive_storage,
             &fixture_settings,
-        );
+        )
+        .unwrap();
         assert_eq!(interactive_storage.0.len(), 1);
 
         assert!(!shell_persists_egui_memory(

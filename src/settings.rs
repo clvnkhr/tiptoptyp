@@ -7,30 +7,30 @@ use eframe::{Storage, egui};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    builtin_themes,
     explorer::ExplorerOrder,
     shortcuts::{ShortcutBindings, ShortcutOverrides},
     syntax_theme::TypstOverrideThemes,
 };
 
 const STORAGE_KEY: &str = "tiptoptyp.settings.v1";
-const REJECTED_STORAGE_KEY: &str = "tiptoptyp.settings.rejected";
+pub(crate) const MAX_SETTINGS_JSON_BYTES: usize = 2_000_000;
 
 #[derive(Debug)]
 pub(crate) struct SettingsLoadError {
     message: String,
-    rejected: String,
 }
 
 impl std::fmt::Display for SettingsLoadError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "Saved settings could not be read: {}. Using defaults; the rejected settings will be retained in {REJECTED_STORAGE_KEY} when preferences are saved",
+            "Settings are invalid or incompatible with this build: {}. Stored preferences are unchanged",
             self.message
         )
     }
 }
+
+impl std::error::Error for SettingsLoadError {}
 fn default_liquid_threads() -> u8 {
     4
 }
@@ -268,6 +268,22 @@ impl ParticleStyle {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum LingeringStyle {
+    Smoke,
+    Embers,
+}
+impl LingeringStyle {
+    pub(crate) const ALL: [Self; 2] = [Self::Smoke, Self::Embers];
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Smoke => "Smoke",
+            Self::Embers => "Embers",
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum EditorAction {
     #[default]
@@ -329,6 +345,7 @@ impl EditorAction {
 #[serde(default)]
 pub(crate) struct ActionEffectSettings {
     pub(crate) particles: Option<ParticleStyle>,
+    pub(crate) lingering: Option<LingeringStyle>,
     pub(crate) shake: bool,
     pub(crate) flash: bool,
     pub(crate) glow: bool,
@@ -337,6 +354,7 @@ impl Default for ActionEffectSettings {
     fn default() -> Self {
         Self {
             particles: Some(ParticleStyle::Explosion),
+            lingering: None,
             shake: false,
             flash: false,
             glow: false,
@@ -345,7 +363,11 @@ impl Default for ActionEffectSettings {
 }
 impl ActionEffectSettings {
     pub(crate) const fn enabled(self) -> bool {
-        self.particles.is_some() || self.shake || self.flash || self.glow
+        self.gpu_enabled() || self.shake || self.flash || self.glow
+    }
+
+    pub(crate) const fn gpu_enabled(self) -> bool {
+        self.particles.is_some() || self.lingering.is_some()
     }
 }
 
@@ -398,8 +420,19 @@ impl EditorActionEffects {
 #[serde(default)]
 pub(crate) struct EditorEffectSettings {
     pub(crate) enabled: bool,
+    pub(crate) same_for_all: bool,
+    pub(crate) cursor_afterburner: bool,
     pub(crate) density: ParticleDensity,
     pub(crate) actions: EditorActionEffects,
+}
+impl EditorEffectSettings {
+    pub(crate) const fn effect(&self, action: EditorAction) -> &ActionEffectSettings {
+        self.actions.get(if self.same_for_all {
+            EditorAction::Typing
+        } else {
+            action
+        })
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -754,6 +787,8 @@ pub(crate) struct AppSettings {
     #[serde(default = "default_true")]
     pub(crate) format_after_math_conversion: bool,
     #[serde(default)]
+    pub(crate) comment_controls: crate::comment_controls::Settings,
+    #[serde(default)]
     pub(crate) mitex_auto_enable: bool,
     #[serde(default = "default_mitex_version")]
     pub(crate) mitex_version: String,
@@ -876,6 +911,7 @@ impl Default for AppSettings {
             indent_spaces: 2,
             ascii_punctuation: false,
             format_after_math_conversion: true,
+            comment_controls: Default::default(),
             mitex_auto_enable: false,
             mitex_version: default_mitex_version(),
             rainbow_brackets: crate::rainbow::RainbowBrackets::default(),
@@ -996,6 +1032,7 @@ impl AppSettings {
             indent_spaces,
             ascii_punctuation,
             format_after_math_conversion,
+            comment_controls,
             mitex_auto_enable,
             mitex_version,
             rainbow_brackets,
@@ -1137,22 +1174,23 @@ impl AppSettings {
 
     pub(crate) fn load(storage: Option<&dyn Storage>) -> Result<Self, SettingsLoadError> {
         let Some(serialized) = storage.and_then(|storage| storage.get_string(STORAGE_KEY)) else {
-            return Ok(Self::default());
-        };
-        let mut settings: Self =
-            serde_json::from_str(&serialized).map_err(|error| SettingsLoadError {
-                message: error.to_string(),
-                rejected: serialized,
+            let settings = Self::default();
+            settings.validate().map_err(|message| SettingsLoadError {
+                message: format!("built-in defaults: {message}"),
             })?;
-        settings.ui_font_weight = settings.ui_font_weight.clamp(1, 1_000);
-        settings.code_font_weight = settings.code_font_weight.clamp(1, 1_000);
-        settings.normalize_builtin_theme_slots();
-        settings.theme_colors = settings.theme_colors.normalized();
-        settings.source_reveal_animation = settings.source_reveal_animation.normalized();
-        settings.preview_reveal_animation = settings.preview_reveal_animation.normalized();
+            return Ok(settings);
+        };
+        let mut settings =
+            crate::settings_json::parse(&serialized).map_err(|message| SettingsLoadError {
+                message: format!("{STORAGE_KEY}.{message}"),
+            })?;
         settings.normalize_workspace_history();
         settings.shortcut_overrides.normalize();
         Ok(settings)
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        crate::settings_json::validate(self)
     }
 
     fn normalize_workspace_history(&mut self) {
@@ -1172,33 +1210,21 @@ impl AppSettings {
             normalize_workspace_map(std::mem::take(&mut self.last_opened_files));
     }
 
-    fn normalize_builtin_theme_slots(&mut self) {
-        for (choice, dark_mode) in [(&mut self.light_theme, false), (&mut self.dark_theme, true)] {
-            let valid = match choice {
-                ColorThemeChoice::Builtin(id) => builtin_themes::find(id).is_some(),
-                ColorThemeChoice::Sublime(_) => true,
-            };
-            if !valid {
-                *choice = ColorThemeChoice::builtin(builtin_themes::default_for_mode(dark_mode).id);
-            }
-        }
-    }
-
-    pub(crate) fn save(&self, storage: &mut dyn Storage) {
+    pub(crate) fn save(&self, storage: &mut dyn Storage) -> Result<(), String> {
         let mut normalized = self.clone();
-        normalized.theme_colors = normalized.theme_colors.normalized();
-        normalized.source_reveal_animation = normalized.source_reveal_animation.normalized();
-        normalized.preview_reveal_animation = normalized.preview_reveal_animation.normalized();
         normalized.normalize_workspace_history();
         normalized.shortcut_overrides.normalize();
-        if let Ok(serialized) = serde_json::to_string(&normalized) {
-            // Preserve rejected input before replacing it, including saves
-            // routed through the multi-window shell rather than EditorApp.
-            if let Err(error) = Self::load(Some(storage)) {
-                storage.set_string(REJECTED_STORAGE_KEY, error.rejected);
-            }
-            storage.set_string(STORAGE_KEY, serialized);
+        let serialized = serde_json::to_string(&normalized).map_err(|error| error.to_string())?;
+        if serialized.len() > MAX_SETTINGS_JSON_BYTES {
+            return Err("Settings exceed 2 MB and could not be saved. Your previously saved settings are unchanged.".into());
         }
+        self.validate().map_err(|error| {
+            format!("Settings could not be saved: {error}. Your previously saved settings are unchanged.")
+        })?;
+        Self::load(Some(storage))
+            .map_err(|error| format!("Refusing to replace incompatible saved settings: {error}"))?;
+        storage.set_string(STORAGE_KEY, serialized);
+        Ok(())
     }
 
     pub(crate) fn effective_shortcuts(&self) -> ShortcutBindings {
@@ -1305,11 +1331,76 @@ fn normalize_workspace_map(map: BTreeMap<String, String>) -> BTreeMap<String, St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn oversized_settings_save_preserves_all_existing_storage() {
+        let mut storage = MemoryStorage::default();
+        let baseline = AppSettings::default();
+        baseline.save(&mut storage).unwrap();
+        storage.set_string("unrelated.preferences", "keep this".into());
+        let previous = storage.0.clone();
+        let mut oversized = baseline.clone();
+        oversized.harper_dictionary = "x".repeat(MAX_SETTINGS_JSON_BYTES);
+        assert!(oversized.save(&mut storage).unwrap_err().contains("2 MB"));
+        assert_eq!(storage.0, previous);
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), baseline);
+    }
+
+    #[test]
+    fn invariant_saved_settings_enforce_the_same_input_budget_as_the_json_editor() {
+        let serialized = format!(
+            "{}{}",
+            " ".repeat(MAX_SETTINGS_JSON_BYTES),
+            serde_json::to_string(&AppSettings::default()).unwrap()
+        );
+        let mut storage = MemoryStorage::default();
+        storage.set_string(STORAGE_KEY, serialized.clone());
+        let error = AppSettings::load(Some(&storage)).unwrap_err();
+        assert!(error.message.contains("2 MB"));
+        assert!(AppSettings::default().save(&mut storage).is_err());
+        assert_eq!(
+            storage.get_string(STORAGE_KEY).as_deref(),
+            Some(serialized.as_str())
+        );
+    }
+
+    #[test]
+    fn invalid_persisted_numeric_choices_fail_instead_of_being_reinterpreted() {
+        for (field, value) in [
+            ("ui_scale_percent", 0),
+            ("ui_scale_percent", 65535),
+            ("auto_save_delay_ms", 0),
+            ("auto_save_delay_ms", 65535),
+            ("hover_delay_ms", 65535),
+            ("indent_spaces", 255),
+            ("liquid_threads", 0),
+            ("liquid_threads", 255),
+            ("theme_hue_shift_degrees", -32768),
+            ("theme_hue_shift_degrees", 32767),
+        ] {
+            let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+            settings[field] = value.into();
+            assert_saved_settings_rejected(settings, field);
+        }
+    }
+
+    #[test]
+    fn deferred_comment_control_edits_preserve_unrelated_newer_choices() {
+        let base = AppSettings::default();
+        let mut current = base.clone();
+        current.line_wrap = !base.line_wrap;
+        let mut edited = base.clone();
+        edited.comment_controls.formatting.off = "fmt: stop".into();
+        edited.comment_controls.diagnostics.on = "checks: resume".into();
+        current.apply_edits(&base, edited.clone());
+        assert_ne!(current.line_wrap, base.line_wrap);
+        assert_eq!(current.comment_controls, edited.comment_controls);
+    }
+
     use std::collections::HashMap;
 
     use super::*;
     use crate::{
-        shortcuts::{ShortcutAction, ShortcutChord, ShortcutPlatform},
+        shortcuts::{ShortcutAction, ShortcutChord},
         sublime_theme::Rgba,
         syntax_theme::TypstSyntaxRole,
         theme,
@@ -1332,6 +1423,105 @@ mod tests {
         }
 
         fn flush(&mut self) {}
+    }
+
+    fn assert_saved_settings_rejected(value: serde_json::Value, field: &str) {
+        let serialized = value.to_string();
+        let mut storage = MemoryStorage::default();
+        storage.set_string(STORAGE_KEY, serialized.clone());
+        storage.set_string("unrelated.preferences", "keep this".into());
+        let previous = storage.0.clone();
+        let editor_error = crate::settings_json::parse(&serialized).unwrap_err();
+        assert!(editor_error.contains(field), "{field}: {editor_error}");
+        let error = AppSettings::load(Some(&storage)).unwrap_err();
+        assert_eq!(error.message, format!("{STORAGE_KEY}.{editor_error}"));
+        assert!(AppSettings::default().save(&mut storage).is_err());
+        assert_eq!(
+            storage.0, previous,
+            "rejected preferences must stay byte-for-byte intact"
+        );
+        if let Ok(invalid) = serde_json::from_value::<AppSettings>(value)
+            && invalid.validate().is_err()
+        {
+            let mut valid_storage = MemoryStorage::default();
+            AppSettings::default().save(&mut valid_storage).unwrap();
+            let previous = valid_storage.0.clone();
+            assert!(invalid.save(&mut valid_storage).is_err());
+            assert_eq!(valid_storage.0, previous);
+        }
+    }
+
+    #[test]
+    fn built_in_defaults_validate_and_roundtrip_every_persistence_boundary() {
+        let defaults = AppSettings::default();
+        defaults.validate().unwrap();
+        let source = serde_json::to_string(&defaults).unwrap();
+        assert_eq!(crate::settings_json::parse(&source).unwrap(), defaults);
+        let mut storage = MemoryStorage::default();
+        defaults.save(&mut storage).unwrap();
+        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), defaults);
+    }
+
+    #[test]
+    fn saved_tool_configurations_fail_the_same_validation_as_editor_input() {
+        for (path, invalid, field) in [
+            (
+                "/tinymist_configuration/formatterProseWrap",
+                serde_json::json!(false),
+                "tinymist_configuration",
+            ),
+            (
+                "/ltex/configuration/checkFrequency",
+                serde_json::json!("edit"),
+                "ltex",
+            ),
+            (
+                "/tex/texlab_configuration",
+                serde_json::json!([]),
+                "tex.texlab_configuration",
+            ),
+            (
+                "/tex/badness_configuration",
+                serde_json::json!([]),
+                "tex.badness_configuration",
+            ),
+            (
+                "/comment_controls/both/off",
+                serde_json::json!(""),
+                "comment_controls",
+            ),
+        ] {
+            let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+            *settings.pointer_mut(path).unwrap() = invalid;
+            assert_saved_settings_rejected(settings, field);
+        }
+    }
+
+    #[test]
+    fn invalid_in_memory_settings_cannot_replace_valid_saved_preferences() {
+        let mut storage = MemoryStorage::default();
+        let baseline = AppSettings::default();
+        baseline.save(&mut storage).unwrap();
+        storage.set_string("unrelated.preferences", "keep this".into());
+        let previous = storage.0.clone();
+        for invalid in [serde_json::json!(false), serde_json::json!("unknown")] {
+            let mut settings = baseline.clone();
+            settings.tinymist_configuration["formatterProseWrap"] = invalid;
+            assert!(
+                settings
+                    .save(&mut storage)
+                    .unwrap_err()
+                    .contains("formatterProseWrap")
+            );
+            assert_eq!(storage.0, previous);
+        }
+    }
+
+    #[test]
+    fn retired_saved_keys_are_rejected_instead_of_ignored() {
+        let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+        settings["retired_setting"] = true.into();
+        assert_saved_settings_rejected(settings, "retired_setting");
     }
 
     #[test]
@@ -1613,6 +1803,20 @@ mod tests {
             indent_spaces: 4,
             ascii_punctuation: true,
             format_after_math_conversion: false,
+            comment_controls: crate::comment_controls::Settings {
+                both: crate::comment_controls::Markers {
+                    off: "all: stop".into(),
+                    on: "all: resume".into(),
+                },
+                formatting: crate::comment_controls::Markers {
+                    off: "format: stop".into(),
+                    on: "format: resume".into(),
+                },
+                diagnostics: crate::comment_controls::Markers {
+                    off: "checks: stop".into(),
+                    on: "checks: resume".into(),
+                },
+            },
             mitex_auto_enable: true,
             mitex_version: "0.2.7".into(),
             rainbow_brackets: crate::rainbow::RainbowBrackets {
@@ -1662,19 +1866,23 @@ mod tests {
             )]),
             recent_workspaces: vec!["/workspace".to_owned()],
             typst: ToolPreference {
-                command: Default::default(),
+                command: crate::tool_command::CommandCustomization::for_tool(
+                    crate::toolchain::ToolKind::Typst,
+                ),
                 mode: ToolMode::Custom,
                 custom_path: "/opt/typst".to_owned(),
             },
             tinymist: ToolPreference {
-                command: Default::default(),
+                command: crate::tool_command::CommandCustomization::for_tool(
+                    crate::toolchain::ToolKind::Tinymist,
+                ),
                 mode: ToolMode::Custom,
                 custom_path: "/opt/tinymist".to_owned(),
             },
             tinymist_configuration: serde_json::json!({"formatterPrintWidth":100}),
         };
         let mut storage = MemoryStorage::default();
-        expected.save(&mut storage);
+        expected.save(&mut storage).unwrap();
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), expected);
 
         storage.set_string(STORAGE_KEY, r#"{"interface_theme":"Dark"}"#.to_owned());
@@ -1682,21 +1890,12 @@ mod tests {
     }
 
     #[test]
-    fn persisted_font_weights_are_normalized() {
-        let mut storage = MemoryStorage::default();
-        let settings = AppSettings {
-            ui_font_weight: 0,
-            code_font_weight: 5_000,
-            ..AppSettings::default()
-        };
-        storage.set_string(
-            STORAGE_KEY,
-            serde_json::to_string(&settings).expect("settings serialize"),
-        );
-
-        let settings = AppSettings::load(Some(&storage)).unwrap();
-        assert_eq!(settings.ui_font_weight, 1);
-        assert_eq!(settings.code_font_weight, 1_000);
+    fn invalid_persisted_font_weights_fail_instead_of_being_clamped() {
+        for (field, value) in [("ui_font_weight", 0), ("code_font_weight", 5000)] {
+            let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+            settings[field] = value.into();
+            assert_saved_settings_rejected(settings, field);
+        }
     }
 
     #[test]
@@ -1710,7 +1909,7 @@ mod tests {
             .shortcut_overrides
             .set(ShortcutAction::ExportPdf, None);
         let mut storage = MemoryStorage::default();
-        settings.save(&mut storage);
+        settings.save(&mut storage).unwrap();
 
         let restored = AppSettings::load(Some(&storage)).unwrap();
         assert_eq!(restored, settings);
@@ -1726,41 +1925,15 @@ mod tests {
     }
 
     #[test]
-    fn loading_settings_drops_only_invalid_shortcut_entries() {
-        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
-        value["shortcut_overrides"] = serde_json::json!({
-            "file.save": "cmd + shift + k",
-            "edit.copy": null,
-            "edit.find": "Primary+NoSuchKey",
-            "future.action": "Primary+Q",
-        });
-        let mut storage = MemoryStorage::default();
-        storage.set_string(STORAGE_KEY, serde_json::to_string(&value).unwrap());
-
-        let settings = AppSettings::load(Some(&storage)).unwrap();
-        let shortcuts = settings.effective_shortcuts();
-        assert_eq!(
-            shortcuts
-                .binding(ShortcutAction::Save)
-                .unwrap()
-                .config_string(),
-            "Primary+Shift+K"
-        );
-        assert_eq!(shortcuts.binding(ShortcutAction::Copy), None);
-        assert_eq!(
-            shortcuts.binding(ShortcutAction::Find),
-            crate::shortcuts::ShortcutBindings::defaults(ShortcutPlatform::current())
-                .binding(ShortcutAction::Find)
-        );
-
-        let normalized = serde_json::to_value(&settings.shortcut_overrides).unwrap();
-        assert_eq!(
-            normalized,
-            serde_json::json!({
-                "edit.copy": null,
-                "file.save": "Primary+Shift+K",
-            })
-        );
+    fn loading_settings_rejects_invalid_shortcuts_without_dropping_them() {
+        for overrides in [
+            serde_json::json!({"edit.find":"Primary+NoSuchKey"}),
+            serde_json::json!({"future.action":"Primary+Q"}),
+        ] {
+            let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+            settings["shortcut_overrides"] = overrides;
+            assert_saved_settings_rejected(settings, "shortcut_overrides");
+        }
     }
 
     #[test]
@@ -1772,39 +1945,21 @@ mod tests {
             ..AppSettings::default()
         };
         let mut storage = MemoryStorage::default();
-        settings.save(&mut storage);
+        settings.save(&mut storage).unwrap();
         settings.interface_theme = InterfaceTheme::System;
 
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), settings);
     }
 
     #[test]
-    fn only_unknown_builtin_slots_use_their_matching_defaults() {
-        let mut storage = MemoryStorage::default();
-        let settings = AppSettings {
-            light_theme: ColorThemeChoice::builtin("catppuccin-mocha"),
-            dark_theme: ColorThemeChoice::builtin("missing-theme"),
-            ..AppSettings::default()
-        };
-        storage.set_string(
-            STORAGE_KEY,
-            serde_json::to_string(&settings).expect("settings serialize"),
-        );
-
-        let settings = AppSettings::load(Some(&storage)).unwrap();
-        assert_eq!(
-            settings.light_theme,
-            ColorThemeChoice::builtin("catppuccin-mocha")
-        );
-        assert_eq!(
-            settings.dark_theme,
-            ColorThemeChoice::builtin("tiptop-dark")
-        );
+    fn missing_builtin_themes_fail_without_replacing_the_chosen_theme() {
+        let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+        settings["dark_theme"] = serde_json::json!({"source":"builtin", "value":"missing-theme"});
+        assert_saved_settings_rejected(settings, "missing-theme");
     }
 
     #[test]
-    fn color_adjustments_are_normalized_without_discarding_other_preferences() {
-        let mut storage = MemoryStorage::default();
+    fn invalid_persisted_color_adjustments_fail_without_changing_preferences() {
         let settings = AppSettings {
             auto_save: false,
             theme_colors: crate::theme_transform::ThemeColorAdjustments {
@@ -1815,12 +1970,7 @@ mod tests {
             },
             ..Default::default()
         };
-        storage.set_string(STORAGE_KEY, serde_json::to_string(&settings).unwrap());
-        let restored = AppSettings::load(Some(&storage)).unwrap();
-        assert_eq!(restored.theme_colors, settings.theme_colors.normalized());
-        assert!(!restored.auto_save);
-        settings.save(&mut storage);
-        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), restored);
+        assert_saved_settings_rejected(serde_json::to_value(&settings).unwrap(), "theme_colors");
     }
 
     #[test]
@@ -1866,7 +2016,7 @@ mod tests {
             .insert(1, "/workspace/0/../0".to_owned());
         let mut storage = MemoryStorage::default();
 
-        settings.save(&mut storage);
+        settings.save(&mut storage).unwrap();
         let restored = AppSettings::load(Some(&storage)).unwrap();
 
         assert_eq!(restored.recent_workspaces.len(), MAX_RECENT_WORKSPACES);
@@ -1923,7 +2073,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_settings_are_normal_but_corrupt_input_is_reported_and_preserved() {
+    fn missing_settings_are_normal_but_corrupt_input_prevents_replacement() {
         let mut storage = MemoryStorage::default();
         assert_eq!(AppSettings::load(None).unwrap(), AppSettings::default());
         assert_eq!(
@@ -1932,28 +2082,12 @@ mod tests {
         );
         for rejected in ["not json", r#"{"interface_theme":"unknown"}"#] {
             storage.set_string(STORAGE_KEY, rejected.to_owned());
+            let previous = storage.0.clone();
             let error = AppSettings::load(Some(&storage)).unwrap_err();
-            assert_eq!(error.rejected, rejected);
-            assert!(
-                error
-                    .to_string()
-                    .contains("Saved settings could not be read")
-            );
-            assert_eq!(storage.get_string(STORAGE_KEY).as_deref(), Some(rejected));
-            AppSettings::default().save(&mut storage);
-            assert_eq!(
-                storage.get_string(REJECTED_STORAGE_KEY).as_deref(),
-                Some(rejected)
-            );
-            assert_eq!(
-                AppSettings::load(Some(&storage)).unwrap(),
-                AppSettings::default()
-            );
-            AppSettings::default().save(&mut storage);
-            assert_eq!(
-                storage.get_string(REJECTED_STORAGE_KEY).as_deref(),
-                Some(rejected)
-            );
+            assert!(error.to_string().contains("invalid or incompatible"));
+            assert!(!error.to_string().contains("Using defaults"));
+            assert!(AppSettings::default().save(&mut storage).is_err());
+            assert_eq!(storage.0, previous);
         }
     }
 
@@ -1964,7 +2098,7 @@ mod tests {
             git_diff_style: GitDiffStyle::SideBySide,
             ..AppSettings::default()
         };
-        settings.save(&mut storage);
+        settings.save(&mut storage).unwrap();
         assert_eq!(
             AppSettings::load(Some(&storage)).unwrap().git_diff_style,
             GitDiffStyle::SideBySide
@@ -2004,6 +2138,8 @@ mod tests {
             defaults.editor_effects,
             EditorEffectSettings {
                 enabled: false,
+                same_for_all: false,
+                cursor_afterburner: false,
                 density: ParticleDensity::Medium,
                 actions: EditorActionEffects::default()
             }
@@ -2033,6 +2169,7 @@ mod tests {
         preview.editor_effects.density = ParticleDensity::High;
         preview.editor_effects.actions.paste = ActionEffectSettings {
             particles: Some(ParticleStyle::Shotgun),
+            lingering: Some(LingeringStyle::Smoke),
             shake: true,
             flash: true,
             glow: true,
@@ -2051,7 +2188,7 @@ mod tests {
         assert_eq!(current.editor_effects.density, ParticleDensity::High);
         assert_eq!(current.editor_effects.actions.paste, effects.actions.paste);
         let mut storage = MemoryStorage::default();
-        current.save(&mut storage);
+        current.save(&mut storage).unwrap();
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), current);
     }
 
@@ -2061,6 +2198,7 @@ mod tests {
         let mut storage = MemoryStorage::default();
         let off = ActionEffectSettings {
             particles: None,
+            lingering: None,
             shake: false,
             flash: false,
             glow: false,
@@ -2070,13 +2208,14 @@ mod tests {
             for style in ParticleStyle::ALL.into_iter().map(Some).chain([None]) {
                 let effects = ActionEffectSettings {
                     particles: style,
+                    lingering: None,
                     shake: true,
                     flash: true,
                     glow: true,
                 };
                 assert!(effects.enabled());
                 *settings.editor_effects.actions.get_mut(action) = effects;
-                settings.save(&mut storage);
+                settings.save(&mut storage).unwrap();
                 let loaded = AppSettings::load(Some(&storage)).unwrap();
                 assert_eq!(*loaded.editor_effects.actions.get(action), effects);
                 assert_eq!(loaded, settings);
@@ -2091,7 +2230,7 @@ mod tests {
                 .get(action)
                 .enabled())
         );
-        settings.save(&mut storage);
+        settings.save(&mut storage).unwrap();
         assert_eq!(AppSettings::load(Some(&storage)).unwrap(), settings);
 
         let mut value = serde_json::to_value(&settings).unwrap();
@@ -2108,42 +2247,122 @@ mod tests {
     }
 
     #[test]
-    fn persisted_motion_ranges_are_normalized_without_enabling_effects() {
-        let invalid = AppSettings {
-            source_reveal_animation: RevealAnimation {
-                enabled: false,
-                duration_ms: 0,
-                size_percent: 65535,
-                ..Default::default()
-            },
-            preview_reveal_animation: RevealAnimation {
-                duration_ms: 65535,
-                size_percent: 0,
-                ..Default::default()
-            },
+    fn unified_effects_preserve_individual_choices_and_lingering_can_run_alone() {
+        let mut settings = AppSettings::default();
+        let defaults = settings.editor_effects;
+        assert!(!defaults.same_for_all && !defaults.cursor_afterburner);
+        assert!(
+            EditorAction::ALL
+                .into_iter()
+                .all(|a| defaults.effect(a).lingering.is_none())
+        );
+        let paste = ActionEffectSettings {
+            particles: Some(ParticleStyle::Railgun),
+            lingering: Some(LingeringStyle::Embers),
+            glow: true,
             ..Default::default()
         };
+        settings.editor_effects.actions.paste = paste;
+        settings.editor_effects.same_for_all = true;
+        settings.editor_effects.cursor_afterburner = true;
+        settings.editor_effects.actions.typing.lingering = Some(LingeringStyle::Smoke);
+        for action in EditorAction::ALL {
+            assert_eq!(
+                settings.editor_effects.effect(action),
+                &settings.editor_effects.actions.typing
+            );
+        }
         let mut storage = MemoryStorage::default();
-        storage.set_string(STORAGE_KEY, serde_json::to_string(&invalid).unwrap());
-        let loaded = AppSettings::load(Some(&storage)).unwrap();
-        assert_eq!(
-            (
-                loaded.source_reveal_animation.duration_ms,
-                loaded.source_reveal_animation.size_percent
-            ),
-            (250, 200)
+        settings.save(&mut storage).unwrap();
+        let mut restored = AppSettings::load(Some(&storage)).unwrap();
+        assert_eq!(restored, settings);
+        assert_eq!(restored.editor_effects.actions.paste, paste);
+        restored.editor_effects.same_for_all = false;
+        assert_eq!(restored.editor_effects.effect(EditorAction::Paste), &paste);
+        assert!(
+            !restored.editor_effects.enabled,
+            "new options do not enable the master switch"
         );
+        for style in LingeringStyle::ALL {
+            let alone = ActionEffectSettings {
+                particles: None,
+                lingering: Some(style),
+                shake: false,
+                flash: false,
+                glow: false,
+            };
+            assert!(alone.enabled() && alone.gpu_enabled());
+            assert!(
+                !ActionEffectSettings {
+                    lingering: None,
+                    ..alone
+                }
+                .enabled()
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_persisted_motion_ranges_fail_without_rewriting_the_choice() {
+        for (name, duration, size) in [
+            ("source_reveal_animation", 0, 65535),
+            ("preview_reveal_animation", 65535, 0),
+        ] {
+            let mut settings = serde_json::to_value(AppSettings::default()).unwrap();
+            settings[name]["duration_ms"] = duration.into();
+            settings[name]["size_percent"] = size.into();
+            assert_saved_settings_rejected(settings, name);
+        }
+    }
+
+    #[test]
+    fn grammar_provider_defaults_use_ltex_without_enabling_harper() {
+        let defaults = AppSettings::default();
+        assert!(!defaults.english_grammar);
+        assert!(defaults.ltex.enabled);
+        assert_eq!(defaults.ltex.mode, ToolMode::Bundled);
+        assert_eq!(AppSettings::load(None).unwrap(), defaults);
         assert_eq!(
-            (
-                loaded.preview_reveal_animation.duration_ms,
-                loaded.preview_reveal_animation.size_percent
-            ),
-            (2000, 50)
+            AppSettings::load(Some(&MemoryStorage::default())).unwrap(),
+            defaults
         );
-        assert!(!loaded.source_reveal_animation.enabled);
-        assert!(!loaded.editor_effects.enabled);
-        invalid.save(&mut storage);
-        assert_eq!(AppSettings::load(Some(&storage)).unwrap(), loaded);
+
+        let mut missing = serde_json::to_value(&defaults).unwrap();
+        missing.as_object_mut().unwrap().remove("english_grammar");
+        missing.as_object_mut().unwrap().remove("ltex");
+        let restored: AppSettings = serde_json::from_value(missing).unwrap();
+        assert!(!restored.english_grammar);
+        assert!(restored.ltex.enabled);
+        assert_eq!(restored.ltex, defaults.ltex);
+
+        let mut missing_enabled = serde_json::to_value(&defaults).unwrap();
+        missing_enabled["ltex"]
+            .as_object_mut()
+            .unwrap()
+            .remove("enabled");
+        let restored: AppSettings = serde_json::from_value(missing_enabled).unwrap();
+        assert!(restored.ltex.enabled);
+    }
+
+    #[test]
+    fn explicit_grammar_provider_choices_persist_independently() {
+        for harper in [false, true] {
+            for ltex in [false, true] {
+                let settings = AppSettings {
+                    english_grammar: harper,
+                    ltex: crate::ltex::LtexSettings {
+                        enabled: ltex,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let mut storage = MemoryStorage::default();
+                settings.save(&mut storage).unwrap();
+                let restored = AppSettings::load(Some(&storage)).unwrap();
+                assert_eq!(restored.english_grammar, harper);
+                assert_eq!(restored.ltex.enabled, ltex);
+            }
+        }
     }
 
     #[test]
@@ -2216,7 +2435,7 @@ mod tests {
         let mut edited = base.clone();
         edited.compact_layout_controls = false;
         let mut storage = MemoryStorage::default();
-        edited.save(&mut storage);
+        edited.save(&mut storage).unwrap();
         assert!(
             !AppSettings::load(Some(&storage))
                 .unwrap()
@@ -2252,7 +2471,7 @@ mod tests {
         let mut edited = base.clone();
         edited.preview_follow_edits = false;
         let mut storage = MemoryStorage::default();
-        edited.save(&mut storage);
+        edited.save(&mut storage).unwrap();
         assert!(
             !AppSettings::load(Some(&storage))
                 .unwrap()
@@ -2296,7 +2515,7 @@ mod tests {
         let mut edited = base.clone();
         edited.tex_preview_follow_edits = true;
         let mut storage = MemoryStorage::default();
-        edited.save(&mut storage);
+        edited.save(&mut storage).unwrap();
         let loaded = AppSettings::load(Some(&storage)).unwrap();
         assert!(loaded.tex_preview_follow_edits);
         assert!(loaded.preview_follow_edits);
@@ -2350,7 +2569,7 @@ mod tests {
             expected
         );
         let mut storage = MemoryStorage::default();
-        settings.save(&mut storage);
+        settings.save(&mut storage).unwrap();
         assert_eq!(
             AppSettings::load(Some(&storage))
                 .unwrap()
@@ -2552,7 +2771,7 @@ mod tests {
             "https://www.overleaf.com/project/00000000000000000000000a"
         );
         let mut storage = MemoryStorage::default();
-        settings.save(&mut storage);
+        settings.save(&mut storage).unwrap();
         assert_eq!(
             AppSettings::load(Some(&storage)).unwrap().overleaf_projects,
             settings.overleaf_projects

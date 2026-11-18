@@ -98,7 +98,7 @@ fn render_with_timeout(
         }
         if let Some(result) = compiler.try_recv() {
             match result.event {
-                CompileEvent::Started => {}
+                CompileEvent::Started | CompileEvent::TexResolved(_) => {}
                 CompileEvent::Failed(report) => {
                     let explanation = if report.raw.trim().is_empty() {
                         report
@@ -271,6 +271,7 @@ cat "$source" >> "$output/${name%.tex}.pdf"
         let mut command = CommandCustomization::for_tool(crate::toolchain::ToolKind::Tectonic);
         command.environment = r#"{"VERSION_TEST":"configured"}"#.into();
         request.engine = EngineConfig::Tex(TexOptions {
+            magic: None,
             engine: crate::tex::settings::BuildEngine::Tectonic,
             command: command.into(),
             executable: program,

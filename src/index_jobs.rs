@@ -280,12 +280,17 @@ pub(crate) enum Poll {
 
 pub(crate) struct ProjectIndexClient {
     owner: WindowSessionId,
-    latest_source: Option<PathBuf>,
-    latest_request: u64,
+    request: RequestState,
     next_request: AtomicU64,
     completion_tx: Sender<Completion>,
     completions: Receiver<Completion>,
-    pending: bool,
+}
+
+/// Only a pending request owns an admissible completion identity. Retiring the
+/// request also retires that identity, including duplicate terminal replies.
+enum RequestState {
+    Idle,
+    Pending { source: PathBuf, request: u64 },
 }
 
 impl ProjectIndexClient {
@@ -293,12 +298,10 @@ impl ProjectIndexClient {
         let (completion_tx, completions) = mpsc::channel();
         Self {
             owner,
-            latest_source: None,
-            latest_request: 0,
+            request: RequestState::Idle,
             next_request: AtomicU64::new(1),
             completion_tx,
             completions,
-            pending: false,
         }
     }
 
@@ -322,9 +325,7 @@ impl ProjectIndexClient {
             completion: self.completion_tx.clone(),
             repaint,
         })?;
-        self.latest_source = Some(source);
-        self.latest_request = request;
-        self.pending = true;
+        self.request = RequestState::Pending { source, request };
         Ok(())
     }
 
@@ -333,10 +334,10 @@ impl ProjectIndexClient {
             match self.completions.try_recv() {
                 Ok(completion)
                     if completion.owner == self.owner
-                        && completion.request == self.latest_request
-                        && self.latest_source.as_ref() == Some(&completion.source) =>
+                        && matches!(&self.request, RequestState::Pending { source, request }
+                            if completion.request == *request && &completion.source == source) =>
                 {
-                    self.pending = false;
+                    self.request = RequestState::Idle;
                     return match completion.output {
                         Ok(index) => Poll::Ready(Box::new(index)),
                         Err(error) => Poll::Failed(error),
@@ -344,14 +345,14 @@ impl ProjectIndexClient {
                 }
                 Ok(_) => continue,
                 Err(TryRecvError::Empty) => {
-                    return if self.pending {
+                    return if self.is_running() {
                         Poll::Pending
                     } else {
                         Poll::Idle
                     };
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.pending = false;
+                    self.request = RequestState::Idle;
                     return Poll::Failed("project-index runner stopped unexpectedly".to_owned());
                 }
             }
@@ -360,13 +361,12 @@ impl ProjectIndexClient {
 
     pub(crate) fn supersede(&mut self) {
         RUNNER.cancel_owner(self.owner);
-        self.pending = false;
-        self.latest_source = None;
+        self.request = RequestState::Idle;
         while self.completions.try_recv().is_ok() {}
     }
 
     pub(crate) fn is_running(&self) -> bool {
-        self.pending
+        matches!(self.request, RequestState::Pending { .. })
     }
 }
 
@@ -400,6 +400,82 @@ mod tests {
             completion,
             repaint: RepaintTarget::test(),
         }
+    }
+
+    #[test]
+    fn an_index_request_consumes_its_matching_completion_exactly_once() {
+        for failed in [false, true] {
+            let owner = WindowSessionId::new(20_001);
+            let mut client = ProjectIndexClient::new(owner);
+            client.request = RequestState::Pending {
+                source: "main.typ".into(),
+                request: 7,
+            };
+            for _ in 0..2 {
+                client
+                    .completion_tx
+                    .send(Completion {
+                        owner,
+                        source: "main.typ".into(),
+                        request: 7,
+                        output: if failed {
+                            Err("failed".into())
+                        } else {
+                            Ok(ProjectIndex::default())
+                        },
+                    })
+                    .unwrap();
+            }
+            assert!(matches!(
+                (failed, client.poll()),
+                (false, Poll::Ready(_)) | (true, Poll::Failed(_))
+            ));
+            assert!(!client.is_running());
+            assert!(
+                matches!(client.poll(), Poll::Idle),
+                "a terminal request must not accept another completion with its former identity"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_completions_cannot_retire_the_current_pending_index() {
+        let owner = WindowSessionId::new(20_002);
+        let mut client = ProjectIndexClient::new(owner);
+        client.request = RequestState::Pending {
+            source: "new.typ".into(),
+            request: 8,
+        };
+        for (reply_owner, source, request) in [
+            (owner, "old.typ", 7),
+            (owner, "old.typ", 8),
+            (owner, "new.typ", 7),
+            (WindowSessionId::new(20_003), "new.typ", 8),
+        ] {
+            client
+                .completion_tx
+                .send(Completion {
+                    owner: reply_owner,
+                    source: source.into(),
+                    request,
+                    output: Err("obsolete".into()),
+                })
+                .unwrap();
+            assert!(matches!(client.poll(), Poll::Pending));
+            assert!(client.is_running());
+        }
+        client
+            .completion_tx
+            .send(Completion {
+                owner,
+                source: "new.typ".into(),
+                request: 8,
+                output: Ok(ProjectIndex::default()),
+            })
+            .unwrap();
+        assert!(matches!(client.poll(), Poll::Ready(_)));
+        assert!(!client.is_running());
+        assert!(matches!(client.poll(), Poll::Idle));
     }
 
     #[test]

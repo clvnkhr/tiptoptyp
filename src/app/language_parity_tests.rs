@@ -5,8 +5,52 @@ use egui_kittest::{
 };
 
 #[test]
+fn tex_context_menu_supports_real_tex_links_and_rejects_inert_literals() {
+    let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 0, 0);
+    for (source, marker, expected) in [
+        (
+            "\\href{https://example.com/a\\_b}{Documentation}",
+            "Documentation",
+            Some("https://example.com/a_b"),
+        ),
+        (
+            "\\url{www.example.com/docs}",
+            "example",
+            Some("https://www.example.com/docs"),
+        ),
+        ("% \\url{https://example.com}", "example", None),
+        ("\\verb|\\url{https://example.com}|", "example", None),
+        (
+            "\\href{javascript:alert(1)}{Documentation}",
+            "Documentation",
+            None,
+        ),
+        (
+            "\\href{file:///tmp/private}{Documentation}",
+            "Documentation",
+            None,
+        ),
+    ] {
+        let at = source[..source.find(marker).unwrap()].chars().count();
+        let mut data = prepared_editor_data(source);
+        let popup = editor_view::editor_context_popup(
+            &mut data,
+            source,
+            DocumentKind::Tex,
+            Pos2::ZERO,
+            Some(at),
+            key,
+        );
+        let AppPopup::Editor { link, .. } = popup else {
+            panic!("expected TeX editor menu")
+        };
+        assert_eq!(link.as_deref(), expected, "{source}");
+    }
+}
+
+#[test]
 fn typst_tex_parity_explorer_can_preview_either_source_language() {
-    for extension in ["typ", "tex", "TEX"] {
+    for extension in ["typ", "tex", "TEX", "sty", "cls", "ltx", "latex"] {
         let path = PathBuf::from(format!("/workspace/main.{extension}"));
         let expected = path.clone();
         let mut harness = Harness::builder()
@@ -140,6 +184,7 @@ fn typst_tex_parity_full_explorer_keeps_texdoc_action_across_later_sections() {
                 let output = explorer_view::show(
                     ui,
                     explorer_view::Input {
+                        status: None,
                         root: Path::new("/project"),
                         label: "/project",
                         snapshot: None,

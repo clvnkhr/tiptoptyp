@@ -68,8 +68,8 @@ fn snippet_click_case(projected: bool, server_backed: bool) {
         let app = harness.state_mut();
         let generation = Generation(7);
         let uri = "file:///fixture.typ".to_owned();
-        app.tinymist_sync.generation = Some(generation);
-        app.tinymist_sync.current_uri = Some(uri.clone());
+        app.tinymist_sync
+            .fixture_session(generation, Some(uri.clone()), None);
         app.editor_completion.as_mut().unwrap().provenance = CompletionProvenance::Server {
             generation,
             uri,

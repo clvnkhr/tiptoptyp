@@ -47,14 +47,14 @@ impl EditorApp {
             Route::Elsewhere => return false,
             Route::Hide => self.hide_overleaf(context),
             Route::Address => {
-                if let Some(browser) = &self.overleaf.browser {
+                if let Some(browser) = self.overleaf.browser.as_ref() {
                     browser.focus_parent();
                 }
                 self.begin_overleaf(context);
                 context.request_repaint_of(viewport);
             }
             Route::BrowserEdit => {
-                if let Some(browser) = &self.overleaf.browser {
+                if let Some(browser) = self.overleaf.browser.as_ref() {
                     browser.edit_command(command);
                 }
                 // An unsupported native edit must not fall through into a

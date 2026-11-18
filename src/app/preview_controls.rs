@@ -661,6 +661,7 @@ impl EditorApp {
         // asset can coexist with the pinned source in the main window.
         if self.tool_dialog_open()
             || self.liquid.visible()
+            || self.diagnostic_fix.visible()
             || !target_valid
             || !self.preview_controls.open
             || in_popout != in_preview_window

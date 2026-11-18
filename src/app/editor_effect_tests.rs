@@ -1,6 +1,6 @@
 //! Per-action effects exercised through the real source and editable-diff widgets.
 use super::*;
-use crate::settings::{ActionEffectSettings, EditorAction, ParticleStyle};
+use crate::settings::{ActionEffectSettings, EditorAction, LingeringStyle, ParticleStyle};
 use egui_kittest::Harness;
 
 fn fixture(diff: bool) -> Harness<'static, EditorApp> {
@@ -18,6 +18,7 @@ fn fixture(diff: bool) -> Harness<'static, EditorApp> {
 
 fn off() -> ActionEffectSettings {
     ActionEffectSettings {
+        lingering: None,
         particles: None,
         shake: false,
         flash: false,
@@ -403,5 +404,264 @@ fn disabling_the_last_shake_keeps_the_captured_pulse_until_expiry() {
             });
             output.drop_without_applying_deltas();
         }
+    }
+}
+
+fn press_navigation(harness: &mut Harness<'_, EditorApp>, key: egui::Key) {
+    for pressed in [true, false] {
+        harness.input_mut().events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+    harness.step();
+}
+
+#[test]
+fn actual_editor_smoke_outlives_the_primary_burst_and_then_releases_animation() {
+    for diff in [false, true] {
+        let mut harness = fixture(diff);
+        harness.state_mut().settings.editor_effects.actions.typing = ActionEffectSettings {
+            particles: Some(ParticleStyle::Plasma),
+            lingering: Some(LingeringStyle::Smoke),
+            ..off()
+        };
+        type_character(&mut harness);
+        let emitted = observe(&harness);
+        assert_eq!(
+            emitted["burst_count"], 1,
+            "primary and smoke form one action burst"
+        );
+        assert_eq!(emitted["max_lifetime_ms"], 2800);
+        assert_eq!(emitted["last_style"], "Plasma");
+        for style in ["Plasma", "Smoke"] {
+            assert!(emitted["live_styles"][style].as_u64().unwrap_or(0) > 0);
+        }
+        // The fixture uses a manual 60 Hz clock. This exercises the real
+        // source/diff paint path without sleeping or wall-time assertions.
+        harness.run_steps(45);
+        let lingering = observe(&harness);
+        assert_eq!(lingering["live_styles"]["Plasma"], serde_json::Value::Null);
+        assert!(lingering["live_styles"]["Smoke"].as_u64().unwrap_or(0) > 0);
+        assert!(lingering["active_count"].as_u64().unwrap() > 0);
+        harness.run_steps(130);
+        let expired = observe(&harness);
+        assert_eq!(expired["active_count"], 0);
+        assert_eq!(expired["burst_count"], 1);
+        assert_eq!(harness.state().document().source(), "prefix x");
+        assert!(
+            harness
+                .ctx
+                .repaint_causes()
+                .iter()
+                .all(|cause| !cause.file.ends_with("editor_particles.rs")),
+            "finite smoke must stop requesting animation frames"
+        );
+    }
+}
+
+#[test]
+fn actual_editor_lingering_runs_independently_when_primary_particles_are_off() {
+    for diff in [false, true] {
+        let mut harness = fixture(diff);
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .actions
+            .typing
+            .lingering = Some(LingeringStyle::Embers);
+        type_character(&mut harness);
+        let emitted = observe(&harness);
+        assert_eq!(emitted["last_style"], "Embers");
+        assert_eq!(emitted["last_action"], "Typing");
+        assert_eq!(emitted["burst_count"], 1);
+        assert_eq!(emitted["live_styles"].as_object().unwrap().len(), 1);
+        assert!(emitted["live_styles"]["Embers"].as_u64().unwrap() > 0);
+        assert_eq!(emitted["feedback"]["burst_count"], 0);
+        harness.run_steps(120);
+        assert_eq!(observe(&harness)["active_count"], 0);
+        assert_eq!(harness.state().document().source(), "prefix x");
+    }
+}
+
+#[test]
+fn unified_effects_apply_to_real_copy_and_comment_without_overwriting_action_preferences() {
+    for diff in [false, true] {
+        let mut harness = fixture(diff);
+        let effects = &mut harness.state_mut().settings.editor_effects;
+        effects.same_for_all = true;
+        effects.actions.typing.particles = Some(ParticleStyle::Plasma);
+        effects.actions.copy.particles = Some(ParticleStyle::Shotgun);
+        effects.actions.comment.particles = Some(ParticleStyle::Railgun);
+        let independent = effects.actions;
+        harness.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        });
+        harness.step();
+        harness.input_mut().events.push(egui::Event::Copy);
+        harness.step();
+        let copied = observe(&harness);
+        assert_eq!(copied["last_action"], "Copy");
+        assert_eq!(copied["last_style"], "Plasma");
+        assert_eq!(copied["burst_count"], 1);
+        assert_eq!(harness.state().document().source(), "prefix ");
+        assert!(harness.output().platform_output.commands.iter().any(
+            |command| matches!(command, egui::OutputCommand::CopyText(text) if text == "prefix ")
+        ));
+        let context = harness.ctx.clone();
+        harness.state_mut().toggle_comments(&context);
+        harness.step();
+        let commented = observe(&harness);
+        assert_eq!(commented["last_action"], "Comment");
+        assert_eq!(commented["last_style"], "Plasma");
+        assert_eq!(commented["burst_count"], 2);
+        assert_eq!(harness.state().document().source(), "// prefix ");
+        assert_eq!(harness.state().settings.editor_effects.actions, independent);
+        harness.state_mut().settings.editor_effects.same_for_all = false;
+        harness.state_mut().toggle_comments(&context);
+        harness.step();
+        assert_eq!(observe(&harness)["last_style"], "Railgun");
+        assert_eq!(harness.state().document().source(), "prefix ");
+        assert_eq!(harness.state().settings.editor_effects.actions, independent);
+    }
+}
+
+#[test]
+fn cursor_only_afterburner_follows_arrow_keys_without_edits_or_action_bursts_and_respects_focus() {
+    for diff in [false, true] {
+        let mut harness = fixture(diff);
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .cursor_afterburner = true;
+        harness.step();
+        assert_eq!(
+            observe(&harness)["cursor_bursts"],
+            0,
+            "enabling establishes a baseline"
+        );
+        for count in 1..=2 {
+            press_navigation(&mut harness, egui::Key::ArrowLeft);
+            let moved = observe(&harness);
+            assert_eq!(moved["cursor_bursts"], count);
+            assert_eq!(moved["burst_count"], 0);
+            assert_eq!(moved["last_action"], serde_json::Value::Null);
+            assert_eq!(moved["last_style"], serde_json::Value::Null);
+            assert_eq!(moved["action_bursts"], serde_json::json!({}));
+            assert!(moved["live_styles"]["Afterburner"].as_u64().unwrap_or(0) > 0);
+            assert_eq!(harness.state().document().source(), "prefix ");
+        }
+        harness.run_steps(40);
+        assert_eq!(observe(&harness)["active_count"], 0);
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .cursor_afterburner = false;
+        harness.step();
+        press_navigation(&mut harness, egui::Key::ArrowRight);
+        assert_eq!(observe(&harness)["cursor_bursts"], 2);
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .cursor_afterburner = true;
+        harness.step();
+        harness.input_mut().focused = false;
+        harness
+            .input_mut()
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .focused = Some(false);
+        harness.step();
+        press_navigation(&mut harness, egui::Key::ArrowLeft);
+        assert_eq!(observe(&harness)["cursor_bursts"], 2);
+        harness.input_mut().focused = true;
+        harness
+            .input_mut()
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .focused = Some(true);
+        harness.step();
+        assert_eq!(
+            observe(&harness)["cursor_bursts"],
+            2,
+            "regaining focus cannot bridge a stale cursor"
+        );
+        press_navigation(&mut harness, egui::Key::ArrowRight);
+        assert_eq!(observe(&harness)["cursor_bursts"], 3);
+        harness.state_mut().settings.editor_effects.enabled = false;
+        harness.step();
+        press_navigation(&mut harness, egui::Key::ArrowLeft);
+        let disabled = observe(&harness);
+        assert_eq!(disabled["cursor_bursts"], 3);
+        assert_eq!(disabled["active_count"], 0);
+        assert_eq!(disabled["burst_count"], 0);
+        assert_eq!(harness.state().document().source(), "prefix ");
+    }
+}
+
+#[test]
+fn cursor_afterburner_does_not_connect_stale_positions_after_external_text_reflow() {
+    for diff in [false, true] {
+        let mut harness = fixture(diff);
+        harness
+            .state_mut()
+            .settings
+            .editor_effects
+            .cursor_afterburner = true;
+        harness.step();
+        press_navigation(&mut harness, egui::Key::ArrowLeft);
+        assert_eq!(observe(&harness)["cursor_bursts"], 1);
+        let context = harness.ctx.clone();
+        let cursor = harness.state_mut().editor_snapshot(&context).cursor;
+        assert_eq!(usize::from(cursor.primary.index), 6);
+        let before = harness.state().document().key();
+        // An incoming same-length source change moves the existing character
+        // to another row while leaving the caret index and document unchanged.
+        harness.state_mut().document_mut().edit(cursor, |source| {
+            source.replace_range(3..4, "\n");
+        });
+        harness.step();
+        let after = harness.state().document().key();
+        assert_eq!(after.epoch, before.epoch);
+        assert!(after.revision > before.revision);
+        assert_eq!(
+            usize::from(
+                harness
+                    .state_mut()
+                    .editor_snapshot(&context)
+                    .cursor
+                    .primary
+                    .index
+            ),
+            6
+        );
+        assert_eq!(observe(&harness)["cursor_bursts"], 1);
+        press_navigation(&mut harness, egui::Key::ArrowLeft);
+        assert_eq!(
+            observe(&harness)["cursor_bursts"],
+            1,
+            "the first movement after reflow establishes a new point instead of connecting stale coordinates"
+        );
+        press_navigation(&mut harness, egui::Key::ArrowLeft);
+        assert_eq!(
+            observe(&harness)["cursor_bursts"],
+            2,
+            "subsequent ordinary movement resumes the afterburner"
+        );
+        assert_eq!(observe(&harness)["burst_count"], 0);
+        assert_eq!(harness.state().document().source(), "pre\nix ");
     }
 }

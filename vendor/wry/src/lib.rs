@@ -347,6 +347,8 @@ mod custom_protocol_workaround;
 mod error;
 #[cfg(any(target_os = "android", test))]
 mod inject_initialization_scripts;
+#[cfg(target_os = "macos")]
+mod ipc_scope;
 mod permissions;
 mod proxy;
 #[cfg(any(target_os = "macos", target_os = "android", target_os = "ios"))]
@@ -359,7 +361,7 @@ pub(crate) mod android;
 pub use crate::android::android_setup;
 #[cfg(target_os = "android")]
 pub mod prelude {
-  pub use crate::android::{binding::*, dispatch, find_class, Context};
+  pub use crate::android::{Context, binding::*, dispatch, find_class};
   pub use tao_macros::{android_fn, generate_package_name};
 }
 #[cfg(target_os = "android")]
@@ -647,6 +649,10 @@ struct WebViewAttributes<'a> {
   /// using `window.ipc.postMessage("insert_message_here")` to host Rust code.
   pub ipc_handler: Option<Box<dyn Fn(Request<String>)>>,
 
+  /// Limit IPC to this WebView's main frame, including when popup configurations are shared.
+  #[cfg(target_os = "macos")]
+  pub ipc_handler_main_frame_only: bool,
+
   /// A handler closure to process incoming [`DragDropEvent`] of the webview.
   ///
   /// ## Blocking OS Default Behavior
@@ -863,6 +869,8 @@ impl Default for WebViewAttributes<'_> {
       initialization_scripts: Default::default(),
       custom_protocols: Default::default(),
       ipc_handler: None,
+      #[cfg(target_os = "macos")]
+      ipc_handler_main_frame_only: false,
       drag_drop_handler: None,
       navigation_handler: None,
       download_started_handler: Some(Box::new(|_, _| true)),
@@ -1177,6 +1185,36 @@ impl<'a> WebViewBuilder<'a> {
     F: Fn(Request<String>) + 'static,
   {
     self.attrs.ipc_handler = Some(Box::new(handler));
+    #[cfg(target_os = "macos")]
+    {
+      self.attrs.ipc_handler_main_frame_only = false;
+    }
+    self
+  }
+
+  /// Receive IPC only from the main frame of this WebView.
+  ///
+  /// Unlike [`Self::with_ipc_handler`], messages from subframes or other WebViews
+  /// sharing this view's configuration are rejected before their bodies are read.
+  /// This does not restrict navigation, popups, or browser session storage.
+  /// The request URL must still be validated by the handler before granting
+  /// access to privileged application operations.
+  ///
+  /// ## Platform-specific
+  ///
+  /// - **macOS**: Validates the native sending WebView and frame identity.
+  /// - **Windows**: WebView2's owning `WebMessageReceived` event already receives
+  ///   only main-document messages; frame messages have a separate event.
+  #[cfg(any(target_os = "macos", target_os = "windows"))]
+  pub fn with_ipc_handler_for_main_frame<F>(mut self, handler: F) -> Self
+  where
+    F: Fn(Request<String>) + 'static,
+  {
+    self.attrs.ipc_handler = Some(Box::new(handler));
+    #[cfg(target_os = "macos")]
+    {
+      self.attrs.ipc_handler_main_frame_only = true;
+    }
     self
   }
 
@@ -2107,7 +2145,8 @@ impl WebView {
   /// Evaluate and run javascript code with callback function. The evaluation result will be
   /// serialized into a JSON string and passed to the callback function.
   ///
-  /// Exception is ignored because of the limitation on windows. You can catch it yourself and return as string as a workaround.
+  /// Exception is ignored because of the limitation on Android and Windows WebView2 before 121.0.2277.86.
+  /// You can catch it yourself and return as string as a workaround.
   pub fn evaluate_script_with_callback(
     &self,
     js: &str,
@@ -2625,6 +2664,22 @@ pub struct InitializationScript {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  #[cfg(target_os = "macos")]
+  fn main_frame_ipc_is_explicit_and_the_last_handler_configuration_wins() {
+    let builder = WebViewBuilder::new();
+    assert!(!builder.attrs.ipc_handler_main_frame_only);
+    assert!(builder.attrs.ipc_handler.is_none());
+    let builder = builder.with_ipc_handler_for_main_frame(|_| {});
+    assert!(builder.attrs.ipc_handler_main_frame_only);
+    assert!(builder.attrs.ipc_handler.is_some());
+    let builder = builder.with_ipc_handler(|_| {});
+    assert!(!builder.attrs.ipc_handler_main_frame_only);
+    assert!(builder.attrs.ipc_handler.is_some());
+    let builder = builder.with_ipc_handler_for_main_frame(|_| {});
+    assert!(builder.attrs.ipc_handler_main_frame_only);
+  }
 
   #[test]
   #[cfg_attr(miri, ignore)]

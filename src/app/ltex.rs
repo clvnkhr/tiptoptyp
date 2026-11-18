@@ -7,44 +7,162 @@ pub(super) struct LtexState {
     settings: Option<LtexSettings>,
     resource_generation: u64,
     root: Option<PathBuf>,
-    service: Option<LtexService>,
-    observed: Option<DocumentKey>,
-    observed_uri: Option<String>,
-    observed_path: Option<PathBuf>,
-    observed_language: Option<crate::settings::WritingLanguage>,
-    completed: Option<DocumentKey>,
+    service: ServicePhase,
+    check: CheckPhase,
     diagnostics_key: Option<DocumentKey>,
-    ready: bool,
-    failed: bool,
-    active: bool,
-    error: Option<String>,
     pub(super) diagnostics: Vec<Diagnostic>,
+}
+#[derive(Default)]
+enum ServicePhase {
+    #[default]
+    Stopped,
+    Starting(LtexService),
+    Ready(LtexService),
+    Failed {
+        process: Option<LtexService>,
+        message: String,
+    },
+}
+impl ServicePhase {
+    fn process(&self) -> Option<&LtexService> {
+        match self {
+            Self::Starting(process) | Self::Ready(process) => Some(process),
+            Self::Failed { process, .. } => process.as_ref(),
+            Self::Stopped => None,
+        }
+    }
+    fn take_process(&mut self) -> Option<LtexService> {
+        match std::mem::take(self) {
+            Self::Starting(process) | Self::Ready(process) => Some(process),
+            Self::Failed { process, .. } => process,
+            Self::Stopped => None,
+        }
+    }
+    fn failed(&self) -> bool {
+        matches!(self, Self::Failed { .. })
+    }
+}
+struct Identity {
+    key: DocumentKey,
+    path: Option<PathBuf>,
+    language: Option<crate::settings::WritingLanguage>,
+}
+struct Submitted {
+    identity: Identity,
+    uri: String,
+}
+#[derive(Default)]
+enum CheckPhase {
+    #[default]
+    Inactive,
+    AwaitingSnapshot,
+    Unsubmitted(Identity),
+    Checking(Submitted),
+    Complete(Submitted),
+    Rejected {
+        identity: Identity,
+        message: String,
+    },
+}
+impl CheckPhase {
+    fn identity(&self) -> Option<&Identity> {
+        match self {
+            Self::Unsubmitted(identity) | Self::Rejected { identity, .. } => Some(identity),
+            Self::Checking(submitted) | Self::Complete(submitted) => Some(&submitted.identity),
+            _ => None,
+        }
+    }
+    fn submitted(&self) -> Option<&Submitted> {
+        match self {
+            Self::Checking(submitted) | Self::Complete(submitted) => Some(submitted),
+            _ => None,
+        }
+    }
+    fn complete(&mut self) {
+        *self = match std::mem::take(self) {
+            Self::Checking(submitted) | Self::Complete(submitted) => Self::Complete(submitted),
+            other => other,
+        };
+    }
 }
 impl LtexState {
     pub(super) fn configure(&mut self, settings: &LtexSettings) {
         if self.settings.as_ref() == Some(settings) {
             return;
         }
+        let active = settings.enabled && self.active();
         self.settings = Some(settings.clone());
-        self.service = None;
-        self.observed = None;
-        self.observed_language = None;
-        self.completed = None;
-        self.ready = false;
-        self.failed = false;
-        self.error = None;
-        if !settings.enabled {
-            self.active = false;
-        }
+        self.service = ServicePhase::Stopped;
+        self.check = if active {
+            CheckPhase::AwaitingSnapshot
+        } else {
+            CheckPhase::Inactive
+        };
     }
     pub(super) fn restart(&mut self) {
-        self.service = None;
-        self.observed = None;
-        self.observed_language = None;
-        self.completed = None;
-        self.ready = false;
-        self.failed = false;
-        self.error = None;
+        let active = self.active();
+        self.service = ServicePhase::Stopped;
+        self.check = if active {
+            CheckPhase::AwaitingSnapshot
+        } else {
+            CheckPhase::Inactive
+        };
+    }
+    pub(super) fn active(&self) -> bool {
+        !matches!(self.check, CheckPhase::Inactive)
+    }
+    pub(super) fn ready(&self) -> bool {
+        matches!(self.service, ServicePhase::Ready(_))
+    }
+    pub(super) fn failed(&self) -> bool {
+        self.service.failed()
+    }
+    pub(super) fn error(&self) -> Option<&str> {
+        match (&self.service, &self.check) {
+            (ServicePhase::Failed { message, .. }, _)
+            | (_, CheckPhase::Rejected { message, .. }) => Some(message),
+            _ => None,
+        }
+    }
+    pub(super) fn observed(&self) -> Option<DocumentKey> {
+        self.check.identity().map(|identity| identity.key)
+    }
+    pub(super) fn completed(&self) -> Option<DocumentKey> {
+        if let CheckPhase::Complete(submitted) = &self.check {
+            Some(submitted.identity.key)
+        } else {
+            None
+        }
+    }
+    fn observe(
+        &mut self,
+        key: DocumentKey,
+        path: Option<PathBuf>,
+        language: Option<crate::settings::WritingLanguage>,
+    ) {
+        self.check = CheckPhase::Unsubmitted(Identity {
+            key,
+            path,
+            language,
+        });
+    }
+    fn submit(&mut self, uri: String) {
+        let CheckPhase::Unsubmitted(identity) = std::mem::take(&mut self.check) else {
+            panic!("LTeX snapshots must be selected before submission")
+        };
+        self.check = CheckPhase::Checking(Submitted { identity, uri });
+    }
+    fn reject_snapshot(&mut self, message: String) {
+        let CheckPhase::Unsubmitted(identity) = std::mem::take(&mut self.check) else {
+            panic!("only an unsubmitted LTeX snapshot can be rejected")
+        };
+        self.check = CheckPhase::Rejected { identity, message };
+    }
+    fn mark_ready(&mut self) {
+        self.service = match std::mem::take(&mut self.service) {
+            ServicePhase::Starting(process) => ServicePhase::Ready(process),
+            other => other,
+        };
     }
     fn refresh_resources(&mut self, generation: u64, mode: crate::settings::ToolMode) {
         if self.resource_generation != generation {
@@ -56,36 +174,38 @@ impl LtexState {
     }
     #[cfg(any(test, feature = "desktop-ui-tests"))]
     pub(super) fn current(&self, key: DocumentKey) -> bool {
-        !self.failed && self.completed == Some(key) && self.observed == Some(key)
+        !self.failed() && self.completed() == Some(key)
     }
     fn needs_snapshot(
         &self,
         key: DocumentKey,
-        path: Option<&std::path::Path>,
+        path: Option<&Path>,
         language: Option<crate::settings::WritingLanguage>,
     ) -> bool {
-        self.observed != Some(key)
-            || self.observed_path.as_deref() != path
-            || self.observed_language != language
+        self.check.identity().is_none_or(|identity| {
+            identity.key != key || identity.path.as_deref() != path || identity.language != language
+        })
     }
-
     fn accepts(&self, key: DocumentKey, uri: &str) -> bool {
-        !self.failed && self.observed == Some(key) && self.observed_uri.as_deref() == Some(uri)
+        !self.failed()
+            && self
+                .check
+                .submitted()
+                .is_some_and(|submitted| submitted.identity.key == key && submitted.uri == uri)
     }
-    fn fail(&mut self, error: String) {
-        self.failed = true;
-        self.ready = false;
-        self.error = Some(error);
+    fn fail(&mut self, message: String) {
+        let process = self.service.take_process();
+        self.service = ServicePhase::Failed { process, message };
     }
     pub(super) fn activity(&self) -> crate::activity::Activity {
         use crate::activity::Activity;
         if !self.settings.as_ref().is_some_and(|s| s.enabled) {
             Activity::Inactive("Disabled")
-        } else if !self.active {
+        } else if !self.active() {
             Activity::Inactive("No TeX or Typst document")
-        } else if let Some(error) = &self.error {
-            Activity::Failed(error.clone())
-        } else if !self.ready || self.completed != self.observed {
+        } else if let Some(error) = self.error() {
+            Activity::Failed(error.into())
+        } else if !self.ready() || self.completed().is_none() {
             Activity::Running
         } else {
             Activity::Idle
@@ -94,16 +214,17 @@ impl LtexState {
 }
 impl EditorApp {
     pub(crate) fn begin_writing_shutdown(&self) {
-        if let Some(service) = &self.ltex.service {
+        if let Some(service) = self.ltex.service.process() {
             service.begin_stop();
         }
     }
     pub(crate) fn shutdown_writing_checks(&mut self) {
-        if let Some(service) = self.ltex.service.take() {
+        if let Some(service) = self.ltex.service.take_process() {
             service.shutdown();
         }
     }
     pub(super) fn update_ltex_checks(&mut self, context: &egui::Context) {
+        self.refresh_tex_magic();
         self.ltex.refresh_resources(
             crate::resource_repair::ltex_generation(),
             self.settings.ltex.mode,
@@ -116,17 +237,14 @@ impl EditorApp {
                 self.document().kind(),
                 DocumentKind::Tex | DocumentKind::Typst
             );
-        self.ltex.active = self.settings.ltex.enabled && supported;
-        if !self.ltex.active {
-            if self.ltex.observed.take().is_some()
-                && let Some(service) = &self.ltex.service
+        let active = self.settings.ltex.enabled && supported && !self.tex_spellcheck_disabled();
+        if !active {
+            if self.ltex.observed().is_some()
+                && let Some(service) = self.ltex.service.process()
             {
                 service.close();
             }
-            self.ltex.completed = None;
-            self.ltex.observed_uri = None;
-            self.ltex.observed_path = None;
-            self.ltex.observed_language = None;
+            self.ltex.check = CheckPhase::Inactive;
             self.ltex.diagnostics_key = None;
             if !self.ltex.diagnostics.is_empty() {
                 self.ltex.diagnostics.clear();
@@ -136,16 +254,14 @@ impl EditorApp {
         }
         let root = self.project_root();
         if self.ltex.root.as_ref() != Some(&root) {
-            self.ltex.service = None;
+            self.ltex.restart();
             self.ltex.root = Some(root.clone());
-            self.ltex.observed = None;
-            self.ltex.completed = None;
-            self.ltex.ready = false;
-            self.ltex.failed = false;
-            self.ltex.error = None;
         }
-        if self.ltex.service.is_none() {
-            self.ltex.service = Some(LtexService::spawn(
+        if matches!(self.ltex.check, CheckPhase::Inactive) {
+            self.ltex.check = CheckPhase::AwaitingSnapshot;
+        }
+        if matches!(self.ltex.service, ServicePhase::Stopped) {
+            self.ltex.service = ServicePhase::Starting(LtexService::spawn(
                 self.settings.ltex.clone(),
                 root,
                 context.clone(),
@@ -169,18 +285,15 @@ impl EditorApp {
                 self.ltex.diagnostics.clear();
                 self.update_tex_diagnostics();
             }
-            self.ltex.observed = Some(key);
-            self.ltex.observed_path = self.document().path().clone();
-            self.ltex.observed_language = language;
-            self.ltex.completed = None;
-            self.ltex.observed_uri = None;
-            if self.ltex.failed {
+            self.ltex
+                .observe(key, self.document().path().clone(), language);
+            if self.ltex.failed() {
                 return;
             }
             if self.document().source().len() > 2_000_000 {
-                self.ltex.error =
-                    Some("LTeX+: document exceeds the 2 MB writing-check limit".into());
-                self.ltex.service.as_ref().unwrap().close();
+                self.ltex
+                    .reject_snapshot("LTeX+: document exceeds the 2 MB writing-check limit".into());
+                self.ltex.service.process().unwrap().close();
                 return;
             }
             let path = self
@@ -189,16 +302,16 @@ impl EditorApp {
                 .clone()
                 .unwrap_or_else(|| self.tinymist_document_path());
             let Ok(uri) = url::Url::from_file_path(path) else {
-                self.ltex.error =
-                    Some("LTeX+: document path cannot be represented as a file URI".into());
+                self.ltex.reject_snapshot(
+                    "LTeX+: document path cannot be represented as a file URI".into(),
+                );
                 return;
             };
-            self.ltex.observed_uri = Some(uri.to_string());
+            self.ltex.submit(uri.to_string());
             // A failed subprocess remains failed until explicit Retry or a
             // settings/workspace change. Edits cannot revive its dead worker.
-            if !self.ltex.failed {
-                self.ltex.error = None;
-                self.ltex.service.as_ref().unwrap().update(LtexSnapshot {
+            if !self.ltex.failed() {
+                self.ltex.service.process().unwrap().update(LtexSnapshot {
                     key,
                     uri: uri.into(),
                     language_id: if self.document().kind() == DocumentKind::Tex {
@@ -214,11 +327,11 @@ impl EditorApp {
         }
         // Bounded even if a malfunctioning server floods its output.
         for _ in 0..64 {
-            let Some(event) = self.ltex.service.as_ref().and_then(|s| s.try_recv()) else {
+            let Some(event) = self.ltex.service.process().and_then(|s| s.try_recv()) else {
                 break;
             };
             match event {
-                LtexEvent::Ready if !self.ltex.failed => self.ltex.ready = true,
+                LtexEvent::Ready => self.ltex.mark_ready(),
                 LtexEvent::Error(error) => self.ltex.fail(error),
                 LtexEvent::Diagnostics {
                     key: completed,
@@ -227,7 +340,6 @@ impl EditorApp {
                 } => {
                     self.accept_ltex_diagnostics(completed, &uri, diagnostics);
                 }
-                _ => {}
             }
         }
     }
@@ -254,9 +366,8 @@ impl EditorApp {
         for diagnostic in &mut diagnostics {
             diagnostic.source = DiagnosticSource::File(path.clone());
         }
-        self.ltex.completed = Some(key);
+        self.ltex.check.complete();
         self.ltex.diagnostics_key = Some(key);
-        self.ltex.error = None;
         self.ltex.diagnostics = diagnostics;
         self.update_tex_diagnostics();
         true
@@ -278,56 +389,47 @@ mod tests {
     #[test]
     fn following_language_changes_recheck_unchanged_source_without_restarting_service() {
         use crate::settings::WritingLanguage;
-        let state = LtexState {
-            observed: Some(key(3)),
-            observed_path: Some(PathBuf::from("/tmp/paper.typ")),
-            observed_language: Some(WritingLanguage::Auto),
-            ..Default::default()
-        };
-        let path = Some(std::path::Path::new("/tmp/paper.typ"));
-        assert!(!state.needs_snapshot(key(3), path, Some(WritingLanguage::Auto)));
-        assert!(state.needs_snapshot(key(3), path, Some(WritingLanguage::American)));
-        assert!(state.needs_snapshot(key(4), path, Some(WritingLanguage::Auto)));
-        let explicit = LtexState {
-            observed_language: None,
-            ..state
-        };
-        assert!(!explicit.needs_snapshot(key(3), path, None));
+        let mut state = LtexState::default();
+        let path = Some(PathBuf::from("/tmp/paper.typ"));
+        state.observe(key(3), path.clone(), Some(WritingLanguage::Auto));
+        assert!(!state.needs_snapshot(key(3), path.as_deref(), Some(WritingLanguage::Auto)));
+        assert!(state.needs_snapshot(key(3), path.as_deref(), Some(WritingLanguage::American)));
+        assert!(state.needs_snapshot(key(4), path.as_deref(), Some(WritingLanguage::Auto)));
+        state.observe(key(3), path.clone(), None);
+        assert!(!state.needs_snapshot(key(3), path.as_deref(), None));
     }
 
     #[test]
     fn result_admission_requires_matching_document_revision_and_exact_uri() {
-        let mut state = LtexState {
-            observed: Some(key(3)),
-            observed_uri: Some("file:///tmp/first.tex".into()),
-            ..Default::default()
-        };
+        let mut state = LtexState::default();
+        state.observe(key(3), None, None);
+        state.submit("file:///tmp/first.tex".into());
         assert!(state.accepts(key(3), "file:///tmp/first.tex"));
         assert!(!state.accepts(key(2), "file:///tmp/first.tex"));
         assert!(!state.accepts(key(3), "file:///tmp/renamed.tex"));
         let other = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(2), 2, 3);
         assert!(!state.accepts(other, "file:///tmp/first.tex"));
-        state.observed_uri = Some("file:///tmp/renamed.tex".into());
+        state.observe(key(3), None, None);
+        state.submit("file:///tmp/renamed.tex".into());
         assert!(!state.accepts(key(3), "file:///tmp/first.tex"));
         assert!(state.accepts(key(3), "file:///tmp/renamed.tex"));
-        state.observed_uri = None;
+        state.observe(key(3), None, None);
         assert!(!state.accepts(key(3), "file:///tmp/renamed.tex"));
     }
 
     #[test]
     fn bundled_resource_refresh_restarts_only_the_bundled_checker_once() {
-        let mut state = LtexState {
-            observed: Some(key(3)),
-            completed: Some(key(3)),
-            ..Default::default()
-        };
+        let mut state = LtexState::default();
+        state.observe(key(3), None, None);
+        state.submit("file:///tmp/paper.tex".into());
+        state.check.complete();
         state.refresh_resources(1, crate::settings::ToolMode::Custom);
-        assert_eq!(state.observed, Some(key(3)));
+        assert_eq!(state.observed(), Some(key(3)));
         state.refresh_resources(2, crate::settings::ToolMode::Bundled);
-        assert_eq!(state.observed, None);
-        state.observed = Some(key(4));
+        assert_eq!(state.observed(), None);
+        state.observe(key(4), None, None);
         state.refresh_resources(2, crate::settings::ToolMode::Bundled);
-        assert_eq!(state.observed, Some(key(4)));
+        assert_eq!(state.observed(), Some(key(4)));
     }
 
     #[test]
@@ -338,23 +440,44 @@ mod tests {
             ..Default::default()
         };
         state.configure(&settings);
-        state.active = true;
-        state.observed = Some(key(3));
-        state.observed_uri = Some("file:///tmp/paper.tex".into());
-        state.completed = Some(key(3));
+        state.observe(key(3), None, None);
+        state.submit("file:///tmp/paper.tex".into());
+        state.check.complete();
         state.fail("server exited".into());
+        state.mark_ready();
+        assert!(
+            state.failed(),
+            "a queued readiness event cannot revive a failed process"
+        );
         assert!(!state.current(key(3)));
         assert!(!state.accepts(key(3), "file:///tmp/paper.tex"));
-        state.observed = Some(key(4));
+        state.observe(key(4), None, None);
         assert!(!state.accepts(key(4), "file:///tmp/paper.tex"));
         assert_eq!(
             state.activity(),
             crate::activity::Activity::Failed("server exited".into())
         );
         state.restart();
-        assert!(!state.failed);
-        assert!(state.error.is_none());
+        assert!(!state.failed());
+        assert!(state.error().is_none());
         assert!(!state.current(key(4)));
+    }
+
+    #[test]
+    fn a_rejected_snapshot_can_be_replaced_without_reviving_a_failed_service() {
+        let mut state = LtexState::default();
+        state.observe(key(3), None, None);
+        state.reject_snapshot("snapshot too large".into());
+        assert_eq!(state.error(), Some("snapshot too large"));
+        assert!(!state.accepts(key(3), "file:///tmp/paper.tex"));
+        state.observe(key(4), None, None);
+        state.submit("file:///tmp/paper.tex".into());
+        assert!(state.error().is_none());
+        assert!(state.accepts(key(4), "file:///tmp/paper.tex"));
+        state.fail("process stopped".into());
+        state.observe(key(5), None, None);
+        assert!(!state.accepts(key(5), "file:///tmp/paper.tex"));
+        assert_eq!(state.error(), Some("process stopped"));
     }
 
     #[test]
@@ -372,8 +495,8 @@ mod tests {
         let key = app.document().key();
         let path = app.tinymist_document_path();
         let uri = url::Url::from_file_path(&path).unwrap().to_string();
-        app.ltex.observed = Some(key);
-        app.ltex.observed_uri = Some(uri.clone());
+        app.ltex.observe(key, None, None);
+        app.ltex.submit(uri.clone());
         let diagnostic = Diagnostic {
             correction: Some(crate::diagnostics::DiagnosticCorrection::new(
                 0..3,
@@ -416,8 +539,9 @@ mod tests {
         };
         state.configure(&settings);
         let key = DocumentKey::new(tiptoptyp_core::document::WindowSessionId::new(1), 1, 1);
-        state.observed = Some(key);
-        state.completed = Some(key);
+        state.observe(key, None, None);
+        state.submit("file:///tmp/paper.tex".into());
+        state.check.complete();
         state.diagnostics_key = Some(key);
         state.diagnostics.push(Diagnostic {
             correction: None,
@@ -443,6 +567,7 @@ mod tests {
         let context = egui::Context::default();
         let root = tempfile::tempdir().unwrap();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.settings.ltex.enabled = false;
         app.ltex.diagnostics.push(Diagnostic {
             correction: None,
             provider: Some("LTeX+".into()),
@@ -453,7 +578,7 @@ mod tests {
             details: vec![],
         });
         app.update_ltex_checks(&context);
-        assert!(app.ltex.service.is_none());
+        assert!(app.ltex.service.process().is_none());
         assert!(app.ltex.diagnostics.is_empty());
         assert_eq!(
             app.ltex.activity(),

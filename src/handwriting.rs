@@ -357,14 +357,165 @@ pub(crate) struct Drawing {
     artboard: Option<egui::Rect>,
     undo: Vec<(Vec<Vec<Pos2>>, Option<egui::Rect>)>,
     redo: Vec<(Vec<Vec<Pos2>>, Option<egui::Rect>)>,
-    job: LatestJob<(u64, Vec<Symbol>)>,
-    job_generation: u64,
-    generation: u64,
-    pending: bool,
+    demand: RecognitionDemand,
+    worker: RecognitionWorker,
     results: Vec<Symbol>,
-    error: Option<String>,
 }
+
+/// Desired input and an older draining worker are independent machines. Ink can
+/// change immediately without overlapping recognizers or accepting old output.
+enum RecognitionDemand {
+    Settled(u64),
+    Drawing(u64),
+    Queued(u64),
+}
+
+impl Default for RecognitionDemand {
+    fn default() -> Self {
+        Self::Settled(0)
+    }
+}
+
+impl RecognitionDemand {
+    fn generation(&self) -> u64 {
+        match self {
+            Self::Settled(generation) | Self::Drawing(generation) | Self::Queued(generation) => {
+                *generation
+            }
+        }
+    }
+
+    fn is_queued(&self) -> bool {
+        matches!(self, Self::Queued(_))
+    }
+
+    fn queue(&mut self) {
+        *self = Self::Queued(self.generation());
+    }
+
+    fn settle(&mut self) {
+        *self = Self::Settled(self.generation());
+    }
+}
+
+#[derive(Default)]
+enum RecognitionWorker {
+    #[default]
+    Idle,
+    Running {
+        generation: u64,
+        job: LatestJob<Vec<Symbol>>,
+    },
+    Failed {
+        generation: u64,
+        error: String,
+    },
+}
+
+enum RecognitionPoll {
+    Idle,
+    Pending,
+    Ready {
+        generation: u64,
+        results: Vec<Symbol>,
+    },
+    Failed {
+        generation: u64,
+    },
+}
+
+impl RecognitionWorker {
+    fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
+
+    fn error(&self, current: u64) -> Option<&str> {
+        match self {
+            Self::Failed { generation, error } if *generation == current => Some(error),
+            _ => None,
+        }
+    }
+
+    fn forget_failure(&mut self) {
+        if matches!(self, Self::Failed { .. }) {
+            *self = Self::Idle;
+        }
+    }
+
+    fn start(
+        &mut self,
+        generation: u64,
+        context: &egui::Context,
+        work: impl FnOnce() -> Result<Vec<Symbol>, String> + Send + 'static,
+    ) -> Result<(), String> {
+        if self.is_running() {
+            return Err("A symbol recognizer is already running".into());
+        }
+        let mut job = LatestJob::default();
+        let started = job.start_and_repaint("symbol-recognition", context, work);
+        match &started {
+            Ok(()) => *self = Self::Running { generation, job },
+            Err(error) => {
+                *self = Self::Failed {
+                    generation,
+                    error: error.clone(),
+                }
+            }
+        }
+        started
+    }
+
+    fn poll(&mut self) -> RecognitionPoll {
+        let Self::Running { generation, job } = self else {
+            return RecognitionPoll::Idle;
+        };
+        let generation = *generation;
+        match job.poll() {
+            LatestJobPoll::Pending => RecognitionPoll::Pending,
+            LatestJobPoll::Ready(results) => {
+                *self = Self::Idle;
+                RecognitionPoll::Ready {
+                    generation,
+                    results,
+                }
+            }
+            LatestJobPoll::Failed(error) => {
+                *self = Self::Failed { generation, error };
+                RecognitionPoll::Failed { generation }
+            }
+            LatestJobPoll::Idle => unreachable!("a running recognizer owns an admitted worker"),
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_until_ready_for_test(&mut self) {
+        let Self::Running { job, .. } = self else {
+            panic!("a recognizer must be running");
+        };
+        job.wait_until_ready_for_test().unwrap();
+    }
+}
+
 impl Drawing {
+    fn change_demand(&mut self, phase: fn(u64) -> RecognitionDemand) {
+        let generation = self
+            .demand
+            .generation()
+            .checked_add(1)
+            .expect("drawing generations exhausted");
+        self.demand = phase(generation);
+        self.worker.forget_failure();
+    }
+
+    fn changed_ink(&mut self) {
+        if self.strokes.is_empty() {
+            self.change_demand(RecognitionDemand::Settled);
+            self.results.clear();
+        } else {
+            self.change_demand(RecognitionDemand::Queued);
+        }
+    }
+
     fn checkpoint(&mut self) {
         if self.undo.len() == 32 {
             self.undo.remove(0);
@@ -384,12 +535,7 @@ impl Drawing {
         } else {
             self.redo.push(previous);
         }
-        self.generation += 1;
-        self.error = None;
-        self.pending = !self.strokes.is_empty();
-        if !self.pending {
-            self.results.clear();
-        }
+        self.changed_ink();
     }
 
     pub(crate) fn fixture() -> Self {
@@ -416,7 +562,10 @@ impl Drawing {
                 let s = &self.results[row.index];
                 serde_json::json!({"index":row.index,"typst":prediction_insertion(s,false,settings.prefer_typst_names, settings.prefer_math_mode),"tex":s.tex,"detexify":s.detexify,"caption":row.caption})
             }).collect::<Vec<_>>(),
-            "busy":self.pending || self.job.is_running(),
+            "busy":self.demand.is_queued() || self.worker.is_running(),
+            "demand":match self.demand { RecognitionDemand::Settled(_) => "settled", RecognitionDemand::Drawing(_) => "drawing", RecognitionDemand::Queued(_) => "queued" },
+            "worker":match self.worker { RecognitionWorker::Idle => "idle", RecognitionWorker::Running { .. } => "running", RecognitionWorker::Failed { .. } => "failed" },
+            "generation":self.demand.generation(),
         })
     }
     fn configure(&mut self, engine: HandwritingEngine) {
@@ -424,33 +573,32 @@ impl Drawing {
             return;
         }
         self.engine = engine;
-        self.generation += 1;
         self.results.clear();
-        self.error = None;
-        self.pending = !self.strokes.is_empty();
+        self.changed_ink();
         // Let any current worker finish before starting the selected engine.
         // Its generation cannot publish results after this switch.
     }
     pub(crate) fn poll(&mut self) {
-        match self.job.poll() {
-            LatestJobPoll::Ready((generation, results)) if generation == self.generation => {
+        match self.worker.poll() {
+            RecognitionPoll::Ready {
+                generation,
+                results,
+            } if generation == self.demand.generation() => {
                 self.results = results;
-                self.error = None
             }
-            LatestJobPoll::Failed(error) if self.job_generation == self.generation => {
-                self.error = Some(error)
+            RecognitionPoll::Failed { generation } if generation != self.demand.generation() => {
+                self.worker.forget_failure()
             }
-            LatestJobPoll::Failed(_) => self.job.supersede(),
             _ => {}
         }
     }
     pub(crate) fn activity(&self) -> crate::activity::Activity {
-        if let Some(error) = &self.error {
-            crate::activity::Activity::Failed(error.clone())
-        } else if self.pending {
+        if let Some(error) = self.worker.error(self.demand.generation()) {
+            crate::activity::Activity::Failed(error.into())
+        } else if self.demand.is_queued() {
             crate::activity::Activity::Pending("Drawing queued")
         } else {
-            self.job.activity()
+            crate::activity::Activity::work(self.worker.is_running(), false, None)
         }
     }
 
@@ -491,9 +639,7 @@ impl Drawing {
                 .input(|input| input.pointer.press_origin())
                 .map(|point| transform.to_model(rect.clamp(point)));
             self.strokes.push(start.into_iter().collect());
-            self.generation += 1;
-            self.pending = false;
-            self.error = None;
+            self.change_demand(RecognitionDemand::Drawing);
         }
         if response.dragged()
             && let Some(point) = response.interact_pointer_pos()
@@ -522,22 +668,16 @@ impl Drawing {
             ));
         }
         if response.drag_stopped() {
-            self.pending = true;
+            self.demand.queue();
         }
-        if self.pending && !self.job.is_running() {
-            self.pending = false;
+        if self.demand.is_queued() && !self.worker.is_running() {
+            self.demand.settle();
             let strokes = self.strokes.clone();
-            let generation = self.generation;
-            self.job_generation = generation;
+            let generation = self.demand.generation();
             let engine = self.engine;
-            if let Err(error) =
-                self.job
-                    .start_and_repaint("symbol-recognition", ui.ctx(), move || {
-                        recognize(strokes, engine).map(|results| (generation, results))
-                    })
-            {
-                self.error = Some(error);
-            }
+            let _ = self
+                .worker
+                .start(generation, ui.ctx(), move || recognize(strokes, engine));
         }
         // Paint translucent result backgrounds after the ink. Each row has a single
         // right-aligned command for the active language and never selects text.
@@ -587,9 +727,7 @@ impl Drawing {
                                 self.strokes.clear();
                                 self.artboard = None;
                                 self.results.clear();
-                                self.error = None;
-                                self.generation += 1;
-                                self.pending = false;
+                                self.changed_ink();
                             }
                             "Undo stroke" => self.history(false),
                             _ => self.history(true),
@@ -598,7 +736,7 @@ impl Drawing {
                 }
             })
             .response;
-        if let Some(error) = &self.error {
+        if let Some(error) = self.worker.error(self.demand.generation()) {
             overlay.label(error);
         }
         let result_rect = egui::Rect::from_min_max(
@@ -687,9 +825,7 @@ impl Drawing {
                 transform.to_model(rect.min),
                 transform.to_model(rect.max),
             ));
-            self.generation += 1;
-            self.error = None;
-            self.pending = true;
+            self.changed_ink();
             ui.ctx().request_repaint();
         }
         selected
@@ -698,6 +834,81 @@ impl Drawing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undo_to_empty_ink_retires_an_old_recognition_failure() {
+        let mut drawing = Drawing::default();
+        drawing.checkpoint();
+        drawing.strokes.push(vec![Pos2::new(1.0, 2.0)]);
+        drawing
+            .worker
+            .start(0, &egui::Context::default(), || {
+                Err("old recognition failure".into())
+            })
+            .unwrap();
+        drawing.worker.wait_until_ready_for_test();
+        drawing.poll();
+        assert_eq!(
+            drawing.activity(),
+            crate::activity::Activity::Failed("old recognition failure".into())
+        );
+        drawing.history(false);
+        assert!(drawing.strokes.is_empty());
+        assert_eq!(
+            drawing.activity(),
+            crate::activity::Activity::Idle,
+            "an empty restored drawing has no failed recognition request"
+        );
+    }
+
+    #[test]
+    fn clearing_ink_does_not_overlap_a_draining_worker_or_accept_its_late_failure() {
+        let mut drawing = Drawing::fixture();
+        let (release, blocked) = std::sync::mpsc::channel();
+        drawing
+            .worker
+            .start(0, &egui::Context::default(), move || {
+                blocked.recv().unwrap();
+                Err("obsolete recognizer".into())
+            })
+            .unwrap();
+        drawing.strokes.clear();
+        drawing.changed_ink();
+        assert!(!drawing.demand.is_queued());
+        assert!(drawing.results.is_empty());
+        assert!(
+            drawing
+                .worker
+                .start(
+                    drawing.demand.generation(),
+                    &egui::Context::default(),
+                    || panic!("must not overlap recognizers")
+                )
+                .is_err()
+        );
+        release.send(()).unwrap();
+        drawing.worker.wait_until_ready_for_test();
+        drawing.poll();
+        assert!(drawing.results.is_empty());
+        assert_eq!(drawing.activity(), crate::activity::Activity::Idle);
+    }
+
+    #[test]
+    fn a_new_stroke_keeps_predictions_but_queues_only_after_drawing_finishes() {
+        let mut drawing = Drawing::fixture();
+        let shown = drawing.results.len();
+        let old_generation = drawing.demand.generation();
+        drawing.change_demand(RecognitionDemand::Drawing);
+        assert_eq!(drawing.results.len(), shown);
+        assert!(!drawing.demand.is_queued());
+        assert!(drawing.demand.generation() > old_generation);
+        drawing.demand.queue();
+        assert!(drawing.demand.is_queued());
+        let generation = drawing.demand.generation();
+        drawing.demand.settle();
+        assert_eq!(drawing.demand.generation(), generation);
+        assert!(!drawing.demand.is_queued());
+    }
     #[test]
     fn typst_symbol_insertion_escapes_delimiters_and_never_quotes_unicode() {
         let symbols: Vec<Symbol> =
@@ -835,7 +1046,7 @@ mod tests {
             harness.run_steps(2);
             assert!(harness.state().0.strokes.is_empty());
             assert!(harness.state().0.results.is_empty());
-            assert!(!harness.state().0.pending);
+            assert!(!harness.state().0.demand.is_queued());
         }
     }
     #[test]
@@ -874,35 +1085,36 @@ mod tests {
         let ink = drawing.strokes.clone();
         let (release, wait) = std::sync::mpsc::channel();
         drawing
-            .job
-            .start("old-engine", move || {
+            .worker
+            .start(0, &egui::Context::default(), move || {
                 wait.recv().unwrap();
-                Ok((0, vec![symbol("α", "\\alpha", None)]))
+                Ok(vec![symbol("α", "\\alpha", None)])
             })
             .unwrap();
         drawing.configure(HandwritingEngine::Detypify);
         assert!(
-            drawing.job.is_running(),
+            drawing.worker.is_running(),
             "wait for the old worker, never overlap engines"
         );
-        assert!(drawing.pending);
+        assert!(drawing.demand.is_queued());
         assert_eq!(drawing.strokes, ink);
         assert!(drawing.results.is_empty());
-        let generation = drawing.generation;
+        let generation = drawing.demand.generation();
         drawing.configure(HandwritingEngine::Detypify);
         assert_eq!(
-            drawing.generation, generation,
+            drawing.demand.generation(),
+            generation,
             "idle settings cannot resubmit work"
         );
         release.send(()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while drawing.job.is_running() {
+        while drawing.worker.is_running() {
             assert!(std::time::Instant::now() < deadline);
             drawing.poll();
             std::thread::yield_now();
         }
         assert!(drawing.results.is_empty());
-        assert!(drawing.pending);
+        assert!(drawing.demand.is_queued());
     }
     #[test]
     fn stroke_history_restores_exact_ink_and_discards_redo_on_new_input() {

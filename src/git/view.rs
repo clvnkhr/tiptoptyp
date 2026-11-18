@@ -22,10 +22,12 @@ pub(super) struct Input<'a> {
     pub(super) diff_style: GitDiffStyle,
     pub(super) busy: bool,
     pub(super) dirty: bool,
+    pub(super) local_copy_pending: bool,
 }
 
 #[derive(Default)]
 pub(crate) struct Output {
+    pub(crate) setup: bool,
     pub(super) operation: Option<Operation>,
     pub(super) commit_message: Option<String>,
     pub(super) revealed: Option<DiffSelection>,
@@ -690,15 +692,26 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                                 Operation::Fetch,
                             ),
                         ] {
-                            if action_button(ui, !input.dirty, label, input.toolbar_style)
+                            let restores = matches!(operation, Operation::Pull);
+                            if action_button(ui, !input.dirty && (!restores || !input.snapshot.managed_overleaf), label, input.toolbar_style)
                                 .on_hover_text(hint)
+                                .on_disabled_hover_text(if restores && input.snapshot.managed_overleaf { "Overleaf manages file updates in this workspace. Git can commit and push saved copies." } else { "Save editor changes before running this Git operation." })
                                 .clicked()
                             {
                                 output.operation = Some(operation);
                             }
                         }
-                    } else if action_button(ui, true, "Initialize repository", input.toolbar_style).clicked() {
-                        output.operation = Some(Operation::Init);
+                        let configure = action_button(ui, !input.local_copy_pending, "Configure Git…", input.toolbar_style)
+                            .on_disabled_hover_text("Wait for Overleaf files to finish saving locally.");
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe("git.setup.open", &configure);
+                        if configure.clicked() { output.setup = true; }
+                    } else {
+                        let setup = ui.add_enabled(!input.local_copy_pending, egui::Button::new("Set up Git…"))
+                            .on_disabled_hover_text("Wait for Overleaf files to finish saving locally.");
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe("git.setup.open", &setup);
+                        if setup.clicked() { output.setup = true; }
                     }
                     ui.with_layout(
                         egui::Layout::left_to_right(egui::Align::Center),
@@ -713,7 +726,9 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                     );
                 });
             });
-            if input.dirty {
+            if input.local_copy_pending {
+                ui.colored_label(palette.warning, "Wait for Overleaf files to finish saving locally before staging or committing.");
+            } else if input.dirty {
                 ui.colored_label(
                     palette.warning,
                     "Save editor changes before staging, committing or reverting. Git uses files on disk.",
@@ -727,16 +742,18 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                     ui.spacing_mut().button_padding.y = 1.0;
                     ui.spacing_mut().interact_size.y = 20.0;
                     right_action_row(ui, |ui| {
-                        if action_button(ui, !input.dirty && input.snapshot.entries.stageable, "Stage all", input.toolbar_style)
-                            .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.").clicked() {
+                        if action_button(ui, !input.dirty && !input.local_copy_pending && input.snapshot.entries.stageable, "Stage all", input.toolbar_style)
+                            .on_hover_text("Stage all working changes, excluding .tiptoptyp temporary files.")
+                            .on_disabled_hover_text(if input.local_copy_pending { "Wait for Overleaf files to finish saving locally before staging or committing." } else { "Save editor changes before staging." }).clicked() {
                             output.operation = Some(Operation::StageAll);
                         }
                         if action_button(ui, staged > 0, "Unstage all", input.toolbar_style)
                             .on_hover_text("Remove all changes from the staging area. Keep all working files and edits.").clicked() {
                             output.operation = Some(Operation::UnstageAll);
                         }
-                        if action_button(ui, !input.dirty && input.snapshot.entries.revertible, "Revert all", input.toolbar_style)
-                            .on_hover_text("Discard unstaged changes and delete unstaged new files after confirmation. Keep staged changes.").clicked() {
+                        if action_button(ui, !input.dirty && !input.snapshot.managed_overleaf && input.snapshot.entries.revertible, "Revert all", input.toolbar_style)
+                            .on_hover_text("Discard unstaged changes and delete unstaged new files after confirmation. Keep staged changes.")
+                            .on_disabled_hover_text(if input.snapshot.managed_overleaf { "Overleaf manages file updates in this workspace. Git can commit and push saved copies." } else { "Save editor changes before reverting." }).clicked() {
                             output.operation = Some(Operation::Revert(input.snapshot.entries.iter().filter(|entry| entry.revertible()).map(|entry| entry.path.clone()).collect()));
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -754,7 +771,7 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                             change_row_height(ui),
                             input.snapshot.entries.len(),
                             |ui, rows| {
-                                let buttons = ChangeButtons::for_ui(ui, input.toolbar_style);
+                                let buttons = ChangeButtons::for_ui(ui, input.toolbar_style, input.snapshot.managed_overleaf, input.local_copy_pending);
                                 for row in rows {
                                     let entry = &input.snapshot.entries[row];
                                     #[cfg(test)]
@@ -845,7 +862,8 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                 ui.separator();
                 right_action_row(ui, |ui| {
                     let stage_all = staged == 0 && input.snapshot.entries.stageable;
-                    if action_button(ui, !input.busy && !input.dirty && (staged > 0 || stage_all) && !cache.commit_message.trim().is_empty(), if staged == 0 { "Stage and commit all" } else { "Commit staged changes" }, crate::settings::ToolbarStyle::Text)
+                    if action_button(ui, !input.busy && !input.dirty && !input.local_copy_pending && (staged > 0 || stage_all) && !cache.commit_message.trim().is_empty(), if staged == 0 { "Stage and commit all" } else { "Commit staged changes" }, crate::settings::ToolbarStyle::Text)
+                        .on_disabled_hover_text(if input.local_copy_pending { "Wait for Overleaf files to finish saving locally before staging or committing." } else { "Save editor changes and enter a commit message before committing." })
                         .clicked()
                     {
                         output.operation = Some(if stage_all {
@@ -863,7 +881,12 @@ pub(super) fn show_panel(ui: &mut egui::Ui, input: Input<'_>, cache: &mut Cache)
                     if response.changed() {
                         output.commit_message = Some(cache.commit_message.clone());
                     }
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("git.commit_message", &response);
                 });
+                if input.snapshot.history.trim().is_empty() || input.snapshot.history == "No commits yet" {
+                    ui.label("Commit records your files locally. Push sends those commits to the remote.");
+                }
                 egui::CollapsingHeader::new("Recent commits").show(ui, |ui| {
                     ui.monospace(&input.snapshot.history);
                 });
@@ -985,10 +1008,21 @@ fn change_row_height(ui: &egui::Ui) -> f32 {
 
 struct ChangeButtons {
     style: crate::settings::ToolbarStyle,
+    managed_overleaf: bool,
+    local_copy_pending: bool,
 }
 impl ChangeButtons {
-    fn for_ui(_ui: &egui::Ui, style: crate::settings::ToolbarStyle) -> Self {
-        Self { style }
+    fn for_ui(
+        _ui: &egui::Ui,
+        style: crate::settings::ToolbarStyle,
+        managed_overleaf: bool,
+        local_copy_pending: bool,
+    ) -> Self {
+        Self {
+            style,
+            managed_overleaf,
+            local_copy_pending,
+        }
     }
     fn show(&self, ui: &mut egui::Ui, entry: &Entry, dirty: bool) -> Option<Operation> {
         let staged = entry.staged();
@@ -1011,7 +1045,7 @@ impl ChangeButtons {
             [
                 (
                     "Stage",
-                    !dirty && entry.stageable(),
+                    !dirty && !self.local_copy_pending && entry.stageable(),
                     "Stage this file's working changes for the next commit.",
                     Operation::Stage as fn(PathBuf) -> Operation,
                 ),
@@ -1026,13 +1060,13 @@ impl ChangeButtons {
         let mut selected = None;
         let revert = (
             "Revert",
-            !dirty && entry.revertible(),
+            !dirty && !self.managed_overleaf && entry.revertible(),
             "Discard unstaged changes or delete this unstaged new file after confirmation. Keep staged changes.",
             (|path| Operation::Revert(vec![path])) as fn(PathBuf) -> Operation,
         );
         for (label, enabled, hint, operation) in actions.into_iter().chain([revert]) {
             let response = action_button(ui, enabled, label, self.style);
-            if response.on_hover_text(format!("{label}: {hint}")).clicked() {
+            if response.on_hover_text(format!("{label}: {hint}")).on_disabled_hover_text(if label == "Stage" && self.local_copy_pending { "Wait for Overleaf files to finish saving locally before staging or committing." } else if label == "Revert" && self.managed_overleaf { "Overleaf manages file updates in this workspace. Git can commit and push saved copies." } else { hint }).clicked() {
                 selected = Some(operation(entry.path.clone()));
             }
         }
@@ -1097,20 +1131,197 @@ fn action_button(
         "Push" => UiIcon::Push,
         "Pull" => UiIcon::Pull,
         "Fetch" => UiIcon::Fetch,
-        "Initialize repository" => UiIcon::InitializeGit,
+        "Configure Git…" => UiIcon::Spanner,
         "Stage" | "Stage all" => UiIcon::Stage,
         "Unstage" | "Unstage all" => UiIcon::Unstage,
         "Revert" | "Revert all" => UiIcon::Revert,
         "Diff" | "Staged diff" => UiIcon::Diff,
         _ => UiIcon::Commit,
     };
-    icons::toolbar_button(ui, enabled, false, icon, label, style, false)
+    let response = icons::toolbar_button(ui, enabled, false, icon, label, style, false);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    if let Some(id) = match label {
+        "Stage all" => Some("git.stage_all"),
+        "Unstage all" => Some("git.unstage_all"),
+        "Commit staged changes" | "Stage and commit all" => Some("git.commit"),
+        "Push" => Some("git.push"),
+        "Pull" => Some("git.pull"),
+        "Fetch" => Some("git.fetch"),
+        "Revert" => Some("git.revert"),
+        _ => None,
+    } {
+        crate::desktop_test::observe(id, &response);
+    }
+    response
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_kittest::{Harness, kittest::Queryable as _};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT as _, Queryable as _},
+    };
+
+    #[test]
+    fn setup_and_configure_emit_a_review_request_without_initializing_or_mutating() {
+        for initialized in [false, true] {
+            let snapshot = Snapshot {
+                initialized,
+                ..Snapshot::default()
+            };
+            let mut harness = Harness::builder()
+                .with_size(egui::vec2(500.0, 400.0))
+                .build_ui_state(
+                    move |ui, state: &mut (Cache, bool, bool)| {
+                        let output = show_panel(
+                            ui,
+                            Input {
+                                toolbar_style: crate::settings::ToolbarStyle::Icons,
+                                snapshot: &snapshot,
+                                message: "",
+                                commit_message: "",
+                                failed: false,
+                                diff: None,
+                                diff_style: GitDiffStyle::Unified,
+                                busy: false,
+                                dirty: false,
+                                local_copy_pending: false,
+                            },
+                            &mut state.0,
+                        );
+                        state.1 |= output.setup;
+                        state.2 |= output.operation.is_some();
+                    },
+                    (Cache::default(), false, false),
+                );
+            harness.run();
+            harness
+                .get_by_label(if initialized {
+                    "Configure Git…"
+                } else {
+                    "Set up Git…"
+                })
+                .click();
+            harness.run();
+            assert!(harness.state().1);
+            assert!(!harness.state().2, "setup must first open a review form");
+        }
+    }
+
+    #[test]
+    fn overleaf_backups_allow_staging_but_never_restore_sources_behind_the_model() {
+        let snapshot = Snapshot {
+            initialized: true,
+            managed_overleaf: true,
+            entries: vec![Entry {
+                path: "main.typ".into(),
+                index: ' ',
+                worktree: 'M',
+            }]
+            .into(),
+            ..Snapshot::default()
+        };
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(560.0, 600.0))
+            .build_ui_state(
+                move |ui, cache| {
+                    let _ = show_panel(
+                        ui,
+                        Input {
+                            toolbar_style: crate::settings::ToolbarStyle::Text,
+                            snapshot: &snapshot,
+                            message: "",
+                            commit_message: "",
+                            failed: false,
+                            diff: None,
+                            diff_style: GitDiffStyle::Unified,
+                            busy: false,
+                            dirty: false,
+                            local_copy_pending: false,
+                        },
+                        cache,
+                    );
+                },
+                Cache::default(),
+            );
+        harness.run();
+        for label in ["Pull", "Revert all", "Revert"] {
+            assert!(
+                harness.get_by_label(label).accesskit_node().is_disabled(),
+                "{label}"
+            );
+        }
+        for label in ["Stage all", "Stage", "Fetch", "Push", "Configure Git…"] {
+            assert!(
+                !harness.get_by_label(label).accesskit_node().is_disabled(),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_local_copy_disables_setup_staging_and_commit_without_disabling_fetch_or_push() {
+        let snapshot = Snapshot {
+            initialized: true,
+            managed_overleaf: true,
+            entries: vec![Entry {
+                path: "main.typ".into(),
+                index: ' ',
+                worktree: 'M',
+            }]
+            .into(),
+            ..Snapshot::default()
+        };
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(560.0, 600.0))
+            .build_ui_state(
+                move |ui, cache| {
+                    let _ = show_panel(
+                        ui,
+                        Input {
+                            toolbar_style: crate::settings::ToolbarStyle::Text,
+                            snapshot: &snapshot,
+                            message: "",
+                            commit_message: "Backup",
+                            failed: false,
+                            diff: None,
+                            diff_style: GitDiffStyle::Unified,
+                            busy: false,
+                            dirty: false,
+                            local_copy_pending: true,
+                        },
+                        cache,
+                    );
+                },
+                Cache::default(),
+            );
+        harness.run();
+        for label in [
+            "Stage all",
+            "Stage",
+            "Stage and commit all",
+            "Configure Git…",
+        ] {
+            assert!(
+                harness.get_by_label(label).accesskit_node().is_disabled(),
+                "{label}"
+            );
+        }
+        for label in ["Fetch", "Push"] {
+            assert!(
+                !harness.get_by_label(label).accesskit_node().is_disabled(),
+                "{label}"
+            );
+        }
+        assert!(
+            harness
+                .query_by_label(
+                    "Wait for Overleaf files to finish saving locally before staging or committing."
+                )
+                .is_some()
+        );
+    }
 
     #[test]
     fn file_rows_open_the_diff_only_on_double_click_even_with_unsaved_buffers() {
@@ -1150,6 +1361,7 @@ mod tests {
                                 diff_style: GitDiffStyle::Unified,
                                 busy: false,
                                 dirty: true,
+                                local_copy_pending: false,
                             },
                             &mut state.0,
                         );
@@ -1236,6 +1448,7 @@ mod tests {
                                 diff_style: GitDiffStyle::Unified,
                                 busy,
                                 dirty,
+                                local_copy_pending: false,
                             },
                             &mut state.0,
                         );
@@ -1303,6 +1516,7 @@ mod tests {
                                 diff_style: GitDiffStyle::Unified,
                                 busy,
                                 dirty,
+                                local_copy_pending: false,
                             },
                             &mut state.0,
                         );
@@ -1427,6 +1641,7 @@ mod tests {
                             diff_style: GitDiffStyle::Unified,
                             busy: false,
                             dirty: false,
+                            local_copy_pending: false,
                         },
                         &mut state.0,
                     );

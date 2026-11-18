@@ -21,6 +21,19 @@ pub(crate) struct TexTools {
     pub(crate) biber: Option<PathBuf>,
 }
 impl TexTools {
+    #[cfg(test)]
+    pub(crate) fn set_distribution_for_test(&mut self, engine: BuildEngine, program: PathBuf) {
+        let index = match engine {
+            BuildEngine::Tectonic => {
+                self.tectonic.program = program;
+                return;
+            }
+            BuildEngine::PdfLatex => 0,
+            BuildEngine::XeLatex => 1,
+            BuildEngine::LuaLatex => 2,
+        };
+        self.distributions[index] = Some(program);
+    }
     pub(crate) fn distribution(&self, engine: BuildEngine) -> Option<&std::path::Path> {
         let index = match engine {
             BuildEngine::Tectonic => return None,

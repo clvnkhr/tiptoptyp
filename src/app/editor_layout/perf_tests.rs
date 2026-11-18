@@ -41,6 +41,7 @@ impl Path {
                 )
                 .expect("complete galley rows");
                 Rows {
+                    cursor: Arc::new(super::CursorIndex::new(galley)),
                     logical: logical.into(),
                     sticky: sticky.into(),
                 }
@@ -133,7 +134,7 @@ fn source_row_index_cost_probe() {
     let source = fixture();
     let lines = source.bytes().filter(|&byte| byte == b'\n').count() + 1;
     assert_eq!(lines, 2005);
-    let fixture_hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let fixture_hash = hex::encode(Sha256::digest(source.as_bytes()));
     let context = egui::Context::default();
     context.set_theme(egui::Theme::Dark);
     context.set_pixels_per_point(1.0);

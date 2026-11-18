@@ -1,6 +1,144 @@
 use super::*;
 
 #[test]
+fn rename_and_delete_preserve_files_owned_by_an_active_save() {
+    let project = tempfile::tempdir().unwrap();
+    let path = project.path().join("main.tex");
+    fs::write(&path, b"saved source").unwrap();
+    let root = WorkspaceRoot::open(project.path()).unwrap();
+    crate::resource_lock::with_resource(&path, || {
+        assert_eq!(
+            root.rename(&path, OsStr::new("renamed.tex"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(
+            root.file(&path).unwrap().delete().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"saved source");
+        assert!(!project.path().join("renamed.tex").exists());
+    });
+    let renamed = root.rename(&path, OsStr::new("renamed.tex")).unwrap();
+    root.file(&renamed).unwrap().delete().unwrap();
+    assert!(!renamed.exists());
+}
+
+#[test]
+fn new_workspace_creates_an_empty_canonical_folder_without_replacing_entries() {
+    let parent = tempfile::tempdir().unwrap();
+    let created = create_workspace(parent.path(), OsStr::new("Research notes 测𝛼")).unwrap();
+    assert_eq!(
+        created,
+        parent
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("Research notes 测𝛼")
+    );
+    assert!(created.is_dir());
+    assert_eq!(fs::read_dir(&created).unwrap().count(), 0);
+    fs::write(created.join("keep.typ"), b"local contents").unwrap();
+    assert_eq!(
+        create_workspace(parent.path(), OsStr::new("Research notes 测𝛼"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(
+        fs::read(created.join("keep.typ")).unwrap(),
+        b"local contents"
+    );
+    fs::write(parent.path().join("existing.typ"), b"source").unwrap();
+    assert_eq!(
+        create_workspace(parent.path(), OsStr::new("existing.typ"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(
+        fs::read(parent.path().join("existing.typ")).unwrap(),
+        b"source"
+    );
+}
+
+#[test]
+fn new_workspace_requires_a_single_name_and_an_existing_parent() {
+    let parent = tempfile::tempdir().unwrap();
+    for name in [
+        "",
+        " ",
+        ".",
+        "..",
+        "../escape",
+        "nested/project",
+        "nested\\project",
+        "/absolute",
+        ".tiptoptyp",
+        "bad\nname",
+        "bad\0name",
+    ] {
+        assert_eq!(
+            create_workspace(parent.path(), OsStr::new(name))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput,
+            "{name:?}"
+        );
+    }
+    assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+    assert!(create_workspace(&parent.path().join("missing"), OsStr::new("project")).is_err());
+    assert!(!parent.path().join("missing").exists());
+    fs::write(parent.path().join("file"), b"keep").unwrap();
+    assert!(create_workspace(&parent.path().join("file"), OsStr::new("project")).is_err());
+    assert_eq!(fs::read(parent.path().join("file")).unwrap(), b"keep");
+}
+
+#[test]
+fn new_workspace_cannot_be_created_inside_an_overleaf_working_copy() {
+    let parent = tempfile::tempdir().unwrap();
+    fs::create_dir_all(parent.path().join(".tiptoptyp")).unwrap();
+    fs::write(
+        parent.path().join(".tiptoptyp/overleaf-project.json"),
+        b"descriptor",
+    )
+    .unwrap();
+    fs::create_dir(parent.path().join("chapters")).unwrap();
+    for path in [parent.path().to_owned(), parent.path().join("chapters")] {
+        assert!(create_workspace(&path, OsStr::new("local")).is_err());
+        assert!(!path.join("local").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn new_workspace_does_not_follow_a_colliding_symlink() {
+    use std::os::unix::fs::symlink;
+    let parent = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    fs::write(external.path().join("keep.typ"), b"external").unwrap();
+    symlink(external.path(), parent.path().join("project")).unwrap();
+    assert_eq!(
+        create_workspace(parent.path(), OsStr::new("project"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert!(
+        fs::symlink_metadata(parent.path().join("project"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_dir(external.path()).unwrap().count(), 1);
+    assert_eq!(
+        fs::read(external.path().join("keep.typ")).unwrap(),
+        b"external"
+    );
+}
+
+#[test]
 fn new_file_is_empty_and_never_overwrites_existing_entries() {
     let project = tempfile::tempdir().unwrap();
     let root = WorkspaceRoot::open(project.path()).unwrap();

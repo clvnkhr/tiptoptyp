@@ -106,13 +106,23 @@ struct SnippetContextCache {
     scope: Option<crate::snippets::Scope>,
 }
 
+struct AssetQuery {
+    key: DocumentKey,
+    cursor: usize,
+    source_path: PathBuf,
+    workspace_root: PathBuf,
+    target: Option<crate::editor_features::LiteralAssetTarget>,
+}
+
 /// Revision-derived text, syntax and diagnostic data consumed by the editor.
 /// Unchanged frames only copy small values or `Arc` handles.
 pub(crate) struct EditorDerivedData {
+    source_kind: crate::document::DocumentKind,
     source_key: Option<DocumentKey>,
     source_snapshot: Arc<str>,
     source_metrics: SourceMetrics,
     char_starts: Vec<usize>,
+    line_starts: Vec<usize>,
     parsed_source: Source,
     parsed_key: Option<DocumentKey>,
     tex_key: Option<DocumentKey>,
@@ -121,6 +131,13 @@ pub(crate) struct EditorDerivedData {
     tex_index: crate::tex_completion::Index,
     regions_key: Option<DocumentKey>,
     regions: Arc<[ContextRegion]>,
+    tex_structure_key: Option<DocumentKey>,
+    tex_structure: crate::delimiters::TexDelimiterIndex,
+    typst_structure_key: Option<DocumentKey>,
+    typst_structure: crate::delimiters::TypstDelimiterIndex,
+    tex_targets_key: Option<DocumentKey>,
+    tex_targets: crate::editor_features::tex_targets::Index,
+    asset_query: Option<AssetQuery>,
     delimiter_query: Option<(DocumentKey, usize)>,
     delimiter_pair: Option<[Range<usize>; 2]>,
     table_query: Option<(DocumentKey, usize, crate::document::DocumentKind)>,
@@ -145,15 +162,23 @@ pub(crate) struct EditorDerivedData {
     tex_rebuilds: usize,
     #[cfg(test)]
     compatibility_checks: usize,
+    #[cfg(test)]
+    tex_structure_rebuilds: usize,
+    #[cfg(test)]
+    typst_structure_rebuilds: usize,
+    #[cfg(test)]
+    asset_resolutions: usize,
 }
 
 impl Default for EditorDerivedData {
     fn default() -> Self {
         Self {
+            source_kind: crate::document::DocumentKind::Typst,
             source_key: None,
             source_snapshot: Arc::from(""),
             source_metrics: SourceMetrics::default(),
             char_starts: vec![0],
+            line_starts: vec![0],
             parsed_source: Source::detached(String::new()),
             parsed_key: None,
             tex_key: None,
@@ -162,6 +187,13 @@ impl Default for EditorDerivedData {
             tex_index: crate::tex_completion::Index::default(),
             regions_key: None,
             regions: Arc::from([]),
+            tex_structure_key: None,
+            tex_structure: crate::delimiters::TexDelimiterIndex::new(""),
+            typst_structure_key: None,
+            typst_structure: Default::default(),
+            tex_targets_key: None,
+            tex_targets: Default::default(),
+            asset_query: None,
             delimiter_query: None,
             delimiter_pair: None,
             table_query: None,
@@ -186,6 +218,12 @@ impl Default for EditorDerivedData {
             tex_rebuilds: 0,
             #[cfg(test)]
             compatibility_checks: 0,
+            #[cfg(test)]
+            tex_structure_rebuilds: 0,
+            #[cfg(test)]
+            typst_structure_rebuilds: 0,
+            #[cfg(test)]
+            asset_resolutions: 0,
         }
     }
 }
@@ -199,6 +237,53 @@ fn tex_index_triggers_present(source: &str) -> bool {
 }
 
 impl EditorDerivedData {
+    pub(crate) fn set_document_kind(&mut self, kind: crate::document::DocumentKind) {
+        if self.source_kind != kind {
+            self.source_kind = kind;
+            self.regions_key = None;
+            self.delimiter_query = None;
+            self.delimiter_pair = None;
+            self.invalidate_asset_targets();
+        }
+    }
+
+    fn prepare_tex_structure(&mut self) {
+        if self.tex_structure_key == self.source_key {
+            return;
+        }
+        self.tex_structure = crate::delimiters::TexDelimiterIndex::new(&self.source_snapshot);
+        self.tex_structure_key = self.source_key;
+        #[cfg(test)]
+        {
+            self.tex_structure_rebuilds += 1;
+        }
+    }
+
+    fn prepare_tex_targets(&mut self) {
+        if self.tex_targets_key == self.source_key {
+            return;
+        }
+        self.prepare_tex_structure();
+        self.tex_targets = crate::editor_features::tex_targets::Index::new(
+            &self.source_snapshot,
+            &self.tex_structure,
+        );
+        self.tex_targets_key = self.source_key;
+    }
+
+    fn prepare_typst_structure(&mut self) {
+        if self.typst_structure_key == self.source_key {
+            return;
+        }
+        self.prepare_syntax();
+        self.typst_structure = crate::delimiters::TypstDelimiterIndex::new(&self.parsed_source);
+        self.typst_structure_key = self.source_key;
+        #[cfg(test)]
+        {
+            self.typst_structure_rebuilds += 1;
+        }
+    }
+
     pub(crate) fn mitex_compatible(&mut self, version: &str) -> bool {
         let Some(key) = self.source_key else {
             return false;
@@ -231,7 +316,7 @@ impl EditorDerivedData {
             return;
         }
 
-        let mut line_count = 1;
+        let mut line_starts = vec![0];
         let mut char_starts = Vec::with_capacity(source.len().saturating_add(1));
         char_starts.push(0);
         let mut current_line_chars = 0;
@@ -242,7 +327,7 @@ impl EditorDerivedData {
             if character == '\n' {
                 longest_line_chars = longest_line_chars.max(current_line_chars);
                 current_line_chars = 0;
-                line_count += 1;
+                line_starts.push(char_starts.len() - 1);
             } else {
                 current_line_chars += 1;
             }
@@ -251,11 +336,12 @@ impl EditorDerivedData {
 
         self.source_snapshot = Arc::from(source);
         self.source_metrics = SourceMetrics {
-            line_count,
+            line_count: line_starts.len(),
             longest_line_chars,
             char_count: char_starts.len() - 1,
         };
         self.char_starts = char_starts;
+        self.line_starts = line_starts;
         self.source_key = Some(key);
         #[cfg(test)]
         {
@@ -286,6 +372,71 @@ impl EditorDerivedData {
         source_path: &std::path::Path,
         workspace_root: &std::path::Path,
     ) -> Option<crate::editor_features::LiteralAssetTarget> {
+        let key = self.source_key?;
+        if let Some(cached) = &self.asset_query
+            && cached.key == key
+            && cached.cursor == cursor
+            && cached.source_path == source_path
+            && cached.workspace_root == workspace_root
+        {
+            return cached.target.clone();
+        }
+        let target = self.literal_asset_target_uncached(cursor, source_path, workspace_root);
+        self.asset_query = Some(AssetQuery {
+            key,
+            cursor,
+            source_path: source_path.to_owned(),
+            workspace_root: workspace_root.to_owned(),
+            target: target.clone(),
+        });
+        #[cfg(test)]
+        {
+            self.asset_resolutions += 1;
+        }
+        target
+    }
+
+    pub(crate) fn invalidate_asset_targets(&mut self) {
+        self.asset_query = None;
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn inspected_matching_delimiters(
+        &self,
+        key: DocumentKey,
+        caret: usize,
+    ) -> Option<&[Range<usize>; 2]> {
+        (self.delimiter_query == Some((key, caret)))
+            .then_some(self.delimiter_pair.as_ref())
+            .flatten()
+    }
+
+    fn literal_asset_target_uncached(
+        &mut self,
+        cursor: usize,
+        source_path: &Path,
+        workspace_root: &Path,
+    ) -> Option<crate::editor_features::LiteralAssetTarget> {
+        if self.source_kind == crate::document::DocumentKind::Tex {
+            self.prepare_tex_targets();
+            let asset = self.tex_targets.asset_at(self.char_to_byte(cursor))?;
+            let (asset_kind, resolved_path) = asset.resolve(source_path, workspace_root)?;
+            let to_chars = |range: &Range<usize>| {
+                self.char_starts.partition_point(|byte| *byte < range.start)
+                    ..self.char_starts.partition_point(|byte| *byte < range.end)
+            };
+            return Some(crate::editor_features::LiteralAssetTarget {
+                call_kind: asset.kind,
+                asset_kind,
+                call_range: to_chars(&asset.call_bytes),
+                literal_range: to_chars(&asset.literal_bytes),
+                value_range: to_chars(&asset.value_bytes),
+                resolved_path,
+            });
+        }
+        if !self.source_kind.is_typst() {
+            return None;
+        }
         self.prepare_syntax();
         let byte = *self.char_starts.get(cursor)?;
         crate::editor_features::find_literal_asset(
@@ -409,6 +560,21 @@ impl EditorDerivedData {
         self.source_metrics
     }
 
+    /// One-based source coordinates, queried without rescanning unchanged text.
+    pub(crate) fn line_column_at_char(&self, character: usize) -> (usize, usize) {
+        let character = character.min(self.source_metrics.char_count);
+        let line = self.line_index_at_char(character);
+        (line + 1, character - self.line_starts[line] + 1)
+    }
+
+    /// A newline belongs to the preceding line; the position after it starts the next.
+    pub(crate) fn line_index_at_char(&self, character: usize) -> usize {
+        let character = character.min(self.source_metrics.char_count);
+        self.line_starts
+            .partition_point(|&start| start <= character)
+            .saturating_sub(1)
+    }
+
     pub(crate) fn source_snapshot(&self) -> Arc<str> {
         Arc::clone(&self.source_snapshot)
     }
@@ -460,21 +626,31 @@ impl EditorDerivedData {
         if self.delimiter_query == Some((key, caret)) {
             return self.delimiter_pair.clone();
         }
-        // Prefer the character under the caret, then the one immediately before it.
-        let candidates = [Some(caret), caret.checked_sub(1)].map(|character| {
-            let character =
-                character.filter(|character| *character < self.source_metrics.char_count)?;
-            let byte = self.char_to_byte(character);
-            let candidate = self.source_snapshot[byte..].chars().next()?;
-            "()[]{}$\"<>`*_|⟨⟩⌈⌉⌊⌋‖".contains(candidate).then_some(byte)
-        });
-        if candidates.iter().any(Option::is_some) {
-            self.prepare_syntax();
+        let byte = self.char_starts.get(caret).copied();
+        if self.source_kind == crate::document::DocumentKind::Tex {
+            let pair = byte.and_then(|byte| {
+                self.prepare_tex_structure();
+                self.tex_structure.pair_at_caret(byte)
+            });
+            self.delimiter_pair = pair.map(|pair| {
+                pair.map(|endpoint| {
+                    self.char_starts
+                        .partition_point(|byte| *byte < endpoint.start)
+                        ..self
+                            .char_starts
+                            .partition_point(|byte| *byte < endpoint.end)
+                })
+            });
+            self.delimiter_query = Some((key, caret));
+            return self.delimiter_pair.clone();
         }
-        let pair = candidates
-            .into_iter()
-            .flatten()
-            .find_map(|byte| crate::delimiters::pair_at(&self.parsed_source, byte));
+        if !self.source_kind.is_typst() {
+            return None;
+        }
+        let pair = byte.and_then(|byte| {
+            self.prepare_typst_structure();
+            self.typst_structure.pair_at_caret(byte)
+        });
         self.delimiter_pair = pair.map(|pair| {
             pair.map(|endpoint| {
                 self.char_starts
@@ -531,8 +707,21 @@ impl EditorDerivedData {
         if self.regions_key == self.source_key {
             return;
         }
-        self.prepare_syntax();
-        self.regions = context_regions(&self.parsed_source, &self.source_snapshot).into();
+        self.regions = match self.source_kind {
+            crate::document::DocumentKind::Typst => {
+                self.prepare_syntax();
+                context_regions(&self.parsed_source, &self.source_snapshot).into()
+            }
+            crate::document::DocumentKind::Tex => {
+                self.prepare_tex_structure();
+                crate::editor_features::tex_context_regions(
+                    &self.source_snapshot,
+                    self.tex_structure.ignored_ranges(),
+                )
+                .into()
+            }
+            _ => Arc::from([]),
+        };
         self.regions_key = self.source_key;
     }
 
@@ -595,6 +784,16 @@ impl EditorDerivedData {
     /// Return the literal argument of a `#link("...")` call under the cursor.
     /// URL policy remains with the application boundary.
     pub(crate) fn web_link_at(&mut self, char_index: usize) -> Option<String> {
+        if self.source_kind == crate::document::DocumentKind::Tex {
+            self.prepare_tex_targets();
+            return self
+                .tex_targets
+                .link_at(self.char_to_byte(char_index))
+                .map(str::to_owned);
+        }
+        if !self.source_kind.is_typst() {
+            return None;
+        }
         fn walk(node: LinkedNode<'_>, source: &str, cursor: usize) -> Option<String> {
             if node.kind() == SyntaxKind::FuncCall
                 && node.range().start <= cursor
@@ -842,6 +1041,134 @@ fn hover_leaf_range(leaf: &LinkedNode<'_>, cursor: usize) -> Option<Range<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tex_editor_features_share_revision_caches_and_reset_on_language_changes() {
+        use crate::document::DocumentKind;
+        let source = "你好 \\section{Intro}\n\\begin{equation}\n(a+[b])\n\\end{equation}\n\\href{https://example.com}{Read more}\n";
+        let mut data = EditorDerivedData::default();
+        data.set_document_kind(DocumentKind::Tex);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        let open = source[..source.find('{').unwrap()].chars().count();
+        let close = source[..source.find('}').unwrap()].chars().count();
+        let pair = Some([open..open + 1, close..close + 1]);
+        assert_eq!(data.matching_delimiters(open), pair);
+        let regions = data.context_regions();
+        assert!(!regions.is_empty());
+        let link = source[..source.find("Read more").unwrap()].chars().count();
+        assert_eq!(
+            data.web_link_at(link).as_deref(),
+            Some("https://example.com")
+        );
+        for cursor in 0..source.chars().count() {
+            data.matching_delimiters(cursor);
+            assert!(Arc::ptr_eq(&regions, &data.context_regions()));
+            data.web_link_at(cursor);
+        }
+        assert_eq!(data.tex_structure_rebuilds, 1);
+        assert_eq!(data.syntax_rebuilds, 0, "TeX must not use the Typst parser");
+        data.set_document_kind(DocumentKind::Text);
+        assert_eq!(data.matching_delimiters(open), None);
+        assert!(data.context_regions().is_empty());
+        assert_eq!(data.web_link_at(link), None);
+        data.set_document_kind(DocumentKind::Tex);
+        assert_eq!(data.matching_delimiters(open), pair);
+        assert_eq!(data.tex_structure_rebuilds, 1);
+        data.prepare_source(&DocumentSnapshot::fixture(
+            revision(2),
+            "\\section{unfinished",
+        ));
+        assert_eq!(data.matching_delimiters(8), None);
+        assert_eq!(data.tex_structure_rebuilds, 2);
+    }
+
+    #[test]
+    fn tex_asset_hover_reuses_resolution_until_source_or_workspace_changes() {
+        use crate::document::DocumentKind;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("main.tex");
+        let source = "\\includegraphics{figure}";
+        let cursor = source.find("figure").unwrap();
+        let mut data = EditorDerivedData::default();
+        data.set_document_kind(DocumentKind::Tex);
+        data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+        assert!(
+            data.literal_asset_target_at(cursor, &path, root.path())
+                .is_none()
+        );
+        std::fs::write(root.path().join("figure.pdf"), b"fixture").unwrap();
+        assert!(
+            data.literal_asset_target_at(cursor, &path, root.path())
+                .is_none()
+        );
+        data.invalidate_asset_targets();
+        let target = data
+            .literal_asset_target_at(cursor, &path, root.path())
+            .unwrap();
+        assert_eq!(
+            target.resolved_path,
+            root.path().join("figure.pdf").canonicalize().unwrap()
+        );
+        for _ in 0..1_000 {
+            assert_eq!(
+                data.literal_asset_target_at(cursor, &path, root.path()),
+                Some(target.clone())
+            );
+        }
+        assert_eq!(
+            data.asset_resolutions, 2,
+            "idle hover must not touch the filesystem"
+        );
+        assert_eq!(data.tex_structure_rebuilds, 1);
+        data.prepare_source(&DocumentSnapshot::fixture(
+            revision(2),
+            "% \\includegraphics{figure}",
+        ));
+        assert!(
+            data.literal_asset_target_at(cursor + 2, &path, root.path())
+                .is_none()
+        );
+        assert_eq!(data.asset_resolutions, 3);
+    }
+
+    #[test]
+    #[ignore = "bounded optimized component measurement; no desktop or user files"]
+    fn literal_asset_hover_cost_probe() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("image.png"), b"fixture").unwrap();
+        let path = root.path().join("main.typ");
+        let source = format!("{}#image(\"image.png\")", "Text α.\n".repeat(128));
+        let cursor = source[..source.find("image.png").unwrap()].chars().count();
+        let mut data = EditorDerivedData::default();
+        data.prepare_source(&DocumentSnapshot::fixture(revision(77), &source));
+        for cached in [false, true] {
+            for _ in 0..100 {
+                let result = if cached {
+                    data.literal_asset_target_at(cursor, &path, root.path())
+                } else {
+                    data.literal_asset_target_uncached(cursor, &path, root.path())
+                };
+                assert!(std::hint::black_box(result).is_some());
+            }
+            for batch in 0..5 {
+                let started = std::time::Instant::now();
+                for _ in 0..500 {
+                    let result = if cached {
+                        data.literal_asset_target_at(cursor, &path, root.path())
+                    } else {
+                        data.literal_asset_target_uncached(cursor, &path, root.path())
+                    };
+                    assert!(std::hint::black_box(result).is_some());
+                }
+                eprintln!(
+                    "asset_hover_cost,cached={cached},batch={batch},ns={}",
+                    started.elapsed().as_nanos() / 500
+                );
+            }
+        }
+        assert_eq!(data.syntax_rebuilds, 1);
+        assert_eq!(data.asset_resolutions, 1);
+    }
 
     #[test]
     fn snippet_context_reuses_revision_syntax_and_scalar_boundaries() {
@@ -1164,8 +1491,8 @@ mod tests {
         data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
         assert_eq!(data.matching_delimiters(5), None);
         assert_eq!(
-            data.syntax_rebuilds, 0,
-            "ordinary typing needs no delimiter parse"
+            data.syntax_rebuilds, 1,
+            "inside-body matching shares one incremental syntax tree per revision"
         );
         let start = source[..source.find('(').unwrap()].chars().count();
         let end = source.chars().count() - 1;
@@ -1188,6 +1515,73 @@ mod tests {
         data.prepare_source(&DocumentSnapshot::fixture(other_window, source));
         assert_eq!(data.matching_delimiters(start), pair);
         assert_eq!(data.matching_delimiters(usize::MAX), None);
+    }
+
+    #[test]
+    fn nearest_enclosing_delimiters_remain_selected_inside_typst_and_tex_bodies() {
+        for (kind, source, marker, left, right) in [
+            (
+                crate::document::DocumentKind::Typst,
+                "你好 #text[outer #text[inner words] trailing]",
+                "words",
+                "[inner",
+                "] trailing",
+            ),
+            (
+                crate::document::DocumentKind::Tex,
+                "你好 \\begin{equation*}\nα + beta\n\\end{equation*}",
+                "beta",
+                "\\begin{equation*}",
+                "\\end{equation*}",
+            ),
+        ] {
+            let mut data = EditorDerivedData::default();
+            data.set_document_kind(kind);
+            data.prepare_source(&DocumentSnapshot::fixture(revision(1), source));
+            let caret = source[..source.find(marker).unwrap() + 2].chars().count();
+            let start = source.find(left).unwrap();
+            let end = source.find(right).unwrap();
+            let left_len = if kind.is_typst() { 1 } else { left.len() };
+            let right_len = if kind.is_typst() { 1 } else { right.len() };
+            let scalar = |byte| source[..byte].chars().count();
+            let expected = Some([
+                scalar(start)..scalar(start + left_len),
+                scalar(end)..scalar(end + right_len),
+            ]);
+            assert_eq!(data.matching_delimiters(caret), expected, "{source}");
+            for _ in 0..100 {
+                assert_eq!(data.matching_delimiters(caret), expected);
+            }
+            assert_eq!(
+                data.tex_structure_rebuilds,
+                usize::from(kind == crate::document::DocumentKind::Tex)
+            );
+            assert_eq!(data.syntax_rebuilds, usize::from(kind.is_typst()));
+            assert_eq!(data.typst_structure_rebuilds, usize::from(kind.is_typst()));
+            let insert = source.find(marker).unwrap() + 2;
+            let mut edited = source.to_owned();
+            edited.insert_str(insert, "🦀 ");
+            data.prepare_source(&DocumentSnapshot::fixture(revision(2), &edited));
+            let close = edited.find(right).unwrap();
+            let scalar = |byte| edited[..byte].chars().count();
+            let shifted = Some([
+                scalar(start)..scalar(start + left_len),
+                scalar(close)..scalar(close + right_len),
+            ]);
+            assert_eq!(data.matching_delimiters(caret + 2), shifted);
+            for at in caret..=caret + 2 {
+                assert_eq!(data.matching_delimiters(at), shifted);
+            }
+            assert_eq!(
+                data.tex_structure_rebuilds,
+                usize::from(kind == crate::document::DocumentKind::Tex) * 2
+            );
+            assert_eq!(data.syntax_rebuilds, usize::from(kind.is_typst()) * 2);
+            assert_eq!(
+                data.typst_structure_rebuilds,
+                usize::from(kind.is_typst()) * 2
+            );
+        }
     }
 
     #[test]
@@ -1889,3 +2283,6 @@ mod tests {
         assert_eq!(data.tex_rebuilds, 2);
     }
 }
+
+#[cfg(test)]
+mod cursor_tests;

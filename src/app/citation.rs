@@ -10,27 +10,44 @@ struct Target {
     cursor: CCursorRange,
     kind: DocumentKind,
 }
-enum Reply {
-    Loaded(Citation, Arc<BibliographySnapshot>),
-    Imported(ImportResult),
+struct Loaded {
+    citation: Citation,
+    snapshot: Arc<BibliographySnapshot>,
 }
 pub(super) struct Dialog {
     query: String,
     destination: String,
     key: String,
     bibtex: String,
-    snapshot: Option<Arc<BibliographySnapshot>>,
+    phase: Phase,
     target: Option<Target>,
     insert: bool,
-    completed: Option<(String, bool)>,
     error: Option<String>,
-    job: LatestJob<Reply>,
-    cancel: Arc<AtomicBool>,
-    picker: Option<PendingDialog<()>>,
     focus: bool,
     pub(super) edit_events: Vec<egui::Event>,
 }
-impl Drop for Dialog {
+#[derive(Default)]
+enum Phase {
+    #[default]
+    Query,
+    Picking(PendingDialog<()>),
+    LookingUp(Task<Loaded>),
+    Review(Arc<BibliographySnapshot>),
+    Importing {
+        snapshot: Arc<BibliographySnapshot>,
+        task: Task<ImportResult>,
+    },
+    Imported {
+        snapshot: Arc<BibliographySnapshot>,
+        key: String,
+        added: bool,
+    },
+}
+struct Task<T> {
+    job: LatestJob<T>,
+    cancel: Arc<AtomicBool>,
+}
+impl<T> Drop for Task<T> {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Release);
     }
@@ -47,65 +64,152 @@ enum Action {
 impl Dialog {
     pub(super) fn activity(&self) -> crate::activity::Activity {
         use crate::activity::Activity;
-        if self.job.is_running() {
-            Activity::Running
-        } else if self.picker.is_some() {
-            Activity::Pending("Choose a file")
-        } else if let Some(error) = &self.error {
-            Activity::Failed(error.clone())
-        } else {
-            Activity::Idle
+        match self.phase {
+            Phase::LookingUp(_) | Phase::Importing { .. } => Activity::Running,
+            Phase::Picking(_) => Activity::Pending("Choose a file"),
+            _ => self
+                .error
+                .as_ref()
+                .map_or(Activity::Idle, |error| Activity::Failed(error.clone())),
         }
     }
-
     fn busy(&self) -> bool {
-        self.job.is_running() || self.picker.is_some()
+        matches!(
+            self.phase,
+            Phase::LookingUp(_) | Phase::Importing { .. } | Phase::Picking(_)
+        )
+    }
+    fn snapshot(&self) -> Option<&Arc<BibliographySnapshot>> {
+        match &self.phase {
+            Phase::Review(snapshot)
+            | Phase::Importing { snapshot, .. }
+            | Phase::Imported { snapshot, .. } => Some(snapshot),
+            _ => None,
+        }
+    }
+    fn completed(&self) -> Option<(&str, bool)> {
+        if let Phase::Imported { key, added, .. } = &self.phase {
+            Some((key, *added))
+        } else {
+            None
+        }
     }
     fn lookup(&mut self, context: &egui::Context, dirty: Vec<PathBuf>) {
-        if self.busy() {
+        if self.busy() || self.completed().is_some() {
             return;
         }
         self.error = None;
         let identifier = self.query.clone();
         let path = PathBuf::from(self.destination.trim());
-        self.cancel = Arc::default();
-        let cancel = self.cancel.clone();
-        if let Err(error) = self
-            .job
-            .start_and_repaint("Find citation", context, move || {
-                reject_dirty_bibliography(&path, &dirty)?;
-                let snapshot = BibliographySnapshot::read(&path)?;
-                let citation = lookup_metadata(&identifier, &cancel)?;
-                Ok(Reply::Loaded(citation, Arc::new(snapshot)))
-            })
-        {
-            self.error = Some(error);
+        let cancel = Arc::<AtomicBool>::default();
+        let token = cancel.clone();
+        let mut job = LatestJob::default();
+        match job.start_and_repaint("Find citation", context, move || {
+            reject_dirty_bibliography(&path, &dirty)?;
+            let snapshot = Arc::new(BibliographySnapshot::read(&path)?);
+            let citation = lookup_metadata(&identifier, &token)?;
+            Ok(Loaded { citation, snapshot })
+        }) {
+            Ok(()) => self.phase = Phase::LookingUp(Task { job, cancel }),
+            Err(error) => self.error = Some(error),
         }
     }
     fn import(&mut self, context: &egui::Context, dirty: Vec<PathBuf>) {
-        if self.busy() || self.completed.is_some() {
-            return;
-        }
-        let Some(snapshot) = self.snapshot.clone() else {
+        let Phase::Review(snapshot) = &self.phase else {
             return;
         };
+        let snapshot = snapshot.clone();
+        let target = snapshot.clone();
         let key = self.key.clone();
         let bibtex = self.bibtex.clone();
-        self.cancel = Arc::default();
-        let cancel = self.cancel.clone();
+        let cancel = Arc::<AtomicBool>::default();
+        let token = cancel.clone();
         self.error = None;
-        if let Err(error) = self
-            .job
-            .start_and_repaint("Import citation", context, move || {
-                reject_dirty_bibliography(&snapshot.path, &dirty)?;
-                let reviewed = citation_import::rekey(&bibtex, &key)?;
-                snapshot.import(&reviewed, &cancel).map(Reply::Imported)
-            })
-        {
-            self.error = Some(error);
+        let mut job = LatestJob::default();
+        match job.start_and_repaint("Import citation", context, move || {
+            reject_dirty_bibliography(&target.path, &dirty)?;
+            let reviewed = citation_import::rekey(&bibtex, &key)?;
+            target.import(&reviewed, &token)
+        }) {
+            Ok(()) => {
+                self.phase = Phase::Importing {
+                    snapshot,
+                    task: Task { job, cancel },
+                }
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
+    fn poll(&mut self, context: &egui::Context) -> Option<ImportResult> {
+        if matches!(self.phase, Phase::Picking(_)) {
+            let Phase::Picking(picker) = std::mem::take(&mut self.phase) else {
+                unreachable!()
+            };
+            let mut picker = Some(picker);
+            if let DialogPoll::Ready {
+                selection: Some(file),
+                ..
+            } = crate::workflow::poll_dialog(&mut picker, context)
+            {
+                self.destination = file.path().to_string_lossy().into_owned();
+            }
+            if let Some(picker) = picker {
+                self.phase = Phase::Picking(picker);
+            }
+        }
+        match &mut self.phase {
+            Phase::LookingUp(task) => match task.job.poll() {
+                LatestJobPoll::Ready(loaded) => {
+                    self.query = loaded.citation.identifier.value().into();
+                    self.key = loaded.citation.key;
+                    self.bibtex = loaded.citation.bibtex;
+                    self.phase = Phase::Review(loaded.snapshot);
+                    self.error = None;
+                }
+                LatestJobPoll::Failed(error) => {
+                    self.phase = Phase::Query;
+                    self.error = Some(error);
+                }
+                _ => {}
+            },
+            Phase::Importing { task, .. } => match task.job.poll() {
+                LatestJobPoll::Ready(result) => {
+                    let Phase::Importing { snapshot, .. } = std::mem::take(&mut self.phase) else {
+                        unreachable!()
+                    };
+                    self.phase = Phase::Imported {
+                        snapshot,
+                        key: result.key.clone(),
+                        added: result.added,
+                    };
+                    return Some(result);
+                }
+                LatestJobPoll::Failed(error) => {
+                    let Phase::Importing { snapshot, .. } = std::mem::take(&mut self.phase) else {
+                        unreachable!()
+                    };
+                    self.phase = Phase::Review(snapshot);
+                    self.error = Some(error);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        None
+    }
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn phase(&self) -> &'static str {
+        match self.phase {
+            Phase::Query => "query",
+            Phase::Picking(_) => "picking",
+            Phase::LookingUp(_) => "looking_up",
+            Phase::Review(_) => "reviewing",
+            Phase::Importing { .. } => "importing",
+            Phase::Imported { .. } => "imported",
         }
     }
 }
+
 fn lookup_metadata(identifier: &str, cancel: &AtomicBool) -> Result<Citation, String> {
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
     if identifier.trim() == "10.5555/tiptoptyp-desktop-test"
@@ -151,7 +255,12 @@ fn reject_dirty_bibliography(path: &Path, dirty: &[PathBuf]) -> Result<(), Strin
     }
     Ok(())
 }
-fn suggested_bibliography(source: &str, kind: DocumentKind, directory: &Path) -> PathBuf {
+fn suggested_bibliography(
+    source: &str,
+    kind: DocumentKind,
+    directory: &Path,
+    included: &[PathBuf],
+) -> PathBuf {
     for line in source.lines() {
         let line = line.trim_start();
         if line.starts_with('%') || line.starts_with("//") {
@@ -194,7 +303,14 @@ fn suggested_bibliography(source: &str, kind: DocumentKind, directory: &Path) ->
             }
         }
     }
-    directory.join("references.bib")
+    included
+        .iter()
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("bib"))
+        })
+        .cloned()
+        .unwrap_or_else(|| directory.join("references.bib"))
 }
 fn citation_text(kind: DocumentKind, key: &str) -> String {
     if kind == DocumentKind::Tex {
@@ -208,10 +324,9 @@ fn citation_text(kind: DocumentKind, key: &str) -> String {
 }
 impl EditorApp {
     pub(super) fn begin_citation(&mut self, context: &egui::Context) {
-        if self.overleaf_source_locked() {
-            return;
-        }
-        if self.document_flow_busy() {
+        // Importing into a bibliography does not require a source document.
+        // Source insertion is separately bound and validated when requested.
+        if self.source_edit_locked() || self.document_flow_busy() {
             return;
         }
         let target = (!self.tabs.is_empty()
@@ -228,28 +343,38 @@ impl EditorApp {
             .and_then(|path| path.parent())
             .map(Path::to_path_buf)
             .unwrap_or_else(|| self.workspace_root.clone());
-        let destination =
-            suggested_bibliography(self.document().source(), self.document().kind(), &directory)
-                .to_string_lossy()
-                .into_owned();
+        let destination = self
+            .document()
+            .path()
+            .as_ref()
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("bib"))
+            })
+            .cloned()
+            .unwrap_or_else(|| {
+                suggested_bibliography(
+                    self.document().source(),
+                    self.document().kind(),
+                    &directory,
+                    &self.project_index.subfiles,
+                )
+            })
+            .to_string_lossy()
+            .into_owned();
         self.citation = Some(Dialog {
             query: String::new(),
             destination,
             key: String::new(),
             bibtex: String::new(),
-            snapshot: None,
+            phase: Phase::Query,
             insert: target.is_some(),
             target,
-            completed: None,
             error: None,
-            job: Default::default(),
-            cancel: Arc::default(),
-            picker: None,
             focus: true,
             edit_events: Vec::new(),
         });
-        self.format_request_key = None;
-        self.manual_format_revision = None;
+        self.formatting.cancel();
         self.clear_editor_hover();
         self.clear_asset_hover();
         self.close_app_popup();
@@ -277,7 +402,11 @@ impl EditorApp {
                 "Citation saved; wait for Overleaf to finish syncing before inserting it.".into(),
             );
         }
-        if self.tabs.is_empty() || self.document().key() != target.key {
+        if self.tabs.is_empty()
+            || self.document().key() != target.key
+            || self.document().kind() != target.kind
+            || self.document().kind().typesetting_language().is_none()
+        {
             return Err(
                 "Citation saved; the document changed, so no citation was inserted.".into(),
             );
@@ -308,36 +437,13 @@ impl EditorApp {
         let Some(dialog) = &mut self.citation else {
             return;
         };
-        if let DialogPoll::Ready {
-            selection: Some(file),
-            ..
-        } = crate::workflow::poll_dialog(&mut dialog.picker, context)
-        {
-            dialog.destination = file.path().to_string_lossy().into_owned();
-        }
-        let imported = match dialog.job.poll() {
-            LatestJobPoll::Ready(Reply::Loaded(citation, snapshot)) => {
-                dialog.query = citation.identifier.value().to_owned();
-                dialog.key = citation.key;
-                dialog.bibtex = citation.bibtex;
-                dialog.snapshot = Some(snapshot);
-                dialog.error = None;
-                None
-            }
-            LatestJobPoll::Ready(Reply::Imported(result)) => {
-                dialog.completed = Some((result.key.clone(), result.added));
-                dialog
-                    .insert
-                    .then(|| dialog.target.clone())
-                    .flatten()
-                    .map(|target| (target, result.key))
-            }
-            LatestJobPoll::Failed(error) => {
-                dialog.error = Some(error);
-                None
-            }
-            _ => None,
-        };
+        let imported = dialog.poll(context).and_then(|result| {
+            dialog
+                .insert
+                .then(|| dialog.target.clone())
+                .flatten()
+                .map(|target| (target, result.key))
+        });
         if let Some((target, key)) = imported
             && let Err(error) = self.insert_imported_citation(&target, &key)
         {
@@ -430,7 +536,7 @@ impl EditorApp {
             }
             Some(Action::Back) => {
                 let dialog = self.citation.as_mut().unwrap();
-                dialog.snapshot = None;
+                dialog.phase = Phase::Query;
                 dialog.error = None;
                 dialog.focus = true;
             }
@@ -439,8 +545,7 @@ impl EditorApp {
                     .citation
                     .as_ref()
                     .unwrap()
-                    .snapshot
-                    .as_ref()
+                    .snapshot()
                     .map(|snapshot| snapshot.path.clone());
                 self.close_citation(context);
                 if let Some(path) = path {
@@ -448,6 +553,9 @@ impl EditorApp {
                 }
             }
             Some(Action::Pick) => {
+                if self.citation.as_ref().unwrap().busy() {
+                    return;
+                }
                 if let Some(mut picker) = self.native_file_dialog(frame) {
                     #[cfg(any(target_os = "macos", target_os = "windows"))]
                     if let Some(parent) = crate::native_window::for_viewport(context, child) {
@@ -460,7 +568,7 @@ impl EditorApp {
                     {
                         picker = picker.set_directory(parent);
                     }
-                    dialog.picker = Some(PendingDialog::new(
+                    dialog.phase = Phase::Picking(PendingDialog::new(
                         (),
                         picker
                             .set_title("Choose bibliography")
@@ -480,12 +588,12 @@ impl EditorApp {
                 "query_fingerprint":null,"destination_fingerprint":null,"key_fingerprint":null,
                 "bibtex_fingerprint":null,"insert":false,"added":null,"error":null});
         };
-        serde_json::json!({"visible":true,"busy":dialog.busy(),"review":dialog.snapshot.is_some(),
-            "completed":dialog.completed.is_some(),"query_fingerprint":crate::desktop_test::fingerprint(&dialog.query),
+        serde_json::json!({"visible":true,"busy":dialog.busy(),"phase":dialog.phase(),"review":dialog.snapshot().is_some(),
+            "completed":dialog.completed().is_some(),"query_fingerprint":crate::desktop_test::fingerprint(&dialog.query),
             "destination_fingerprint":crate::desktop_test::fingerprint(&dialog.destination),
             "key_fingerprint":crate::desktop_test::fingerprint(&dialog.key),
             "bibtex_fingerprint":crate::desktop_test::fingerprint(&dialog.bibtex),"insert":dialog.insert,
-            "added":dialog.completed.as_ref().map(|(_,added)| *added),"error":dialog.error})
+            "added":dialog.completed().map(|(_,added)| added),"error":dialog.error})
     }
 }
 fn observe(_name: &str, _response: &egui::Response) {
@@ -507,8 +615,8 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
     });
     ui.separator();
     let busy = dialog.busy();
-    let review = dialog.snapshot.is_some();
-    let complete = dialog.completed.is_some();
+    let review = dialog.snapshot().is_some();
+    let complete = dialog.completed().is_some();
     let bounds = ui.available_rect_before_wrap();
     let footer_height = ui.spacing().interact_size.y * 2.0 + ui.spacing().item_spacing.y;
     let split = (bounds.bottom() - footer_height).max(bounds.top());
@@ -569,11 +677,7 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
                             ui.weak(format!(
                                 "{} · {}",
                                 dialog.query,
-                                if dialog
-                                    .snapshot
-                                    .as_ref()
-                                    .is_some_and(|snapshot| snapshot.exists)
-                                {
+                                if dialog.snapshot().is_some_and(|snapshot| snapshot.exists) {
                                     "Append to bibliography"
                                 } else {
                                     "Create bibliography"
@@ -612,10 +716,10 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
                             observe("insert", &insert);
                         }
                     });
-                    if let Some((key, added)) = &dialog.completed {
+                    if let Some((key, added)) = dialog.completed() {
                         ui.colored_label(
                             ui.visuals().selection.stroke.color,
-                            if *added {
+                            if added {
                                 format!("Imported {key}")
                             } else {
                                 format!("Already in bibliography: {key}")
@@ -703,8 +807,19 @@ mod tests {
     fn fixture() -> Dialog {
         Dialog { query: "10.5555/tiptoptyp-desktop-test".into(), destination: "/tmp/references.bib".into(),
             key: "Fixture2026".into(), bibtex: "@article{Fixture2026, title={A reviewed title}, doi={10.5555/tiptoptyp-desktop-test}}".into(),
-            snapshot: None, target: None, insert: false, completed: None, error: None,
-            job: Default::default(), cancel: Arc::default(), picker: None, focus: true, edit_events: Vec::new() }
+            phase: Phase::Query, target: None, insert: false, error: None,
+            focus: true, edit_events: Vec::new() }
+    }
+    fn complete_fixture(dialog: &mut Dialog, key: &str, added: bool) {
+        let snapshot = dialog.snapshot().cloned().unwrap_or_else(|| {
+            let directory = tempfile::tempdir().unwrap();
+            Arc::new(BibliographySnapshot::read(&directory.path().join("references.bib")).unwrap())
+        });
+        dialog.phase = Phase::Imported {
+            snapshot,
+            key: key.into(),
+            added,
+        };
     }
     #[test]
     fn activity_keeps_pending_picker_and_explicit_import_errors_visible() {
@@ -716,17 +831,20 @@ mod tests {
             dialog.activity(),
             Activity::Failed("The bibliography changed".into())
         );
-        dialog.picker = Some(PendingDialog::new(
+        dialog.phase = Phase::Picking(PendingDialog::new(
             (),
             std::future::poll_fn(|_| panic!("Activity must not poll file dialogs")),
         ));
         assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
         assert_eq!(dialog.activity(), Activity::Pending("Choose a file"));
-        assert!(dialog.picker.is_some());
-        assert!(!dialog.job.is_running());
-        dialog.picker = None;
+        assert!(matches!(dialog.phase, Phase::Picking(_)));
+        assert!(!matches!(
+            dialog.phase,
+            Phase::LookingUp(_) | Phase::Importing { .. }
+        ));
+        dialog.phase = Phase::Query;
         dialog.error = None;
-        dialog.completed = Some(("Fixture2026".into(), true));
+        complete_fixture(&mut dialog, "Fixture2026", true);
         assert_eq!(dialog.activity(), Activity::Idle);
     }
 
@@ -801,7 +919,7 @@ mod tests {
     fn reviewed_key_and_source_are_editable_while_footer_remains_visible() {
         let directory = tempfile::tempdir().unwrap();
         let mut dialog = fixture();
-        dialog.snapshot = Some(Arc::new(
+        dialog.phase = Phase::Review(Arc::new(
             BibliographySnapshot::read(&directory.path().join("references.bib")).unwrap(),
         ));
         let mut harness = harness(dialog);
@@ -835,7 +953,7 @@ mod tests {
         harness.get_by_label("Import").click();
         harness.step();
         assert_eq!(harness.state().1, Some(Action::Import));
-        harness.state_mut().0.completed = Some(("Fixture2026".into(), true));
+        complete_fixture(&mut harness.state_mut().0, "Fixture2026", true);
         harness.run();
         harness.state_mut().1 = None;
         harness.get_by_label("Open bibliography").click();
@@ -874,10 +992,106 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
         app.begin_citation(&context);
-        let cancel = app.citation.as_ref().unwrap().cancel.clone();
+        let cancel = Arc::<AtomicBool>::default();
+        let (release, released) = std::sync::mpsc::channel();
+        let mut job = LatestJob::<Loaded>::default();
+        job.start("controlled citation lookup", move || {
+            released.recv().unwrap();
+            Err("cancelled test lookup".into())
+        })
+        .unwrap();
+        app.citation.as_mut().unwrap().phase = Phase::LookingUp(Task {
+            job,
+            cancel: cancel.clone(),
+        });
+        let key = app.document().key();
         app.close_citation(&context);
         assert!(cancel.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        assert_eq!(app.document().key(), key);
         assert!(app.citation.is_none());
+    }
+
+    #[test]
+    fn bibliography_import_opens_without_an_editable_source_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        for kind in [None, Some(DocumentKind::Pdf), Some(DocumentKind::Image)] {
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            if let Some(kind) = kind {
+                app.document_mut().replace_loaded_unprojected(
+                    String::new(),
+                    directory.path().join("asset"),
+                    kind,
+                    None,
+                );
+            } else {
+                app.tabs = app.tabs.empty_after();
+            }
+            let before = app.document().key();
+            let path = app.document().path().clone();
+            app.begin_citation(&context);
+            let dialog = app.citation.as_ref().expect("bibliography import opens");
+            assert!(dialog.target.is_none());
+            assert!(!dialog.insert);
+            app.close_citation(&context);
+
+            // The normal command route must also treat this as a tool dialog,
+            // rather than reject it as an immediate edit to the source page.
+            app.execute_app_command(AppCommand::ImportCitation, &context, None);
+            let dialog = app
+                .citation
+                .as_ref()
+                .expect("Import Citation command opens");
+            assert!(dialog.target.is_none());
+            assert!(!dialog.insert);
+            assert_eq!(app.document().key(), before);
+            assert_eq!(app.document().path(), &path);
+            assert_eq!(app.document().source(), "");
+            assert!(!app.document().is_dirty());
+            app.close_citation(&context);
+
+            app.begin_latexdiff(&context);
+            assert!(app.source_edit_locked());
+            app.begin_citation(&context);
+            assert!(
+                app.citation.is_none(),
+                "another tool retains its modal ownership"
+            );
+            assert!(app.latexdiff.is_some());
+            app.close_latexdiff(&context);
+            let key = app.document().key();
+            app.document_workflow
+                .begin_save(key, crate::workflow::SaveDomain::Local)
+                .unwrap();
+            app.begin_citation(&context);
+            assert!(app.citation.is_none(), "an admitted save retains ownership");
+        }
+    }
+
+    #[test]
+    fn imported_citation_rejects_a_non_source_insertion_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        for kind in [DocumentKind::Pdf, DocumentKind::Image, DocumentKind::Text] {
+            let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+            app.document_mut().replace_loaded_unprojected(
+                String::new(),
+                directory.path().join("asset"),
+                kind,
+                None,
+            );
+            let before = app.document().key();
+            let target = Target {
+                key: before,
+                cursor: CCursorRange::default(),
+                kind,
+            };
+            assert!(app.insert_imported_citation(&target, "Paper2026").is_err());
+            assert_eq!(app.document().key(), before);
+            assert_eq!(app.document().source(), "");
+            assert!(!app.document().is_dirty());
+        }
     }
 
     #[test]
@@ -902,10 +1116,60 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                suggested_bibliography(source, kind, directory),
+                suggested_bibliography(source, kind, directory, &[]),
                 directory.join(expected)
             );
         }
+    }
+
+    #[test]
+    fn citation_import_in_a_subfile_uses_its_projects_bibliography_without_saving() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        let child = root.path().join("chapters/one.tex");
+        let bibliography = root.path().join("bibliography/project.bib");
+        app.document_mut().replace_loaded_unprojected(
+            "% !TeX root = ../main.tex\n\\section{Child}".into(),
+            child,
+            DocumentKind::Tex,
+            None,
+        );
+        app.project_index.subfiles.push(bibliography.clone());
+        let before = app.document().key();
+        app.begin_citation(&context);
+        assert_eq!(
+            app.citation.as_ref().unwrap().destination,
+            bibliography.to_string_lossy()
+        );
+        assert_eq!(app.document().key(), before);
+        assert!(
+            !bibliography.exists(),
+            "opening the review must not create a database"
+        );
+    }
+
+    #[test]
+    fn citation_import_uses_the_current_bibliography_before_inherited_databases() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        let current = root.path().join("selected.bib");
+        app.document_mut().replace_loaded_unprojected(
+            "% bibliography".into(),
+            current.clone(),
+            DocumentKind::Text,
+            None,
+        );
+        app.project_index
+            .subfiles
+            .push(root.path().join("other.bib"));
+        app.begin_citation(&context);
+        assert_eq!(
+            app.citation.as_ref().unwrap().destination,
+            current.to_string_lossy()
+        );
+        assert!(app.citation.as_ref().unwrap().target.is_none());
     }
     #[test]
     fn insertion_is_bound_to_document_and_one_undo_transaction() {
@@ -1010,13 +1274,13 @@ mod tests {
                 });
                 dialog.insert = true;
                 if scene != "citation-lookup" {
-                    dialog.snapshot = Some(Arc::new(
+                    dialog.phase = Phase::Review(Arc::new(
                         BibliographySnapshot::read(&directory.path().join("references.bib"))
                             .unwrap(),
                     ));
                 }
                 if scene == "citation-success" {
-                    dialog.completed = Some(("Fixture2026".into(), true));
+                    complete_fixture(&mut dialog, "Fixture2026", true);
                 }
                 let mut framebuffer = crate::test_framebuffer::Framebuffer::new([900, 580]);
                 let destination = PathBuf::from(format!(

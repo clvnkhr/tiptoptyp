@@ -19,9 +19,40 @@ use std::{
     sync::Arc,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WorkspaceStatusTone {
+    Ready,
+    Busy,
+    Warning,
+    Error,
+    Offline,
+}
+
+impl WorkspaceStatusTone {
+    fn color(self, palette: theme::Palette) -> Color32 {
+        match self {
+            Self::Ready => palette.success,
+            Self::Busy => palette.accent,
+            Self::Warning => palette.warning,
+            Self::Error => palette.error,
+            Self::Offline => palette.neutral,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct WorkspaceStatus<'a> {
+    pub text: &'a str,
+    pub tone: WorkspaceStatusTone,
+}
+
+const WORKSPACE_STATUS_WIDTH: f32 = 12.0;
+const WORKSPACE_STATUS_RADIUS: f32 = 3.0;
+
 pub(super) struct Input<'a> {
     pub root: &'a Path,
     pub label: &'a str,
+    pub status: Option<WorkspaceStatus<'a>>,
     pub snapshot: Option<&'a Arc<WorkspaceSnapshot>>,
     pub index: &'a ProjectIndex,
     pub project_kind: crate::document::DocumentKind,
@@ -57,6 +88,48 @@ pub(super) struct Output {
     pub git: Option<crate::git::view::Output>,
 }
 
+/// The name owns the flexible column; an optional status gets only its fixed
+/// dot lane. Normal workspaces reserve no lane or inter-column spacing.
+fn workspace_header_label(
+    ui: &mut egui::Ui,
+    label: &str,
+    status: Option<WorkspaceStatus<'_>>,
+) -> egui::Response {
+    let gap = ui.spacing().item_spacing.x;
+    let status_width = status.map_or(0.0, |_| WORKSPACE_STATUS_WIDTH + gap);
+    let path_width =
+        (ui.available_width() - METRICS.explorer.header_refresh_width - gap - status_width)
+            .max(1.0);
+    let max_chars = approximate_char_capacity(path_width, theme::TYPE.supporting);
+    let response = ui.add_sized(
+        [path_width, METRICS.explorer.header_row_height],
+        egui::Label::new(
+            RichText::new(tail_elide(label, max_chars)).color(ui.visuals().weak_text_color()),
+        )
+        .truncate()
+        .sense(Sense::click()),
+    );
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("explorer.workspace", &response);
+    if let Some(status) = status {
+        let (rect, indicator) = ui.allocate_exact_size(
+            Vec2::new(WORKSPACE_STATUS_WIDTH, METRICS.explorer.header_row_height),
+            Sense::hover(),
+        );
+        indicator
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, status.text));
+        ui.painter().circle_filled(
+            rect.center(),
+            WORKSPACE_STATUS_RADIUS,
+            status.tone.color(theme::palette(ui.ctx())),
+        );
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe("explorer.overleaf_status", &indicator);
+        native_hover_text(indicator, status.text);
+    }
+    response
+}
+
 pub(super) fn show(
     ui: &mut egui::Ui,
     input: Input<'_>,
@@ -80,28 +153,24 @@ pub(super) fn show(
     }
     let mut output = Output::default();
     theme::panel_header(ui, "workspace-header", |ui| {
-        let action_width = METRICS.explorer.header_refresh_width;
-        let actions_width = action_width + ui.spacing().item_spacing.x;
-        let path_width = (ui.available_width() - actions_width).max(1.0);
-        let max_chars = approximate_char_capacity(path_width, theme::TYPE.supporting);
-        let response = ui.add_sized(
-            [path_width, METRICS.explorer.header_row_height],
-            egui::Label::new(
-                RichText::new(tail_elide(input.label, max_chars))
-                    .color(ui.visuals().weak_text_color()),
-            )
-            .truncate()
-            .sense(Sense::click()),
-        );
-        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-        crate::desktop_test::observe("explorer.workspace", &response);
+        let response = workspace_header_label(ui, input.label, input.status);
         let mut hover = input.root.display().to_string();
         if let Some(warning) = input.index.warning() {
             hover.push_str("\nSome Explorer entries could not be discovered.\n");
             hover.push_str(warning);
         }
-        if native_hover_text(response, hover).double_clicked() {
+        let response = native_hover_text(response, hover);
+        if response.double_clicked() {
             output.change_root = true;
+        }
+        if response.secondary_clicked() {
+            output.context_menu = Some(ContextMenu {
+                anchor: response
+                    .interact_pointer_pos()
+                    .unwrap_or(response.rect.center()),
+                path: input.root.to_owned(),
+                is_file: false,
+            });
         }
         if icon_button(ui, UiIcon::Refresh, "Refresh filesystem").clicked() {
             output.refresh = true;
@@ -188,6 +257,7 @@ pub(super) fn show(
     let section_action = show_explorer_sections(
         ui,
         ExplorerSectionsSpec {
+            files_scroll_owner: egui::Id::new(project_root),
             order,
             defaults: section_defaults,
             heights: section_body_heights,
@@ -235,14 +305,10 @@ pub(super) fn show(
                         .allow_multi_selection(false)
                         .allow_drag_and_drop(!input.read_only)
                         .fallback_context_menu(|ui, selected: &Vec<PathBuf>| {
-                            if input.read_only {
-                                ui.close();
-                                return;
-                            }
-                            let Some(path) = selected.first().cloned() else {
-                                ui.close();
-                                return;
-                            };
+                            let path = selected
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| input.root.to_owned());
                             let is_file = find_node(&path).is_some_and(WorkspaceNode::is_file);
                             let anchor = ui
                                 .ctx()
@@ -726,7 +792,7 @@ pub(super) fn workspace_entry_color(
     }
     let syntax = theme::syntax_palette(context);
     let extension = path.extension().and_then(|extension| extension.to_str());
-    if extension_matches(extension, &["typ", "tex"]) {
+    if extension_matches(extension, &["typ"]) || crate::document::is_tex_path(path) {
         return syntax.keyword;
     }
     if extension_matches(
@@ -979,6 +1045,7 @@ pub(super) fn explorer_section(
     let _ = explorer_section_resizable(
         ui,
         ExplorerSectionRenderSpec {
+            scroll_owner: None,
             id_salt,
             title,
             default_open,
@@ -994,6 +1061,7 @@ pub(super) fn explorer_section(
 }
 
 pub(super) struct ExplorerSectionsSpec {
+    pub(super) files_scroll_owner: egui::Id,
     pub(super) order: ExplorerOrder,
     pub(super) defaults: [bool; 9],
     pub(super) heights: [f32; 9],
@@ -1034,6 +1102,8 @@ pub(super) fn show_explorer_sections(
         let rendered = explorer_section_resizable(
             ui,
             ExplorerSectionRenderSpec {
+                scroll_owner: (section == ExplorerSection::Files)
+                    .then_some(spec.files_scroll_owner),
                 id_salt: section.id(),
                 title: section.title(),
                 default_open: spec.defaults[index],
@@ -1154,6 +1224,7 @@ fn collapsed_explorer_sections_have_no_resize_grip() {
             *visible = explorer_section_resizable(
                 ui,
                 ExplorerSectionRenderSpec {
+                    scroll_owner: None,
                     id_salt: "grip-regression",
                     title: "Files",
                     default_open: true,
@@ -1191,6 +1262,7 @@ fn quiet_explorer_header_actions_preserve_panel_geometry_and_collapse_state() {
             let output = explorer_section_resizable(
                 ui,
                 ExplorerSectionRenderSpec {
+                    scroll_owner: None,
                     id_salt: "quiet-header-regression",
                     title: "Files",
                     default_open: true,
@@ -1249,6 +1321,7 @@ fn explorer_search_initial_offset_does_not_reset_wheel_scrolling() {
                 let rendered = explorer_section_resizable(
                     ui,
                     ExplorerSectionRenderSpec {
+                        scroll_owner: None,
                         id_salt: "wheel-regression",
                         title: "Files",
                         default_open: true,
@@ -1302,6 +1375,7 @@ fn explorer_search_initial_offset_does_not_reset_wheel_scrolling() {
 
 pub(super) struct ExplorerSectionRenderSpec<'a> {
     pub(super) id_salt: &'static str,
+    pub(super) scroll_owner: Option<egui::Id>,
     pub(super) title: &'static str,
     pub(super) default_open: bool,
     pub(super) body_height: f32,
@@ -1466,7 +1540,10 @@ pub(super) fn explorer_section_resizable(
                         explorer_section_search(ui, spec.title, query, spec.focus_search);
                 });
             }
-            let scroll_salt = ("section-search-scroll", spec.id_salt);
+            // File scroll belongs to its workspace, while section collapse and
+            // layout remain stable. A newly opened project must not inherit a
+            // previous project's offset or kinetic scrolling target.
+            let scroll_salt = ("section-search-scroll", spec.id_salt, spec.scroll_owner);
             // ScrollArea hashes its salt before combining it with the Ui id.
             // Use the same id here or every frame looks like the first one
             // and vertical_scroll_offset fights native wheel/drag input.
@@ -1476,15 +1553,14 @@ pub(super) fn explorer_section_resizable(
             let was_sticky = ui
                 .ctx()
                 .data(|data| data.get_temp::<bool>(sticky_id).unwrap_or(false));
+            let scroll_height = (spec.body_height
+                - handle_height
+                - if sticky_search { search_height } else { 0.0 })
+            .max(0.0);
             let mut scroll = egui::ScrollArea::both()
                 .id_salt(scroll_salt)
                 .max_width(ui.available_width().max(0.0))
-                .max_height(
-                    (spec.body_height
-                        - handle_height
-                        - if sticky_search { search_height } else { 0.0 })
-                    .max(0.0),
-                )
+                .max_height(scroll_height)
                 .min_scrolled_width(0.0)
                 .min_scrolled_height(0.0)
                 .auto_shrink([false, false]);
@@ -1496,9 +1572,11 @@ pub(super) fn explorer_section_resizable(
                 .data_mut(|data| data.insert_temp(sticky_id, sticky_search));
             let scroll_output = scroll.show(ui, |ui| {
                 if !sticky_search && let Some(query) = spec.search.as_deref_mut() {
+                    // Reserve before advancing the cursor: set_min_height is
+                    // relative to it. Reserving after the search creates an
+                    // extra empty row that can scroll a tiny list out of view.
+                    ui.set_min_height(scroll_height + search_height);
                     output.search_focused = explorer_section_search(ui, spec.title, query, false);
-                    // Even a short list must permit scrolling up to reveal the search row.
-                    ui.set_min_height(spec.body_height + search_height);
                 }
                 add_body(ui);
             });
@@ -1602,6 +1680,10 @@ pub(super) fn show_project_index_section(
                 shown = true;
                 let label = project_relative_path(root, path);
                 let response = explorer_index_row(ui, &label, None, 0.0);
+                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                if ui.is_rect_visible(response.rect) {
+                    crate::desktop_test::observe(&format!("explorer.subfile.{label}"), &response);
+                }
                 outcome.focused |= response.has_focus();
                 if native_hover_text(response, path.display().to_string()).clicked() {
                     outcome.target = Some((path.clone(), 1));
@@ -1993,6 +2075,10 @@ mod read_only_tests {
                         Input {
                             root: &root,
                             label: "Overleaf project",
+                            status: state.read_only.then_some(super::WorkspaceStatus {
+                                text: "Ready",
+                                tone: super::WorkspaceStatusTone::Ready,
+                            }),
                             snapshot: Some(&snapshot),
                             index: &index,
                             project_kind: crate::document::DocumentKind::Tex,
@@ -2046,13 +2132,13 @@ mod read_only_tests {
     }
 
     #[test]
-    fn read_only_explorer_blocks_filesystem_context_menus_but_keeps_open_and_search() {
+    fn managed_explorer_keeps_context_menus_open_and_search_without_local_imports() {
         for read_only in [false, true] {
             let mut harness = harness(read_only);
             harness.run();
             harness.get_by_label("main.tex").click_secondary();
             harness.run();
-            assert_eq!(harness.state().context_menu.is_some(), !read_only);
+            assert!(harness.state().context_menu.is_some());
         }
         let mut harness = harness(true);
         harness.run();
@@ -2150,3 +2236,182 @@ mod disclosure_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod workspace_handoff_tests {
+    use super::{Input, show};
+    use crate::{
+        explorer::{ExplorerOrder, ExplorerPanelState},
+        project_index::ProjectIndex,
+        workspace::{WorkspaceNode, WorkspaceNodeKind, WorkspaceSnapshot},
+    };
+    use eframe::egui::{self, Vec2};
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    use std::{path::PathBuf, sync::Arc};
+
+    struct State {
+        panel: ExplorerPanelState,
+        drawing: crate::handwriting::Drawing,
+        snapshot: Arc<WorkspaceSnapshot>,
+        remote: bool,
+    }
+
+    fn snapshot(root: &str, count: usize) -> Arc<WorkspaceSnapshot> {
+        let root = PathBuf::from(root);
+        let nodes = (0..count)
+            .map(|index| {
+                let name = if count == 1 {
+                    "main.tex".to_owned()
+                } else {
+                    format!("file-{index:03}-{}.tex", "long-name-".repeat(30))
+                };
+                WorkspaceNode {
+                    name: name.clone().into(),
+                    path: root.join(&name),
+                    relative_path: name.into(),
+                    kind: WorkspaceNodeKind::File,
+                    children: vec![],
+                }
+            })
+            .collect();
+        Arc::new(WorkspaceSnapshot { root, nodes })
+    }
+
+    fn harness() -> Harness<'static, State> {
+        let index = ProjectIndex::default();
+        let statuses = crate::git::editor::FileStatuses::default();
+        let mut ready = false;
+        Harness::builder()
+            .with_size(Vec2::new(400.0, 700.0))
+            .with_step_dt(1.0 / 60.0)
+            .build_ui_state(
+                move |ui, state: &mut State| {
+                    if !ready {
+                        crate::theme::configure_test_fonts(ui.ctx());
+                        ready = true;
+                        return;
+                    }
+                    show(
+                        ui,
+                        Input {
+                            root: &state.snapshot.root,
+                            label: if state.remote {
+                                "Overleaf project"
+                            } else {
+                                "Local project"
+                            },
+                            status: state.remote.then_some(super::WorkspaceStatus {
+                                text: "Ready",
+                                tone: super::WorkspaceStatusTone::Ready,
+                            }),
+                            snapshot: Some(&state.snapshot),
+                            index: &index,
+                            project_kind: crate::document::DocumentKind::Tex,
+                            active: state.remote.then(|| state.snapshot.nodes[0].path.as_path()),
+                            preview: None,
+                            statuses: &statuses,
+                            error: None,
+                            order: ExplorerOrder::default(),
+                            git_visible: false,
+                            read_only: state.remote,
+                            tex: true,
+                            handwriting: Default::default(),
+                        },
+                        &mut state.panel,
+                        &mut state.drawing,
+                        |_| Default::default(),
+                    );
+                },
+                State {
+                    panel: Default::default(),
+                    drawing: Default::default(),
+                    snapshot: snapshot("/local/workspace", 200),
+                    remote: false,
+                },
+            )
+    }
+
+    #[test]
+    fn overleaf_workspace_handoff_reveals_small_tree_after_local_scrolling() {
+        let mut harness = harness();
+        harness.run();
+        let first = harness.state().snapshot.nodes[0]
+            .display_name()
+            .into_owned();
+        harness.hover_at(egui::pos2(150.0, 150.0));
+        harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(-400.0, -900.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        // Advance the fixed test clock through the wheel's kinetic tail.
+        harness.run_steps(120);
+        assert!(
+            harness.query_by_label(&first).is_none(),
+            "old tree must actually scroll"
+        );
+        let (scrolled_label, scrolled_rect) = harness
+            .state()
+            .snapshot
+            .nodes
+            .iter()
+            .find_map(|node| {
+                let label = node.display_name().into_owned();
+                let rect = harness.query_by_label(&label).map(|row| row.rect())?;
+                Some((label, rect))
+            })
+            .expect("some rows remain visible in the scrolled local workspace");
+        harness.state_mut().snapshot = snapshot("/local/workspace", 200);
+        harness.run_steps(3);
+        assert_eq!(
+            harness.get_by_label(&scrolled_label).rect(),
+            scrolled_rect,
+            "a new snapshot for the same root must preserve scrolling"
+        );
+        assert!(harness.query_by_label(&first).is_none());
+        harness.state_mut().snapshot = snapshot("/overleaf/project", 1);
+        harness.state_mut().remote = true;
+        harness.run_steps(3);
+        harness.get_by_label("main.tex");
+        harness.run_steps(5);
+        harness.get_by_label("main.tex");
+        harness.state_mut().snapshot = snapshot("/local/workspace", 200);
+        harness.state_mut().remote = false;
+        harness.run_steps(3);
+        assert_eq!(
+            harness.get_by_label(&scrolled_label).rect(),
+            scrolled_rect,
+            "returning to a workspace restores its own scroll position"
+        );
+    }
+
+    #[test]
+    fn tiny_file_list_cannot_scroll_its_only_file_into_empty_space() {
+        let mut harness = harness();
+        harness.state_mut().snapshot = snapshot("/overleaf/project", 1);
+        harness.state_mut().remote = true;
+        harness.run();
+        let initial_rect = harness.get_by_label("main.tex").rect();
+        harness.hover_at(egui::pos2(150.0, 150.0));
+        harness.input_mut().events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -10_000.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        // Advance the fixed test clock through the wheel's kinetic tail.
+        harness.run_steps(120);
+        assert_eq!(
+            harness.get_by_label("main.tex").rect(),
+            initial_rect,
+            "the single file must not scroll above its initial hidden-search position"
+        );
+        harness.run_steps(12);
+        assert_eq!(harness.get_by_label("main.tex").rect(), initial_rect);
+    }
+}
+
+#[cfg(test)]
+#[path = "explorer_header_tests.rs"]
+mod header_tests;

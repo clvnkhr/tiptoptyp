@@ -92,8 +92,7 @@ impl TableEditorDialog {
 }
 impl EditorApp {
     pub(super) fn begin_new_tex_table(&mut self, context: &egui::Context) {
-        if self.overleaf_source_locked()
-            || self.table_editor.is_some()
+        if self.reject_read_only_edit(context)
             || self.tabs.is_empty()
             || self.document().kind() != DocumentKind::Tex
         {
@@ -115,8 +114,7 @@ impl EditorApp {
         self.table_edit_events.clear();
         self.table_editor = Some(TableEditorDialog::Tex(Box::new(dialog)));
         self.editor_completion = None;
-        self.format_request_key = None;
-        self.manual_format_revision = None;
+        self.formatting.cancel();
     }
 
     pub(super) fn cancel_table_editor(&mut self, context: &egui::Context) {
@@ -131,10 +129,7 @@ impl EditorApp {
         crate::window_host::return_focus(context);
     }
     pub(super) fn begin_table_target(&mut self, target: TableTarget) {
-        if self.overleaf_source_locked() {
-            return;
-        }
-        if self.table_editor.is_some() {
+        if self.source_edit_blocked() {
             return;
         }
         self.table_samples.reset();
@@ -162,8 +157,7 @@ impl EditorApp {
             }))),
         };
         self.editor_completion = None;
-        self.format_request_key = None;
-        self.manual_format_revision = None;
+        self.formatting.cancel();
     }
 }
 
@@ -447,6 +441,8 @@ pub(super) fn prepare_child_keyboard(
     shortcuts: &ShortcutBindings,
     allow_requested_paste: bool,
 ) -> ChildWidgetEdits {
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe_wheel_input(ui.ctx());
     if let TableEditorDialog::Typst(dialog) = dialog {
         table_editor::prepare_grid_keyboard(ui, dialog);
     }
@@ -1098,6 +1094,8 @@ fn code_grid(ui: &mut egui::Ui, table: &mut impl CodeGridDraft, settings: &AppSe
         }
     }
     let mut changed = false;
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    let wheel_pass = crate::desktop_test::begin_table_wheel(ui.ctx());
     let output = egui::ScrollArea::both()
         .id_salt("tex-table-cells")
         .max_height(ui.available_height().max(1.0))
@@ -1174,13 +1172,16 @@ fn code_grid(ui: &mut egui::Ui, table: &mut impl CodeGridDraft, settings: &AppSe
                         job.wrap.max_width = width;
                         ui.fonts_mut(|fonts| fonts.layout_job(job))
                     };
-                    egui::ScrollArea::vertical()
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    let wheel_before =
+                        crate::desktop_test::table_wheel_cell_before(ui, inner, wheel_pass);
+                    let cell_scroll = egui::ScrollArea::vertical()
                         .id_salt(("tex-cell-scroll", r, c))
                         .max_height(inner.height())
                         .min_scrolled_height(0.0)
                         .show(ui, |ui| {
-                            if table_samples::locked_cell(ui, (r, c), cell).is_some() {
-                                return;
+                            if let Some(response) = table_samples::locked_cell(ui, (r, c), cell) {
+                                return response;
                             }
                             let mut contents = CellContents {
                                 cell,
@@ -1221,7 +1222,19 @@ fn code_grid(ui: &mut egui::Ui, table: &mut impl CodeGridDraft, settings: &AppSe
                                 );
                             }
                             changed |= response.changed();
+                            response
                         });
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    if let Some(before) = wheel_before {
+                        crate::desktop_test::observe_table_wheel_cell(
+                            ui,
+                            wheel_pass.expect("the cell sample owns an active wheel pass"),
+                            (r, c),
+                            before,
+                            &cell_scroll,
+                        );
+                    }
+                    let _ = cell_scroll;
                 });
             }
         });
@@ -1233,6 +1246,14 @@ fn code_grid(ui: &mut egui::Ui, table: &mut impl CodeGridDraft, settings: &AppSe
         output.content_size.y,
         output.state.offset.y,
         false,
+    );
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::end_table_wheel(
+        ui.ctx(),
+        wheel_pass,
+        output.inner_rect,
+        output.content_size,
+        output.state.offset,
     );
     let _ = output;
     changed

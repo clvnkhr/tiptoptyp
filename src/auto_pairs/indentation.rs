@@ -86,16 +86,113 @@ fn environment(source: &str, at: usize, end: usize, begin: bool) -> Option<(&str
     let name = source[name_start..next].trim();
     (!name.is_empty()
         && name.len() <= 64
-        && name
-            .bytes()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'*' | b'_' | b'-' | b'@')))
+        && !name
+            .chars()
+            .any(|ch| ch.is_whitespace() || "\\{}%".contains(ch)))
     .then_some((name, next + 1))
 }
 fn raw_environment(name: &str) -> bool {
     matches!(
         name.trim_end_matches('*'),
-        "verbatim" | "Verbatim" | "lstlisting" | "minted" | "comment"
+        "verbatim" | "Verbatim" | "BVerbatim" | "LVerbatim" | "lstlisting" | "minted" | "comment"
     )
+}
+
+pub(super) struct EnvironmentHeader<'a> {
+    pub(super) start: usize,
+    pub(super) name: &'a str,
+}
+
+/// Only completed headers qualify; text already in the body keeps ordinary
+/// indentation. The shared TeX index separately verifies lexical ownership.
+pub(super) fn environment_headers(
+    source: &str,
+    byte: usize,
+) -> impl Iterator<Item = EnvironmentHeader<'_>> {
+    let context = context_start(source, byte);
+    source[context..byte]
+        .rmatch_indices("\\begin")
+        .filter_map(move |(at, _)| environment_header_at(source, context + at, byte))
+}
+
+fn environment_header_at(source: &str, start: usize, byte: usize) -> Option<EnvironmentHeader<'_>> {
+    let (name, mut at) = environment(source, start, byte, true)?;
+    if source[at..byte].contains('\n') {
+        return None;
+    }
+    while at < byte {
+        match source.as_bytes()[at] {
+            b' ' | b'\t' | b'\r' => at += 1,
+            b'%' => break,
+            b'[' | b'{' => {
+                let mut stack = vec![if source.as_bytes()[at] == b'[' {
+                    b']'
+                } else {
+                    b'}'
+                }];
+                at += 1;
+                while at < byte && !stack.is_empty() {
+                    match source.as_bytes()[at] {
+                        b'\\' => {
+                            at += 1;
+                            at += source[at..byte].chars().next().map_or(0, char::len_utf8);
+                        }
+                        b'{' => {
+                            stack.push(b'}');
+                            at += 1;
+                        }
+                        b'[' if stack.last() == Some(&b']') => {
+                            stack.push(b']');
+                            at += 1;
+                        }
+                        close if Some(&close) == stack.last() => {
+                            stack.pop();
+                            at += 1;
+                        }
+                        _ => at += source[at..].chars().next().unwrap().len_utf8(),
+                    }
+                    if stack.len() > MAX_DEPTH {
+                        return None;
+                    }
+                }
+                if !stack.is_empty() {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(EnvironmentHeader { start, name })
+}
+
+pub(super) fn complete_environment(
+    source: &str,
+    byte: usize,
+    header: &EnvironmentHeader<'_>,
+    spaces: u8,
+) -> Newline {
+    let start = source[..header.start].rfind('\n').map_or(0, |at| at + 1);
+    let indent = indentation(&source[start..header.start]);
+    let ending = line_ending(source, byte, start);
+    let unit = if header.name == "document" {
+        String::new()
+    } else if spaces == 0 {
+        "\t".into()
+    } else {
+        " ".repeat(usize::from(spaces.min(16)))
+    };
+    let body = format!("{ending}{indent}{unit}");
+    let suffix_end = source[byte..]
+        .find(['\r', '\n'])
+        .map_or(source.len(), |at| byte + at);
+    let suffix = &source[byte..suffix_end];
+    Newline {
+        text: format!("{body}{suffix}{ending}{indent}\\end{{{}}}", header.name),
+        advance: body.len(),
+        trim_after: suffix.chars().count(),
+        #[cfg(test)]
+        indentation_bytes_scanned: indent.len() + 1,
+    }
 }
 fn pop<'a>(stack: &mut Vec<Frame<'a>>, close: Close<'a>) -> Option<Frame<'a>> {
     let index = stack.iter().rposition(|frame| frame.close == close)?;
@@ -540,6 +637,22 @@ mod tests {
             ),
         ] {
             assert_eq!(enter(before, DocumentKind::Typst, 2), after, "{before}");
+        }
+    }
+
+    #[test]
+    fn all_verbatim_environment_variants_preserve_payload_indentation() {
+        for name in [
+            "verbatim",
+            "Verbatim",
+            "BVerbatim",
+            "LVerbatim",
+            "BVerbatim*",
+            "LVerbatim*",
+        ] {
+            let before = format!("\\begin{{{name}}}\n  {{fake|");
+            let expected = format!("\\begin{{{name}}}\n  {{fake\n  |");
+            assert_eq!(enter(&before, DocumentKind::Tex, 2), expected, "{name}");
         }
     }
 

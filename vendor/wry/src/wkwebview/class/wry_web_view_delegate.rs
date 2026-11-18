@@ -6,12 +6,11 @@ use std::{ffi::CStr, panic::AssertUnwindSafe};
 
 use http::Request;
 use objc2::{
-  define_class, msg_send,
+  DeclaredClass, MainThreadOnly, define_class, msg_send,
   rc::Retained,
   runtime::{NSObject, ProtocolObject},
-  DeclaredClass, MainThreadOnly,
 };
-use objc2_foundation::{ns_string, MainThreadMarker, NSObjectProtocol, NSString};
+use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSString, ns_string};
 use objc2_web_kit::{WKScriptMessage, WKScriptMessageHandler, WKUserContentController};
 
 pub const IPC_MESSAGE_HANDLER_NAME: &str = "ipc";
@@ -19,6 +18,8 @@ pub const IPC_MESSAGE_HANDLER_NAME: &str = "ipc";
 pub struct WryWebViewDelegateIvars {
   pub controller: Retained<WKUserContentController>,
   pub ipc_handler: Box<dyn Fn(Request<String>)>,
+  #[cfg(target_os = "macos")]
+  pub main_frame_owner: std::cell::Cell<Option<usize>>,
 }
 
 define_class!(
@@ -42,6 +43,21 @@ define_class!(
         #[cfg(feature = "tracing")]
         let _span = tracing::info_span!(parent: None, "wry::ipc::handle").entered();
 
+        // Native identity is the authority boundary. A popup can inherit this
+        // controller and even show the same URL; its messages still do not
+        // belong to the WebView that installed a main-frame-only handler.
+        #[cfg(target_os = "macos")]
+        if let Some(owner) = this.ivars().main_frame_owner.get() {
+          let sender = msg.webView().map(|view| Retained::as_ptr(&view) as usize);
+          if !crate::ipc_scope::main_frame_sender_allowed(
+            owner,
+            sender,
+            msg.frameInfo().isMainFrame(),
+          ) {
+            return;
+          }
+        }
+
         let ipc_handler = &this.ivars().ipc_handler;
         let body = msg.body();
         if let Ok(body) = body.downcast::<NSString>() {
@@ -61,7 +77,7 @@ define_class!(
               ipc_handler(r);
             } else {
               #[cfg(feature = "tracing")]
-              tracing::warn!("WebView received invalid IPC request: {}", js);
+              tracing::warn!("WebView received invalid IPC request.");
             }
             return;
           }
@@ -75,6 +91,13 @@ define_class!(
 );
 
 impl WryWebViewDelegate {
+  #[cfg(target_os = "macos")]
+  pub fn restrict_to_main_frame_of(&self, owner: usize) {
+    // Keep only identity, not a retained WebView: the WebView already retains
+    // this handler through its content controller, so retaining it would cycle.
+    self.ivars().main_frame_owner.set(Some(owner));
+  }
+
   pub fn new(
     controller: Retained<WKUserContentController>,
     ipc_handler: Box<dyn Fn(Request<String>)>,
@@ -85,6 +108,8 @@ impl WryWebViewDelegate {
       .set_ivars(WryWebViewDelegateIvars {
         ipc_handler,
         controller,
+        #[cfg(target_os = "macos")]
+        main_frame_owner: std::cell::Cell::new(None),
       });
 
     let delegate: Retained<Self> = unsafe { msg_send![super(delegate), init] };

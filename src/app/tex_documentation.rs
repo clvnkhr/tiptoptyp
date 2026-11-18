@@ -10,91 +10,123 @@ pub(super) const SALT: &str = "tiptoptyp-tex-documentation";
 
 pub(super) struct Dialog {
     query: String,
-    results: Option<SearchResult>,
-    error: Option<String>,
-    job: LatestJob<SearchResult>,
-    cancel: Arc<AtomicBool>,
+    phase: Phase,
     focus: bool,
     pub(super) edit_events: Vec<egui::Event>,
 }
+#[derive(Default)]
+enum Phase {
+    #[default]
+    Idle,
+    Searching(Search),
+    Loaded(SearchResult),
+    Failed {
+        message: String,
+        retained: Option<SearchResult>,
+    },
+}
+struct Search {
+    job: LatestJob<SearchResult>,
+    cancel: Arc<AtomicBool>,
+}
+impl Drop for Search {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
 impl Dialog {
     pub(super) fn activity(&self) -> crate::activity::Activity {
-        documentation_activity(
-            self.job.activity(),
-            self.error.as_deref(),
-            self.results
-                .as_ref()
-                .is_some_and(|results| results.unavailable),
-        )
+        use crate::activity::Activity;
+        match &self.phase {
+            Phase::Searching(_) => Activity::Running,
+            Phase::Failed { message, .. } => Activity::Failed(message.clone()),
+            Phase::Loaded(results) if results.unavailable => {
+                Activity::Inactive("TeXdoc unavailable")
+            }
+            Phase::Loaded(_) | Phase::Idle => Activity::Idle,
+        }
     }
-
     fn new(query: Option<String>) -> Self {
         Self {
             query: query.unwrap_or_default(),
-            results: None,
-            error: None,
-            job: LatestJob::default(),
-            cancel: Arc::new(AtomicBool::new(false)),
+            phase: Phase::Idle,
             focus: true,
             edit_events: Vec::new(),
         }
     }
+    fn busy(&self) -> bool {
+        matches!(self.phase, Phase::Searching(_))
+    }
+    fn results(&self) -> Option<&SearchResult> {
+        match &self.phase {
+            Phase::Loaded(results) => Some(results),
+            Phase::Failed { retained, .. } => retained.as_ref(),
+            _ => None,
+        }
+    }
+    fn error(&self) -> Option<&str> {
+        if let Phase::Failed { message, .. } = &self.phase {
+            Some(message)
+        } else {
+            None
+        }
+    }
+    fn fail(&mut self, message: String) {
+        let retained = match std::mem::take(&mut self.phase) {
+            Phase::Loaded(results) => Some(results),
+            Phase::Failed { retained, .. } => retained,
+            _ => None,
+        };
+        self.phase = Phase::Failed { message, retained };
+    }
     fn invalidate(&mut self) {
-        self.cancel.store(true, Ordering::Release);
-        self.job = LatestJob::default();
-        self.results = None;
-        self.error = None;
+        self.phase = Phase::Idle;
     }
     fn start(&mut self, context: &egui::Context) {
         let query = match documentation::validate_query(&self.query) {
             Ok(query) => query.to_owned(),
             Err(error) => {
-                self.error = Some(error);
+                self.fail(error);
                 return;
             }
         };
         self.invalidate();
-        self.cancel = Arc::new(AtomicBool::new(false));
-        let cancel = self.cancel.clone();
-        if let Err(error) = self
-            .job
-            .start_and_repaint("Texdoc search", context, move || {
-                documentation::search(query, &cancel)
-            })
-        {
-            self.error = Some(error);
-        }
+        let cancel = Arc::<AtomicBool>::default();
+        let token = cancel.clone();
+        let mut job = LatestJob::default();
+        self.phase = match job.start_and_repaint("Texdoc search", context, move || {
+            documentation::search(query, &token)
+        }) {
+            Ok(()) => Phase::Searching(Search { job, cancel }),
+            Err(message) => Phase::Failed {
+                message,
+                retained: None,
+            },
+        };
     }
     fn poll(&mut self) {
-        match self.job.poll() {
-            LatestJobPoll::Ready(results) => self.results = Some(results),
-            LatestJobPoll::Failed(error) => self.error = Some(error),
+        let Phase::Searching(search) = &mut self.phase else {
+            return;
+        };
+        match search.job.poll() {
+            LatestJobPoll::Ready(results) => self.phase = Phase::Loaded(results),
+            LatestJobPoll::Failed(message) => {
+                self.phase = Phase::Failed {
+                    message,
+                    retained: None,
+                }
+            }
             _ => {}
         }
     }
-}
-fn documentation_activity(
-    worker: crate::activity::Activity,
-    error: Option<&str>,
-    unavailable: bool,
-) -> crate::activity::Activity {
-    use crate::activity::Activity;
-    if matches!(worker, Activity::Running) {
-        Activity::Running
-    } else if let Some(error) = error {
-        Activity::Failed(error.into())
-    } else if matches!(worker, Activity::Failed(_)) {
-        worker
-    } else if unavailable {
-        Activity::Inactive("TeXdoc unavailable")
-    } else {
-        Activity::Idle
-    }
-}
-
-impl Drop for Dialog {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    fn phase(&self) -> &'static str {
+        match self.phase {
+            Phase::Idle => "idle",
+            Phase::Searching(_) => "searching",
+            Phase::Loaded(_) => "loaded",
+            Phase::Failed { .. } => "failed",
+        }
     }
 }
 
@@ -120,8 +152,7 @@ impl EditorApp {
         if !dialog.query.trim().is_empty() {
             dialog.start(context);
         }
-        self.format_request_key = None;
-        self.manual_format_revision = None;
+        self.formatting.cancel();
         self.tex_documentation = Some(dialog);
         self.clear_editor_hover();
         self.clear_asset_hover();
@@ -211,8 +242,7 @@ impl EditorApp {
                     .tex_documentation
                     .as_ref()
                     .unwrap()
-                    .results
-                    .as_ref()
+                    .results()
                     .and_then(|results| results.manuals.get(index))
                     .map(|manual| manual.path.clone());
                 if let Some(path) = path {
@@ -230,10 +260,10 @@ impl EditorApp {
             return serde_json::json!({"visible":false,"busy":false,"query_fingerprint":null,
                 "error":null,"unavailable":false,"manual_paths":[]});
         };
-        serde_json::json!({"visible":true,"busy":dialog.job.is_running(),
+        serde_json::json!({"visible":true,"busy":dialog.busy(),
             "query_fingerprint":crate::desktop_test::fingerprint(&dialog.query),
-            "error":dialog.error,"unavailable":dialog.results.as_ref().is_some_and(|r| r.unavailable),
-            "manual_paths":dialog.results.as_ref().map(|r| r.manuals.iter().map(|m| &m.path).collect::<Vec<_>>()).unwrap_or_default()})
+            "phase":dialog.phase(),"error":dialog.error(),"unavailable":dialog.results().is_some_and(|r| r.unavailable),
+            "manual_paths":dialog.results().map(|r| r.manuals.iter().map(|m| &m.path).collect::<Vec<_>>()).unwrap_or_default()})
     }
 }
 
@@ -309,14 +339,14 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
         if online.clicked() {
             action = Some(Action::Online);
         }
-        if dialog.job.is_running() {
+        if dialog.busy() {
             ui.spinner();
             let cancel = ui.button("Cancel search");
             observe("cancel", &cancel);
             if cancel.clicked() {
                 action = Some(Action::Cancel);
             }
-        } else if let Some(results) = &dialog.results {
+        } else if let Some(results) = dialog.results() {
             if results.unavailable {
                 ui.weak("Texdoc is not installed.");
             } else if results.manuals.is_empty() {
@@ -326,7 +356,7 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
             }
         }
     });
-    if let Some(error) = &dialog.error {
+    if let Some(error) = dialog.error() {
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
     ui.separator();
@@ -334,7 +364,7 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
         .id_salt("tex-documentation-results")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let Some(results) = &dialog.results else {
+            let Some(results) = dialog.results() else {
                 return;
             };
             for (index, manual) in results.manuals.iter().enumerate() {
@@ -379,7 +409,7 @@ fn show(ui: &mut egui::Ui, dialog: &mut Dialog) -> Option<Action> {
 #[cfg(all(test, target_os = "macos"))]
 pub(super) fn show_framebuffer_results(ui: &mut egui::Ui) {
     let mut dialog = Dialog::new(Some("amsmath".into()));
-    dialog.results = Some(SearchResult {
+    dialog.phase = Phase::Loaded(SearchResult {
         unavailable: false,
         manuals: vec![
             documentation::Manual {
@@ -411,26 +441,18 @@ mod tests {
         use crate::activity::Activity;
         let mut dialog = Dialog::new(None);
         assert_eq!(dialog.activity(), Activity::Idle);
-        dialog.results = Some(SearchResult {
+        dialog.phase = Phase::Loaded(SearchResult {
             unavailable: true,
             manuals: Vec::new(),
         });
         assert_eq!(dialog.activity(), Activity::Inactive("TeXdoc unavailable"));
-        dialog.error = Some("The search failed".into());
+        dialog.fail("The search failed".into());
         assert_eq!(
             dialog.activity(),
             Activity::Failed("The search failed".into())
         );
-        assert_eq!(
-            documentation_activity(Activity::Running, Some("old failure"), true),
-            Activity::Running
-        );
-        assert_eq!(
-            documentation_activity(Activity::Failed("worker stopped".into()), None, true),
-            Activity::Failed("worker stopped".into())
-        );
-        assert!(!dialog.job.is_running());
-        assert!(dialog.results.as_ref().unwrap().unavailable);
+        assert!(!dialog.busy());
+        assert!(dialog.results().unwrap().unavailable);
     }
     use egui_kittest::{
         Harness,
@@ -474,7 +496,7 @@ mod tests {
                 .is_disabled()
         );
         harness.state_mut().0.query = "amsmath".into();
-        harness.state_mut().0.results = Some(SearchResult {
+        harness.state_mut().0.phase = Phase::Loaded(SearchResult {
             manuals: Vec::new(),
             unavailable: true,
         });
@@ -494,7 +516,7 @@ mod tests {
     #[test]
     fn manual_open_routes_the_selected_local_result_without_launching_texdoc() {
         let mut dialog = Dialog::new(Some("amsmath".into()));
-        dialog.results = Some(SearchResult {
+        dialog.phase = Phase::Loaded(SearchResult {
             manuals: vec![documentation::Manual {
                 path: PathBuf::from("/TeX docs/amsldoc.pdf"),
                 description: "User guide".into(),
@@ -508,7 +530,7 @@ mod tests {
         harness.get_by_label("Open").click();
         harness.step();
         assert_eq!(harness.state().1, Some(Action::Open(0)));
-        assert!(!harness.state().0.job.is_running());
+        assert!(!harness.state().0.busy());
     }
 
     #[test]
@@ -533,17 +555,34 @@ mod tests {
 
     #[test]
     fn changing_or_dropping_dialog_cancels_pending_work_and_flushes_results() {
+        fn search(dialog: &mut Dialog) -> (Arc<AtomicBool>, std::sync::mpsc::Sender<()>) {
+            let cancel = Arc::<AtomicBool>::default();
+            let (release, released) = std::sync::mpsc::channel();
+            let mut job = LatestJob::default();
+            job.start("controlled manual search", move || {
+                released.recv().unwrap();
+                Ok(SearchResult::default())
+            })
+            .unwrap();
+            dialog.phase = Phase::Searching(Search {
+                job,
+                cancel: cancel.clone(),
+            });
+            (cancel, release)
+        }
         let mut dialog = Dialog::new(Some("amsmath".into()));
-        let cancel = dialog.cancel.clone();
-        dialog.results = Some(SearchResult::default());
+        let (cancel, release) = search(&mut dialog);
+        assert!(dialog.busy());
         dialog.invalidate();
         assert!(cancel.load(Ordering::Acquire));
-        assert!(dialog.results.is_none());
-        assert!(!dialog.job.is_running());
-        dialog.cancel = Arc::new(AtomicBool::new(false));
-        let cancel = dialog.cancel.clone();
+        release.send(()).unwrap();
+        dialog.poll();
+        assert!(dialog.results().is_none());
+        assert!(!dialog.busy());
+        let (cancel, release) = search(&mut dialog);
         drop(dialog);
         assert!(cancel.load(Ordering::Acquire));
+        release.send(()).unwrap();
     }
 
     #[test]

@@ -36,6 +36,26 @@ pub(crate) fn with_resource<R>(path: &Path, operation: impl FnOnce() -> R) -> R 
     operation()
 }
 
+/// Interactive filesystem mutations must neither race an active save nor wait
+/// for a worker on the UI thread. The caller can display the busy error and retry.
+pub(crate) fn try_with_resource<R>(
+    path: &Path,
+    operation: impl FnOnce() -> std::io::Result<R>,
+) -> std::io::Result<R> {
+    let lock = resource_lock(path);
+    let _guard = match lock.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "The file is busy in another operation. Try again after it finishes.",
+            ));
+        }
+    };
+    operation()
+}
+
 #[cfg(test)]
 pub(crate) fn is_locked_for_test(path: &Path) -> bool {
     matches!(
@@ -60,5 +80,21 @@ mod tests {
         ));
         let other = resource_lock(&dir.path().join("other.txt"));
         assert!(other.try_lock().is_ok());
+    }
+
+    #[test]
+    fn interactive_mutations_refuse_an_owned_resource_without_running_or_waiting() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("note.txt");
+        with_resource(&path, || {
+            let error = try_with_resource::<()>(&directory.path().join("./note.txt"), || {
+                panic!("a busy mutation must not execute")
+            })
+            .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+            assert!(error.to_string().contains("Try again"));
+            assert!(try_with_resource(&directory.path().join("other.txt"), || Ok(())).is_ok());
+        });
+        assert_eq!(try_with_resource(&path, || Ok(7)).unwrap(), 7);
     }
 }

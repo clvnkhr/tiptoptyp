@@ -139,6 +139,29 @@ impl StoredProject {
     /// Call on an explicit open/reopen worker, not during a frame or file guard.
     pub(crate) fn from_path(path: &Path) -> Result<Option<Self>, String> {
         validate_root(path)?;
+        if let Some(linked) = super::workspace_session::linked_project(path)? {
+            // Opening the selected workspace base restores its associated
+            // project child. Opening unrelated files beside it remains local.
+            #[cfg(unix)]
+            let stored = {
+                let directory = mirror::unix::root_directory_existing(&linked.root)
+                    .map_err(|e| e.to_string())?;
+                let marker = read_marker(&directory)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("The linked Overleaf project folder is missing its descriptor.")?;
+                Self {
+                    project: marker.project()?,
+                    root: linked.root.clone(),
+                    persistent: marker.persistent,
+                }
+            };
+            #[cfg(not(unix))]
+            let stored = return Err("Secure Overleaf workspace storage is unavailable.".into());
+            if stored != linked {
+                return Err("The Overleaf workspace link and project descriptor disagree.".into());
+            }
+            return Ok(Some(stored));
+        }
         #[cfg(unix)]
         {
             for root in path.ancestors().take(MAX_ANCESTORS) {

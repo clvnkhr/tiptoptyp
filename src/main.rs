@@ -13,13 +13,15 @@ mod bundled_payload;
 mod capabilities;
 mod child_view;
 mod citation_import;
+mod comment_controls;
 mod compiler;
 mod completion;
 mod completion_edit;
 mod delimiters;
 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
 mod desktop_test;
-mod diagnostic_suppression;
+mod diagnostic_fix;
+mod diagnostic_fix_request;
 mod diagnostics;
 mod document;
 mod document_templates;
@@ -39,6 +41,8 @@ mod font_preview;
 mod frame_monitor;
 mod generic_highlight;
 mod git;
+mod github;
+mod github_cli;
 mod handwriting;
 mod handwriting_detexify;
 mod highlight;
@@ -89,6 +93,7 @@ mod settings_json;
 mod shortcuts;
 mod snippet_presets;
 mod snippets;
+mod startup;
 mod synctex;
 mod syntax_theme;
 mod table_sampling;
@@ -134,6 +139,22 @@ fn main() -> eframe::Result {
         .any(|arg| arg == "--version" || arg == "-V")
     {
         println!("{}", build_info::VERSION);
+        return Ok(());
+    }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--check-settings")
+    {
+        let arguments: Vec<_> = std::env::args_os().skip(2).collect();
+        if arguments.len() > 1 {
+            return Err(invalid_startup_configuration(
+                "usage: tiptoptyp --check-settings [app.ron]",
+            ));
+        }
+        let path = arguments.first().map(std::path::PathBuf::from);
+        startup::check_settings(path.as_deref(), build_info::APP_NAME)
+            .map_err(invalid_startup_configuration)?;
+        println!("Saved settings and built-in defaults are valid");
         return Ok(());
     }
     if std::env::args_os().len() == 2
@@ -226,7 +247,6 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
             step.theme.name
         )));
     }
-    validate_runtime(RuntimeCheck::Presence)?;
     let launch_mode = launch.mode;
     let initial_path = launch.initial_path;
     let theme_profile = launch.theme_profile;
@@ -246,6 +266,20 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
         ..native_options(deterministic_snapshot)
     };
 
+    let settings_path = startup::persistence_path(
+        options.persistence_path.as_deref(),
+        options
+            .viewport
+            .app_id
+            .as_deref()
+            .unwrap_or(build_info::APP_NAME),
+    );
+    // Reject incompatible input before creating a window or worker. Check the
+    // file again in the creator because eframe silently defaults malformed RON.
+    startup::check_settings(settings_path.as_deref(), build_info::APP_NAME)
+        .map_err(invalid_startup_configuration)?;
+    validate_runtime(RuntimeCheck::Presence)?;
+
     let (open_request_sender, open_requests) = open_requests::channel();
     let (native_menu_sender, native_menu_commands) = native_menu::channel();
 
@@ -263,32 +297,43 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
             .map_err(|error| eframe::Error::AppCreation(error.into()))?;
         native_menu::install_macos_handler(native_menu_sender)
             .map_err(|error| eframe::Error::AppCreation(error.into()))?;
+        type CreationResult =
+            Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>>;
+        let creation_failure = startup::AppCreationFailure::default();
+        let creator_failure = creation_failure.clone();
         let mut app = eframe::create_native(
             build_info::APP_NAME,
             options,
             Box::new(move |context| {
-                native_menu::install_macos_menu(
-                    context.egui_ctx.clone(),
-                    &ShortcutBindings::current_defaults(),
-                )?;
-                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                desktop_test::attach(&context.egui_ctx);
-                let app = AppShell::new(
-                    context,
-                    initial_path,
-                    captures.clone(),
-                    theme_profile,
-                    ui_snapshot_scene,
-                    ui_capture_steps,
-                    launch_mode,
-                    open_requests,
-                    native_menu_commands,
-                );
-                Ok(Box::new(ScreenshotApp::new(app, captures)))
+                let result: CreationResult = (|| {
+                    startup::check_settings(settings_path.as_deref(), build_info::APP_NAME)?;
+                    native_menu::install_macos_menu(
+                        context.egui_ctx.clone(),
+                        &ShortcutBindings::current_defaults(),
+                    )?;
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    desktop_test::attach(&context.egui_ctx);
+                    let app = AppShell::new(
+                        context,
+                        initial_path,
+                        captures.clone(),
+                        theme_profile,
+                        ui_snapshot_scene,
+                        ui_capture_steps,
+                        launch_mode,
+                        open_requests,
+                        native_menu_commands,
+                    )?;
+                    Ok(Box::new(ScreenshotApp::new(app, captures)) as Box<dyn eframe::App>)
+                })();
+                creator_failure.record(result)
             }),
             &event_loop,
         );
         event_loop.run_app(&mut app)?;
+        if let Some(error) = creation_failure.take() {
+            return Err(invalid_startup_configuration(error));
+        }
         Ok(())
     }
 
@@ -300,6 +345,7 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
             build_info::APP_NAME,
             options,
             Box::new(move |context| {
+                startup::check_settings(settings_path.as_deref(), build_info::APP_NAME)?;
                 let app = AppShell::new(
                     context,
                     initial_path,
@@ -310,11 +356,17 @@ fn run(profile_storage: Option<std::path::PathBuf>) -> eframe::Result {
                     launch_mode,
                     open_requests,
                     native_menu_commands,
-                );
+                )?;
                 Ok(Box::new(ScreenshotApp::new(app, captures)))
             }),
         )
     }
+}
+
+fn invalid_startup_configuration(error: impl std::fmt::Display) -> eframe::Error {
+    eframe::Error::AppCreation(
+        std::io::Error::other(format!("Startup configuration rejected: {error}")).into(),
+    )
 }
 
 fn invalid_launch_configuration(error: impl std::fmt::Display) -> eframe::Error {

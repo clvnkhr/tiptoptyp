@@ -4,8 +4,8 @@ use egui_kittest::{Harness, kittest::Queryable as _};
 
 fn source(kind: DocumentKind, enabled: bool) -> String {
     let prefix = if kind == DocumentKind::Tex { "%" } else { "//" };
-    let switch = if enabled { "on" } else { "disabled" };
-    format!("outside\n{prefix} ttt: {switch}\nteh\n{prefix} ttt: off\noutside")
+    let switch = if enabled { "off" } else { "disabled" };
+    format!("outside\n{prefix} ttt: {switch}\nteh\n{prefix} ttt: on\noutside")
 }
 
 fn app_with_source(root: &Path, kind: DocumentKind, text: &str) -> EditorApp {
@@ -115,6 +115,54 @@ fn every_provider_and_severity_share_problems_badge_facets_and_inline_suppressio
 }
 
 #[test]
+fn whitespace_variants_keep_channel_scope_raw_findings_and_idle_cache() {
+    for (prefix, kind) in [("%", DocumentKind::Tex), ("//", DocumentKind::Typst)] {
+        for separator in ["", " \t\u{2003}"] {
+            let body = |marker: &str| {
+                marker
+                    .chars()
+                    .filter(|ch| !ch.is_whitespace())
+                    .map(|ch| ch.to_string())
+                    .collect::<Vec<_>>()
+                    .join(separator)
+            };
+            let text = format!(
+                "before\n{prefix}{}\nformat-only\n{prefix}{}\n{prefix}{}\ndiag-only\n{prefix}{}\n{prefix}{}\nboth\n{prefix}{}\nafter",
+                body("fmt: off"),
+                body("fmt: on"),
+                body("diag: off"),
+                body("diag: on"),
+                body("ttt: off"),
+                body("ttt: on"),
+            );
+            let root = tempfile::tempdir().unwrap();
+            let mut app = app_with_source(root.path(), kind, &text);
+            app.preview.editor_diagnostics = (1..=11)
+                .map(|line| diagnostic("Harper", DiagnosticSeverity::Help, line))
+                .collect();
+            app.mark_diagnostics_changed();
+            let raw = app.preview.editor_diagnostics.clone();
+            app.prepare_diagnostic_visibility(None);
+            assert_eq!(
+                app.diagnostic_regions.suppressed,
+                [
+                    false, true, false, true, true, true, true, true, true, true, false
+                ],
+                "{kind:?}, separator {separator:?}"
+            );
+            assert_eq!(app.preview.editor_diagnostics, raw);
+            let generation = app.diagnostic_regions.generation;
+            let rebuilds = app.diagnostic_regions.rebuilds;
+            for _ in 0..20 {
+                app.prepare_diagnostic_visibility(None);
+            }
+            assert_eq!(app.diagnostic_regions.generation, generation);
+            assert_eq!(app.diagnostic_regions.rebuilds, rebuilds);
+        }
+    }
+}
+
+#[test]
 fn editing_only_a_directive_restores_stored_corrections_and_retires_hidden_hover() {
     let root = tempfile::tempdir().unwrap();
     let kind = DocumentKind::Typst;
@@ -149,7 +197,7 @@ fn editing_only_a_directive_restores_stored_corrections_and_retires_hidden_hover
         detail: finding.full_message(),
     });
     app.document_mut().edit(CCursorRange::default(), |text| {
-        *text = text.replace("ttt: disabled", "ttt: on");
+        *text = text.replace("ttt: disabled", "ttt: off");
     });
     harness.run();
     harness.get_by_label("Problems");
@@ -166,7 +214,7 @@ fn editing_only_a_directive_restores_stored_corrections_and_retires_hidden_hover
         .state_mut()
         .document_mut()
         .edit(CCursorRange::default(), |text| {
-            *text = text.replace("ttt: on", "ttt: disabled");
+            *text = text.replace("ttt: off", "ttt: disabled");
         });
     harness.run();
     harness.get_by_label("Problems (1)");
@@ -302,7 +350,7 @@ fn a_pinned_preview_and_other_active_tab_use_their_own_unsaved_directives() {
 #[test]
 fn unicode_markers_use_scalar_positions_and_idle_frames_reuse_the_mask() {
     let root = tempfile::tempdir().unwrap();
-    let text = "文😀\n// ttt: on\nα\u{200b}😀\n// ttt: off\n中\u{200b}";
+    let text = "文😀\n// ttt: off\nα\u{200b}😀\n// ttt: on\n中\u{200b}";
     let mut app = app_with_source(root.path(), DocumentKind::Typst, text);
     app.preview.editor_diagnostics = vec![diagnostic("Unicode", DiagnosticSeverity::Warning, 3)];
     app.mark_diagnostics_changed();
@@ -310,12 +358,12 @@ fn unicode_markers_use_scalar_positions_and_idle_frames_reuse_the_mask() {
     let tab = app.tabs.active_id();
     let hidden = text[..text.find('\u{200b}').unwrap()].chars().count();
     let visible = text[..text.rfind('\u{200b}').unwrap()].chars().count();
-    let opening = text[..text.find("// ttt: on").unwrap()].chars().count();
-    let closing = text[..text.find("// ttt: off").unwrap()].chars().count();
+    let opening = text[..text.find("// ttt: off").unwrap()].chars().count();
+    let closing = text[..text.find("// ttt: on").unwrap()].chars().count();
     assert!(app.diagnostic_regions.suppresses_char(tab, hidden));
     assert!(!app.diagnostic_regions.suppresses_char(tab, visible));
-    assert!(!app.diagnostic_regions.suppresses_char(tab, opening));
-    assert!(!app.diagnostic_regions.suppresses_char(tab, closing));
+    assert!(app.diagnostic_regions.suppresses_char(tab, opening));
+    assert!(app.diagnostic_regions.suppresses_char(tab, closing));
     assert!(!app.diagnostic_regions.suppresses_char(None, hidden));
     let generation = app.diagnostic_regions.generation;
     let rebuilds = app.diagnostic_regions.rebuilds;
@@ -445,7 +493,7 @@ fn tex_include_comment_syntax_does_not_change_when_the_file_is_opened() {
     let path = root.path().join("custom.sty");
     let text = source(DocumentKind::Tex, true);
     std::fs::write(&path, &text).unwrap();
-    let external = read_external(vec![path.clone()]);
+    let external = read_external(vec![path.clone()], &Settings::default());
     assert!(external[&path].as_ref().unwrap().contains_line(3));
     let mut app = app_with_source(root.path(), DocumentKind::Tex, "outside");
     app.document_mut()
@@ -458,8 +506,235 @@ fn tex_include_comment_syntax_does_not_change_when_the_file_is_opened() {
     app.prepare_diagnostic_visibility(None);
     assert_eq!(app.diagnostic_regions.suppressed, [true]);
     app.document_mut().edit(CCursorRange::default(), |source| {
-        *source = source.replace("ttt: on", "ttt: disabled")
+        *source = source.replace("ttt: off", "ttt: disabled")
     });
     app.prepare_diagnostic_visibility(None);
     assert_eq!(app.diagnostic_regions.suppressed, [false]);
+}
+
+#[test]
+fn changing_diagnostic_markers_reprojects_stored_findings_without_editing_or_republishing() {
+    for kind in [DocumentKind::Tex, DocumentKind::Typst] {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = if kind == DocumentKind::Tex { "%" } else { "//" };
+        let text =
+            format!("outside\n{prefix} checks: pause\nteh\n{prefix} checks: resume\noutside");
+        let mut app = app_with_source(root.path(), kind, &text);
+        let finding = diagnostic("Harper", DiagnosticSeverity::Help, 3);
+        app.preview.editor_diagnostics = vec![finding.clone()];
+        app.mark_diagnostics_changed();
+        let published = app.preview.diagnostics_generation;
+        let key = app.document().key();
+        let mut harness = problems_harness(app);
+        harness.get_by_label("Problems (1)");
+        harness.get_by_label("Harper finding");
+
+        harness.state_mut().settings.comment_controls.diagnostics = Markers {
+            off: "checks: pause".into(),
+            on: "checks: resume".into(),
+        };
+        harness.run();
+        harness.get_by_label("No problems");
+        assert!(harness.query_by_label("Harper finding").is_none());
+        assert!(harness.state().editor_data.line_diagnostics().is_empty());
+        assert_eq!(harness.state().diagnostic_regions.suppressed, [true]);
+        assert_eq!(harness.state().document().key(), key);
+        assert_eq!(harness.state().document().source(), &text);
+        assert_eq!(harness.state().preview.diagnostics_generation, published);
+        assert_eq!(
+            harness.state().preview.editor_diagnostics.as_slice(),
+            std::slice::from_ref(&finding)
+        );
+
+        // Formatting controls do not hide their body. Their comment lines are
+        // metadata, so changing this pair still refreshes marker recognition.
+        harness.state_mut().settings.comment_controls.formatting = Markers {
+            off: "format: pause".into(),
+            on: "format: resume".into(),
+        };
+        harness.run();
+        assert_eq!(harness.state().diagnostic_regions.suppressed, [true]);
+        let generation = harness.state().diagnostic_regions.generation;
+        let rebuilds = harness.state().diagnostic_regions.rebuilds;
+        let mask = harness.state().diagnostic_regions.suppressed.as_ptr();
+        for _ in 0..12 {
+            harness.run();
+        }
+        assert_eq!(harness.state().diagnostic_regions.generation, generation);
+        assert_eq!(harness.state().diagnostic_regions.rebuilds, rebuilds);
+        assert_eq!(harness.state().diagnostic_regions.suppressed.as_ptr(), mask);
+        assert!(!harness.state().diagnostic_regions.external_job.is_running());
+
+        harness.state_mut().settings.comment_controls.diagnostics = Settings::default().diagnostics;
+        harness.run();
+        harness.get_by_label("Problems (1)");
+        harness.get_by_label("Harper finding");
+        assert_eq!(harness.state().diagnostic_regions.suppressed, [false]);
+        assert_eq!(harness.state().preview.editor_diagnostics, [finding]);
+        assert_eq!(harness.state().preview.diagnostics_generation, published);
+        assert_eq!(harness.state().document().key(), key);
+    }
+}
+
+#[test]
+fn changing_the_shared_pair_also_refreshes_diagnostics_without_new_provider_results() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = app_with_source(
+        root.path(),
+        DocumentKind::Tex,
+        &source(DocumentKind::Tex, true),
+    );
+    app.preview.editor_diagnostics = vec![diagnostic("Harper", DiagnosticSeverity::Help, 3)];
+    app.mark_diagnostics_changed();
+    let published = app.preview.diagnostics_generation;
+    let key = app.document().key();
+    app.prepare_diagnostic_visibility(None);
+    assert_eq!(app.diagnostic_regions.suppressed, [true]);
+
+    app.settings.comment_controls.both = Markers {
+        off: "all: pause".into(),
+        on: "all: resume".into(),
+    };
+    app.prepare_diagnostic_visibility(None);
+    assert_eq!(app.diagnostic_regions.suppressed, [false]);
+    assert_eq!(app.preview.diagnostics_generation, published);
+    assert_eq!(app.document().key(), key);
+
+    app.settings.comment_controls.both = Settings::default().both;
+    app.prepare_diagnostic_visibility(None);
+    assert_eq!(app.diagnostic_regions.suppressed, [true]);
+    assert_eq!(app.preview.diagnostics_generation, published);
+}
+
+#[test]
+fn all_control_comment_lines_are_metadata_without_hiding_format_only_body_findings() {
+    for kind in [DocumentKind::Tex, DocumentKind::Typst] {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = if kind == DocumentKind::Tex { "%" } else { "//" };
+        let text = format!(
+            "{prefix} fmt: off\nvisible body\n{prefix} fmt: on\n{prefix} diag: off\nhidden body\n{prefix} diag: on\n{prefix} ttt: off\nhidden body\n{prefix} ttt: on\nvisible after"
+        );
+        let mut app = app_with_source(root.path(), kind, &text);
+        let lines = [1, 3, 4, 6, 7, 9, 2, 5, 8, 10];
+        let raw: Vec<_> = lines
+            .into_iter()
+            .map(|line| diagnostic("Any provider", DiagnosticSeverity::Warning, line))
+            .collect();
+        app.preview.editor_diagnostics = raw.clone();
+        app.mark_diagnostics_changed();
+        let published = app.preview.diagnostics_generation;
+        app.prepare_editor_data();
+        assert_eq!(
+            app.diagnostic_regions.suppressed,
+            [true, true, true, true, true, true, false, true, true, false]
+        );
+        assert_eq!(app.preview.editor_diagnostics, raw);
+        assert_eq!(
+            app.editor_data
+                .line_diagnostics()
+                .iter()
+                .map(|row| row.line)
+                .collect::<Vec<_>>(),
+            [2, 10]
+        );
+
+        // A formatting-only control never hides its body, but its configured
+        // marker text still determines whether a comment is metadata.
+        app.settings.comment_controls.formatting = Markers {
+            off: "layout: pause".into(),
+            on: "layout: resume".into(),
+        };
+        app.prepare_editor_data();
+        assert_eq!(
+            app.diagnostic_regions.suppressed,
+            [
+                false, false, true, true, true, true, false, true, true, false
+            ]
+        );
+        assert_eq!(app.preview.editor_diagnostics, raw);
+        assert_eq!(app.preview.diagnostics_generation, published);
+        app.settings.comment_controls.formatting = Settings::default().formatting;
+        app.prepare_editor_data();
+        assert_eq!(
+            app.diagnostic_regions.suppressed,
+            [true, true, true, true, true, true, false, true, true, false]
+        );
+        assert_eq!(app.preview.editor_diagnostics, raw);
+    }
+}
+
+#[test]
+fn changing_markers_rejects_a_pending_external_result_and_rereads_with_the_new_pair() {
+    let context = egui::Context::default();
+    let root = tempfile::tempdir().unwrap();
+    let mut app = app_with_source(root.path(), DocumentKind::Typst, "outside\nplain\nthird");
+    let included = root.path().join("included.tex");
+    std::fs::write(
+        &included,
+        source(DocumentKind::Tex, true).replace("ttt:", "diag:"),
+    )
+    .unwrap();
+    app.preview.diagnostics = vec![Diagnostic {
+        source: DiagnosticSource::File(included.clone()),
+        ..diagnostic("External", DiagnosticSeverity::Warning, 3)
+    }];
+    app.mark_diagnostics_changed();
+    app.prepare_diagnostic_visibility(Some(&context));
+    app.diagnostic_regions
+        .external_job
+        .wait_until_ready_for_test()
+        .unwrap();
+    app.prepare_diagnostic_visibility(Some(&context));
+    assert_eq!(app.diagnostic_regions.suppressed, [true]);
+
+    let old_epoch = app.diagnostic_regions.external_epoch;
+    let old_results = app.diagnostic_regions.external.clone();
+    let (release, held) = std::sync::mpsc::channel();
+    app.diagnostic_regions
+        .external_job
+        .start("held-old-markers-test", move || {
+            held.recv().map_err(|error| error.to_string())?;
+            Ok((old_epoch, old_results))
+        })
+        .unwrap();
+    app.settings.comment_controls.diagnostics = Markers {
+        off: "checks: pause".into(),
+        on: "checks: resume".into(),
+    };
+    app.prepare_diagnostic_visibility(None);
+    assert_ne!(app.diagnostic_regions.external_epoch, old_epoch);
+    assert_eq!(app.diagnostic_regions.suppressed, [false]);
+    assert!(app.diagnostic_regions.external_needed.contains(&included));
+    app.document_mut()
+        .edit(CCursorRange::default(), |text| text.push('!'));
+    app.prepare_diagnostic_visibility(None);
+    release.send(()).unwrap();
+    app.diagnostic_regions
+        .external_job
+        .wait_until_ready_for_test()
+        .unwrap();
+    app.prepare_diagnostic_visibility(Some(&context));
+    assert!(app.diagnostic_regions.external_job.is_running());
+    assert_eq!(app.diagnostic_regions.suppressed, [false]);
+    app.diagnostic_regions
+        .external_job
+        .wait_until_ready_for_test()
+        .unwrap();
+    app.prepare_diagnostic_visibility(Some(&context));
+    assert_eq!(app.diagnostic_regions.suppressed, [false]);
+    assert!(!app.diagnostic_regions.external_job.is_running());
+
+    std::fs::write(
+        &included,
+        "% checks: pause\nhidden\nteh\n% checks: resume\nvisible",
+    )
+    .unwrap();
+    app.diagnostic_regions.invalidate_files();
+    app.prepare_diagnostic_visibility(Some(&context));
+    app.diagnostic_regions
+        .external_job
+        .wait_until_ready_for_test()
+        .unwrap();
+    app.prepare_diagnostic_visibility(Some(&context));
+    assert_eq!(app.diagnostic_regions.suppressed, [true]);
 }

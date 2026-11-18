@@ -62,7 +62,7 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
     Reference {
         id: Id::Tinymist,
         title: "Tinymist",
-        reviewed_version: "0.15.2",
+        reviewed_version: "0.15.12",
         summary: "Provides Typst intelligence, formatting and live preview. Configure the language server, not a separate preview command.",
         examples: &[
             example!(
@@ -73,9 +73,9 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
             ),
             example!(
                 "Configuration JSON",
-                r#"{"formatterMode":"typstyle","formatterPrintWidth":100,"formatterProseWrap":false,"typstExtraArgs":["--input=mode=draft"]}"#,
+                r#"{"formatterMode":"typstyle","formatterPrintWidth":100,"formatterProseWrap":"none","typstExtraArgs":["--input=mode=draft"]}"#,
                 "json",
-                "Merge directly into Tinymist configuration, without a tinymist wrapper. In 0.15.2 prose wrapping is boolean; typstExtraArgs here accepts input values."
+                "Merge directly into Tinymist configuration, without a tinymist wrapper. Prose wrapping uses none, fill or sentence; typstExtraArgs here accepts input values."
             ),
             example!(
                 "Verbose diagnostics",
@@ -92,7 +92,7 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
         sources: &[
             source!(
                 "Versioned configuration",
-                "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.2/crates/tinymist/src/config.rs"
+                "https://github.com/Myriad-Dreamin/tinymist/blob/v0.15.12/crates/tinymist/src/config.rs"
             ),
             source!(
                 "CLI and logging",
@@ -185,7 +185,7 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
     Reference {
         id: Id::Badness,
         title: "Badness",
-        reviewed_version: "0.24.0",
+        reviewed_version: "0.29.0",
         summary: "LaTeX formatting and linting use badness lsp. Most formatting choices belong in a project badness.toml.",
         examples: &[
             example!(
@@ -214,7 +214,7 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
             ),
         ],
         notes: &[
-            "In 0.24.0, --config and --no-config do not select configuration for lsp. Discovery begins at each document's directory, so changing Working Directory is not a project-selector workaround.",
+            "In 0.29.0, --config and --no-config do not select configuration for lsp. Discovery begins at each document's directory, so changing Working Directory is not a project-selector workaround.",
             "Normal keeps the stdio protocol unchanged and hides the twelve configured cosmetic lint codes. Verbose clears those ignored codes to show the full lint diagnostics; the lsp command and formatting settings stay unchanged. Badness has no --verbose process flag.",
             PROCESS,
         ],
@@ -225,7 +225,7 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
             ),
             source!(
                 "Versioned implementation",
-                "https://github.com/jolars/badness/blob/v0.24.0/src/config.rs"
+                "https://github.com/jolars/badness/blob/v0.29.0/src/config.rs"
             ),
             source!("CLI reference", "https://badness.dev/reference/cli.html"),
         ],
@@ -319,7 +319,7 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
     Reference {
         id: Id::Harper,
         title: "Harper",
-        reviewed_version: "2.11.0",
+        reviewed_version: "2.13.0",
         summary: "In-process English spelling and grammar. The app projects TeX/Typst prose and reuses unchanged paragraph results; no executable or Java is involved.",
         examples: &[
             example!(
@@ -352,7 +352,7 @@ pub(super) const REFERENCES: [Reference; Id::ALL.len()] = [
             ),
             source!(
                 "Versioned Rust library",
-                "https://docs.rs/harper-core/2.11.0/harper_core/"
+                "https://docs.rs/harper-core/2.13.0/harper_core/"
             ),
         ],
     },

@@ -8,6 +8,7 @@ use serde_json::Value;
 pub(crate) struct LtexSettings {
     pub(crate) enabled: bool,
     pub(crate) follow_document_language: bool,
+    pub(crate) oxford_spelling: bool,
     pub(crate) mode: crate::settings::ToolMode,
     pub(crate) executable: String,
     pub(crate) command: CommandCustomization,
@@ -17,8 +18,9 @@ pub(crate) struct LtexSettings {
 impl Default for LtexSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             follow_document_language: true,
+            oxford_spelling: false,
             mode: crate::settings::ToolMode::Bundled,
             executable: String::new(),
             command: CommandCustomization::default(),
@@ -229,6 +231,14 @@ impl LtexSettings {
         } else {
             crate::document::DocumentKind::Tex
         };
+        if kind == crate::document::DocumentKind::Tex
+            && let Ok(directives) = crate::tex::magic::parse(&snapshot.source)
+            && let Some(crate::tex::magic::Spellcheck::Language(language)) = directives.spellcheck
+        {
+            return canonical_document_language(&language.replace('_', "-"), None)
+                .unwrap_or(configured)
+                .to_owned();
+        }
         let (language, region) = crate::writing::document_language(&snapshot.source, kind);
         let language = language
             .as_deref()

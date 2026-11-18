@@ -301,6 +301,11 @@ pub(crate) struct Worker {
 
 impl Worker {
     #[cfg(test)]
+    pub(crate) fn search_requests_for_test(&self) -> u64 {
+        self.search_serial.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
     pub(crate) fn idle_for_tests() -> Self {
         Self {
             mailbox: Arc::new((Mutex::new(Mailbox::default()), Condvar::new())),
@@ -1077,7 +1082,7 @@ mod tests {
         const WARMUPS: usize = 4;
         const SAMPLES: usize = 20;
         let bytes: Arc<[u8]> = find_fixture_pdf().into();
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let hash = hex::encode(Sha256::digest(&bytes));
         let worker = Worker::start(crate::worker::RepaintTarget::test());
         let initial = RequestKey {
             revision: 1,

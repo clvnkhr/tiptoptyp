@@ -2,7 +2,7 @@
 use crate::settings::{AppSettings, ColorThemeChoice, ToolMode};
 
 pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
-    if text.len() > 2_000_000 {
+    if text.len() > crate::settings::MAX_SETTINGS_JSON_BYTES {
         return Err("Settings JSON exceeds 2 MB".into());
     }
     let mut deserializer = serde_json::Deserializer::from_str(text);
@@ -20,7 +20,18 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     let original: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
     let roundtrip = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
     reject_unknown(&original, &roundtrip, "settings")?;
+    validate(&settings)?;
+    Ok(settings)
+}
+
+/// One semantic contract for startup, persistence, form publication and JSON.
+/// This must reject invalid values rather than silently applying new defaults.
+pub(crate) fn validate(settings: &AppSettings) -> Result<(), String> {
     settings.window_background.validate()?;
+    settings
+        .comment_controls
+        .validate()
+        .map_err(|error| format!("comment_controls.{error}"))?;
     for (name, animation) in [
         ("source_reveal_animation", settings.source_reveal_animation),
         (
@@ -70,7 +81,10 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
     {
         return Err("highlight_rules: use at most 100 rules, each matching a single line of up to 256 characters; font weights must be 1–1000".into());
     }
-    settings.tex.validate_build_settings()?;
+    settings
+        .tex
+        .validate_build_settings()
+        .map_err(|error| format!("tex: {error}"))?;
     for (name, valid) in [
         (
             "ui_scale_percent (75–150)",
@@ -114,11 +128,14 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
             return Err(format!("Invalid {name}"));
         }
     }
-    for choice in [&settings.light_theme, &settings.dark_theme] {
+    for (name, choice) in [
+        ("light_theme", &settings.light_theme),
+        ("dark_theme", &settings.dark_theme),
+    ] {
         if let ColorThemeChoice::Builtin(id) = choice
             && crate::builtin_themes::find(id).is_none()
         {
-            return Err(format!("Unknown built-in theme: {id}"));
+            return Err(format!("{name}: Unknown built-in theme: {id}"));
         }
     }
     let mut shortcuts = settings.shortcut_overrides.clone();
@@ -165,7 +182,7 @@ pub(crate) fn parse(text: &str) -> Result<AppSettings, String> {
         .latexdiff
         .validate()
         .map_err(|e| format!("latexdiff: {e}"))?;
-    Ok(settings)
+    Ok(())
 }
 
 fn reject_unknown(
@@ -221,6 +238,114 @@ impl Draft {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn comment_controls_roundtrip_default_custom_and_partial_settings() {
+        let defaults = AppSettings::default();
+        let mut value = serde_json::to_value(&defaults).unwrap();
+        assert_eq!(value["comment_controls"]["both"]["off"], "ttt: off");
+        assert_eq!(value["comment_controls"]["formatting"]["off"], "fmt: off");
+        assert_eq!(value["comment_controls"]["diagnostics"]["on"], "diag: on");
+        value.as_object_mut().unwrap().remove("comment_controls");
+        assert_eq!(
+            parse(&value.to_string()).unwrap().comment_controls,
+            defaults.comment_controls
+        );
+        value["comment_controls"] = serde_json::json!({
+            "formatting":{"off":"fmt: stop", "on":"fmt: resume"},
+            "diagnostics":{"off":"checks: stop", "on":"checks: resume"}
+        });
+        let parsed = parse(&value.to_string()).unwrap();
+        assert_eq!(parsed.comment_controls.formatting.off, "fmt: stop");
+        assert_eq!(parsed.comment_controls.diagnostics.on, "checks: resume");
+        assert_eq!(
+            parse(&serde_json::to_string(&parsed).unwrap())
+                .unwrap()
+                .comment_controls,
+            parsed.comment_controls
+        );
+        value["comment_controls"] = serde_json::json!({"formatting":{"off":"fmt: stop"}});
+        let parsed = parse(&value.to_string()).unwrap();
+        assert_eq!(parsed.comment_controls.formatting.on, "fmt: on");
+        assert_eq!(
+            parsed.comment_controls.diagnostics,
+            defaults.comment_controls.diagnostics
+        );
+    }
+
+    #[test]
+    fn comment_control_json_rejects_cross_channel_ambiguity() {
+        for (channel, field, other, other_field) in [
+            ("formatting", "off", "both", "off"),
+            ("formatting", "on", "diagnostics", "off"),
+            ("diagnostics", "on", "both", "on"),
+        ] {
+            for separator in ["", " \t\u{2003}"] {
+                let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+                let duplicate = value["comment_controls"][other][other_field]
+                    .as_str()
+                    .unwrap()
+                    .chars()
+                    .filter(|ch| !ch.is_whitespace())
+                    .map(|ch| ch.to_string())
+                    .collect::<Vec<_>>()
+                    .join(separator);
+                value["comment_controls"][channel][field] = duplicate.into();
+                let Err(error) = parse(&value.to_string()) else {
+                    panic!("whitespace-equivalent markers must be rejected");
+                };
+                assert!(
+                    error.contains("comment_controls") && error.contains("must differ"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn comment_control_json_preserves_custom_whitespace_without_changing_matching() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        let off = " \tp a u s e\u{2003}: o f f ";
+        value["comment_controls"]["both"]["off"] = off.into();
+        let settings = parse(&value.to_string()).unwrap();
+        assert_eq!(settings.comment_controls.both.off, off);
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["comment_controls"]["both"]["off"], off);
+        let regions = crate::comment_controls::Regions::parse(
+            "%pause:off\nhidden\n%ttt:on\nvisible",
+            crate::document::DocumentKind::Tex,
+            &settings.comment_controls,
+            crate::comment_controls::Feature::Diagnostics,
+        );
+        assert!(regions.contains_line(2));
+        assert!(!regions.contains_line(4));
+    }
+
+    #[test]
+    fn comment_control_json_errors_identify_the_invalid_channel() {
+        for channel in ["both", "formatting", "diagnostics"] {
+            for invalid in [
+                serde_json::json!(""),
+                serde_json::json!("%off"),
+                serde_json::json!("a\nb"),
+                serde_json::json!(false),
+                serde_json::Value::Null,
+            ] {
+                let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+                value["comment_controls"][channel]["off"] = invalid;
+                let error = parse(&value.to_string()).unwrap_err();
+                assert!(
+                    error.contains("comment_controls") && error.contains(channel),
+                    "{error}"
+                );
+            }
+            let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+            value["comment_controls"][channel]["off"] =
+                value["comment_controls"][channel]["on"].clone();
+            let error = parse(&value.to_string()).unwrap_err();
+            assert!(error.contains("different"), "{error}");
+        }
+    }
+
     #[test]
     fn removed_python_setting_is_not_silently_accepted() {
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
@@ -283,7 +408,9 @@ mod tests {
 
     #[test]
     fn motion_json_accepts_valid_options_and_rejects_impossible_or_out_of_range_values() {
-        use crate::settings::{EditorAction, ParticleDensity, ParticleStyle, RevealStyle};
+        use crate::settings::{
+            EditorAction, LingeringStyle, ParticleDensity, ParticleStyle, RevealStyle,
+        };
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
         for style in RevealStyle::ALL {
             for key in ["source_reveal_animation", "preview_reveal_animation"] {
@@ -315,6 +442,24 @@ mod tests {
                         .all(|style| error.contains(style.label())),
                 "{error}"
             );
+            for style in [None].into_iter().chain(LingeringStyle::ALL.map(Some)) {
+                value["editor_effects"]["actions"][action.key()]["lingering"] =
+                    serde_json::to_value(style).unwrap();
+                assert!(super::parse(&value.to_string()).is_ok());
+            }
+            let mut invalid_lingering = value.clone();
+            invalid_lingering["editor_effects"]["actions"][action.key()]["lingering"] =
+                serde_json::json!("Foggy");
+            let error = super::parse(&invalid_lingering.to_string()).unwrap_err();
+            assert!(
+                error.contains(&format!(
+                    "editor_effects.actions.{}.lingering",
+                    action.key()
+                )) && error.contains("choose")
+                    && error.contains("Smoke")
+                    && error.contains("Embers"),
+                "{error}"
+            );
             for field in ["shake", "flash", "glow"] {
                 let mut invalid_toggle = value.clone();
                 invalid_toggle["editor_effects"]["actions"][action.key()][field] =
@@ -325,6 +470,19 @@ mod tests {
                         && error.contains("boolean"),
                     "{error}"
                 );
+            }
+        }
+        for field in ["same_for_all", "cursor_afterburner"] {
+            let mut invalid = value.clone();
+            invalid["editor_effects"][field] = serde_json::json!("yes");
+            let error = super::parse(&invalid.to_string()).unwrap_err();
+            assert!(
+                error.contains(&format!("editor_effects.{field}")) && error.contains("boolean"),
+                "{error}"
+            );
+            for enabled in [false, true] {
+                value["editor_effects"][field] = serde_json::json!(enabled);
+                assert!(super::parse(&value.to_string()).is_ok());
             }
         }
         for key in ["source_reveal_animation", "preview_reveal_animation"] {
@@ -532,6 +690,29 @@ mod tests {
     #[test]
     fn tinymist_configuration_uses_shared_validation_and_roundtrips() {
         let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        assert_eq!(
+            value["tinymist_configuration"]["formatterProseWrap"],
+            "none"
+        );
+        for mode in ["none", "fill", "sentence"] {
+            value["tinymist_configuration"]["formatterProseWrap"] = serde_json::json!(mode);
+            let settings = parse(&value.to_string()).unwrap();
+            assert_eq!(settings.tinymist_configuration["formatterProseWrap"], mode);
+        }
+        for invalid in [
+            serde_json::json!(false),
+            serde_json::json!(true),
+            serde_json::json!("invalid"),
+        ] {
+            value["tinymist_configuration"]["formatterProseWrap"] = invalid;
+            let Err(error) = parse(&value.to_string()) else {
+                panic!("legacy or invalid prose wrapping must be rejected");
+            };
+            assert!(
+                error.contains("tinymist_configuration") && error.contains("formatterProseWrap")
+            );
+        }
+        value["tinymist_configuration"]["formatterProseWrap"] = serde_json::json!("none");
         value["tinymist_configuration"]["formatterMode"] = serde_json::json!("invalid");
         let error = parse(&value.to_string()).unwrap_err();
         assert!(error.contains("tinymist_configuration") && error.contains("typstyle"));
@@ -750,7 +931,8 @@ mod writing_service_settings_tests {
     #[test]
     fn writing_defaults_roundtrip_with_full_prose_registry() {
         let settings = AppSettings::default();
-        assert!(!settings.ltex.enabled);
+        assert!(!settings.english_grammar);
+        assert!(settings.ltex.enabled);
         assert!(
             settings
                 .tex_prose_rules

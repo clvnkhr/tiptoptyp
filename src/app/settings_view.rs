@@ -99,9 +99,10 @@ impl EditorApp {
                 lsp: if document == DocumentKind::Tex {
                     if !self.settings.tex.texlab_enabled {
                         ServiceState::Disabled("TexLab is disabled".into())
-                    } else if let Some(error) = &self.tex_service.texlab_error {
-                        ServiceState::Failed(error.clone())
-                    } else if self.tex_service.texlab_ready {
+                    } else if let Some(error) = self.tex_service.error(crate::tex::Provider::Texlab)
+                    {
+                        ServiceState::Failed(error.to_owned())
+                    } else if self.tex_service.ready(crate::tex::Provider::Texlab) {
                         ServiceState::Ready("TexLab is ready".into())
                     } else {
                         ServiceState::Starting("Starting TexLab".into())
@@ -595,11 +596,15 @@ impl EditorApp {
                 }
                 SettingsAction::RetryTinymist => self.restart_tinymist(),
                 SettingsAction::RestartLtex => self.ltex.restart(),
-                SettingsAction::RedownloadLtex | SettingsAction::DownloadLiquid => {
+                SettingsAction::RedownloadLtex
+                | SettingsAction::DownloadLiquid
+                | SettingsAction::DownloadDiagnosticFix => {
                     let component = if matches!(action, SettingsAction::RedownloadLtex) {
                         crate::resource_repair::Component::Ltex
-                    } else {
+                    } else if matches!(action, SettingsAction::DownloadLiquid) {
                         crate::resource_repair::Component::Liquid
+                    } else {
+                        crate::resource_repair::Component::DiagnosticFix
                     };
                     if let Err(error) =
                         crate::resource_repair::start(component, &self.settings_snapshot(), context)

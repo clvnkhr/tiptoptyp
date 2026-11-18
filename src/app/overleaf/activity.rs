@@ -37,7 +37,7 @@ impl State {
             BrowserStatus::Disconnected => Activity::Inactive("Disconnected"),
             BrowserStatus::Failed(error) => Activity::Failed(error.clone()),
             BrowserStatus::Unavailable => Activity::Inactive("Connection unavailable"),
-            BrowserStatus::Dormant | BrowserStatus::Connected if connection.online => {
+            BrowserStatus::Dormant | BrowserStatus::Connected if connection.online() => {
                 Activity::Idle
             }
             BrowserStatus::Dormant | BrowserStatus::Connected => Activity::Inactive("Offline"),
@@ -80,7 +80,7 @@ impl EditorApp {
         if state
             .connection
             .as_ref()
-            .is_some_and(|c| c.hydration.pending)
+            .is_some_and(|c| c.hydration.pending())
         {
             Activity::Pending("Syncing working copy")
         } else if state.tree_pending.is_some()
@@ -114,7 +114,7 @@ impl EditorApp {
         if !state.blocked.is_empty() {
             return Activity::Failed(state.error.as_deref().unwrap_or(CONFLICT_ERROR).into());
         }
-        if let Some(pending) = &state.pending {
+        if let Some(pending) = state.save.pending() {
             if let Some(error) = &state.error {
                 return Activity::Failed(error.clone());
             }
@@ -127,7 +127,7 @@ impl EditorApp {
             return Activity::Pending("Awaiting Overleaf confirmation");
         }
         let dirty = self.overleaf_has_unsaved_changes();
-        if state.save_active || dirty {
+        if state.save.active() || dirty {
             if let Some(error) = &state.error {
                 return Activity::Failed(error.clone());
             }
@@ -150,7 +150,7 @@ impl EditorApp {
                 Activity::Running => return Activity::Pending("Waiting for connection"),
                 _ => {}
             }
-            if state.save_active {
+            if state.save.active() {
                 return if mirror == Activity::Running {
                     Activity::Running
                 } else {
@@ -161,7 +161,7 @@ impl EditorApp {
                 if state
                     .connection
                     .as_ref()
-                    .is_some_and(|c| c.hydration.pending)
+                    .is_some_and(|c| c.hydration.pending())
                 {
                     "Waiting for sync"
                 } else {

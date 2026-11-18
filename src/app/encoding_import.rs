@@ -50,21 +50,7 @@ impl EditorApp {
         if import {
             let dialog = self.encoding_import.take().expect("open import");
             if let Ok(source) = dialog.preview {
-                let kind = if dialog
-                    .path
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("tex"))
-                {
-                    DocumentKind::Tex
-                } else if dialog
-                    .path
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("typ"))
-                {
-                    DocumentKind::Typst
-                } else {
-                    DocumentKind::Text
-                };
+                let kind = imported_kind(&dialog.path);
                 self.new_tab(context);
                 self.document_mut().replace_untitled_kind(kind);
                 self.document_mut()
@@ -80,6 +66,19 @@ impl EditorApp {
         } else if close {
             self.encoding_import = None;
         }
+    }
+}
+
+fn imported_kind(path: &Path) -> DocumentKind {
+    if crate::document::is_tex_path(path) {
+        DocumentKind::Tex
+    } else if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("typ"))
+    {
+        DocumentKind::Typst
+    } else {
+        DocumentKind::Text
     }
 }
 
@@ -184,6 +183,19 @@ mod tests {
         Harness,
         kittest::{NodeT, Queryable},
     };
+
+    #[test]
+    fn converted_tex_class_and_style_files_keep_their_editor_language() {
+        for extension in crate::document::TEX_SOURCE_EXTENSIONS {
+            let file = format!("/project/source.{}", extension.to_ascii_uppercase());
+            assert_eq!(imported_kind(Path::new(&file)), DocumentKind::Tex);
+        }
+        assert_eq!(imported_kind(Path::new("source.TYP")), DocumentKind::Typst);
+        assert_eq!(
+            imported_kind(Path::new("references.bib")),
+            DocumentKind::Text
+        );
+    }
 
     #[test]
     fn converted_copy_actions_stay_visible_and_invalid_preview_cannot_open() {

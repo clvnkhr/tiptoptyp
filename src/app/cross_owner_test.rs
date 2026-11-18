@@ -17,7 +17,7 @@ impl EditorApp {
             .replace_unprojected_untitled("pending save from owner A");
         assert!(self.save_to(save_path, context));
         assert!(
-            self.save_job.is_running(),
+            self.local_save.is_running(),
             "the cross-owner fixture must retain an in-flight save"
         );
 
@@ -26,8 +26,8 @@ impl EditorApp {
         let stale_generation = Generation(17);
         let stale_version = revision_as_i32(self.document().revision());
         let stale_token = 91;
-        self.tinymist_sync.generation = Some(stale_generation);
-        self.tinymist_sync.current_uri = Some(stale_uri.clone());
+        self.tinymist_sync
+            .fixture_session(stale_generation, Some(stale_uri.clone()), None);
         self.editor_completion = Some(EditorCompletionState {
             key: stale_key,
             provenance: CompletionProvenance::Server {

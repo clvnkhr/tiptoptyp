@@ -1,6 +1,20 @@
 //! Owned child-window views and native preview composition.
 use super::*;
 
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    feature = "desktop-ui-tests"
+))]
+const PREVIEW_NAVIGATION_SCRIPT: &str = concat!(
+    "const TIPTOPTYP_NAVIGATION_DIAGNOSTICS = true;\n",
+    include_str!("../preview_navigation.js")
+);
+#[cfg(all(
+    any(target_os = "macos", target_os = "windows"),
+    not(feature = "desktop-ui-tests")
+))]
+const PREVIEW_NAVIGATION_SCRIPT: &str = include_str!("../preview_navigation.js");
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct WebviewStyle {
@@ -96,8 +110,8 @@ impl EditorApp {
         request: preview_jump::WebMenuRequest,
     ) {
         if self.document_flow_busy()
-            || self.process_close_pending
-            || self.tinymist_sync.generation != Some(request.generation)
+            || self.process_close_pending()
+            || self.tinymist_sync.generation() != Some(request.generation)
             || !self.interactive_preview_active()
         {
             return;
@@ -126,7 +140,7 @@ impl EditorApp {
     pub(super) fn reveal_web_preview_source(&mut self, target: preview_jump::WebSourceLocation) {
         let trace = std::env::var_os("TIPTOPTYP_UI_TRACE").is_some();
         let current = self.interactive_preview_active()
-            && self.tinymist_sync.generation == Some(target.generation)
+            && self.tinymist_sync.generation() == Some(target.generation)
             && self.preview_document_path() == target.path;
         if trace {
             eprintln!(
@@ -190,6 +204,7 @@ impl EditorApp {
         if !self.packages_visible
             || self.document_workflow.modal().is_some()
             || self.rename_dialog.is_some()
+            || self.overleaf_file_dialog_open()
         {
             return;
         }
@@ -421,7 +436,7 @@ impl EditorApp {
     pub(super) fn show_rename_dialog(&mut self, context: &egui::Context) {
         if self.rename_dialog.is_none()
             || self.document_workflow.modal().is_some()
-            || self.rename_overlay_suspended
+            || self.rename_overlay_focus.suspended()
         {
             return;
         }
@@ -444,7 +459,7 @@ impl EditorApp {
         };
         let mut submit = false;
         let mut cancel = false;
-        let mut overlay_had_focus = self.rename_overlay_had_focus;
+        let mut overlay_focus = self.rename_overlay_focus;
         let mut suspend_overlay = false;
         let captures = self.captures.clone();
         let title = if dialog.create { "New file" } else { "Rename" };
@@ -465,10 +480,8 @@ impl EditorApp {
                     })
                 });
             cancel |= {
-                if input.focused == Some(true) {
-                    overlay_had_focus = true;
-                }
-                suspend_overlay |= overlay_had_focus && input.focused == Some(false);
+                overlay_focus.observe(input.focused);
+                suspend_overlay |= overlay_focus.suspended();
                 input.close_requested || input.escape_pressed
             };
             if suspend_overlay {
@@ -520,19 +533,17 @@ impl EditorApp {
         if paste_requested {
             self.request_widget_paste(context, child);
         }
-        self.rename_overlay_had_focus = overlay_had_focus;
+        self.rename_overlay_focus = overlay_focus;
         if suspend_overlay {
-            self.rename_overlay_suspended = true;
+            self.rename_overlay_focus = ModalFocus::Suspended;
         }
         if cancel {
             self.rename_dialog = None;
-            self.rename_overlay_had_focus = false;
-            self.rename_overlay_suspended = false;
+            self.rename_overlay_focus = ModalFocus::default();
             crate::window_host::return_focus(context);
         } else if submit {
             let dialog = self.rename_dialog.take().expect("rename dialog exists");
-            self.rename_overlay_had_focus = false;
-            self.rename_overlay_suspended = false;
+            self.rename_overlay_focus = ModalFocus::default();
             crate::window_host::return_focus(context);
             if dialog.create {
                 self.create_workspace_file(dialog, context);
@@ -552,7 +563,7 @@ impl EditorApp {
                 // Switching choosers keeps the connected model, pending saves,
                 // browser, and every local draft alive.
                 self.overleaf.visible = false;
-                if let Some(browser) = &self.overleaf.browser {
+                if let Some(browser) = self.overleaf.browser.as_ref() {
                     let _ = browser.set_visible(false);
                 }
                 ChildViewHost::hide(context, overleaf::SALT);
@@ -567,6 +578,7 @@ impl EditorApp {
     }
 
     pub(super) fn show_workspace_chooser(&mut self, context: &egui::Context) {
+        self.poll_workspace_creation(context);
         if !self.workspace_chooser_visible || self.document_workflow.modal().is_some() {
             return;
         }
@@ -577,7 +589,10 @@ impl EditorApp {
         let native_theme = theme::native_theme(context.theme());
         let card_width = (window_rect.width() - METRICS.popup.modal_window_inset)
             .clamp(1.0, METRICS.popup.modal_max_width);
-        let recent_workspaces = if self.snapshot_scene == Some(UiSnapshotScene::WorkspaceChooser) {
+        let creating = self.workspace_creation.draft.is_some();
+        let recent_workspaces = if creating {
+            Vec::new()
+        } else if self.snapshot_scene == Some(UiSnapshotScene::WorkspaceChooser) {
             vec![
                 PathBuf::from("Recent/Annual report"),
                 PathBuf::from("Recent/Research notes"),
@@ -589,7 +604,7 @@ impl EditorApp {
                 .filter(|root| !self.is_overleaf_path(root))
                 .collect()
         };
-        let recent_projects = if self.snapshot_scene.is_some() {
+        let recent_projects = if creating || self.snapshot_scene.is_some() {
             Vec::new()
         } else {
             self.settings
@@ -598,6 +613,16 @@ impl EditorApp {
                 .map(|url| (url.clone(), self.overleaf_project_label(url)))
                 .collect::<Vec<_>>()
         };
+        let child = scoped_child_viewport_id(context, workspace_creation::SALT);
+        let shortcuts = self.settings.effective_shortcuts();
+        let admitted = self
+            .pending_widget_paste
+            .is_some_and(|pending| pending.admits(child, context.cumulative_frame_nr()));
+        let mut paste_requested = false;
+        let mut paste_admitted = false;
+        let mut new_workspace = false;
+        let mut creation_action = workspace_creation::Action::default();
+        let creation_busy = self.workspace_creation.busy();
         let mut switch_overleaf = false;
         let mut selected_project = None;
         let mut selected = None;
@@ -618,12 +643,34 @@ impl EditorApp {
                 .with_active(true),
             |ui, _class| {
                 captures.begin_viewport(ui.ctx(), "workspace");
+                if shortcuts
+                    .egui(ShortcutAction::CaptureUi)
+                    .is_some_and(|shortcut| ui.input_mut(|input| input.consume_shortcut(&shortcut)))
+                {
+                    captures.queue_for_viewport(ui.ctx().viewport_id());
+                }
+                handle_window_management_shortcuts(ui.ctx(), ui.ctx().viewport_id(), &shortcuts);
+                dismiss |= ui.input_mut(|input| {
+                    input.viewport().close_requested()
+                        || input.key_pressed(egui::Key::Escape)
+                        || [ShortcutAction::CloseWindow, ShortcutAction::CloseTab]
+                            .into_iter()
+                            .any(|action| {
+                                shortcuts
+                                    .egui(action)
+                                    .is_some_and(|shortcut| input.consume_shortcut(&shortcut))
+                            })
+                });
+                let edits = prepare_child_widget_edit_events(ui.ctx(), &shortcuts, admitted);
+                paste_requested |= edits.paste_requested;
+                paste_admitted |= edits.requested_paste_admitted;
+                let _queued = crate::child_view::begin_queued_edit_events(
+                    ui.ctx(),
+                    &mut self.workspace_creation.edit_events,
+                );
                 ui.set_style(style.clone());
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
-                dismiss |= ui.ctx().input(|input| {
-                    input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
-                });
                 egui::Area::new(viewport_scoped_id(ui.ctx(), "workspace-chooser-card"))
                     .order(egui::Order::Foreground)
                     .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
@@ -631,6 +678,13 @@ impl EditorApp {
                         theme::dialog_card_frame(&style).show(ui, |ui| {
                             theme::apply_compact_tool_spacing(ui);
                             ui.set_width(card_width);
+                            if let Some(draft) = &mut self.workspace_creation.draft {
+                                let action = workspace_creation::show(ui, draft, creation_busy);
+                                creation_action.create |= action.create;
+                                creation_action.cancel |= action.cancel;
+                                creation_action.choose_parent |= action.choose_parent;
+                                return;
+                            }
                             let content_top = ui.next_widget_position().y;
                             switch_overleaf |= show_workspace_chooser_header(ui);
                             if !recent_workspaces.is_empty() || !recent_projects.is_empty() {
@@ -650,6 +704,8 @@ impl EditorApp {
                                 );
                                 let reserved = used
                                     + footer
+                                    + ui.spacing().interact_size.y
+                                    + ui.spacing().item_spacing.y
                                     + theme::SPACE.control
                                     + theme::dialog_card_frame(&style).total_margin().sum().y
                                     + theme::SPACE.content * 2.0;
@@ -700,6 +756,10 @@ impl EditorApp {
                                     });
                             }
                             ui.add_space(theme::SPACE.control);
+                            let new = ui.button("New Workspace…");
+                            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                            crate::desktop_test::observe("chooser.new_workspace", &new);
+                            new_workspace = new.clicked();
                             match dialog_footer(ui, "Choose Folder…", None, true, false) {
                                 Some(AppModalChoice::Primary) => choose_folder = true,
                                 Some(AppModalChoice::Cancel) => cancel = true,
@@ -711,7 +771,28 @@ impl EditorApp {
             },
         );
 
-        if switch_overleaf {
+        if paste_admitted {
+            self.pending_widget_paste = None;
+        }
+        if paste_requested {
+            self.request_widget_paste(context, child);
+        }
+        if creation_busy {
+            context.send_viewport_cmd_to(child, egui::ViewportCommand::CancelClose);
+            return;
+        }
+        if creation_action.cancel || (dismiss && self.workspace_creation.draft.is_some()) {
+            self.workspace_creation.draft = None;
+            self.workspace_creation.edit_events.clear();
+            self.pending_widget_paste = None;
+            context.send_viewport_cmd_to(child, egui::ViewportCommand::CancelClose);
+        } else if creation_action.choose_parent {
+            self.choose_workspace_parent(context);
+        } else if creation_action.create {
+            self.submit_workspace_creation(context);
+        } else if new_workspace {
+            self.begin_workspace_creation();
+        } else if switch_overleaf {
             self.switch_workspace_chooser(context, WorkspaceChooser::Overleaf);
         } else if let Some(url) = selected_project {
             self.workspace_chooser_visible = false;
@@ -737,7 +818,7 @@ impl EditorApp {
     }
 
     pub(super) fn show_app_modal_window(&mut self, context: &egui::Context) {
-        if self.document_workflow.modal_suspended {
+        if self.document_workflow.modal_focus.suspended() {
             return;
         }
         let Some(window_rect) = context.input(|input| input.viewport().inner_rect) else {
@@ -753,7 +834,7 @@ impl EditorApp {
             .clamp(1.0, METRICS.popup.modal_max_width);
 
         let mut choice = None;
-        let mut overlay_had_focus = self.document_workflow.modal_had_focus;
+        let mut overlay_focus = self.document_workflow.modal_focus;
         let mut suspend_overlay = false;
         let captures = self.captures.clone();
 
@@ -772,10 +853,8 @@ impl EditorApp {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::SetTheme(native_theme));
                 if ui.ctx().input(|input| {
-                    if input.viewport().focused == Some(true) {
-                        overlay_had_focus = true;
-                    }
-                    suspend_overlay |= overlay_had_focus && input.viewport().focused == Some(false);
+                    overlay_focus.observe(input.viewport().focused);
+                    suspend_overlay |= overlay_focus.suspended();
                     input.viewport().close_requested() || input.key_pressed(egui::Key::Escape)
                 }) {
                     choice = Some(AppModalChoice::Cancel);
@@ -861,9 +940,9 @@ impl EditorApp {
                 captures.end_glow_viewport(ui, "modal");
             },
         );
-        self.document_workflow.modal_had_focus = overlay_had_focus;
+        self.document_workflow.modal_focus = overlay_focus;
         if suspend_overlay {
-            self.document_workflow.modal_suspended = true;
+            self.document_workflow.modal_focus = ModalFocus::Suspended;
         }
 
         let Some(choice) = choice else {
@@ -901,28 +980,7 @@ impl EditorApp {
             }
             (AppModal::UninstallPackage { .. }, _) => {}
             (AppModal::DeleteFile { path, .. }, AppModalChoice::Primary) => {
-                let deletes_preview = self.designated_preview_path().as_ref() == Some(&path);
-                match crate::workspace::WorkspaceRoot::open(&self.workspace_root)
-                    .and_then(|root| root.file(&path))
-                    .and_then(|file| file.delete())
-                {
-                    Ok(()) => {
-                        if deletes_preview {
-                            self.restart_tinymist_preserving_preview();
-                            self.schedule_compile_now();
-                        }
-                        if self.document().path().as_ref() == Some(&path) {
-                            self.reset_untitled_document();
-                        }
-                        self.refresh_workspace();
-                        self.notice = Some(Notice {
-                            message: format!("Deleted {}", path.display()),
-                            kind: NoticeKind::Success,
-                        });
-                    }
-                    Err(error) => self
-                        .show_file_error(format!("Could not delete {}: {error}", path.display())),
-                }
+                self.delete_workspace_file(path, context);
             }
             (AppModal::DeleteFile { .. }, _) => self.schedule_autosave_if_needed(),
             (AppModal::Unsaved { pending, .. }, AppModalChoice::Primary) => {
@@ -941,6 +999,7 @@ impl EditorApp {
             }
             (AppModal::Unsaved { .. }, AppModalChoice::Cancel) => {
                 self.document_workflow.cancel_continuation();
+                self.cancel_workspace_switch(context);
                 self.schedule_autosave_if_needed();
             }
             (
@@ -967,6 +1026,7 @@ impl EditorApp {
             }
             (AppModal::Overwrite { .. }, _) => {
                 self.document_workflow.cancel_continuation();
+                self.cancel_workspace_switch(context);
                 self.schedule_autosave_if_needed();
             }
         }
@@ -1015,7 +1075,7 @@ impl EditorApp {
                 .filter(|state| state.identity == identity)
                 .unwrap_or(TooltipInteractionState::new(identity))
         });
-        if interaction.dismissed {
+        if interaction.dismissed() {
             self.clear_asset_hover();
             context.data_mut(|data| {
                 data.remove::<TooltipGeometry>(geometry_id);
@@ -1031,9 +1091,11 @@ impl EditorApp {
         let blocked_by_overlay = self.settings_visible
             || self.packages_visible
             || self.rename_dialog.is_some()
+            || self.overleaf_file_dialog_open()
             || self.table_editor.is_some()
             || self.tool_dialog_open()
             || self.liquid.visible()
+            || self.diagnostic_fix.visible()
             || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some();
         if blocked_by_overlay {
@@ -1127,7 +1189,7 @@ impl EditorApp {
             "tiptoptyp asset preview",
             position,
             size,
-            interaction.focus_requested || interaction.focused,
+            interaction.engaged(),
             "asset-hover",
         );
         let content_size = frame_content_size(size, frame_margin);
@@ -1152,7 +1214,7 @@ impl EditorApp {
                     .filter(|state| state.identity == identity)
                     .unwrap_or(TooltipInteractionState::new(identity));
                 let dismiss_requested = input.escape_pressed;
-                let frame = if interaction.focused {
+                let frame = if interaction.focused() {
                     tooltip_frame.stroke(Stroke::new(
                         1.0,
                         style.visuals.widgets.active.bg_stroke.color,
@@ -1181,12 +1243,9 @@ impl EditorApp {
                     input.focused,
                 );
                 let interaction = if dismiss_requested {
-                    TooltipInteractionState {
-                        focused: false,
-                        focus_requested: false,
-                        dismissed: true,
-                        ..interaction
-                    }
+                    let mut interaction = interaction;
+                    interaction.dismiss();
+                    interaction
                 } else {
                     interaction
                 };
@@ -1268,7 +1327,7 @@ impl EditorApp {
         let identity = cached_tooltip_identity(context, origin, &detail);
         let interaction =
             context.data(|data| data.get_temp::<TooltipInteractionState>(interaction_id));
-        if interaction.is_some_and(|state| state.identity == identity && state.dismissed) {
+        if interaction.is_some_and(|state| state.identity == identity && state.dismissed()) {
             self.diagnostic_tooltip = None;
             context.data_mut(|data| {
                 data.remove::<HoverTooltipOverlay>(native_tooltip_id);
@@ -1298,7 +1357,9 @@ impl EditorApp {
             || self.settings_visible
             || self.packages_visible
             || self.rename_dialog.is_some()
+            || self.overleaf_file_dialog_open()
             || self.liquid.visible()
+            || self.diagnostic_fix.visible()
             || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some()
         {
@@ -1324,11 +1385,12 @@ impl EditorApp {
 
     pub(super) fn show_app_popup_window(&mut self, context: &egui::Context) {
         if self.liquid.visible()
+            || self.diagnostic_fix.visible()
             || app_popup_blocked_by_root_overlay(
                 self.document_workflow.modal().is_some(),
                 self.typst_overrides_visible,
                 self.workspace_chooser_visible,
-                self.rename_dialog.is_some(),
+                self.rename_dialog.is_some() || self.overleaf_file_dialog_open(),
             )
         {
             self.close_app_popup();
@@ -1357,6 +1419,17 @@ impl EditorApp {
         let style = context.style_of(theme);
         let rename_path = self.document().path().clone();
         let shortcuts = self.settings.effective_shortcuts();
+        let diagnostic_fix = if self.source_edit_blocked() {
+            None
+        } else if let AppPopup::Editor {
+            source: Some(source),
+            ..
+        } = &popup
+        {
+            self.diagnostic_fix_at_source(*source)
+        } else {
+            None
+        };
         let (anchor, desired_size) = match &popup {
             AppPopup::CommandPalette { anchor } => (*anchor, Vec2::new(600.0, 260.0)),
             AppPopup::PreviewSource { anchor, .. } => {
@@ -1477,8 +1550,7 @@ impl EditorApp {
         let layout_state = self.layout_menu_state();
         let mut close = false;
         let mut action = None;
-        let mut had_focus = self.app_popup_had_focus;
-        let mut blur_started = self.app_popup_blur_started;
+        let mut popup_focus = self.app_popup_focus;
         let popup_generation = self.app_popup_generation;
         let captures = self.captures.clone();
         let is_git_chunk_popup = matches!(&popup, AppPopup::GitChunk { .. });
@@ -1512,9 +1584,8 @@ impl EditorApp {
             // The palette owns Escape so an IME composition can consume it.
             close |= input.close_requested || (!is_palette && input.escape_pressed);
             let now = Instant::now();
-            close |=
-                popup_focus_should_close(&mut had_focus, &mut blur_started, input.focused, now);
-            if let Some(started) = blur_started {
+            close |= popup_focus.observe(input.focused, now);
+            if let Some(started) = popup_focus.blur_started() {
                 let elapsed = now.saturating_duration_since(started);
                 if elapsed < POPUP_BLUR_GRACE {
                     ui.ctx().request_repaint_after(POPUP_BLUR_GRACE - elapsed);
@@ -1631,15 +1702,25 @@ impl EditorApp {
                                     let preview_selected = self
                                         .designated_preview_path()
                                         .is_some_and(|preview| same_path(&preview, path));
-                                    show_workspace_popup_ui(
-                                        ui,
-                                        path,
-                                        *is_file,
-                                        preview_selected,
-                                        !self.is_overleaf_path(path)
-                                            && !self.file_import.is_running(),
-                                        &mut action,
-                                    );
+                                    if self.is_overleaf_path(path) {
+                                        self.show_overleaf_file_menu(
+                                            ui,
+                                            path,
+                                            *is_file,
+                                            &mut action,
+                                        );
+                                    } else {
+                                        show_workspace_popup_ui(
+                                            ui,
+                                            path,
+                                            *is_file,
+                                            preview_selected,
+                                            !self.file_import.is_running()
+                                                && !self.document_flow_busy()
+                                                && !self.process_close_pending(),
+                                            &mut action,
+                                        );
+                                    }
                                 }
                                 AppPopup::Editor {
                                     source,
@@ -1667,6 +1748,7 @@ impl EditorApp {
                                             liquid_selection: liquid_selection
                                                 .as_ref()
                                                 .filter(|_| !self.liquid.busy()),
+                                            diagnostic_fix: diagnostic_fix.as_deref(),
                                         },
                                         &shortcuts,
                                         &mut editor_action,
@@ -1696,8 +1778,7 @@ impl EditorApp {
                     });
                 });
         });
-        self.app_popup_had_focus = had_focus;
-        self.app_popup_blur_started = blur_started;
+        self.app_popup_focus = popup_focus;
 
         if palette_paste_admitted {
             self.pending_widget_paste = None;
@@ -1742,6 +1823,9 @@ impl EditorApp {
     ) -> bool {
         use wry::dpi::{LogicalPosition, LogicalSize};
 
+        // Root egui popups cannot paint over an embedded native child view.
+        // Keep the renderer alive while the compact collaborator list overlaps.
+        let visible = visible && !overleaf_presence::popup_obscures(context, _rect);
         if self
             .webview_parent
             .is_some_and(|parent| parent != context.viewport_id())
@@ -1803,7 +1887,7 @@ impl EditorApp {
                 .with_initialization_script("window.tiptoptypCaptureZoomSnapshot = request => window.ipc?.postMessage(JSON.stringify({type:'preview-zoom-snapshot', ...request}));")
                 .with_initialization_script(include_str!("../preview_zoom_snapshot.js"))
                 .with_initialization_script(include_str!("../preview_snapshot_buffer.js"))
-                .with_initialization_script(include_str!("../preview_navigation.js"))
+                .with_initialization_script(PREVIEW_NAVIGATION_SCRIPT)
                 .with_initialization_script(palette_script)
                 .with_on_page_load_handler(move |event, _url| {
                     // evaluate_script returning Ok only means queued. A navigation
@@ -2095,10 +2179,12 @@ fn dialog_footer(
         Vec2::new(ui.available_width(), ui.spacing().interact_size.y),
         Layout::right_to_left(Align::Center).with_main_wrap(true),
         |ui| {
-            if ui
-                .add(egui::Button::new(primary).fill(ui.visuals().selection.bg_fill))
-                .clicked()
-            {
+            let primary = ui.add(egui::Button::new(primary).fill(ui.visuals().selection.bg_fill));
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            if observe_modal {
+                crate::desktop_test::observe("modal.primary", &primary);
+            }
+            if primary.clicked() {
                 choice = Some(AppModalChoice::Primary);
             }
             if let Some(label) = secondary {

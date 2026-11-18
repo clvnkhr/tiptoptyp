@@ -79,6 +79,7 @@ impl WritingState {
 }
 impl EditorApp {
     pub(super) fn update_writing_checks(&mut self, context: &egui::Context) {
+        self.refresh_tex_magic();
         if self.tabs.is_empty() {
             // Superseding only drops result acceptance; it cannot stop a worker
             // that still owns the checker. Keep that receiver until completion
@@ -111,7 +112,7 @@ impl EditorApp {
         let key = self.document().key();
         let identity = (
             key,
-            self.settings.english_grammar,
+            self.settings.english_grammar && !self.tex_spellcheck_disabled(),
             self.settings.unicode_warnings,
             self.settings.writing_language,
             self.writing.configuration_revision,

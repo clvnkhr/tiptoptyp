@@ -261,7 +261,7 @@ fn split_reader(
                 builder
                     .append(&header, &contents[..])
                     .map_err(|e| e.to_string())?;
-                format!("{:x}", Sha256::digest(&contents))
+                hex::encode(Sha256::digest(&contents))
             } else {
                 let mut reader = HashReader {
                     inner: &mut entry,
@@ -270,7 +270,7 @@ fn split_reader(
                 builder
                     .append(&header, &mut reader)
                     .map_err(|e| e.to_string())?;
-                format!("{:x}", reader.hash.finalize())
+                hex::encode(reader.hash.finalize())
             }
         };
         fingerprint.insert(name, (bytes, mode, digest));

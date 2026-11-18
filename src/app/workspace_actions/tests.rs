@@ -103,6 +103,69 @@ fn finish_worker(app: &mut EditorApp, context: &egui::Context) {
 }
 
 #[test]
+fn deleting_a_parked_file_retires_its_source_preview_and_autosave() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let path = root.join("deleted.typ");
+    fs::write(&path, "Saved source").unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.clone());
+    app.document_mut().replace_loaded_unprojected(
+        "Saved source".into(),
+        path.clone(),
+        DocumentKind::Typst,
+        Some(fingerprint(b"Saved source")),
+    );
+    app.document_mut().edit(CCursorRange::default(), |source| {
+        source.push_str(" with unsaved changes")
+    });
+    let deleted = app.tabs.active_id().unwrap();
+    app.set_tab_autosave(deleted, Some(Instant::now()));
+    let retained = root.join("retained.typ");
+    fs::write(&retained, "Retained source").unwrap();
+    assert!(app.open_workspace_document(retained, &context));
+    let survivor = app.tabs.active_id().unwrap();
+    let survivor_key = app.document().key();
+    let survivor_source = app.document().source().clone();
+    assert_eq!(app.tabs.preview_id(), Some(deleted));
+    app.document_workflow.pending_export = Some(PendingExport {
+        automatic_destination: false,
+        path: root.join("deleted.pdf"),
+        source: app.pdf_output_source(),
+        intent: PdfWriteIntent::Compile,
+        after_artifact_generation: None,
+    });
+
+    // A refused disk mutation leaves the dirty parked owner and queued output
+    // intact. A subsequent confirmed retry retires them only after deletion.
+    crate::resource_lock::with_resource(&path, || {
+        app.delete_workspace_file(path.clone(), &context);
+        assert!(path.exists());
+        assert!(app.document_for_tab(deleted).unwrap().is_dirty());
+        assert_eq!(app.tabs.preview_id(), Some(deleted));
+        assert!(app.document_workflow.pending_export.is_some());
+        assert_eq!(app.document().key(), survivor_key);
+    });
+    app.document_workflow.clear_modal();
+    // Resolve the validated file identity before deleting, without following a
+    // final symlink. A lexical alias must retire the canonical open owner too.
+    app.delete_workspace_file(root.join(".").join("deleted.typ"), &context);
+
+    assert!(!path.exists());
+    assert!(app.document_for_tab(deleted).is_none());
+    assert_eq!(app.tabs.ids().collect::<Vec<_>>(), [survivor]);
+    assert_eq!(app.tabs.active_id(), Some(survivor));
+    assert_eq!(app.tabs.preview_id(), Some(survivor));
+    assert_eq!(app.document().key(), survivor_key);
+    assert_eq!(app.document().source(), &survivor_source);
+    assert!(app.document_workflow.pending_export.is_none());
+    app.settings.auto_save = true;
+    app.tick_parked_autosave(&context);
+    assert!(!app.local_save.is_running());
+    assert!(!path.exists());
+}
+
+#[test]
 fn new_file_prompt_does_not_touch_disk_until_submit_and_rejects_invalid_or_existing_names() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();

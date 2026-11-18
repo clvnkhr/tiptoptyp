@@ -4,36 +4,169 @@
 //! never cross the application bridge.
 use crate::overleaf_inbox::Sender;
 use eframe::egui;
+#[path = "overleaf_browser_auth.rs"]
+mod auth;
+#[cfg(any(target_os = "macos", test))]
+#[path = "overleaf_browser_focus.rs"]
+mod native_focus;
+#[cfg(any(target_os = "macos", test))]
+#[path = "overleaf_browser_passwords.rs"]
+mod passwords;
+pub(crate) use auth::SignIn;
+#[cfg(target_os = "macos")]
+pub(crate) use passwords::open_passwords;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[path = "overleaf_browser_profile.rs"]
+mod profile;
+
+pub(crate) const LOGIN_URL: &str = "https://www.overleaf.com/login";
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+const OVERLEAF_ORIGIN: &str = "https://www.overleaf.com";
+const MAX_URL_BYTES: usize = 16 * 1024;
+
+/// Browsing is independent of access to the authoritative project bridge.
+/// A valid browsing address alone does not grant access to the project bridge.
+pub(crate) fn navigation_url(input: &str) -> Result<String, String> {
+    let input = input.trim();
+    if input.len() > MAX_URL_BYTES {
+        return Err("The browser address exceeds the 16 KiB limit.".into());
+    }
+    if input == "about:blank" {
+        return Ok(input.into());
+    }
+    let url = url::Url::parse(input).map_err(|_| "Enter an HTTP or HTTPS address.".to_owned())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.host().is_none()
+    {
+        return Err("Use an HTTP or HTTPS address without URL credentials.".into());
+    }
+    Ok(url.into())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Navigation {
+    pub(crate) url: String,
+    pub(crate) project: Option<crate::overleaf::ProjectUrl>,
+    pub(crate) sign_in: SignIn,
+}
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn navigation_allowed(candidate: &str) -> bool {
-    if candidate == "about:blank" {
-        return true;
-    }
-    let Ok(url) = url::Url::parse(candidate) else {
-        return false;
-    };
-    if !url.username().is_empty() || url.password().is_some() || url.host().is_none() {
-        return false;
-    }
-    url.scheme() == "https"
-        || (url.scheme() == "http"
-            && match url.host() {
-                Some(url::Host::Domain("localhost")) => true,
-                Some(url::Host::Ipv4(address)) => address.is_loopback(),
-                Some(url::Host::Ipv6(address)) => address.is_loopback(),
-                _ => false,
-            })
+    navigation_url(candidate).is_ok()
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
-fn message_allowed(origin: &str, candidate: &str, bytes: usize) -> bool {
-    bytes <= MAX_MESSAGE_BYTES
-        && navigation_allowed(candidate)
-        && url::Url::parse(candidate).is_ok_and(|url| url.origin().ascii_serialization() == origin)
+fn message_allowed(navigation: &ProjectNavigation, candidate: &str) -> bool {
+    navigation.is_active() && navigation.owns_page(candidate)
+}
+
+/// Shared by the native callback and deterministic routing checks. The caller
+/// already owns the IPC body, so rejection never allocates another copy.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+fn receive_message(
+    navigation: &ProjectNavigation,
+    candidate: &str,
+    message: String,
+    events: &Sender,
+) {
+    if message_allowed(navigation, candidate) {
+        // A missing authoritative event invalidates the stream. Let the bounded
+        // sender report oversized bodies instead of silently dropping them.
+        let _ = events.send(message);
+    }
+}
+
+/// Track committed main-frame pages, never generic navigation-policy requests:
+/// WebKit also calls its policy for iframes, which do not end our project session.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageAuthority {
+    Uncommitted,
+    ProjectPage,
+    Browsing,
+}
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+struct ProjectNavigation {
+    // A page can browse anywhere, but only this project belongs to the native
+    // model's epoch. Discovery is a request to establish a new connection.
+    project: Option<crate::overleaf::ProjectUrl>,
+    trusted_origin: String,
+    authority: PageAuthority,
+    current_url: String,
+    pending: Option<Navigation>,
+    recovery: auth::Recovery,
+}
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+impl ProjectNavigation {
+    fn new(address: &str) -> Result<Self, String> {
+        let address = navigation_url(address)?;
+        let project = crate::overleaf::ProjectUrl::parse(&address).ok();
+        let trusted_origin = project
+            .as_ref()
+            .map_or(OVERLEAF_ORIGIN, |project| project.origin())
+            .to_owned();
+        Ok(Self {
+            project,
+            trusted_origin,
+            authority: PageAuthority::Uncommitted,
+            current_url: address,
+            pending: None,
+            recovery: auth::Recovery::default(),
+        })
+    }
+    /// Returning to the project permits browser commands, but never reports a
+    /// live connection. Native editing still requires fresh project hydration.
+    fn started(&mut self, candidate: &str) -> bool {
+        let active = self.owns_page(candidate);
+        let departed = self.is_active() && !active;
+        self.authority = if active {
+            PageAuthority::ProjectPage
+        } else {
+            PageAuthority::Browsing
+        };
+        if let Ok(address) = navigation_url(candidate) {
+            self.current_url.clone_from(&address);
+            self.pending = Some(Navigation {
+                project: self.project_on_trusted_origin(&address),
+                sign_in: self.recovery.observe(self.project.as_ref(), &address),
+                url: address,
+            });
+        } else {
+            self.pending = None;
+        }
+        departed
+    }
+    fn is_active(&self) -> bool {
+        self.authority == PageAuthority::ProjectPage
+    }
+    fn project_on_trusted_origin(&self, candidate: &str) -> Option<crate::overleaf::ProjectUrl> {
+        let mut url = url::Url::parse(candidate).ok()?;
+        if url.origin().ascii_serialization() != self.trusted_origin
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return None;
+        }
+        url.set_query(None);
+        url.set_fragment(None);
+        crate::overleaf::ProjectUrl::parse(url.as_str()).ok()
+    }
+    fn owns_page(&self, candidate: &str) -> bool {
+        self.project.as_ref().is_some_and(|project| {
+            url::Url::parse(candidate).is_ok_and(|url| {
+                url.origin().ascii_serialization() == project.origin()
+                    && url.path().strip_suffix('/').unwrap_or(url.path())
+                        == format!("/project/{}", project.id())
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+        })
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
@@ -77,14 +210,21 @@ fn edit_action(command: crate::native_menu::AppCommand) -> Option<EditAction> {
 }
 
 pub(crate) struct Browser {
+    // Field order removes the native event monitor before the WebView drops.
+    #[cfg(target_os = "macos")]
+    native_focus: native_focus::Lease,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview: wry::WebView,
+    // Drop the WebView before its context; moving/rebuilding the executable
+    // must not select another WebView2 cookie profile.
+    #[cfg(target_os = "windows")]
+    _profile: Box<wry::WebContext>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     context: egui::Context,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     viewport: egui::ViewportId,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    origin: String,
+    navigation: std::rc::Rc<std::cell::RefCell<ProjectNavigation>>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     bounds: Option<tiptoptyp_core::geometry::NativeRect>,
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -98,29 +238,46 @@ impl Browser {
         url: &str,
         epoch: u64,
         events: Sender,
+        profile_id: Option<[u8; 16]>,
     ) -> Result<Self, String> {
-        if !navigation_allowed(url) || url == "about:blank" {
-            return Err("Overleaf requires an HTTPS address.".into());
-        }
-        let origin = url::Url::parse(url)
-            .map_err(|_| "Invalid Overleaf address.".to_owned())?
-            .origin()
-            .ascii_serialization();
+        let url = navigation_url(url)?;
+        let navigation = std::rc::Rc::new(std::cell::RefCell::new(ProjectNavigation::new(&url)?));
         let viewport = context.viewport_id();
         let parent = crate::native_window::for_viewport(context, viewport)
             .ok_or_else(|| "The Overleaf connection window is not ready.".to_owned())?;
         // Wry injects into subframes on Windows even when main-only is requested.
         // The explicit guard also keeps the bridge out of third-party SSO pages.
-        let script = format!(
-            "if(window===window.top && location.origin==={}){{window.tiptoptypOverleafEpoch={epoch};\n{}\n}}",
-            serde_json::json!(origin),
-            include_str!("overleaf_bridge.js"),
-        );
-        let allowed_origin = origin.clone();
+        let script = navigation.borrow().project.as_ref().map_or_else(String::new, |project| {
+            format!(
+                "if(window===window.top && location.origin==={} && location.pathname.replace(/\\/$/,'')==={}){{window.tiptoptypOverleafEpoch={epoch};\n{}\n}}",
+                serde_json::json!(project.origin()),
+                serde_json::json!(format!("/project/{}", project.id())),
+                include_str!("overleaf_bridge.js"),
+            )
+        });
+        let load_navigation = std::rc::Rc::clone(&navigation);
+        let ipc_navigation = std::rc::Rc::clone(&navigation);
+        let navigation_events = events.clone();
+        let navigation_context = context.clone();
         #[cfg(target_os = "macos")]
         let termination_events = events.clone();
-        let builder = wry::WebViewBuilder::new()
-            .with_url(url)
+        #[cfg(target_os = "windows")]
+        let mut profile = {
+            let local_data = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+            Box::new(wry::WebContext::new(Some(profile::directory(
+                local_data.as_deref(),
+                profile_id,
+            )?)))
+        };
+        #[cfg(target_os = "windows")]
+        let builder = wry::WebViewBuilder::new_with_web_context(&mut profile);
+        #[cfg(not(target_os = "windows"))]
+        let builder = wry::WebViewBuilder::new();
+        #[cfg(target_os = "macos")]
+        let builder = profile::configure_macos(builder, profile_id)?;
+        let builder = builder
+            .with_incognito(false)
+            .with_url(&url)
             .with_focused(false)
             .with_visible(false)
             .with_background_throttling(wry::BackgroundThrottlingPolicy::Disabled)
@@ -128,6 +285,24 @@ impl Browser {
             .with_bounds(wry_bounds([0.0, 0.0, 1.0, 1.0]))
             .with_initialization_script_for_main_only(script, true)
             .with_navigation_handler(|candidate| navigation_allowed(&candidate))
+            .with_on_page_load_handler(move |event, candidate| {
+                if !matches!(event, wry::PageLoadEvent::Started) {
+                    return;
+                }
+                let departed = load_navigation.borrow_mut().started(&candidate);
+                navigation_context.request_repaint();
+                if departed {
+                    let _ = navigation_events.send(
+                        serde_json::json!({
+                            "event": "status",
+                            "epoch": epoch,
+                            "state": "disconnected",
+                            "message": "The Overleaf browser left this project. Sign in or reconnect to continue.",
+                        })
+                        .to_string(),
+                    );
+                }
+            })
             .with_new_window_req_handler(|candidate, _| {
                 if navigation_allowed(&candidate) {
                     wry::NewWindowResponse::Allow
@@ -136,16 +311,15 @@ impl Browser {
                 }
             })
             .with_permission_handler(|_| wry::PermissionResponse::Deny)
-            .with_ipc_handler(move |request| {
-                if message_allowed(
-                    &allowed_origin,
+            .with_ipc_handler_for_main_frame(move |request| {
+                // The decoder wakes the owner only after a typed result or
+                // explicit overflow; raw arrivals never force a UI pass.
+                receive_message(
+                    &ipc_navigation.borrow(),
                     &request.uri().to_string(),
-                    request.body().len(),
-                ) {
-                    // The decoder wakes the owner only after a typed result or
-                    // explicit overflow; raw arrivals never force a UI pass.
-                    let _ = events.send(request.into_body());
-                }
+                    request.into_body(),
+                    &events,
+                );
             });
         #[cfg(target_os = "macos")]
         let builder = {
@@ -165,14 +339,60 @@ impl Browser {
         let webview = builder
             .build_as_child(&parent)
             .map_err(|error| format!("Could not open the Overleaf frontend: {error}"))?;
+        #[cfg(target_os = "macos")]
+        let native_focus = native_focus::Lease::new(&webview)?;
         Ok(Self {
+            #[cfg(target_os = "macos")]
+            native_focus,
             webview,
+            #[cfg(target_os = "windows")]
+            _profile: profile,
             context: context.clone(),
             viewport,
-            origin,
+            navigation,
             bounds: None,
             visible: std::cell::Cell::new(false),
         })
+    }
+
+    pub(crate) fn navigate(&self, address: &str) -> Result<(), String> {
+        let address = navigation_url(address)?;
+        self.navigation.borrow_mut().recovery.cancel();
+        self.webview
+            .load_url(&address)
+            .map_err(|error| format!("Could not open the browser address: {error}"))
+    }
+
+    pub(crate) fn back(&self) -> Result<(), String> {
+        self.navigation.borrow_mut().recovery.cancel();
+        self.webview
+            .evaluate_script("window.history.back();")
+            .map_err(|error| format!("Could not go back in the browser: {error}"))
+    }
+
+    pub(crate) fn forward(&self) -> Result<(), String> {
+        self.navigation.borrow_mut().recovery.cancel();
+        self.webview
+            .evaluate_script("window.history.forward();")
+            .map_err(|error| format!("Could not go forward in the browser: {error}"))
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn current_url(&self) -> String {
+        self.navigation.borrow().current_url.clone()
+    }
+
+    pub(crate) fn project_ready(&self) {
+        self.navigation.borrow_mut().recovery.ready();
+    }
+    pub(crate) fn cancel_sign_in_return(&self) {
+        self.navigation.borrow_mut().recovery.cancel();
+    }
+
+    /// Main-frame callbacks coalesce redirects, so a stale project route never
+    /// starts a connection after the browser has already navigated elsewhere.
+    pub(crate) fn take_navigation(&self) -> Option<Navigation> {
+        self.navigation.borrow_mut().pending.take()
     }
 
     /// `scale` converts egui points into native logical points, as for previews.
@@ -206,7 +426,8 @@ impl Browser {
         }
         #[cfg(target_os = "macos")]
         {
-            self.keyboard_target().is_some()
+            self.native_focus
+                .browser_owns_keyboard(self.keyboard_target().is_some())
         }
         #[cfg(target_os = "windows")]
         {
@@ -214,11 +435,71 @@ impl Browser {
         }
     }
 
-    /// Release native focus before moving it to an egui field in this window.
+    /// Explicit widget focus repairs the native responder even if this window
+    /// is not key yet. `owns_keyboard` is an observation, not an admission gate.
     pub(crate) fn focus_parent(&self) {
-        if self.owns_keyboard() {
-            let _ = self.webview.focus_parent();
-        }
+        #[cfg(target_os = "macos")]
+        self.native_focus.claim_parent();
+        #[cfg(target_os = "windows")]
+        let _ = self.webview.focus_parent();
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn keyboard_inspection(&self) -> serde_json::Value {
+        use wry::WebViewExtMacOS as _;
+        let web = self.webview.webview();
+        let window = web.window();
+        let browser_responder = window
+            .as_ref()
+            .and_then(|window| window.firstResponder())
+            .and_then(|responder| responder.downcast::<objc2_app_kit::NSView>().ok())
+            .is_some_and(|responder| responder.isDescendantOf(&web));
+        let parent_responder = crate::native_window::for_viewport(&self.context, self.viewport)
+            .and_then(|parent| parent.ime_cursor_area())
+            .map(|(_, focused)| focused);
+        let rect = |rect: objc2_foundation::NSRect| {
+            [
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height,
+            ]
+        };
+        let web_window_rect = web.convertRect_toView(web.bounds(), None);
+        let screen_rect = window
+            .as_ref()
+            .map(|window| window.convertRectToScreen(web_window_rect));
+        let screen_top = objc2::MainThreadMarker::new()
+            .and_then(|marker| objc2_app_kit::NSScreen::screens(marker).firstObject())
+            .map(|screen| screen.frame().origin.y + screen.frame().size.height);
+        let screen_rect_top_left = screen_rect.zip(screen_top).map(|(screen, top)| {
+            [
+                screen.origin.x,
+                top - screen.origin.y - screen.size.height,
+                screen.size.width,
+                screen.size.height,
+            ]
+        });
+        // SAFETY: this live WebView is queried on its owning AppKit thread;
+        // the returned retained parent is used only for read-only geometry.
+        let host = unsafe { web.superview() };
+        serde_json::json!({
+            "window_key": window.as_ref().map(|window| window.isKeyWindow()),
+            "window_visible": window.as_ref().map(|window| window.isVisible()),
+            "browser_first_responder": browser_responder,
+            "parent_first_responder": parent_responder,
+            "keyboard_owner": self.native_focus.owner(),
+            "viewport": format!("{:?}", self.viewport),
+            "window_title_fingerprint": window.as_ref().map(|window|crate::desktop_test::fingerprint(&window.title().to_string())),
+            "window_frame": window.as_ref().map(|window| rect(window.frame())),
+            "web_frame": rect(web.frame()),
+            "web_bounds": rect(web.bounds()),
+            "host_frame": host.as_ref().map(|host| rect(host.frame())),
+            "host_bounds": host.as_ref().map(|host| rect(host.bounds())),
+            "web_window_rect": rect(web_window_rect),
+            "web_screen_rect_appkit": screen_rect.map(rect),
+            "web_screen_rect_top_left": screen_rect_top_left,
+        })
     }
 
     #[cfg(target_os = "macos")]
@@ -288,8 +569,7 @@ impl Browser {
                 EditAction::Redo => "redo",
             };
             let script = format!(
-                "if(window===window.top && location.origin==={} && document.hasFocus()){{document.execCommand({});}}",
-                serde_json::json!(self.origin),
+                "if(window===window.top && document.hasFocus()){{document.execCommand({});}}",
                 serde_json::json!(action),
             );
             self.webview.evaluate_script(&script).is_ok()
@@ -298,7 +578,7 @@ impl Browser {
 
     pub(crate) fn set_visible(&self, visible: bool) -> Result<(), String> {
         if self.visible.get() != visible {
-            if !visible {
+            if !visible && self.owns_keyboard() {
                 self.focus_parent();
             }
             self.webview
@@ -310,14 +590,23 @@ impl Browser {
     }
 
     pub(crate) fn command(&self, command: &serde_json::Value) -> Result<(), String> {
+        let navigation = self.navigation.borrow();
+        let Some(project) = navigation
+            .project
+            .as_ref()
+            .filter(|_| navigation.is_active())
+        else {
+            return Err("The Overleaf browser is outside this project. Sign in or reconnect before continuing.".into());
+        };
         let payload = serde_json::to_string(command)
             .map_err(|_| "Could not encode the Overleaf command.".to_owned())?;
         if payload.len() > MAX_MESSAGE_BYTES {
             return Err("The Overleaf command exceeds the 16 MiB limit.".into());
         }
         let script = format!(
-            "if(window===window.top && location.origin==={}){{window.tiptoptypOverleaf?.command({payload});}}",
-            serde_json::json!(self.origin),
+            "if(window===window.top && location.origin==={} && location.pathname.replace(/\\/$/,'')==={}){{window.tiptoptypOverleaf?.command({payload});}}",
+            serde_json::json!(project.origin()),
+            serde_json::json!(format!("/project/{}", project.id())),
         );
         self.webview
             .evaluate_script(&script)
@@ -365,9 +654,33 @@ impl Browser {
         _url: &str,
         _epoch: u64,
         _events: Sender,
+        _profile_id: Option<[u8; 16]>,
     ) -> Result<Self, String> {
         Err("The Overleaf frontend is available on macOS and Windows.".into())
     }
+
+    pub(crate) fn navigate(&self, _address: &str) -> Result<(), String> {
+        Err("The Overleaf frontend is unavailable on this platform.".into())
+    }
+
+    pub(crate) fn back(&self) -> Result<(), String> {
+        Err("The Overleaf frontend is unavailable on this platform.".into())
+    }
+
+    pub(crate) fn forward(&self) -> Result<(), String> {
+        Err("The Overleaf frontend is unavailable on this platform.".into())
+    }
+
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    pub(crate) fn current_url(&self) -> String {
+        LOGIN_URL.into()
+    }
+
+    pub(crate) fn take_navigation(&self) -> Option<Navigation> {
+        None
+    }
+    pub(crate) fn project_ready(&self) {}
+    pub(crate) fn cancel_sign_in_return(&self) {}
 
     pub(crate) fn set_bounds(&mut self, _rect: egui::Rect, _scale: f32) -> Result<(), String> {
         Err("The Overleaf frontend is unavailable on this platform.".into())
@@ -416,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_allows_secure_sso_and_local_fixtures_without_url_credentials() {
+    fn browsing_allows_web_pages_and_sso_without_granting_native_access() {
         for candidate in [
             "https://www.overleaf.com/login",
             "https://institution.example/sso",
@@ -424,41 +737,271 @@ mod tests {
             "http://localhost:3421/project/test",
             "http://127.0.0.1:3421/",
             "http://[::1]:3421/",
+            "http://www.overleaf.com/login",
+            "http://self-hosted.example/",
+            "http://localhost.example/",
         ] {
             assert!(navigation_allowed(candidate), "{candidate}");
         }
         for candidate in [
-            "http://www.overleaf.com/login",
             "https://user:password@www.overleaf.com/login",
             "javascript:alert(1)",
             "file:///tmp/project.tex",
             "https://",
-            "http://localhost.example/",
+            "data:text/html,hello",
+            "mailto:alice@example.org",
         ] {
             assert!(!navigation_allowed(candidate), "{candidate}");
         }
     }
 
     #[test]
-    fn ipc_requires_the_exact_origin_and_bounded_body() {
-        let origin = "https://www.overleaf.com";
+    fn login_starts_without_a_project_and_discovers_only_verified_routes() {
+        let mut navigation = ProjectNavigation::new(LOGIN_URL).unwrap();
+        assert!(navigation.project.is_none());
+        assert!(!navigation.is_active());
+        assert_eq!(navigation.current_url, LOGIN_URL);
+        assert!(!navigation.started(LOGIN_URL));
+        assert_eq!(navigation.pending.take().unwrap().project, None);
+        for candidate in [
+            "https://institution.example/sso",
+            "http://www.overleaf.com/project/0123456789abcdef01234567",
+            "https://www.overleaf.com.evil.example/project/0123456789abcdef01234567",
+            "https://www.overleaf.com:8443/project/0123456789abcdef01234567",
+            "https://www.overleaf.com/project/0123456789abcdef01234567/download",
+            "https://www.overleaf.com/project/0123456789abcdef012345670",
+        ] {
+            assert!(
+                !navigation.started(candidate),
+                "unbound browser: {candidate}"
+            );
+            assert!(
+                navigation.pending.take().unwrap().project.is_none(),
+                "{candidate}"
+            );
+            assert!(!message_allowed(&navigation, candidate));
+        }
+        let candidate = "https://www.overleaf.com/project/0123456789abcdef01234567/?doc=abcdef0123456789abcdef01#editor";
+        assert!(!navigation.started(candidate));
+        let publication = navigation.pending.take().unwrap();
+        assert_eq!(publication.url, candidate);
+        assert_eq!(
+            publication.project.unwrap().id(),
+            "0123456789abcdef01234567"
+        );
+        assert!(
+            !navigation.is_active(),
+            "discovery is not a live project connection"
+        );
+        assert!(!message_allowed(&navigation, candidate));
+    }
+
+    #[test]
+    fn trusted_discovery_coalesces_redirects_and_does_not_change_bound_project() {
+        let project = crate::overleaf::ProjectUrl::parse(
+            "https://self-hosted.example/project/0123456789abcdef01234567",
+        )
+        .unwrap();
+        let mut navigation = ProjectNavigation::new(project.url()).unwrap();
+        assert!(!navigation.started(project.url()));
+        navigation.pending.take();
+        let next = "https://self-hosted.example/project/abcdef0123456789abcdef01";
+        assert!(navigation.started(next));
+        assert_eq!(
+            navigation
+                .pending
+                .as_ref()
+                .unwrap()
+                .project
+                .as_ref()
+                .unwrap()
+                .id(),
+            "abcdef0123456789abcdef01"
+        );
+        assert!(!message_allowed(&navigation, next));
+        assert!(!navigation.started("https://self-hosted.example/login"));
+        let redirect = navigation.pending.take().unwrap();
+        assert_eq!(redirect.url, "https://self-hosted.example/login");
+        assert!(
+            redirect.project.is_none(),
+            "no stale project discovery after a redirect"
+        );
+        assert_eq!(navigation.project.as_ref(), Some(&project));
+        assert!(!navigation.started("https://www.overleaf.com/project/abcdef0123456789abcdef01"));
+        assert!(
+            navigation.pending.take().unwrap().project.is_none(),
+            "explicit self-host origin remains exact"
+        );
+    }
+
+    #[test]
+    fn navigation_bounds_addresses_and_does_not_promote_arbitrary_sites_to_trusted_hosts() {
+        assert_eq!(
+            navigation_url("  https://example.org/page?q=1#section  ").unwrap(),
+            "https://example.org/page?q=1#section"
+        );
+        assert!(
+            navigation_url(&format!(
+                "https://example.org/{}",
+                "a".repeat(MAX_URL_BYTES)
+            ))
+            .is_err()
+        );
+        let mut navigation = ProjectNavigation::new("https://institution.example/sso").unwrap();
+        navigation.started("https://institution.example/project/0123456789abcdef01234567");
+        assert!(navigation.pending.take().unwrap().project.is_none());
+        navigation.started("https://www.overleaf.com/project/0123456789abcdef01234567");
+        assert!(navigation.pending.take().unwrap().project.is_some());
+    }
+
+    #[test]
+    fn ipc_requires_the_active_project_page() {
+        let project = crate::overleaf::ProjectUrl::parse(
+            "https://www.overleaf.com/project/0123456789abcdef01234567",
+        )
+        .unwrap();
+        let mut navigation = ProjectNavigation::new(project.url()).unwrap();
+        assert!(!message_allowed(&navigation, project.url()));
+        navigation.started(project.url());
+        assert!(message_allowed(&navigation, project.url()));
         assert!(message_allowed(
-            origin,
-            "https://www.overleaf.com/project/abc",
-            MAX_MESSAGE_BYTES
+            &navigation,
+            "https://www.overleaf.com/project/0123456789abcdef01234567?doc=abcdef0123456789abcdef01",
         ));
         for candidate in [
-            "https://www.overleaf.com.evil.example/project/abc",
-            "https://overleaf.com/project/abc",
-            "https://www.overleaf.com:8443/project/abc",
+            "https://www.overleaf.com.evil.example/project/0123456789abcdef01234567",
+            "https://overleaf.com/project/0123456789abcdef01234567",
+            "https://www.overleaf.com:8443/project/0123456789abcdef01234567",
             "https://institution.example/sso",
-            "http://www.overleaf.com/project/abc",
+            "http://www.overleaf.com/project/0123456789abcdef01234567",
+            "https://www.overleaf.com/login",
+            "https://www.overleaf.com/project/abcdef0123456789abcdef01",
+            "https://www.overleaf.com/project/0123456789abcdef01234567/download",
             "data:text/plain,hello",
             "about:blank",
         ] {
-            assert!(!message_allowed(origin, candidate, 10), "{candidate}");
+            assert!(!message_allowed(&navigation, candidate), "{candidate}");
         }
-        assert!(!message_allowed(origin, origin, MAX_MESSAGE_BYTES + 1));
+        assert!(navigation.started("https://institution.example/sso"));
+        assert!(
+            !message_allowed(&navigation, project.url()),
+            "late old-page IPC cannot revive a departed project"
+        );
+    }
+
+    #[test]
+    fn oversized_active_project_ipc_is_terminal_but_wrong_route_cannot_poison_inbox() {
+        let project = crate::overleaf::ProjectUrl::parse(
+            "https://www.overleaf.com/project/0123456789abcdef01234567",
+        )
+        .unwrap();
+        let mut navigation = ProjectNavigation::new(project.url()).unwrap();
+        navigation.started(project.url());
+        let mut inbox = crate::overleaf_inbox::Inbox::new(&egui::Context::default());
+        let events = inbox.sender();
+        for candidate in [
+            "https://www.overleaf.com/login",
+            "https://www.overleaf.com/project/abcdef0123456789abcdef01",
+            "https://institution.example/sso",
+        ] {
+            receive_message(
+                &navigation,
+                candidate,
+                "x".repeat(MAX_MESSAGE_BYTES + 1),
+                &events,
+            );
+            assert!(inbox.poll().is_none(), "unowned page: {candidate}");
+        }
+        receive_message(
+            &navigation,
+            project.url(),
+            "x".repeat(MAX_MESSAGE_BYTES + 1),
+            &events,
+        );
+        let error = inbox
+            .poll()
+            .expect("an oversized owned message must end the stream")
+            .unwrap_err();
+        assert!(error.contains("16 MiB"));
+        assert!(
+            events
+                .send(
+                    serde_json::json!({
+                        "event": "project", "epoch": 7,
+                        "project_id": "0123456789abcdef01234567",
+                        "name": "Stale publication", "entries": [],
+                    })
+                    .to_string()
+                )
+                .is_err()
+        );
+        assert!(
+            inbox.poll().is_none(),
+            "later Project cannot revive the failed stream"
+        );
+    }
+
+    #[test]
+    fn committed_project_navigation_invalidates_departures_without_enabling_on_return() {
+        let project = crate::overleaf::ProjectUrl::parse(
+            "https://www.overleaf.com/project/0123456789abcdef01234567",
+        )
+        .unwrap();
+        let mut navigation = ProjectNavigation::new(project.url()).unwrap();
+        assert!(
+            !navigation.is_active(),
+            "commands wait for an actual committed page"
+        );
+        assert!(!navigation.started(project.url()));
+        assert!(navigation.is_active());
+        for candidate in [
+            "https://www.overleaf.com/project/0123456789abcdef01234567/?doc=abcdef0123456789abcdef01",
+            "https://www.overleaf.com/project/0123456789abcdef01234567#editor",
+        ] {
+            assert!(!navigation.started(candidate), "same project: {candidate}");
+            assert!(navigation.is_active());
+        }
+        for candidate in [
+            "https://www.overleaf.com/login",
+            "https://institution.example/sso",
+            "https://www.overleaf.com/project/abcdef0123456789abcdef01",
+            "https://www.overleaf.com/project/0123456789abcdef01234567/download",
+            "https://www.overleaf.com/project/0123456789abcdef012345670",
+            "https://www.overleaf.com:8443/project/0123456789abcdef01234567",
+            "https://www.overleaf.com.evil.example/project/0123456789abcdef01234567",
+            "https://user@www.overleaf.com/project/0123456789abcdef01234567",
+            "about:blank",
+            "not a URL",
+        ] {
+            assert!(navigation.started(candidate), "departure: {candidate}");
+            assert!(!navigation.is_active());
+            assert!(
+                !navigation.started(candidate),
+                "do not flood offline events"
+            );
+            assert!(
+                !navigation.started(project.url()),
+                "return never emits connected"
+            );
+            assert!(navigation.is_active());
+        }
+    }
+
+    #[test]
+    fn committed_local_fixture_navigation_checks_exact_origin_and_project_route() {
+        let project = crate::overleaf::ProjectUrl::parse(
+            "http://127.0.0.1:43210/project/0123456789abcdef01234567",
+        )
+        .unwrap();
+        let mut navigation = ProjectNavigation::new(project.url()).unwrap();
+        assert!(!navigation.started(project.url()));
+        assert!(navigation.is_active());
+        assert!(navigation.started("http://127.0.0.1:43211/project/0123456789abcdef01234567"));
+        assert!(!navigation.is_active());
+        assert!(!navigation.started(
+            "http://127.0.0.1:43210/project/0123456789abcdef01234567?doc=abcdef0123456789abcdef01"
+        ));
+        assert!(navigation.is_active());
     }
 
     #[test]

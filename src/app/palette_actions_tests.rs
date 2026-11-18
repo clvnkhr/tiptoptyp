@@ -1,6 +1,39 @@
 //! Palette integration checks use real command routing and text-edit state.
 use super::*;
 
+#[test]
+fn palette_offers_folding_and_sticky_context_for_both_typesetting_languages() {
+    let root = tempfile::tempdir().unwrap();
+    let context = egui::Context::default();
+    let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+    let origin = Origin {
+        viewport: egui::ViewportId::ROOT,
+        focus: Some(source_editor_id(&context)),
+        terminal: false,
+        preview: None,
+        tex_mode: false,
+    };
+    for kind in [DocumentKind::Typst, DocumentKind::Tex, DocumentKind::Text] {
+        app.document_mut().replace_untitled_kind(kind);
+        for action in [
+            ShortcutAction::ToggleFold,
+            ShortcutAction::CollapseAll,
+            ShortcutAction::ExpandAll,
+            ShortcutAction::ToggleStickyContext,
+        ] {
+            assert_eq!(
+                app.palette_action_enabled(action, origin, &context),
+                kind.typesetting_language().is_some(),
+                "{kind:?} {action:?}"
+            );
+        }
+    }
+    app.document_mut().replace_untitled_kind(DocumentKind::Tex);
+    app.settings.line_numbers = false;
+    assert!(!app.palette_action_enabled(ShortcutAction::CollapseAll, origin, &context));
+    assert!(app.palette_action_enabled(ShortcutAction::ToggleStickyContext, origin, &context));
+}
+
 fn fixture(context: &egui::Context, root: &Path) -> EditorApp {
     let mut app = EditorApp::dormant_for_tests(context, root.into());
     app.document_mut()
@@ -592,7 +625,7 @@ fn palette_find_origin_preserves_its_host_beyond_the_normal_blur_grace() {
     assert!(app.command_palette_visible());
     // Without the captured-origin presentation policy, Find's normal grace
     // would hide its dormant native host before cancellation could focus it.
-    app.find_bar.focus = false;
+    app.find_bar.clear_focus_request();
     app.find_bar.child_focused = false;
     let now = Instant::now();
     assert!(app.find_bar.present(false, now));
@@ -606,7 +639,7 @@ fn palette_find_origin_preserves_its_host_beyond_the_normal_blur_grace() {
             let held = app.palette_holds_find(ui.ctx());
             assert!(held);
             assert!(app.find_bar.present(held, after_grace));
-            assert!(!app.find_bar.focus);
+            assert!(!app.find_bar.focus_requested());
         })
         .drop_without_applying_deltas();
     let mut inactive = input(None, Vec::new());
@@ -632,7 +665,7 @@ fn palette_find_origin_preserves_its_host_beyond_the_normal_blur_grace() {
     assert!(!app.command_palette_visible());
     assert!(app.find_bar.present(false, after_grace));
     assert!(
-        !app.find_bar.focus,
+        !app.find_bar.focus_requested(),
         "cancellation must not force the Find query over Replace"
     );
     assert!(app.find_bar.visible && app.find_bar.replace_visible);

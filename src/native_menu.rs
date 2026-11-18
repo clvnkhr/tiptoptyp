@@ -64,6 +64,7 @@ commands! {
     Settings => ("Settings…", Application, 0, Always, 1),
     New => ("New", File, 0, Always, 100),
     NewFromTemplate => ("New from Template…", File, 0, Always, 180),
+    MakeDemoFile => ("Make Demo File…", File, 0, Always, 217),
     ComfyPreview => ("Toggle Comfy Preview", View, 2, Always, 181),
     NewWindow => ("New Window", File, 0, Always, 106),
     Open => ("Open…", File, 0, Always, 101),

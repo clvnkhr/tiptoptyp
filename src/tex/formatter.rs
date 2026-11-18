@@ -87,7 +87,7 @@ impl Job {
         Some(match result {
             Ok(edits) => Event::Formatted {
                 request: self.request.clone(),
-                edits: Some(edits),
+                edits,
             },
             Err(message) => Event::RequestFailed {
                 request: self.request.clone(),
@@ -155,7 +155,7 @@ mod tests {
         snapshot.tools.tex_fmt.origin = crate::toolchain::ToolOrigin::Custom;
         let request = Request {
             identity: snapshot.identity(),
-            kind: crate::tex::RequestKind::Format,
+            kind: crate::tex::RequestKind::Format { token: 17 },
         };
         (snapshot, request)
     }
@@ -206,7 +206,7 @@ mod tests {
                 Event::Formatted { edits, .. } if source.trim().is_empty() => {
                     let result = tiptoptyp_core::text::apply_text_edits(
                         source,
-                        &edits.unwrap(),
+                        &edits,
                         [ScalarOffset::new(0); 2],
                     )
                     .unwrap();

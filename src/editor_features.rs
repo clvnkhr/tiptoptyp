@@ -9,6 +9,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+pub(crate) mod tex_targets;
+
 use typst_syntax::{
     LinkedNode, Source, SyntaxKind,
     ast::{self, AstNode},
@@ -374,6 +376,96 @@ pub(crate) fn context_regions(parsed: &Source, source: &str) -> Vec<ContextRegio
             r.rows[0].line,
             std::cmp::Reverse(r.rows[0].end_line),
             r.range.start,
+        )
+    });
+    regions
+}
+
+/// Native TeX uses the same structural regions as embedded TeX, without asking
+/// a Typst parser to interpret TeX commands. Called once per source revision.
+pub(crate) fn tex_context_regions(
+    source: &str,
+    ignored: &[std::ops::Range<usize>],
+) -> Vec<ContextRegion> {
+    let lines = LineMap::new(source);
+    let mut regions = Vec::new();
+    for region in crate::embedded_structure::tex_regions(source, ignored) {
+        let end_line = if region.heading_level.is_some() && region.range.end < source.len() {
+            lines.line_index_at(region.range.end) + 1
+        } else {
+            lines.line_index_at(region.range.end.saturating_sub(1)) + 2
+        };
+        let first_line = lines.line_index_at(region.range.start);
+        let line = &source[lines.line_range(source, first_line)];
+        let declaration = [
+            "\\newcommand",
+            "\\renewcommand",
+            "\\providecommand",
+            "\\DeclareRobustCommand",
+            "\\NewDocumentCommand",
+            "\\RenewDocumentCommand",
+            "\\ProvideDocumentCommand",
+            "\\DeclareDocumentCommand",
+            "\\newenvironment",
+            "\\renewenvironment",
+            "\\NewDocumentEnvironment",
+            "\\RenewDocumentEnvironment",
+            "\\def",
+            "\\gdef",
+            "\\edef",
+            "\\xdef",
+        ]
+        .iter()
+        .any(|name| {
+            line.trim_start()
+                .strip_prefix(name)
+                .is_some_and(|tail| !tail.chars().next().is_some_and(char::is_alphabetic))
+        });
+        let kind = region.heading_level.map_or(
+            if declaration {
+                StickyContextKind::Function
+            } else {
+                StickyContextKind::Block
+            },
+            |level| StickyContextKind::Heading { level },
+        );
+        let row = context_row(source, &lines, region.range.start, end_line, kind);
+        if row.line + 1 >= end_line {
+            continue;
+        }
+        let mut range = region.range;
+        let fragment = &source[range.clone()];
+        let closed = if fragment.starts_with('{') {
+            fragment.ends_with('}')
+        } else if fragment.starts_with("\\[") {
+            fragment.ends_with("\\]")
+        } else if fragment.starts_with("$$") {
+            fragment.len() >= 4 && fragment.ends_with("$$")
+        } else if fragment.starts_with("\\begin") {
+            fragment
+                .find('{')
+                .and_then(|start| {
+                    let tail = &fragment[start + 1..];
+                    tail.find('}')
+                        .map(|end| fragment.ends_with(&format!("\\end{{{}}}", &tail[..end])))
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if range.end == source.len() && (region.heading_level.is_some() || !closed) {
+            range.end += 1;
+        }
+        regions.push(ContextRegion {
+            range,
+            rows: vec![row],
+        });
+    }
+    regions.sort_by_key(|region| {
+        (
+            region.rows[0].line,
+            std::cmp::Reverse(region.rows[0].end_line),
+            region.range.start,
         )
     });
     regions
@@ -1346,6 +1438,78 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    fn native_tex_regions(source: &str) -> Vec<ContextRegion> {
+        tex_context_regions(source, &crate::delimiters::tex_ignored_ranges(source))
+    }
+
+    #[test]
+    fn native_tex_contexts_cover_sections_environments_definitions_and_eof() {
+        let source = "\\section{Outer}\n\\subsection{Inner}\n\\begin{align}\n α+β\n\\end{align}\n\\newcommand{\\identity}[1]{\n #1\n}\n\\section*{Next}\ntext";
+        let regions = native_tex_regions(source);
+        let starts = source
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain([source.len()])
+            .collect::<Vec<_>>();
+        let query = StickyContextQuery::new(&regions, &starts);
+        let within = |text: &str| source[..source.find(text).unwrap()].chars().count();
+        let math = query.rows(within("α+β"));
+        assert_eq!(
+            math.iter().map(|row| row.text.as_str()).collect::<Vec<_>>(),
+            vec!["\\section{Outer}", "\\subsection{Inner}", "\\begin{align}"]
+        );
+        let definition = query.rows(within("#1"));
+        assert_eq!(definition.last().unwrap().kind, StickyContextKind::Function);
+        assert!(definition.last().unwrap().text.starts_with("\\newcommand"));
+        assert_eq!(
+            query
+                .rows(source.chars().count())
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["\\section*{Next}"]
+        );
+        assert!(
+            regions
+                .iter()
+                .all(|region| region.rows[0].line + 1 < region.rows[0].end_line)
+        );
+    }
+
+    #[test]
+    fn native_tex_ignored_sections_do_not_end_real_section_ancestry() {
+        let source = "\\section{Real}\n% \\section{Comment}\n\\newcommand{\\fake}{\\section{Macro}}\n\\begin{BVerbatim}\n\\section{Literal}\n{fake group}\n\\end{BVerbatim}\n\\begin{comment}\n\\section{Hidden}\n\\end{comment}\n\\lstinline|\\section{Inline}|\nbody";
+        let regions = native_tex_regions(source);
+        let headings = regions
+            .iter()
+            .filter(|region| matches!(region.rows[0].kind, StickyContextKind::Heading { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].range.end, source.len() + 1);
+        assert!(
+            regions
+                .iter()
+                .all(|region| !region.rows[0].text.contains("Literal")
+                    && !region.rows[0].text.contains("Hidden"))
+        );
+    }
+
+    #[test]
+    fn native_tex_finished_and_unfinished_environments_have_distinct_eof_context() {
+        for (source, expected) in [
+            ("\\begin{equation}\nx", true),
+            ("\\begin{equation}\nx\n\\end{equation}", false),
+        ] {
+            let regions = native_tex_regions(source);
+            assert_eq!(
+                regions
+                    .iter()
+                    .any(|region| region.range.contains(&source.len())),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn embedded_markdown_and_tex_share_folding_and_sticky_source_positions() {

@@ -89,7 +89,7 @@ pub(super) fn fetch_to(target: &str, bundle: &Path) -> Result<(), String> {
     }) {
         extract_member_to_file(&archive, name, &bundle.join(name), false)?;
     }
-    fs::write(bundle.join("PROVENANCE.txt"), format!("PDFium chromium/{VERSION}\nTarget: {target}\nSource: {url}\nArchive SHA-256: {hash}\nBinding: pdfium-render 0.9.4, pdfium_7881\nNative and dependency licenses accompany this library.\n"))
+    fs::write(bundle.join("PROVENANCE.txt"), format!("PDFium chromium/{VERSION}\nTarget: {target}\nSource: {url}\nArchive SHA-256: {hash}\nBinding: pdfium-render 0.9.5, pdfium_7881\nNative and dependency licenses accompany this library.\n"))
         .map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -9,12 +9,56 @@ pub(super) enum FileFollowUp {
 }
 
 impl EditorApp {
+    pub(super) fn delete_workspace_file(&mut self, path: PathBuf, context: &egui::Context) {
+        if self.document_workflow.save_in_flight()
+            || self.local_save.is_running()
+            || self.workspace_switch.active()
+            || self.process_close_pending()
+        {
+            self.notice = Some(Notice {
+                message: "Finish the current file operation before deleting.".into(),
+                kind: NoticeKind::Info,
+            });
+            return;
+        }
+        if self.is_overleaf_path(&path) {
+            self.begin_overleaf_file_action(overleaf::files::Action::Delete(path));
+            return;
+        }
+        match crate::workspace::WorkspaceRoot::open(&self.workspace_root)
+            .and_then(|root| root.file(&path))
+            .and_then(|file| {
+                let path = file.path().to_owned();
+                file.delete().map(|()| path)
+            }) {
+            Ok(path) => {
+                let deletes_preview = self.designated_preview_path().as_ref() == Some(&path);
+                let retired_preview = self.close_deleted_parked_tabs(&path, context);
+                if deletes_preview && !retired_preview {
+                    self.restart_tinymist_preserving_preview();
+                    self.schedule_compile_now();
+                }
+                if self.document().path().as_ref() == Some(&path) {
+                    self.reset_untitled_document();
+                }
+                self.refresh_workspace();
+                self.notice = Some(Notice {
+                    message: format!("Deleted {}", path.display()),
+                    kind: NoticeKind::Success,
+                });
+            }
+            Err(error) => {
+                self.show_file_error(format!("Could not delete {}: {error}", path.display()))
+            }
+        }
+    }
+
     pub(super) fn begin_workspace_new_file(&mut self, directory: PathBuf, tex: bool) {
         if self.document_flow_busy() || self.file_import.is_running() {
             return;
         }
         if self.is_overleaf_path(&directory) {
-            self.show_file_error("Create Overleaf files in Overleaf.".into());
+            self.begin_overleaf_file_action(overleaf::files::Action::NewFile(directory));
             return;
         }
         self.rename_dialog = Some(RenameDialog {
@@ -30,8 +74,7 @@ impl EditorApp {
             error: None,
             edit_events: Vec::new(),
         });
-        self.rename_overlay_had_focus = false;
-        self.rename_overlay_suspended = false;
+        self.rename_overlay_focus = ModalFocus::default();
     }
 
     pub(super) fn create_workspace_file(
@@ -98,7 +141,7 @@ impl EditorApp {
             return;
         }
         if self.is_overleaf_path(&path) {
-            self.show_file_error("Duplicate Overleaf files in Overleaf.".into());
+            self.begin_overleaf_file_action(overleaf::files::Action::Duplicate(path));
             return;
         }
         let root = self.workspace_root.clone();

@@ -53,10 +53,7 @@ impl EditorApp {
         }
     }
     pub(super) fn set_tex_mode(&mut self, enabled: bool, context: &egui::Context) -> bool {
-        if self.overleaf_source_locked() {
-            return false;
-        }
-        if self.table_editor.is_some() {
+        if self.reject_read_only_edit(context) {
             return false;
         }
         if enabled == self.document().config().is_some() {

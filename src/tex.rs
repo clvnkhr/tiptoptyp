@@ -1,8 +1,10 @@
 //! Native TeX tools. One coordinator per window, started lazily for TeX.
+mod diagnostics;
 pub(crate) mod diff;
 pub(crate) mod documentation;
 mod formatter;
 pub(crate) mod imports;
+pub(crate) mod magic;
 mod session;
 pub(crate) mod settings;
 pub(crate) mod tools;
@@ -76,7 +78,7 @@ pub(crate) struct Identity {
 }
 #[derive(Debug, Clone)]
 pub(crate) enum RequestKind {
-    Format,
+    Format { token: u64 },
     Completion { position: LspPosition, token: u64 },
     Hover { position: LspPosition, token: u64 },
 }
@@ -108,7 +110,7 @@ pub(crate) enum Event {
     },
     Formatted {
         request: Request,
-        edits: Option<Vec<LspTextEdit>>,
+        edits: Vec<LspTextEdit>,
     },
     Completed {
         request: Request,
@@ -143,10 +145,21 @@ pub(crate) struct TexService {
     current: Option<Snapshot>,
     generation: u64,
     worker: Option<Worker>,
-    pub(crate) texlab_ready: bool,
-    pub(crate) badness_ready: bool,
-    pub(crate) texlab_error: Option<String>,
-    pub(crate) badness_error: Option<String>,
+    providers: [ProviderState; 2],
+}
+#[derive(Default)]
+enum ProviderState {
+    #[default]
+    NotReady,
+    Ready,
+    Failed(String),
+}
+impl ProviderState {
+    fn stop(&mut self) {
+        if matches!(self, Self::Ready) {
+            *self = Self::NotReady;
+        }
+    }
 }
 struct Worker {
     snapshots: LatestSender<Option<Snapshot>>,
@@ -205,6 +218,28 @@ pub(crate) fn finish_shutdown() {
 }
 
 impl TexService {
+    fn provider(&self, provider: Provider) -> &ProviderState {
+        &self.providers[match provider {
+            Provider::Texlab => 0,
+            Provider::Badness => 1,
+        }]
+    }
+    fn provider_mut(&mut self, provider: Provider) -> &mut ProviderState {
+        &mut self.providers[match provider {
+            Provider::Texlab => 0,
+            Provider::Badness => 1,
+        }]
+    }
+    pub(crate) fn ready(&self, provider: Provider) -> bool {
+        matches!(self.provider(provider), ProviderState::Ready)
+    }
+    pub(crate) fn error(&self, provider: Provider) -> Option<&str> {
+        match self.provider(provider) {
+            ProviderState::Failed(error) => Some(error),
+            _ => None,
+        }
+    }
+
     pub(crate) fn identity(&self) -> Option<&Snapshot> {
         self.current.as_ref()
     }
@@ -223,10 +258,7 @@ impl TexService {
         });
         if restart {
             self.generation = self.generation.wrapping_add(1).max(1);
-            self.texlab_ready = false;
-            self.badness_ready = false;
-            self.texlab_error = None;
-            self.badness_error = None;
+            self.providers = Default::default();
         }
         snapshot.generation = Generation(self.generation);
         if self
@@ -246,8 +278,7 @@ impl TexService {
             if let Some(worker) = &self.worker {
                 let _ = worker.snapshots.send(None);
             }
-            self.texlab_ready = false;
-            self.badness_ready = false;
+            self.providers.iter_mut().for_each(ProviderState::stop);
         }
     }
     pub(crate) fn begin_shutdown(&mut self) {
@@ -260,13 +291,15 @@ impl TexService {
             RequestKind::Completion { .. } => {
                 snapshot.settings.texlab_enabled
                     && snapshot.settings.completion
-                    && self.texlab_ready
+                    && self.ready(Provider::Texlab)
             }
             RequestKind::Hover { .. } => {
-                snapshot.settings.texlab_enabled && snapshot.settings.hover && self.texlab_ready
+                snapshot.settings.texlab_enabled
+                    && snapshot.settings.hover
+                    && self.ready(Provider::Texlab)
             }
-            RequestKind::Format => match snapshot.settings.formatter {
-                Formatter::Badness => self.badness_ready,
+            RequestKind::Format { .. } => match snapshot.settings.formatter {
+                Formatter::Badness => self.ready(Provider::Badness),
                 Formatter::TexFmt => snapshot.tools.tex_fmt.is_available(),
                 Formatter::Disabled => false,
             },
@@ -303,28 +336,12 @@ impl TexService {
                 continue;
             }
             match &event {
-                Event::Ready { provider, .. } => match provider {
-                    Provider::Texlab => {
-                        self.texlab_ready = true;
-                        self.texlab_error = None;
-                    }
-                    Provider::Badness => {
-                        self.badness_ready = true;
-                        self.badness_error = None;
-                    }
-                },
+                Event::Ready { provider, .. } => {
+                    *self.provider_mut(*provider) = ProviderState::Ready
+                }
                 Event::Failed {
                     provider, message, ..
-                } => match provider {
-                    Provider::Texlab => {
-                        self.texlab_ready = false;
-                        self.texlab_error = Some(message.clone());
-                    }
-                    Provider::Badness => {
-                        self.badness_ready = false;
-                        self.badness_error = Some(message.clone());
-                    }
-                },
+                } => *self.provider_mut(*provider) = ProviderState::Failed(message.clone()),
                 _ => {}
             }
             return Some(event);
@@ -432,14 +449,14 @@ impl Worker {
                             continue;
                         }
                         let result = match request.kind {
-                            RequestKind::Format
+                            RequestKind::Format { .. }
                                 if snapshot.settings.formatter == Formatter::TexFmt =>
                             {
                                 formatter = None;
                                 formatter::Job::start(snapshot, request.clone())
                                     .map(|job| formatter = Some(job))
                             }
-                            RequestKind::Format
+                            RequestKind::Format { .. }
                                 if snapshot.settings.formatter == Formatter::Badness =>
                             {
                                 badness
@@ -447,7 +464,7 @@ impl Worker {
                                     .ok_or("Badness is unavailable".to_owned())
                                     .and_then(|s| s.request(request.clone()))
                             }
-                            RequestKind::Format => Err("TeX formatting is disabled".into()),
+                            RequestKind::Format { .. } => Err("TeX formatting is disabled".into()),
                             _ => texlab
                                 .as_mut()
                                 .ok_or("TexLab is unavailable".to_owned())
@@ -556,6 +573,33 @@ pub(crate) fn diagnostic_locations(
         }
     }
     locations
+}
+
+#[cfg(test)]
+mod provider_state_tests {
+    use super::*;
+    #[test]
+    fn readiness_and_failure_are_exclusive_and_restart_retires_old_errors() {
+        let mut service = TexService::default();
+        assert!(!service.ready(Provider::Texlab));
+        assert!(service.error(Provider::Texlab).is_none());
+        *service.provider_mut(Provider::Texlab) = ProviderState::Failed("failed".into());
+        assert!(!service.ready(Provider::Texlab));
+        assert_eq!(service.error(Provider::Texlab), Some("failed"));
+        service.providers.iter_mut().for_each(ProviderState::stop);
+        assert_eq!(
+            service.error(Provider::Texlab),
+            Some("failed"),
+            "stopping preserves the last reported failure"
+        );
+        *service.provider_mut(Provider::Texlab) = ProviderState::Ready;
+        assert!(service.ready(Provider::Texlab));
+        assert!(service.error(Provider::Texlab).is_none());
+        service.providers.iter_mut().for_each(ProviderState::stop);
+        assert!(!service.ready(Provider::Texlab));
+        service.providers = Default::default();
+        assert!(service.error(Provider::Texlab).is_none());
+    }
 }
 
 #[cfg(test)]
@@ -731,7 +775,7 @@ mod tests {
         service.synchronize(input.clone(), RepaintTarget::test());
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         let mut saw_lint = false;
-        while !service.texlab_ready || !service.badness_ready || !saw_lint {
+        while !service.ready(Provider::Texlab) || !service.ready(Provider::Badness) || !saw_lint {
             while let Some(event) = service.try_recv() {
                 match event {
                     Event::Failed {
@@ -791,13 +835,13 @@ mod tests {
                 input.settings.formatter = formatter;
                 service.synchronize(input.clone(), RepaintTarget::test());
             }
-            service.request(RequestKind::Format).unwrap();
+            service.request(RequestKind::Format { token: 17 }).unwrap();
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             loop {
                 match service.try_recv() {
                     Some(Event::Formatted { request, edits }) => {
                         assert!(service.accepts(&request.identity, input.key));
-                        let edits = edits.unwrap_or_default();
+                        assert!(matches!(request.kind, RequestKind::Format { token: 17 }));
                         let result = tiptoptyp_core::text::apply_text_edits(
                             source,
                             &edits,

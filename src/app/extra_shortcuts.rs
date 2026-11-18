@@ -70,7 +70,7 @@ impl EditorApp {
         // Never act on a document behind another native child or a file dialog.
         if viewport != context.viewport_id()
             || self.document_flow_busy()
-            || self.process_close_pending
+            || self.process_close_pending()
         {
             return;
         }
@@ -198,7 +198,7 @@ impl EditorApp {
     }
 
     fn fold_shortcut(&mut self, action: ShortcutAction, context: &egui::Context) {
-        if !self.document().kind().is_typst() || !self.settings.line_numbers {
+        if self.document().kind().typesetting_language().is_none() || !self.settings.line_numbers {
             return;
         }
         if context.egui_wants_keyboard_input()
@@ -273,6 +273,46 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
 
+    #[test]
+    fn tex_folding_shortcuts_share_source_preservation_and_line_number_guards() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        let source = "\\section{First}\nBody.\n\\begin{equation}\na+b\n\\end{equation}\n\\section{Next}\nMore.\n";
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            root.path().join("main.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        let key = app.document().key();
+        app.execute_extra_shortcut(A::CollapseAll, &context);
+        assert!(!app.folding().regions.is_empty());
+        assert!(
+            app.folding()
+                .regions
+                .iter()
+                .all(|region| app.folding().is_collapsed(region.line))
+        );
+        assert_eq!(app.document().key(), key);
+        assert_eq!(app.document().source(), source);
+        app.execute_extra_shortcut(A::ExpandAll, &context);
+        assert!(
+            app.folding()
+                .regions
+                .iter()
+                .all(|region| !app.folding().is_collapsed(region.line))
+        );
+        app.settings.line_numbers = false;
+        app.execute_extra_shortcut(A::CollapseAll, &context);
+        assert!(
+            app.folding()
+                .regions
+                .iter()
+                .all(|region| !app.folding().is_collapsed(region.line))
+        );
+    }
+
     fn shortcut_harness(app: EditorApp) -> Harness<'static, EditorApp> {
         Harness::builder()
             .with_size(Vec2::new(1000.0, 700.0))
@@ -324,10 +364,11 @@ mod tests {
         );
         press(&mut harness, A::KeyboardShortcuts);
         assert!(harness.state().shortcut_editor_visible);
-        harness.state_mut().process_close_pending = true;
+        let key = harness.state().document().key();
+        harness.state_mut().process_close = Some(key);
         press(&mut harness, A::ToggleLineWrap);
         assert!(harness.state().pending_settings.is_none());
-        harness.state_mut().process_close_pending = false;
+        harness.state_mut().process_close = None;
         press(&mut harness, A::ToggleLineWrap);
         assert_eq!(
             harness.state().pending_settings.as_ref().unwrap().line_wrap,

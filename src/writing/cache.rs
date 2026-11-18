@@ -887,15 +887,224 @@ mod tests {
     }
 
     #[test]
+    fn capitalization_exemption_never_hides_sentence_initial_spelling_errors() {
+        for (kind, source, sentence_initial) in [
+            (DocumentKind::Typst, "Misspelld follows.", true),
+            (DocumentKind::Tex, "Misspelld follows.", true),
+            (
+                DocumentKind::Typst,
+                "A correct result. Misspelld follows.",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                "A correct result? Misspelld follows.",
+                true,
+            ),
+            (
+                DocumentKind::Typst,
+                "A correct result! \"Misspelld follows.\"",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                "A correct result. (Misspelld follows.)",
+                true,
+            ),
+            (
+                DocumentKind::Typst,
+                "A correct result\n\n  Misspelld follows.",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                "A correct result\n  \nMisspelld follows.",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                "A correct result\r\n \t\r\nMisspelld follows.",
+                true,
+            ),
+            (
+                DocumentKind::Typst,
+                "A correct result\r\n \t\r\nMisspelld follows.",
+                true,
+            ),
+            (DocumentKind::Typst, "*Misspelld* follows.", true),
+            (DocumentKind::Tex, r"\emph{Misspelld} follows.", true),
+            (
+                DocumentKind::Typst,
+                "A correct result. #emph[Misspelld] follows.",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                r"A correct result. \textbf{Misspelld} follows.",
+                true,
+            ),
+            (
+                DocumentKind::Typst,
+                "= Misspelld heading\n\nA correct result.",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                "\\section{Misspelld heading}\nA correct result.",
+                true,
+            ),
+            (
+                DocumentKind::Typst,
+                "We obtain\n$ x = 1. $\nMisspelld follows.",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                "We obtain\n\\[x=1.\\]\nMisspelld follows.",
+                true,
+            ),
+            (
+                DocumentKind::Tex,
+                r"We obtain \begin{align}x&=1.\end{align} Misspelld follows.",
+                true,
+            ),
+            (DocumentKind::Typst, "$ x $ Misspelld follows.", true),
+            (DocumentKind::Tex, r"\[x\] Misspelld follows.", true),
+            (DocumentKind::Typst, "We use\nMisspelld here.", false),
+            (DocumentKind::Tex, "We use\nMisspelld here.", false),
+            (DocumentKind::Typst, "We use #emph[Misspelld] here.", false),
+            (DocumentKind::Tex, r"We use \emph{Misspelld} here.", false),
+            (
+                DocumentKind::Typst,
+                "We obtain\n$ x = 1, $\nMisspelld follows.",
+                false,
+            ),
+            (
+                DocumentKind::Tex,
+                "We obtain\n\\[x=1,\\]\nMisspelld follows.",
+                false,
+            ),
+            (DocumentKind::Typst, "We use e.g. Misspelld here.", false),
+            (DocumentKind::Tex, "We consider ... Misspelld here.", false),
+        ] {
+            let mut checker = Checker::default();
+            let start = source[..source.find("Misspelld").unwrap()].chars().count();
+            let expected = start..start + "Misspelld".chars().count();
+            let spelling_at_target = |issues: &[Diagnostic]| {
+                issues.iter().any(|issue| {
+                    issue.correction.as_ref().is_some_and(|correction| {
+                        correction.category.as_deref() == Some("Spelling")
+                            && correction.range == expected
+                    })
+                })
+            };
+            let baseline = configured(&mut checker, source, kind, Options::default());
+            assert!(
+                spelling_at_target(&baseline),
+                "fixture must expose the typo: {kind:?}: {source:?}: {baseline:?}"
+            );
+            let filtered = configured(
+                &mut checker,
+                source,
+                kind,
+                Options {
+                    ignore_capitalized_names: true,
+                    ..Options::default()
+                },
+            );
+            assert_eq!(
+                spelling_at_target(&filtered),
+                sentence_initial,
+                "{kind:?}: {source:?}: {filtered:?}"
+            );
+            assert_eq!(
+                checker.stats.1, 0,
+                "filtering must reuse raw paragraph lints"
+            );
+
+            // The explicit dictionary is authoritative even at sentence starts.
+            let accepted = configured(
+                &mut checker,
+                source,
+                kind,
+                Options {
+                    dictionary: "Misspelld",
+                    ignore_capitalized_names: true,
+                    ..Options::default()
+                },
+            );
+            assert!(
+                !spelling_at_target(&accepted),
+                "explicit dictionary: {kind:?}: {source:?}: {accepted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cached_sentence_initial_spelling_metadata_survives_paragraph_moves_and_name_filter_toggles()
+    {
+        for kind in [DocumentKind::Typst, DocumentKind::Tex] {
+            let mut checker = Checker::default();
+            let options = Options {
+                ignore_capitalized_names: true,
+                ..Options::default()
+            };
+            let first = "A correct result.\n\nMisspelld follows.\n\nWe use Misspelld here.\n\n";
+            let moved = "We use Misspelld here.\n\nA correct result.\n\nMisspelld follows.\n\n";
+            let spelling_locations = |issues: &[Diagnostic]| {
+                issues
+                    .iter()
+                    .filter(|issue| {
+                        issue.correction.as_ref().is_some_and(|correction| {
+                            correction.category.as_deref() == Some("Spelling")
+                                && correction.original == "Misspelld"
+                        })
+                    })
+                    .map(|issue| issue.location.unwrap())
+                    .collect::<Vec<_>>()
+            };
+            let initial = configured(&mut checker, first, kind, options);
+            assert_eq!(
+                spelling_locations(&initial),
+                [DiagnosticLocation { line: 3, column: 1 }]
+            );
+            let current = configured(&mut checker, moved, kind, options);
+            assert_eq!(
+                spelling_locations(&current),
+                [DiagnosticLocation { line: 5, column: 1 }]
+            );
+            assert_eq!(
+                checker.stats.1, 0,
+                "moving unchanged paragraphs must reuse their lints"
+            );
+            let unfiltered = configured(&mut checker, moved, kind, Options::default());
+            assert_eq!(
+                spelling_locations(&unfiltered),
+                [
+                    DiagnosticLocation { line: 1, column: 8 },
+                    DiagnosticLocation { line: 5, column: 1 }
+                ]
+            );
+            assert_eq!(
+                checker.stats.1, 0,
+                "toggling capitalization filtering must not relint paragraphs"
+            );
+            let again = configured(&mut checker, moved, kind, options);
+            assert_eq!(spelling_locations(&again), spelling_locations(&current));
+            assert_eq!(checker.stats.1, 0);
+        }
+    }
+
+    #[test]
     fn capitalized_name_toggle_filters_cached_spelling_but_preserves_grammar_and_unicode() {
         for kind in [DocumentKind::Typst, DocumentKind::Tex] {
             let mut checker = Checker::default();
-            let source = "Zulverton Zulverton proves this.\n\nMacZulverton's and Ézulverton’s results use zulverton, lowerCamelZulverton and ZULVERTON.\n\nA zero\u{200b}width value.";
+            let source = "We use Zulverton Zulverton to prove this.\n\nWe inspect MacZulverton's and Ézulverton’s results with zulverton, lowerCamelZulverton and ZULVERTON.\n\nA zero\u{200b}width value.";
             let baseline = configured(&mut checker, source, kind, Options::default());
             assert!(
                 baseline
                     .iter()
-                    .any(|d| d.location == Some(DiagnosticLocation { line: 1, column: 1 })),
+                    .any(|d| d.location == Some(DiagnosticLocation { line: 1, column: 8 })),
                 "{kind:?}: {baseline:?}"
             );
             let filtered = configured(
@@ -910,7 +1119,7 @@ mod tests {
             assert!(
                 filtered
                     .iter()
-                    .filter(|d| d.location == Some(DiagnosticLocation { line: 1, column: 1 }))
+                    .filter(|d| d.location == Some(DiagnosticLocation { line: 1, column: 8 }))
                     .all(|d| d.message.contains("repeat")),
                 "spelling is removed while repetition at the same location remains: {kind:?}: {filtered:?}"
             );

@@ -404,7 +404,7 @@ fn valid_cached(path: &Path, payload: &Payload) -> io::Result<bool> {
         count += read as u64;
         hasher.update(&buffer[..read]);
     }
-    if count != payload.bytes || format!("{:x}", hasher.finalize()) != payload.sha256 {
+    if count != payload.bytes || hex::encode(hasher.finalize()) != payload.sha256 {
         return Ok(false);
     }
     let current = fs::symlink_metadata(path)?;
@@ -430,7 +430,11 @@ mod tests {
         fs::write(&archive, codec::encode_fixture(bytes)).unwrap();
         fs::write(
             directory.path().join("manifest.tsv"),
-            format!("typst\t{}\t{:x}\n", bytes.len(), Sha256::digest(bytes)),
+            format!(
+                "typst\t{}\t{}\n",
+                bytes.len(),
+                hex::encode(Sha256::digest(bytes))
+            ),
         )
         .unwrap();
         let cache = directory.path().join("cache");
@@ -518,7 +522,7 @@ mod tests {
         // Warm archive I/O equally before both paths. This measures a fresh
         // application cache, never a claimed cold filesystem or whole launch.
         let compressed = fs::read(&archive).unwrap();
-        let compressed_sha256 = format!("{:x}", Sha256::digest(&compressed));
+        let compressed_sha256 = hex::encode(Sha256::digest(&compressed));
         let compressed_bytes = compressed.len();
         drop(compressed);
         let directory = tempfile::tempdir().unwrap();
@@ -658,7 +662,7 @@ mod tests {
             "typst\t3\tHASH\ntypst\t3\tHASH",
         ] {
             let (fixture, archive, _) = fixture(b"abc");
-            let record = record.replace("HASH", &format!("{:x}", Sha256::digest(b"abc")));
+            let record = record.replace("HASH", &hex::encode(Sha256::digest(b"abc")));
             fs::write(fixture.path().join("manifest.tsv"), record).unwrap();
             assert!(describe(&archive).is_err());
         }
@@ -666,7 +670,7 @@ mod tests {
             let (fixture, archive, cache) = fixture(bytes);
             fs::write(
                 fixture.path().join("manifest.tsv"),
-                format!("typst\t3\t{:x}", Sha256::digest(b"abc")),
+                format!("typst\t3\t{}", hex::encode(Sha256::digest(b"abc"))),
             )
             .unwrap();
             assert!(expand(&describe(&archive).unwrap().unwrap(), &cache).is_err());

@@ -11,6 +11,7 @@ use std::sync::{
 pub(crate) enum Component {
     Ltex,
     Liquid,
+    DiagnosticFix,
 }
 #[derive(Clone, Default)]
 pub(crate) struct Status {
@@ -19,11 +20,20 @@ pub(crate) struct Status {
     pub(crate) message: Option<String>,
 }
 #[derive(Default)]
-struct State {
-    component: Option<Component>,
+enum State {
+    #[default]
+    Unrequested,
+    Requested(RecoveryTask),
+}
+
+/// Resource identity, cancellation, outcome and worker belong to one request.
+/// The worker's explicit lifecycle owns running/failed status; there is no
+/// parallel resource busy flag or absent component on an active request.
+struct RecoveryTask {
+    component: Component,
     job: ExclusiveJob<String>,
     cancel: Arc<AtomicBool>,
-    message: Option<String>,
+    message: String,
 }
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
 static LTEX_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -58,8 +68,7 @@ pub(crate) fn cancel() {
     STATE
         .lock()
         .unwrap_or_else(|error| error.into_inner())
-        .cancel
-        .store(true, Ordering::Release);
+        .request_cancel();
 }
 pub(crate) fn start(
     component: Component,
@@ -67,13 +76,16 @@ pub(crate) fn start(
     context: &egui::Context,
 ) -> Result<(), String> {
     let config = match component {
-        Component::Liquid => Some(crate::liquid_runtime::Config::from_settings(settings)?),
+        Component::Liquid | Component::DiagnosticFix => {
+            Some(crate::liquid_runtime::Config::from_settings(settings)?)
+        }
         Component::Ltex => None,
     };
     let mut state = STATE.lock().unwrap_or_else(|error| error.into_inner());
     let message = match component {
         Component::Ltex => "Downloading LTeX+…",
         Component::Liquid => "Downloading Liquid…",
+        Component::DiagnosticFix => "Downloading Liquid fix model…",
     };
     state.start(component, context, message, move |cancel| match component {
         Component::Ltex => {
@@ -87,21 +99,27 @@ pub(crate) fn start(
             client.redownload(config.as_ref().unwrap(), &cancel)?;
             Ok("Liquid downloaded".into())
         }
+        Component::DiagnosticFix => {
+            crate::diagnostic_fix::download(&config.as_ref().unwrap().directory, &cancel)?;
+            Ok("Liquid fix model downloaded".into())
+        }
     })
 }
 impl State {
     fn activity(&self) -> crate::activity::Activity {
-        if self.component.is_none() {
-            crate::activity::Activity::Inactive("Not requested")
-        } else {
-            self.job.activity()
+        match self {
+            Self::Unrequested => crate::activity::Activity::Inactive("Not requested"),
+            Self::Requested(task) => task.job.activity(),
         }
     }
 
     fn poll(&mut self) {
-        match self.job.poll() {
+        let Self::Requested(task) = self else {
+            return;
+        };
+        match task.job.poll() {
             LatestJobPoll::Ready(message) | LatestJobPoll::Failed(message) => {
-                self.message = Some(message)
+                task.message = message
             }
             _ => {}
         }
@@ -109,11 +127,28 @@ impl State {
 
     fn snapshot(&mut self) -> Status {
         self.poll();
-        Status {
-            component: self.component,
-            busy: self.job.is_running(),
-            message: self.message.clone(),
+        match self {
+            Self::Unrequested => Status::default(),
+            Self::Requested(task) => Status {
+                component: Some(task.component),
+                busy: task.job.is_running(),
+                message: Some(task.message.clone()),
+            },
         }
+    }
+
+    fn request_cancel(&self) {
+        if let Self::Requested(task) = self {
+            task.cancel.store(true, Ordering::Release);
+        }
+    }
+
+    #[cfg(test)]
+    fn task(&self) -> &RecoveryTask {
+        let Self::Requested(task) = self else {
+            panic!("a requested recovery task is required")
+        };
+        task
     }
     fn start(
         &mut self,
@@ -125,17 +160,22 @@ impl State {
         if self.snapshot().busy {
             return Err("A resource task is already running".into());
         }
-        self.cancel = Arc::new(AtomicBool::new(false));
-        let cancel = self.cancel.clone();
-        self.component = Some(component);
-        self.message = Some(message.into());
-        if let Err(error) = self
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let mut task = RecoveryTask {
+            component,
+            job: ExclusiveJob::default(),
+            cancel,
+            message: message.into(),
+        };
+        let started = task
             .job
-            .start_and_repaint("Resource recovery", context, move || work(cancel))
-        {
-            self.message = Some(error.clone());
-            return Err(error);
+            .start_and_repaint("Resource recovery", context, move || work(worker_cancel));
+        if let Err(error) = &started {
+            task.message = error.clone();
         }
+        *self = Self::Requested(task);
+        started?;
         context.request_repaint();
         Ok(())
     }
@@ -154,20 +194,25 @@ mod tests {
         );
         let (entered, received) = std::sync::mpsc::channel();
         state
-            .start(Component::Liquid, &context, "working", move |cancel| {
-                entered.send(()).unwrap();
-                while !cancel.load(Ordering::Acquire) {
-                    std::thread::yield_now();
-                }
-                Err("cancelled".into())
-            })
+            .start(
+                Component::DiagnosticFix,
+                &context,
+                "working",
+                move |cancel| {
+                    entered.send(()).unwrap();
+                    while !cancel.load(Ordering::Acquire) {
+                        std::thread::yield_now();
+                    }
+                    Err("cancelled".into())
+                },
+            )
             .unwrap();
         received
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
         assert!(state.snapshot().busy);
         assert_eq!(state.activity(), crate::activity::Activity::Running);
-        assert_eq!(state.snapshot().component, Some(Component::Liquid));
+        assert_eq!(state.snapshot().component, Some(Component::DiagnosticFix));
         assert!(
             state
                 .start(Component::Ltex, &context, "duplicate", |_| panic!(
@@ -175,14 +220,14 @@ mod tests {
                 ))
                 .is_err()
         );
-        assert_eq!(state.snapshot().component, Some(Component::Liquid));
-        state.cancel.store(true, Ordering::Release);
+        assert_eq!(state.snapshot().component, Some(Component::DiagnosticFix));
+        state.request_cancel();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let status = state.snapshot();
             if !status.busy {
                 assert_eq!(status.message.as_deref(), Some("cancelled"));
-                assert_eq!(status.component, Some(Component::Liquid));
+                assert_eq!(status.component, Some(Component::DiagnosticFix));
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
@@ -201,11 +246,11 @@ mod tests {
         // A getter cannot consume the result, even if the worker has already
         // completed. Only the existing owner polling path retires the job.
         assert_eq!(state.activity(), crate::activity::Activity::Running);
-        assert!(state.job.is_running());
+        assert!(state.task().job.is_running());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             state.poll();
-            if !state.job.is_running() {
+            if !state.task().job.is_running() {
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
@@ -217,14 +262,15 @@ mod tests {
 
     #[test]
     fn recovery_activity_uses_job_outcome_instead_of_parsing_status_message() {
-        let state = State {
-            component: Some(Component::Liquid),
-            message: Some("The old error was repaired".into()),
-            ..Default::default()
-        };
+        let state = State::Requested(RecoveryTask {
+            component: Component::Liquid,
+            message: "The old error was repaired".into(),
+            job: ExclusiveJob::default(),
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
         assert_eq!(state.activity(), crate::activity::Activity::Idle);
-        assert_eq!(state.message.as_deref(), Some("The old error was repaired"));
-        assert_eq!(state.component, Some(Component::Liquid));
-        assert!(!state.job.is_running());
+        assert_eq!(state.task().message, "The old error was repaired");
+        assert_eq!(state.task().component, Component::Liquid);
+        assert!(!state.task().job.is_running());
     }
 }

@@ -3,13 +3,45 @@ use super::*;
 use crate::editor_features::{CellPosition, TableAxis, TableSelection};
 
 #[derive(Debug, Clone, Default)]
+enum EdgeEditor {
+    #[default]
+    Closed,
+    Selected(TableAxis, usize),
+    Editing {
+        target: (TableAxis, usize),
+        text: String,
+        validation: Result<(), String>,
+    },
+}
+
+impl EdgeEditor {
+    fn target(&self) -> Option<(TableAxis, usize)> {
+        match self {
+            Self::Closed => None,
+            Self::Selected(axis, boundary) => Some((*axis, *boundary)),
+            Self::Editing { target, .. } => Some(*target),
+        }
+    }
+    fn error(&self) -> Option<&String> {
+        match self {
+            Self::Editing { validation, .. } => validation.as_ref().err(),
+            _ => None,
+        }
+    }
+    #[cfg(test)]
+    fn text(&self) -> &str {
+        match self {
+            Self::Editing { text, .. } => text,
+            _ => "",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub(super) struct TableEditorState {
     selection: TableSelection,
     focus_cell: Option<CellPosition>,
-    edge: Option<(TableAxis, usize)>,
-    edge_draft_for: Option<(TableAxis, usize)>,
-    edge_draft: String,
-    edge_error: Option<String>,
+    edge: EdgeEditor,
     rule_cache_key: Option<(u64, usize, usize)>,
     rule_cache: Vec<(TableAxis, usize, egui::Stroke)>,
     widths: Vec<f32>,
@@ -201,9 +233,7 @@ pub(super) fn show_table_editor_ui(
             match dialog.table.import_markdown(&dialog.ui.markdown) {
                 Ok(()) => {
                     dialog.ui.selection = Default::default();
-                    dialog.ui.edge = None;
-                    dialog.ui.edge_draft_for = None;
-                    dialog.ui.edge_error = None;
+                    dialog.ui.edge = EdgeEditor::Closed;
                     dialog.ui.widths.clear();
                     dialog.focus_first_cell = true;
                     dialog.ui.importing = false;
@@ -214,16 +244,14 @@ pub(super) fn show_table_editor_ui(
         }
         return table_footer(ui, dialog);
     }
-    if let Some((axis, boundary)) = dialog.ui.edge {
+    if let Some((axis, boundary)) = dialog.ui.edge.target() {
         let limit = if axis == TableAxis::Horizontal {
             dialog.table.row_count()
         } else {
             dialog.table.columns
         };
         if boundary > limit {
-            dialog.ui.edge = None;
-            dialog.ui.edge_draft_for = None;
-            dialog.ui.edge_error = None;
+            dialog.ui.edge = EdgeEditor::Closed;
         } else {
             edge_controls(ui, dialog, axis, boundary);
         }
@@ -243,6 +271,8 @@ pub(super) fn show_table_editor_ui(
         *width = width.clamp(72.0, 1200.0);
     }
     let height = table_grid_height(ui, cells_height);
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    let wheel_pass = crate::desktop_test::begin_table_wheel(ui.ctx());
     let scroll = egui::ScrollArea::both()
         .id_salt("table-editor-cells")
         .max_height(height)
@@ -277,9 +307,7 @@ pub(super) fn show_table_editor_ui(
                         )
                     });
                     if response.clicked() {
-                        dialog.ui.edge = None;
-                        dialog.ui.edge_draft_for = None;
-                        dialog.ui.edge_error = None;
+                        dialog.ui.edge = EdgeEditor::Closed;
                         dialog
                             .ui
                             .selection
@@ -298,9 +326,7 @@ pub(super) fn show_table_editor_ui(
                         .put(rect, egui::Button::new(format!("{}", r + 1)).frame(false))
                         .clicked()
                 {
-                    dialog.ui.edge = None;
-                    dialog.ui.edge_draft_for = None;
-                    dialog.ui.edge_error = None;
+                    dialog.ui.edge = EdgeEditor::Closed;
                     dialog.ui.selection.select_row(r, dialog.table.columns);
                 }
                 for (c, &owner) in row.iter().enumerate() {
@@ -386,7 +412,11 @@ pub(super) fn show_table_editor_ui(
                                 let foreground =
                                     readable_cell_color(ui.visuals().text_color(), fill);
                                 ui.visuals_mut().override_text_color = Some(foreground);
-                                egui::ScrollArea::vertical()
+                                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                let wheel_before = crate::desktop_test::table_wheel_cell_before(
+                                    ui, inner, wheel_pass,
+                                );
+                                let cell_scroll = egui::ScrollArea::vertical()
                                     .id_salt(("table-cell-scroll", r, c))
                                     .min_scrolled_height(0.0)
                                     .max_height(inner.height())
@@ -412,17 +442,26 @@ pub(super) fn show_table_editor_ui(
                                             .desired_width(ui.available_width())
                                             .desired_rows(1),
                                         )
-                                    })
-                                    .inner
+                                    });
+                                #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                if let Some(before) = wheel_before {
+                                    crate::desktop_test::observe_table_wheel_cell(
+                                        ui,
+                                        wheel_pass
+                                            .expect("the cell sample owns an active wheel pass"),
+                                        (r, c),
+                                        before,
+                                        &cell_scroll,
+                                    );
+                                }
+                                cell_scroll.inner
                             },
                         )
                         .inner;
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                     crate::desktop_test::observe(&format!("table.cell.{r}.{c}"), &response);
                     if response.clicked() || response.gained_focus() && !wants_focus {
-                        dialog.ui.edge = None;
-                        dialog.ui.edge_error = None;
-                        dialog.ui.edge_draft_for = None;
+                        dialog.ui.edge = EdgeEditor::Closed;
                         dialog
                             .ui
                             .selection
@@ -452,6 +491,14 @@ pub(super) fn show_table_editor_ui(
         scroll.content_size.y,
         scroll.state.offset.y,
         false,
+    );
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::end_table_wheel(
+        ui.ctx(),
+        wheel_pass,
+        scroll.inner_rect,
+        scroll.content_size,
+        scroll.state.offset,
     );
     let _ = scroll;
     table_footer(ui, dialog)
@@ -489,7 +536,7 @@ fn table_footer(ui: &mut egui::Ui, dialog: &TypstTableEditorDialog) -> Option<Ta
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let mut action = None;
                 let apply =
-                    apply_button(ui, !dialog.ui.importing && dialog.ui.edge_error.is_none());
+                    apply_button(ui, !dialog.ui.importing && dialog.ui.edge.error().is_none());
                 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
                 crate::desktop_test::observe("table.apply", &apply);
                 if apply.clicked() {
@@ -501,7 +548,7 @@ fn table_footer(ui: &mut egui::Ui, dialog: &TypstTableEditorDialog) -> Option<Ta
                 if cancel.clicked() {
                     action = Some(TableEditorUiAction::Cancel);
                 }
-                if let Some(error) = dialog.ui.edge_error.as_ref().or(dialog.error.as_ref()) {
+                if let Some(error) = dialog.ui.edge.error().or(dialog.error.as_ref()) {
                     ui.add(
                         egui::Label::new(RichText::new(error).color(ui.visuals().error_fg_color))
                             .truncate(),
@@ -929,12 +976,12 @@ fn table_edge_handles(
             )
         });
         if response.clicked() {
-            dialog.ui.edge = Some((axis, boundary));
+            dialog.ui.edge = EdgeEditor::Selected(axis, boundary);
             if let Some(focused) = ui.memory(|memory| memory.focused()) {
                 ui.memory_mut(|memory| memory.surrender_focus(focused));
             }
         }
-        if response.hovered() || dialog.ui.edge == Some((axis, boundary)) {
+        if response.hovered() || dialog.ui.edge.target() == Some((axis, boundary)) {
             ui.painter()
                 .line_segment([from, to], ui.visuals().selection.stroke);
         }
@@ -947,14 +994,18 @@ fn edge_controls(
     axis: TableAxis,
     boundary: usize,
 ) {
-    if dialog.ui.edge_draft_for != Some((axis, boundary)) {
-        dialog.ui.edge_draft = dialog
-            .table
-            .boundary_rule(axis, boundary)
-            .unwrap_or_default();
-        dialog.ui.edge_draft_for = Some((axis, boundary));
-        dialog.ui.edge_error = None;
+    if !matches!(&dialog.ui.edge, EdgeEditor::Editing { target, .. } if *target == (axis, boundary))
+    {
+        dialog.ui.edge = EdgeEditor::Editing {
+            target: (axis, boundary),
+            text: dialog
+                .table
+                .boundary_rule(axis, boundary)
+                .unwrap_or_default(),
+            validation: Ok(()),
+        };
     }
+    let mut close = false;
     ui.horizontal(|ui| {
         ui.strong(format!(
             "{} edge {}",
@@ -965,9 +1016,15 @@ fn edge_controls(
             },
             boundary + 1
         ));
+        let EdgeEditor::Editing {
+            text, validation, ..
+        } = &mut dialog.ui.edge
+        else {
+            unreachable!()
+        };
         let changed = ui
             .add(
-                egui::TextEdit::singleline(&mut dialog.ui.edge_draft)
+                egui::TextEdit::singleline(text)
                     .code_editor()
                     .id_salt("table-edge-stroke")
                     .hint_text("Default stroke")
@@ -978,24 +1035,23 @@ fn edge_controls(
         let reset = ui.small_button("Default").clicked();
         let done = ui.small_button("Done").clicked();
         if none {
-            dialog.ui.edge_draft = "none".into();
+            *text = "none".into();
         }
         if reset {
-            dialog.ui.edge_draft.clear();
+            text.clear();
         }
         if changed || none || reset || done {
-            let value =
-                (!dialog.ui.edge_draft.trim().is_empty()).then_some(dialog.ui.edge_draft.as_str());
-            dialog.ui.edge_error = dialog.table.set_boundary_rule(axis, boundary, value).err();
-            if dialog.ui.edge_error.is_none() {
+            let value = (!text.trim().is_empty()).then_some(text.as_str());
+            *validation = dialog.table.set_boundary_rule(axis, boundary, value);
+            if validation.is_ok() {
                 dialog.error = None;
-                if done {
-                    dialog.ui.edge = None;
-                    dialog.ui.edge_draft_for = None;
-                }
+                close = done;
             }
         }
     });
+    if close {
+        dialog.ui.edge = EdgeEditor::Closed;
+    }
 }
 
 /// Only literals are evaluated by the draft view. Functions, dictionaries,
@@ -1522,10 +1578,11 @@ mod tests {
     fn invalid_intermediate_edge_expression_survives_frames_and_blocks_apply() {
         use egui_kittest::{Harness, kittest::Queryable as _};
         let mut draft = dialog("#table(columns: 2, [A], [B])");
-        draft.ui.edge = Some((TableAxis::Horizontal, 0));
-        draft.ui.edge_draft_for = draft.ui.edge;
-        draft.ui.edge_draft = "rgb(\"".into();
-        draft.ui.edge_error = Some("Finish the stroke expression".into());
+        draft.ui.edge = EdgeEditor::Editing {
+            target: (TableAxis::Horizontal, 0),
+            text: "rgb(\"".into(),
+            validation: Err("Finish the stroke expression".into()),
+        };
         let mut configured = false;
         let mut harness = Harness::builder()
             .with_size(Vec2::new(940.0, 740.0))
@@ -1541,12 +1598,12 @@ mod tests {
                 draft,
             );
         harness.run();
-        assert_eq!(harness.state().ui.edge_draft, "rgb(\"");
-        assert!(harness.state().ui.edge_error.is_some());
+        assert_eq!(harness.state().ui.edge.text(), "rgb(\"");
+        assert!(harness.state().ui.edge.error().is_some());
         harness.get_by_label("Done").click();
         harness.run();
-        assert_eq!(harness.state().ui.edge_draft, "rgb(\"");
-        assert!(harness.state().ui.edge_error.is_some());
+        assert_eq!(harness.state().ui.edge.text(), "rgb(\"");
+        assert!(harness.state().ui.edge.error().is_some());
         assert!(
             harness
                 .state()
@@ -1554,6 +1611,12 @@ mod tests {
                 .boundary_rule(TableAxis::Horizontal, 0)
                 .is_none()
         );
+        harness.get_by_label("Default").click();
+        harness.run();
+        assert!(harness.state().ui.edge.error().is_none());
+        harness.get_by_label("Done").click();
+        harness.run();
+        assert!(matches!(harness.state().ui.edge, EdgeEditor::Closed));
     }
 
     #[test]
@@ -1737,11 +1800,13 @@ mod tests {
             dialog.table.cells[0][0] = "Long cell\n\n".repeat(80);
             dialog.ui.importing = importing;
             if edge_error {
-                dialog.ui.edge = Some((TableAxis::Horizontal, 0));
-                dialog.ui.edge_draft_for = dialog.ui.edge;
-                dialog.ui.edge_draft = "rgb(\"".into();
-                dialog.ui.edge_error =
-                    Some("Finish the stroke expression before applying this table".into());
+                dialog.ui.edge = EdgeEditor::Editing {
+                    target: (TableAxis::Horizontal, 0),
+                    text: "rgb(\"".into(),
+                    validation: Err(
+                        "Finish the stroke expression before applying this table".into()
+                    ),
+                };
             }
             let mut configured = false;
             let mut harness = Harness::builder()
