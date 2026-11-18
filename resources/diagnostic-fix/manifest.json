@@ -1,0 +1,261 @@
+{
+  "format": 1,
+  "model_id": "lfm3-1.7b-q4-k-m",
+  "model_revision": "cd0c74c575b5c416f3011b5b4c298077f26ca8c2",
+  "runtime_version": "llama.cpp b12110 (v0.9.0)",
+  "minimum_macos": [
+    13,
+    3
+  ],
+  "model": {
+    "url": "https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/cd0c74c575b5c416f3011b5b4c298077f26ca8c2/LFM3-1.7B-Q4_K_M.gguf?download=true",
+    "bytes": 1099627808,
+    "sha256": "3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4"
+  },
+  "runtimes": [
+    {
+      "target": "aarch64-apple-darwin",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-arm64.tar.gz",
+      "bytes": 16650691,
+      "sha256": "4f5b8de12e0b9516658ca6a5764c6ffb3d7c659c3dd538556b1413c7b4050662",
+      "files": [
+        {
+          "source": "llama-b12110/llama-server",
+          "name": "llama-server",
+          "bytes": 49984,
+          "sha256": "e7e3c60a5e612460d095bfd219047040d6bb9d0b56466aae30a480980b676959"
+        },
+        {
+          "source": "llama-b12110/libllama-server-impl.dylib",
+          "name": "libllama-server-impl.dylib",
+          "bytes": 9777736,
+          "sha256": "f85a52e783abfe603b5d8631ef697e43e383e0d76fd1bb07a8b88461685e5c7b"
+        },
+        {
+          "source": "llama-b12110/libllama-common.0.9.0.dylib",
+          "name": "libllama-common.0.dylib",
+          "bytes": 8052840,
+          "sha256": "7ac3cb04d2f8f1a13faea1221e76aa805739012c0499496f08786c5352868a38"
+        },
+        {
+          "source": "llama-b12110/libllama-common.0.9.0.dylib",
+          "name": "libllama-common.dylib",
+          "bytes": 8052840,
+          "sha256": "7ac3cb04d2f8f1a13faea1221e76aa805739012c0499496f08786c5352868a38"
+        },
+        {
+          "source": "llama-b12110/libmtmd.0.9.0.dylib",
+          "name": "libmtmd.0.dylib",
+          "bytes": 1846304,
+          "sha256": "42b9be2dc7c1f4e2842faa912dfc2358f87a8828355b17736650ca5998a898cb"
+        },
+        {
+          "source": "llama-b12110/libmtmd.0.9.0.dylib",
+          "name": "libmtmd.dylib",
+          "bytes": 1846304,
+          "sha256": "42b9be2dc7c1f4e2842faa912dfc2358f87a8828355b17736650ca5998a898cb"
+        },
+        {
+          "source": "llama-b12110/libllama.0.9.0.dylib",
+          "name": "libllama.0.dylib",
+          "bytes": 3754816,
+          "sha256": "00413f74e567abb23896e1dbf46e156c3029e7e38d76e43f0e29846066853143"
+        },
+        {
+          "source": "llama-b12110/libllama.0.9.0.dylib",
+          "name": "libllama.dylib",
+          "bytes": 3754816,
+          "sha256": "00413f74e567abb23896e1dbf46e156c3029e7e38d76e43f0e29846066853143"
+        },
+        {
+          "source": "llama-b12110/libggml.0.29.0.dylib",
+          "name": "libggml.0.dylib",
+          "bytes": 60016,
+          "sha256": "f2b3b1a494448bb17a7bfe6111873326ba2872bdbc52a95c6f1140c6868261b8"
+        },
+        {
+          "source": "llama-b12110/libggml.0.29.0.dylib",
+          "name": "libggml.dylib",
+          "bytes": 60016,
+          "sha256": "f2b3b1a494448bb17a7bfe6111873326ba2872bdbc52a95c6f1140c6868261b8"
+        },
+        {
+          "source": "llama-b12110/libggml-cpu.0.29.0.dylib",
+          "name": "libggml-cpu.0.dylib",
+          "bytes": 959216,
+          "sha256": "a81c23818a48fb10e306d082428ef5aac4b34077b3143a232b7c39641bb93abd"
+        },
+        {
+          "source": "llama-b12110/libggml-cpu.0.29.0.dylib",
+          "name": "libggml-cpu.dylib",
+          "bytes": 959216,
+          "sha256": "a81c23818a48fb10e306d082428ef5aac4b34077b3143a232b7c39641bb93abd"
+        },
+        {
+          "source": "llama-b12110/libggml-blas.0.29.0.dylib",
+          "name": "libggml-blas.0.dylib",
+          "bytes": 58776,
+          "sha256": "786754ac19bff80ad4ca76d44d3031f32593772f38d9da819b428dc702f63339"
+        },
+        {
+          "source": "llama-b12110/libggml-blas.0.29.0.dylib",
+          "name": "libggml-blas.dylib",
+          "bytes": 58776,
+          "sha256": "786754ac19bff80ad4ca76d44d3031f32593772f38d9da819b428dc702f63339"
+        },
+        {
+          "source": "llama-b12110/libggml-rpc.0.29.0.dylib",
+          "name": "libggml-rpc.0.dylib",
+          "bytes": 243536,
+          "sha256": "5e8345f15c9d156d84b35ab0bace85cbbdbc929ae3cb0fcb4a00874b00382d5c"
+        },
+        {
+          "source": "llama-b12110/libggml-rpc.0.29.0.dylib",
+          "name": "libggml-rpc.dylib",
+          "bytes": 243536,
+          "sha256": "5e8345f15c9d156d84b35ab0bace85cbbdbc929ae3cb0fcb4a00874b00382d5c"
+        },
+        {
+          "source": "llama-b12110/libggml-base.0.29.0.dylib",
+          "name": "libggml-base.0.dylib",
+          "bytes": 772024,
+          "sha256": "8ceab2debfd7f8289b384c2730d7905f462606f448346ea3d5dc6efef9cff711"
+        },
+        {
+          "source": "llama-b12110/libggml-base.0.29.0.dylib",
+          "name": "libggml-base.dylib",
+          "bytes": 772024,
+          "sha256": "8ceab2debfd7f8289b384c2730d7905f462606f448346ea3d5dc6efef9cff711"
+        },
+        {
+          "source": "llama-b12110/libggml-metal.0.29.0.dylib",
+          "name": "libggml-metal.0.dylib",
+          "bytes": 5655000,
+          "sha256": "2b04ec59315ed3bd196ef119e20c2173c094b3cf206d8d0d4ca5b5caf685f8d9"
+        },
+        {
+          "source": "llama-b12110/libggml-metal.0.29.0.dylib",
+          "name": "libggml-metal.dylib",
+          "bytes": 5655000,
+          "sha256": "2b04ec59315ed3bd196ef119e20c2173c094b3cf206d8d0d4ca5b5caf685f8d9"
+        }
+      ]
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-x64.tar.gz",
+      "bytes": 12388601,
+      "sha256": "c8094268b6bf62f4998f0e45656fd9f5e2d4afb6b1cd0044d761db64be1dd47d",
+      "files": [
+        {
+          "source": "llama-b12110/llama-server",
+          "name": "llama-server",
+          "bytes": 20760,
+          "sha256": "55364f57dea886f675fe240eaf2a3efd1700805447b24fef535f33b74a3d8941"
+        },
+        {
+          "source": "llama-b12110/libllama-server-impl.dylib",
+          "name": "libllama-server-impl.dylib",
+          "bytes": 10195360,
+          "sha256": "0edf65ee104f7721a3a8e83c9e4fd0149d0f21b4444da824e015cd0c5d2681cf"
+        },
+        {
+          "source": "llama-b12110/libllama-common.0.9.0.dylib",
+          "name": "libllama-common.0.dylib",
+          "bytes": 8559504,
+          "sha256": "ccc4ee8264aa90ad3495a90dcbd4ac9fee12f1486ccd2799d05156a5e192abfb"
+        },
+        {
+          "source": "llama-b12110/libllama-common.0.9.0.dylib",
+          "name": "libllama-common.dylib",
+          "bytes": 8559504,
+          "sha256": "ccc4ee8264aa90ad3495a90dcbd4ac9fee12f1486ccd2799d05156a5e192abfb"
+        },
+        {
+          "source": "llama-b12110/libmtmd.0.9.0.dylib",
+          "name": "libmtmd.0.dylib",
+          "bytes": 1998432,
+          "sha256": "63262104b790b92f4bbeb27acaceddcb3c2c4620849453a9585e676c9baf2e32"
+        },
+        {
+          "source": "llama-b12110/libmtmd.0.9.0.dylib",
+          "name": "libmtmd.dylib",
+          "bytes": 1998432,
+          "sha256": "63262104b790b92f4bbeb27acaceddcb3c2c4620849453a9585e676c9baf2e32"
+        },
+        {
+          "source": "llama-b12110/libllama.0.9.0.dylib",
+          "name": "libllama.0.dylib",
+          "bytes": 4085048,
+          "sha256": "e9dd8f0feff2c15be3b0535735c8e9a777055ef480adb28aedef557977a5aab8"
+        },
+        {
+          "source": "llama-b12110/libllama.0.9.0.dylib",
+          "name": "libllama.dylib",
+          "bytes": 4085048,
+          "sha256": "e9dd8f0feff2c15be3b0535735c8e9a777055ef480adb28aedef557977a5aab8"
+        },
+        {
+          "source": "llama-b12110/libggml.0.29.0.dylib",
+          "name": "libggml.0.dylib",
+          "bytes": 43216,
+          "sha256": "7ec8a597a9b330284d7de17798ffc8aaac0a150f85761d038dfff2b12ffb3017"
+        },
+        {
+          "source": "llama-b12110/libggml.0.29.0.dylib",
+          "name": "libggml.dylib",
+          "bytes": 43216,
+          "sha256": "7ec8a597a9b330284d7de17798ffc8aaac0a150f85761d038dfff2b12ffb3017"
+        },
+        {
+          "source": "llama-b12110/libggml-cpu.0.29.0.dylib",
+          "name": "libggml-cpu.0.dylib",
+          "bytes": 1578144,
+          "sha256": "52872313772ca1e0f04fda9773d212763f47ff6949e5ad494e5fe7c0009e6c48"
+        },
+        {
+          "source": "llama-b12110/libggml-cpu.0.29.0.dylib",
+          "name": "libggml-cpu.dylib",
+          "bytes": 1578144,
+          "sha256": "52872313772ca1e0f04fda9773d212763f47ff6949e5ad494e5fe7c0009e6c48"
+        },
+        {
+          "source": "llama-b12110/libggml-blas.0.29.0.dylib",
+          "name": "libggml-blas.0.dylib",
+          "bytes": 33688,
+          "sha256": "afba8390b5fa33f310a57ec4fe8baecb895998447158b7ab2f0164e2340d8d67"
+        },
+        {
+          "source": "llama-b12110/libggml-blas.0.29.0.dylib",
+          "name": "libggml-blas.dylib",
+          "bytes": 33688,
+          "sha256": "afba8390b5fa33f310a57ec4fe8baecb895998447158b7ab2f0164e2340d8d67"
+        },
+        {
+          "source": "llama-b12110/libggml-rpc.0.29.0.dylib",
+          "name": "libggml-rpc.0.dylib",
+          "bytes": 224952,
+          "sha256": "0c524aa8961cd99d2d4ff53fc35efff1a0b0d870300b13cc05348d8b206e272f"
+        },
+        {
+          "source": "llama-b12110/libggml-rpc.0.29.0.dylib",
+          "name": "libggml-rpc.dylib",
+          "bytes": 224952,
+          "sha256": "0c524aa8961cd99d2d4ff53fc35efff1a0b0d870300b13cc05348d8b206e272f"
+        },
+        {
+          "source": "llama-b12110/libggml-base.0.29.0.dylib",
+          "name": "libggml-base.0.dylib",
+          "bytes": 762504,
+          "sha256": "aa28b8cf0151f1a10098fbcdcfc487dcacb2f77d6c55014ade95ae18e9670b91"
+        },
+        {
+          "source": "llama-b12110/libggml-base.0.29.0.dylib",
+          "name": "libggml-base.dylib",
+          "bytes": 762504,
+          "sha256": "aa28b8cf0151f1a10098fbcdcfc487dcacb2f77d6c55014ade95ae18e9670b91"
+        }
+      ]
+    }
+  ]
+}
