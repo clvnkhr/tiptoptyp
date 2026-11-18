@@ -1,0 +1,306 @@
+{
+  "kind": "deterministic delimiter correctness and bounded-work evidence; not a speed benchmark",
+  "date": "2026-11-18",
+  "recorded_at_utc": "2026-11-18T12:35:35.621923+00:00",
+  "host": {
+    "os": "macOS",
+    "version": "14.6.1",
+    "architecture": "arm64"
+  },
+  "profile": {
+    "rustc_arguments": [
+      "--edition=2024",
+      "--test",
+      "-C",
+      "opt-level=3",
+      "-C",
+      "debuginfo=0"
+    ],
+    "dependency_profile": "Same existing target/debug/deps rlibs for both variants; not a whole-application release-profile claim."
+  },
+  "before_failures": {
+    "environment_tokens": {
+      "log": "/private/tmp/ttt-env-pair-before.log",
+      "result": "0 passed; 1 failed; 15 filtered out",
+      "finding": "Real complete document environment begin returned None instead of whole begin/end token ranges."
+    },
+    "inside_typst_and_tex": {
+      "log": "/private/tmp/ttt-bracket-edit-probe/before.log",
+      "result": "0 passed; 2 failed; 18 filtered out",
+      "finding": "Actual extracted EditorDerivedData::matching_delimiters returned None for interior body carets in both languages."
+    }
+  },
+  "after_correctness": {
+    "log": "/private/tmp/ttt-bracket-edit-probe-after/test.log",
+    "result": {
+      "passed": 32,
+      "failed": 0,
+      "ignored": 0
+    },
+    "command_file": "/private/tmp/ttt-bracket-edit-probe-after/real-rainbow-command.json",
+    "coverage": [
+      "whole environment tokens and non-overlapping rainbow spans",
+      "nested/exact/starred/custom colon/underscore/Unicode environment names",
+      "comment, URL, escape and inline-literal suppression",
+      "raw environment outer begin/end remain visible while fake payload pairs stay ignored",
+      "incomplete and malformed nesting does not create crossing environment pairs",
+      "nearest complete inner pair, adjacent inner pair immediately after closer, then enclosing outer pair in later text, adjacent closing pair at EOF",
+      "Typst string/raw outer tokens remain eligible without interpreting fake inner brackets",
+      "UTF-8 byte-to-scalar mapping and closing-offset shift after inserting a Unicode character and space",
+      "one revision-derived cache build, stationary reuse, language/source invalidation",
+      "same-name outer closer reservation for Enter completion while ordinary endpoint matching stays LIFO"
+    ]
+  },
+  "deterministic_workloads": {
+    "scope": "Verbatim production matching/preparation methods with minimal source/document fixture adapters, real delimiter/rainbow/math-guide modules. Full app/editor-frame/native checks belong to root and UI agent.",
+    "counter_order": [
+      "Typst incremental syntax rebuilds",
+      "TeX lexical index rebuilds",
+      "Typst interval index rebuilds"
+    ],
+    "before": [
+      {
+        "after_edit_body_matches": false,
+        "cold_body_matches": false,
+        "language": "typst",
+        "moving_calls": 20000,
+        "rebuilds": {
+          "after_edit_body": [
+            1,
+            0,
+            0
+          ],
+          "after_edit_endpoint": [
+            2,
+            0,
+            0
+          ],
+          "cold_body": [
+            0,
+            0,
+            0
+          ],
+          "moving": [
+            1,
+            0,
+            0
+          ],
+          "stationary": [
+            0,
+            0,
+            0
+          ]
+        },
+        "sibling_count": 20000,
+        "source_bytes": 300044,
+        "stationary_calls": 100000
+      },
+      {
+        "after_edit_body_matches": false,
+        "cold_body_matches": false,
+        "language": "tex",
+        "moving_calls": 20000,
+        "rebuilds": {
+          "after_edit_body": [
+            0,
+            2,
+            0
+          ],
+          "after_edit_endpoint": [
+            0,
+            2,
+            0
+          ],
+          "cold_body": [
+            0,
+            1,
+            0
+          ],
+          "moving": [
+            0,
+            1,
+            0
+          ],
+          "stationary": [
+            0,
+            1,
+            0
+          ]
+        },
+        "sibling_count": 10000,
+        "source_bytes": 290069,
+        "stationary_calls": 100000
+      }
+    ],
+    "after": [
+      {
+        "after_edit_body_matches": true,
+        "cold_body_matches": true,
+        "language": "typst",
+        "moving_calls": 20000,
+        "rebuilds": {
+          "after_edit_body": [
+            2,
+            0,
+            2
+          ],
+          "after_edit_endpoint": [
+            2,
+            0,
+            2
+          ],
+          "cold_body": [
+            1,
+            0,
+            1
+          ],
+          "moving": [
+            1,
+            0,
+            1
+          ],
+          "stationary": [
+            1,
+            0,
+            1
+          ]
+        },
+        "sibling_count": 20000,
+        "source_bytes": 300044,
+        "stationary_calls": 100000
+      },
+      {
+        "after_edit_body_matches": true,
+        "cold_body_matches": true,
+        "language": "tex",
+        "moving_calls": 20000,
+        "rebuilds": {
+          "after_edit_body": [
+            0,
+            2,
+            0
+          ],
+          "after_edit_endpoint": [
+            0,
+            2,
+            0
+          ],
+          "cold_body": [
+            0,
+            1,
+            0
+          ],
+          "moving": [
+            0,
+            1,
+            0
+          ],
+          "stationary": [
+            0,
+            1,
+            0
+          ]
+        },
+        "sibling_count": 10000,
+        "source_bytes": 290069,
+        "stationary_calls": 100000
+      }
+    ],
+    "query_visits": {
+      "deep_interval_visits": 16,
+      "deep_nested_pairs": 100000,
+      "tex_interval_count": 100001,
+      "tex_interval_visits": [
+        32,
+        33,
+        33
+      ],
+      "typst_interval_visits": 28,
+      "typst_sibling_count": 20000
+    },
+    "meaning": [
+      "100,000 stationary calls do not rebuild syntax or delimiter indices.",
+      "20,000 moving-caret calls reuse exactly one source-revision index.",
+      "A Unicode source edit causes one further index rebuild; later queries reuse it.",
+      "Before code omitted interior highlights; the added Typst first-body parse/index work is intentional functionality, not a measured speed improvement.",
+      "Typst AST collection is iterative heap work once per edited revision; warm queries retain no AST and cannot scan syntax siblings.",
+      "Balanced interval build/query recursion is logarithmic even for deeply nested source pairs."
+    ]
+  },
+  "provenance": {
+    "sources": {
+      "src/delimiters.rs": "132731d3d1aeda713e7b07831369651e4bb821f6f0248d9426d17fe455a2846d",
+      "src/delimiters/tex.rs": "c7f946a00aeebef22b23262d3541dafff8153a08dcfda37c9042eed75c4866af",
+      "src/editor_data.rs": "afd6ef024bc8df953bccefcd6549433711393f6adcb4a8f640a7ac1841a0454c",
+      "src/rainbow.rs": "bbdf93237f0d5f136953eaeb146e01e39f2746da93f4d19b5fc982fa28321c49"
+    },
+    "temporary_commands_and_frozen_source_hashes": "/private/tmp/ttt-bracket-bounded-observation/commands.json",
+    "before_build_command": [
+      "/opt/homebrew/bin/rustc",
+      "--edition=2024",
+      "--test",
+      "/private/tmp/ttt-bracket-bounded-observation/before/main.rs",
+      "-L",
+      "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+      "--extern",
+      "typst_syntax=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtypst_syntax-8f696df5a5bb84ab.rlib",
+      "--extern",
+      "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libeframe-50564616d159ea8a.rlib",
+      "--extern",
+      "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+      "--extern",
+      "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+      "-C",
+      "opt-level=3",
+      "-C",
+      "debuginfo=0",
+      "-o",
+      "/private/tmp/ttt-bracket-bounded-observation/before/tests"
+    ],
+    "after_build_command": [
+      "/opt/homebrew/bin/rustc",
+      "--edition=2024",
+      "--test",
+      "/private/tmp/ttt-bracket-bounded-observation/after/main.rs",
+      "-L",
+      "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+      "--extern",
+      "typst_syntax=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtypst_syntax-8f696df5a5bb84ab.rlib",
+      "--extern",
+      "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libeframe-50564616d159ea8a.rlib",
+      "--extern",
+      "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+      "--extern",
+      "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+      "-C",
+      "opt-level=3",
+      "-C",
+      "debuginfo=0",
+      "-o",
+      "/private/tmp/ttt-bracket-bounded-observation/after/tests"
+    ],
+    "run_commands": {
+      "before": [
+        "/private/tmp/ttt-bracket-bounded-observation/before/tests",
+        "bounded_",
+        "--nocapture"
+      ],
+      "after": [
+        "/private/tmp/ttt-bracket-bounded-observation/after/tests",
+        "bounded_",
+        "--nocapture"
+      ]
+    },
+    "logs": {
+      "before": "/private/tmp/ttt-bracket-bounded-observation/before/run.log",
+      "after": "/private/tmp/ttt-bracket-bounded-observation/after/run.log"
+    }
+  },
+  "limitations": [
+    "No end-to-end GUI, native composition, screenshot or cross-platform speed claim.",
+    "No wall-time comparison is used; cold index build, cached stationary queries, moving queries and one edit are separated by counters.",
+    "The new persistent highlight requires revision-derived syntax/index work when ordinary body typing previously skipped delimiter parsing.",
+    "Source-derived collection and sorting happen once per edited revision; no per-frame full-source scan, disk IO, polling or idle repaint was added.",
+    "Parent owns final Cargo/Clippy/full tests, native journeys, and endpoint-paint geometry/performance evidence."
+  ]
+}

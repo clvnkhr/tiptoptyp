@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-08",
+  "host": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+  "profile": "rustc -C opt-level=3 test component; same existing dependency artifacts",
+  "fixture": {
+    "lazy_json_sequence_elements": 4096,
+    "element_bytes": 32768,
+    "payload_limit_bytes": 33554432
+  },
+  "workload": "Single oversized outbound JSON-RPC value, no network or UI; no warmup; fresh test process for each variant. Same regression test on original and updated framing implementation.",
+  "interpretation": "Memory-boundary validation, not a GUI performance or latency benchmark. Before is expected to fail because it serializes the complete value before rejection; after must stop before completing the sequence and leave the output untouched. RSS is one local observation, not a threshold.",
+  "results": [
+    {
+      "variant": "before",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/private/tmp/tiptoptyp-invariant-framing-memory/before",
+        "invariant_outbound_budget_stops_serialization_without_writing_a_partial_frame",
+        "--test-threads=1"
+      ],
+      "exit_code": 101,
+      "max_resident_bytes": 127647744,
+      "source_sha256": "c256f55a5e0a660cba17a73eceb0c0bd5009b0ba20f06d05472ad797cdf48de9",
+      "log": "/private/tmp/tiptoptyp-invariant-framing-memory/before-run.log"
+    },
+    {
+      "variant": "after",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/private/tmp/tiptoptyp-invariant-framing-memory/after",
+        "invariant_outbound_budget_stops_serialization_without_writing_a_partial_frame",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "max_resident_bytes": 35405824,
+      "source_sha256": "fa576a4b6a6bb3f9cad2787263764bf4df48e5d87a798b134130c63fc575a5f4",
+      "log": "/private/tmp/tiptoptyp-invariant-framing-memory/after-run.log"
+    }
+  ],
+  "baseline_git_commit": "a096fa6e94f6de1d3dda6ac136b190bfda75d5d0",
+  "baseline_reconstruction": "Original write_lsp_message and prefix from baseline commit, with the same read function and test module as after; original caller-provided serializer fixture is unchanged."
+}

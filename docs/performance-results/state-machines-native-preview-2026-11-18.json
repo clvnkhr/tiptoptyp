@@ -1,0 +1,45 @@
+{
+  "before": {
+    "source_sha256": "e1877fe25d33987955fc092f92f726e9e7c49861ea32a7eb06b626b4232d8356",
+    "warmup": "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=10586250",
+    "batches": [
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=11329166",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=11217792",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=9683958",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=8965792",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=8671584"
+    ]
+  },
+  "after": {
+    "source_sha256": "fd7e4f9d5c071d084f501d1c8c744951a72e038a5d70477f6407227de284d37c",
+    "warmup": "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=14433958",
+    "batches": [
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=19158750",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=14810708",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=12204542",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=23563458",
+      "inputs=1000000 flights=2000 replacements=999000 completions=2000 remaining=0 elapsed_ns=11292584"
+    ]
+  },
+  "date": "2026-11-18",
+  "host": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+  "profile": {
+    "opt-level": 3,
+    "debuginfo": 0
+  },
+  "fixture": {
+    "kind": "actual native Pipeline+RenderGate source, extracted verbatim",
+    "cycles": 1000,
+    "inputs_per_cycle": 1000,
+    "viewport": [
+      640,
+      420
+    ],
+    "theme": "none: pure native request scheduler",
+    "warmup_runs": 1,
+    "batches": 5
+  },
+  "limitations": "Component CPU timings only; not composed-window or end-to-end native latency. Operation counts, bounded one flight/one replacement, unchanged worker count are the regression contract."
+}

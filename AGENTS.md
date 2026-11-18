@@ -102,6 +102,25 @@ repeated transition and frame-stability checks over single settled states.
 - Preserve unrelated working-tree changes and never replace user edits with
   fixture or screenshot output.
 
+## State machines
+
+- Represent mutually exclusive lifecycle phases with payload-carrying enums.
+  A phase owns its request identity, cancellation handle and required data;
+  avoid a phase label alongside independently writable flags that duplicate it.
+- Keep independent preferences, retained results and concurrent operations
+  separate. Do not create one application-wide state machine or a framework
+  where a small domain type and named transitions are sufficient.
+- Admit results against their exact owner/request before consuming current work.
+  Cancellation, failure, supersession and owner departure are explicit
+  transitions; stale events must not retire newer work or revive completed work.
+- Keep external effects at transition boundaries. Test meaningful event sequences
+  including repeated completion/cancel, stale replies and recovery, rather than
+  only testing enum getters. Preserve existing persistence contracts unless the
+  task explicitly changes them.
+- Maintain `docs/state-machines.md` when adding or changing a lifecycle. Give
+  developers and agents stable phase observations and source references without
+  logging document contents or adding idle polling.
+
 ## Performance working agreement
 
 Performance is an ongoing requirement, not a one-off cleanup. See

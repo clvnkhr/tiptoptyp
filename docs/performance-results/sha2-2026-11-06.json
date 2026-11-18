@@ -1,0 +1,109 @@
+{
+  "date": "2026-11-06",
+  "environment": {
+    "os": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "arch": "arm64",
+    "cpu": "Apple M2 Max",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)"
+  },
+  "profile": {
+    "name": "release",
+    "lto": "thin",
+    "codegen_units": 1
+  },
+  "fixture": {
+    "bytes": 67108864,
+    "byte": 165,
+    "sha256": "1c5386005b9cc63833a7cac9ee928040d05d4128b81715d893f2e2fb2a3391b7"
+  },
+  "workload": {
+    "warmup_rounds_per_version": 2,
+    "samples_per_version": 6,
+    "rounds_per_sample": 8,
+    "order": "alternating old/new; paired same binary, no other builds running",
+    "includes": "warm in-memory hashing only; no file IO/startup/model inference"
+  },
+  "median_gib_per_second": {
+    "0.10.9-asm": 1.5049437781961559,
+    "0.11.1-default": 1.499226229695735
+  },
+  "relative_new_over_old": 0.9962008225268894,
+  "samples": [
+    {
+      "version": "0.10.9-asm",
+      "sample": 0,
+      "bytes": 536870912,
+      "seconds": 0.331957625
+    },
+    {
+      "version": "0.11.1-default",
+      "sample": 0,
+      "bytes": 536870912,
+      "seconds": 0.336453167
+    },
+    {
+      "version": "0.11.1-default",
+      "sample": 1,
+      "bytes": 536870912,
+      "seconds": 0.334401709
+    },
+    {
+      "version": "0.10.9-asm",
+      "sample": 1,
+      "bytes": 536870912,
+      "seconds": 0.334225041
+    },
+    {
+      "version": "0.10.9-asm",
+      "sample": 2,
+      "bytes": 536870912,
+      "seconds": 0.331620667
+    },
+    {
+      "version": "0.11.1-default",
+      "sample": 2,
+      "bytes": 536870912,
+      "seconds": 0.333713292
+    },
+    {
+      "version": "0.11.1-default",
+      "sample": 3,
+      "bytes": 536870912,
+      "seconds": 0.333297709
+    },
+    {
+      "version": "0.10.9-asm",
+      "sample": 3,
+      "bytes": 536870912,
+      "seconds": 0.3325195
+    },
+    {
+      "version": "0.10.9-asm",
+      "sample": 4,
+      "bytes": 536870912,
+      "seconds": 0.333309334
+    },
+    {
+      "version": "0.11.1-default",
+      "sample": 4,
+      "bytes": 536870912,
+      "seconds": 0.332209041
+    },
+    {
+      "version": "0.11.1-default",
+      "sample": 5,
+      "bytes": 536870912,
+      "seconds": 0.329881333
+    },
+    {
+      "version": "0.10.9-asm",
+      "sample": 5,
+      "bytes": 536870912,
+      "seconds": 0.329807041
+    }
+  ],
+  "limitations": "Single Apple Silicon machine; no cross-platform performance guarantee. Both digests compared for exact equality before timing.",
+  "benchmark_source": "use std::{hint::black_box, time::Instant};\nfn old(data: &[u8]) -> [u8; 32] { use old_sha2::Digest; black_box(old_sha2::Sha256::digest(black_box(data))).into() }\nfn new(data: &[u8]) -> [u8; 32] { use new_sha2::Digest; black_box(new_sha2::Sha256::digest(black_box(data))).into() }\nfn main() {\n    let data = vec![0xa5; 64 * 1024 * 1024];\n    assert_eq!(old(&data),new(&data));\n    for _ in 0..2 { black_box(old(&data)); black_box(new(&data)); }\n    for sample in 0..6 {\n        let order: [(&str,fn(&[u8])->[u8; 32]);2] = if sample % 2 == 0 { [(\"0.10.9-asm\",old),(\"0.11.1-default\",new)] } else { [(\"0.11.1-default\",new),(\"0.10.9-asm\",old)] };\n        for (name,run) in order { let start=Instant::now(); for _ in 0..8 { black_box(run(&data)); } println!(\"{{\\\"version\\\":\\\"{name}\\\",\\\"sample\\\":{sample},\\\"bytes\\\":{},\\\"seconds\\\":{:.9}}}\",data.len()*8,start.elapsed().as_secs_f64()); }\n    }\n}\n",
+  "benchmark_manifest": "[package]\nname = \"tiptoptyp-sha2-benchmark\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\nold_sha2 = { package = \"sha2\", version = \"=0.10.9\", features = [\"asm\"] }\nnew_sha2 = { package = \"sha2\", version = \"=0.11.1\" }\n[profile.release]\nlto = \"thin\"\ncodegen-units = 1\n[workspace]\n",
+  "binary_sha256": "77c8ebd4f46626380506078f82e19e4bb923f16f5124e1d5ae3d2dcb740a6d75"
+}

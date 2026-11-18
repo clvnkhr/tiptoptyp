@@ -1,0 +1,93 @@
+{
+  "date": "2026-11-18",
+  "component": "TeX rainbow highlighting and shared asset-target cache",
+  "host": {
+    "system": "Darwin",
+    "macos": "14.6.1",
+    "architecture": "arm64"
+  },
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "build": {
+    "profile": "Cargo test, inherits optimized dev profile, opt-level=1, debug assertions enabled",
+    "binary": "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/tiptoptyp-ac817b82c463a248",
+    "binary_sha256": "fe8129567d121541657ac0b2db7b373f76abd022af89aef8ca37b279e05d9846",
+    "same_binary_for_before_and_after": true
+  },
+  "production_sources_sha256": {
+    "src/generic_highlight.rs": "5b5e803094537a3ab15bf142acd81fcb68d2587d920c52b7c68b16f6180efb57",
+    "src/rainbow.rs": "dcbef853fbf84f22a64e316bb860d79ef42eb989634968a3409233ba3d69910e",
+    "src/delimiters/tex.rs": "aefd7723848bf617af4a1eabf32afb0d07c8c930ee0591ca724c35b4ab9333a3",
+    "src/editor_data.rs": "d1580be92da77c26fcd9a7087d2e67986d35eaebf9350757a2d06415563e4361",
+    "src/editor_features/tex_targets.rs": "bd01d95c499c903f4654d798192136d7f27601c43d9ed40ddb33fcbb6a169a0a"
+  },
+  "rainbow": {
+    "command": "target/debug/deps/tiptoptyp-ac817b82c463a248 generic_highlight::tests::tex_bracket_cost_probe --exact --ignored --nocapture --test-threads=1",
+    "comparison": "Same syntax highlighter with rainbow disabled (previous TeX behavior) and enabled. A bounded component cost comparison, not whole-app latency.",
+    "workload": {
+      "lines": 5000,
+      "bytes": 358890,
+      "warmup_passes_per_phase": 1,
+      "one_character_edits": 25,
+      "viewport": "not applicable",
+      "theme": "light syntax, default rainbow palette"
+    },
+    "measurements": [
+      {
+        "rainbow": false,
+        "total_ms": 152.359,
+        "per_edit_ms": 6.094
+      },
+      {
+        "rainbow": true,
+        "total_ms": 368.107,
+        "per_edit_ms": 14.724
+      }
+    ]
+  },
+  "asset_hover": {
+    "command": "target/debug/deps/tiptoptyp-ac817b82c463a248 editor_data::tests::literal_asset_hover_cost_probe --exact --ignored --nocapture --test-threads=1",
+    "comparison": "Prior uncached Typst literal-asset resolution versus the shared cached entry point, at one stable target. TeX uses this cache with its own parsed target index.",
+    "workload": {
+      "fixture": "Text \u03b1.\\n repeated 128 times, followed by #image(\"image.png\")",
+      "source_parses": 1,
+      "warmup_queries_per_phase": 100,
+      "queries_per_batch": 500,
+      "timed_batches": 5,
+      "filesystem": "temporary existing image, warm metadata",
+      "viewport": "not applicable",
+      "theme": "not applicable"
+    },
+    "measurements": {
+      "uncached": {
+        "batch_ns_per_query": [
+          53880,
+          54043,
+          54511,
+          53813,
+          53615
+        ],
+        "median_ns_per_query": 53880
+      },
+      "cached": {
+        "batch_ns_per_query": [
+          82,
+          82,
+          81,
+          81,
+          82
+        ],
+        "median_ns_per_query": 82
+      }
+    },
+    "asserted_cache_invariants": {
+      "syntax_rebuilds": 1,
+      "asset_resolutions": 1
+    }
+  },
+  "limitations": [
+    "Single local macOS arm64 optimized component measurement; not a cross-platform guarantee.",
+    "Measures warm edits and repeated target cache hits; excludes cold startup, native UI interaction latency and idle rendering.",
+    "Uncontrolled host activity may affect timing; deterministic cache and bounded-work tests remain the regression contract.",
+    "Enabling rainbow brackets has measurable linear per-edit work; palette-only changes reuse cached syntax."
+  ]
+}

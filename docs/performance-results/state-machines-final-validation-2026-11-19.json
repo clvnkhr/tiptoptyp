@@ -1,0 +1,194 @@
+{
+  "kind": "Final deterministic validation; native failures remain separate, not an aggregate native pass",
+  "recorded_utc": "2026-11-18T17:21:27.614256+00:00",
+  "host": {
+    "os": "macOS",
+    "version": "14.6.1",
+    "architecture": "arm64"
+  },
+  "rust": {
+    "started_utc": "2026-11-18T16:47:07.666532+00:00",
+    "source_before": "a0a7f775a07ff8dee87ff20410a19e7aa19ac600258fe7d5c2cb8370779d18df",
+    "checks": [
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "log": "/private/tmp/ttt-final-rust-gates/fmt.log"
+      },
+      {
+        "name": "clippy",
+        "command": [
+          "cargo",
+          "clippy",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "log": "/private/tmp/ttt-final-rust-gates/clippy.log"
+      },
+      {
+        "name": "clippy-desktop-profiling",
+        "command": [
+          "cargo",
+          "clippy",
+          "--all-targets",
+          "--features",
+          "desktop-ui-tests,profiling",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "log": "/private/tmp/ttt-final-rust-gates/clippy-desktop-profiling.log"
+      },
+      {
+        "name": "test",
+        "command": [
+          "cargo",
+          "test",
+          "--no-fail-fast",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "log": "/private/tmp/ttt-final-rust-gates/test.log",
+        "passed": 3810,
+        "failed": 0,
+        "ignored": 89,
+        "suites": 24
+      },
+      {
+        "name": "test-profiling",
+        "command": [
+          "cargo",
+          "test",
+          "--features",
+          "profiling",
+          "--no-fail-fast",
+          "--",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "log": "/private/tmp/ttt-final-rust-gates/test-profiling.log",
+        "passed": 3818,
+        "failed": 0,
+        "ignored": 89,
+        "suites": 24
+      }
+    ],
+    "source_after": "a0a7f775a07ff8dee87ff20410a19e7aa19ac600258fe7d5c2cb8370779d18df",
+    "finished_utc": "2026-11-18T17:20:34.209663+00:00",
+    "passed": true
+  },
+  "xtask": {
+    "command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "xtask/Cargo.toml"
+    ],
+    "passed": 55,
+    "failed": 0,
+    "ignored": 1,
+    "format_check_passed": true
+  },
+  "scripts": {
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "scripts",
+      "-p",
+      "test_*.py"
+    ],
+    "passed": 701,
+    "skipped": 1,
+    "failed": 0
+  },
+  "browser_controllers": {
+    "command": [
+      "node",
+      "--test",
+      "scripts/test-preview-navigation.mjs",
+      "scripts/test-preview-zoom-snapshot.mjs",
+      "scripts/test-preview-snapshot-buffer.mjs",
+      "scripts/test-preview-native-probe.mjs",
+      "scripts/test-desktop-preview-probe.mjs",
+      "scripts/test_overleaf_bridge.cjs"
+    ],
+    "passed": 421,
+    "failed": 0
+  },
+  "gallery": {
+    "command": [
+      "scripts/capture-theme-gallery.sh",
+      "--validate-latest"
+    ],
+    "validated_pngs": 25,
+    "note": "Maintained gallery was freshly captured in one app session earlier in this task; inspected targeted TeX and Typst pair frames are listed in native records. Later changes do not alter highlight paint."
+  },
+  "logs": {
+    "xtask": {
+      "path": "/private/tmp/ttt-final-xtask-tests.log",
+      "sha256": "cca3fb0ec0920dc468465aaa21922b78a7f4e49aca0d982e24c1d72bd876a8f2"
+    },
+    "scripts": {
+      "path": "/private/tmp/ttt-final-script-tests.log",
+      "sha256": "3124290739194ba88924696eb9d25b6ab518bdad01e731939147d290205b3b3d"
+    },
+    "browser": {
+      "path": "/private/tmp/ttt-preview-full-navigation-diagnostics/tracked-full-js.log",
+      "sha256": "98e16f48788cd3e8339d012143eb026abbe1cb7c8a1f8e1ed2b4908f4ab25162"
+    },
+    "gallery": {
+      "path": "/private/tmp/ttt-final-gallery-validation.log",
+      "sha256": "a54b84bbbedd8a0e48effffcb84c4b7a57eba9831e0a9625347a2f01959f054c"
+    }
+  },
+  "latest_native_artifact": {
+    "binary": "/private/tmp/ttt-navigation-trace-app",
+    "sha256": "5257c156d9225ae4546d4d332fe0e8565e1488b9f69941c866d801a340c80bd6",
+    "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795019778)",
+    "profile": "dev",
+    "features": [
+      "desktop-ui-tests"
+    ],
+    "build_log": "/private/tmp/ttt-navigation-trace-build.log",
+    "recorded_at": "2026-11-18T16:37:59.673288+00:00",
+    "purpose": "bounded desktop-test-only full source-navigation call/rescale diagnostics; production navigation unchanged from admitted-anchor fix",
+    "source_sha256": {
+      "src/preview_navigation.js": "e0b70c732ac684c051b5c5351acfb512689a617591e5a1da94ae259ab2021cdf",
+      "src/app/native_views.rs": "c3689d763ec1529267c287a27c0776788114a7d26614304edd0ee7401cfe66f0",
+      "src/desktop_test.rs": "113c4b03d20338036460fd6f617880ae31aeef2bdd92b7c8499448d70311a69b",
+      "src/app/desktop_inspection.rs": "a727abea883af99173a19420e508139fb52a2f9ba463a7afffd7b1a9c55ca030",
+      "src/app/table_editor.rs": "b8575cfd0c61cfe2b42768865237e23ab4b4237f4e67d8d3f722cdf7b6910c5b",
+      "src/app/table_workbench.rs": "6b967f087a51b25ced167f9791db98b6275dc0d22a804efbf282fcda4b581c23",
+      "vendor/eframe/src/native/glow_integration.rs": "dfc429315f82ff54977420e24ef3b05c92807467ac409380e8e8ede9c7b8d49a",
+      "scripts/desktop-ui-driver.swift": "9080c16c07fb7bde706f53b3cee4f251b9add52a78e15efee03c54c40aee0876"
+    }
+  },
+  "native_evidence": "docs/performance-results/state-machines-native-validation-2026-11-18.json",
+  "native_status": "Incomplete: focused native TeX editing/intelligence/saving and loopback Overleaf flows passed; full Tinymist source reveal and automated wheel checks remain failed. No complete native aggregate pass.",
+  "native_limitations": [
+    "Overleaf/GitHub tests use owned loopback services, not real cloud accounts.",
+    "Direct full-mode navigation sends a valid smooth-scroll request but no progress is observed; lower-level cause is unresolved.",
+    "One table wheel was emitted without fresh native/egui delivery. A separate PDFium wheel failure lacks a native trace and is not assigned the same cause."
+  ],
+  "cleanup": {
+    "owned_native_fixtures_and_apps_removed": true,
+    "task_screen_awake_hold_released": true,
+    "user_documents_preserved": true
+  },
+  "scope": "Source and native test artifacts verified. This record does not claim the installed app was replaced in this final validation phase."
+}

@@ -1,0 +1,349 @@
+{
+  "timestamp_utc": "2026-11-18T09:47:55.866182+00:00",
+  "scope": "TeX diagnostic event component; exact current-source normalizer, delimiter lexer, math/literal helpers, protocol codecs and compiled real core text; no GUI/frame inference",
+  "host": {
+    "os": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu": "CPU model sysctl unavailable: Operation not permitted",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)"
+  },
+  "build": {
+    "harness": "/private/tmp/ttt-tex-diagnostics-current.rs",
+    "optimization": "rustc --test -C opt-level=3; linked same already-compiled target/debug/deps rlibs for both conditions",
+    "root_build_activity": "Root paused Cargo/native/model preparation for this bounded probe",
+    "source_sha256": {
+      "src/tex/diagnostics.rs": "f158b6d76c06a038687e761593d6b582f39385628862e9c038c67f235acf8223",
+      "src/delimiters/tex.rs": "aefd7723848bf617af4a1eabf32afb0d07c8c930ee0591ca724c35b4ab9333a3",
+      "src/editor_math_guides.rs": "d2139d33e371b01e1342d4bc48eaab7abcd6bbff125b065ca135627397cabfcf",
+      "src/rainbow.rs": "dcbef853fbf84f22a64e316bb860d79ef42eb989634968a3409233ba3d69910e",
+      "src/lsp/protocol.rs": "cb4fdd7e93fe92b0bd7822db62b3de2e26f1332173efdeb61dcc2fca517b2a95",
+      "core/src/text.rs": "68bd9e6e8b13469247e9b89ee6e0e3f7a21b6f8790315e4b308d3044742238c0"
+    },
+    "harness_source": "#![allow(dead_code, unused_imports)]\nmod document { pub use tiptoptyp_core::document::DocumentKind; }\n#[path = \"/Users/calvinkhor/Documents/GitHub/mytypst/src/editor_math_guides.rs\"]\nmod editor_math_guides;\n#[path = \"/Users/calvinkhor/Documents/GitHub/mytypst/src/rainbow.rs\"]\nmod rainbow;\nmod delimiters {\n    #[path = \"/Users/calvinkhor/Documents/GitHub/mytypst/src/delimiters/tex.rs\"]\n    mod tex;\n    pub(crate) use tex::TexDelimiterIndex;\n}\nmod lsp {\n    #[path = \"/Users/calvinkhor/Documents/GitHub/mytypst/src/lsp/protocol.rs\"]\n    pub mod protocol;\n}\nmod tex {\n    #[path = \"/Users/calvinkhor/Documents/GitHub/mytypst/src/tex/diagnostics.rs\"]\n    mod diagnostics;\n}\n",
+    "compiled_real_dependencies": [
+      "libtiptoptyp_core-9527f3cb635c27b0.rlib",
+      "libserde-8588c1fdfe600c69.rlib",
+      "libserde_json-411554177e4f7781.rlib",
+      "libeframe-50564616d159ea8a.rlib",
+      "libtypst_syntax-8f696df5a5bb84ab.rlib"
+    ]
+  },
+  "fixture": {
+    "source": "Ordinary \u03b1 prose.\\n repeated5,000 times followed by \\[ newline x+y newline blank line \\]",
+    "source_bytes": 95011,
+    "cases": {
+      "clean": 0,
+      "unrelated": 1000,
+      "cascade": 1002
+    }
+  },
+  "workload": {
+    "baseline": "clone+drop diagnostic event with normalization bypassed",
+    "after": "same clone+drop event with normalization enabled",
+    "warmup_events_per_case_condition": 10,
+    "batches_per_case_condition": 5,
+    "events_per_batch": 10,
+    "timing_order": "case order clean,unrelated,cascade; baseline then enabled within each case",
+    "includes": "diagnostic cloning and dropping plus optional contextual normalizer",
+    "excludes": "provider process, transport, editor/frame, GUI, compile, network",
+    "command": "/private/tmp/ttt-tex-diagnostics-current tex::diagnostics::tests::paragraph_normalization_cost_probe --ignored --exact --nocapture --test-threads=1"
+  },
+  "summary": {
+    "clean": {
+      "baseline_ns_per_event": 4,
+      "normalizer_ns_per_event": 4,
+      "delta_ns_per_event": 0,
+      "ratio": 1.0
+    },
+    "unrelated": {
+      "baseline_ns_per_event": 1450875,
+      "normalizer_ns_per_event": 1453845,
+      "delta_ns_per_event": 2970,
+      "ratio": 1.002047040578961
+    },
+    "cascade": {
+      "baseline_ns_per_event": 1446370,
+      "normalizer_ns_per_event": 1927608,
+      "delta_ns_per_event": 481238,
+      "ratio": 1.3327212262422479
+    }
+  },
+  "samples": [
+    {
+      "case": "clean",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 0,
+      "ns_per_event": 16
+    },
+    {
+      "case": "clean",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 1,
+      "ns_per_event": 4
+    },
+    {
+      "case": "clean",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 2,
+      "ns_per_event": 4
+    },
+    {
+      "case": "clean",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 3,
+      "ns_per_event": 0
+    },
+    {
+      "case": "clean",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 4,
+      "ns_per_event": 4
+    },
+    {
+      "case": "clean",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 0,
+      "ns_per_event": 20
+    },
+    {
+      "case": "clean",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 1,
+      "ns_per_event": 4
+    },
+    {
+      "case": "clean",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 2,
+      "ns_per_event": 4
+    },
+    {
+      "case": "clean",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 3,
+      "ns_per_event": 0
+    },
+    {
+      "case": "clean",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 0,
+      "iterations": 10,
+      "batch": 4,
+      "ns_per_event": 4
+    },
+    {
+      "case": "unrelated",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 0,
+      "ns_per_event": 1417025
+    },
+    {
+      "case": "unrelated",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 1,
+      "ns_per_event": 1462554
+    },
+    {
+      "case": "unrelated",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 2,
+      "ns_per_event": 1453295
+    },
+    {
+      "case": "unrelated",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 3,
+      "ns_per_event": 1450875
+    },
+    {
+      "case": "unrelated",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 4,
+      "ns_per_event": 1438995
+    },
+    {
+      "case": "unrelated",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 0,
+      "ns_per_event": 1487420
+    },
+    {
+      "case": "unrelated",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 1,
+      "ns_per_event": 1453845
+    },
+    {
+      "case": "unrelated",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 2,
+      "ns_per_event": 1373666
+    },
+    {
+      "case": "unrelated",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 3,
+      "ns_per_event": 1503162
+    },
+    {
+      "case": "unrelated",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1000,
+      "iterations": 10,
+      "batch": 4,
+      "ns_per_event": 1453433
+    },
+    {
+      "case": "cascade",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 0,
+      "ns_per_event": 1446370
+    },
+    {
+      "case": "cascade",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 1,
+      "ns_per_event": 1445162
+    },
+    {
+      "case": "cascade",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 2,
+      "ns_per_event": 1453816
+    },
+    {
+      "case": "cascade",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 3,
+      "ns_per_event": 1420545
+    },
+    {
+      "case": "cascade",
+      "enabled": false,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 4,
+      "ns_per_event": 1479904
+    },
+    {
+      "case": "cascade",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 0,
+      "ns_per_event": 1804158
+    },
+    {
+      "case": "cascade",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 1,
+      "ns_per_event": 1787050
+    },
+    {
+      "case": "cascade",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 2,
+      "ns_per_event": 1935045
+    },
+    {
+      "case": "cascade",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 3,
+      "ns_per_event": 1943245
+    },
+    {
+      "case": "cascade",
+      "enabled": true,
+      "source_bytes": 95011,
+      "findings": 1002,
+      "iterations": 10,
+      "batch": 4,
+      "ns_per_event": 1927608
+    }
+  ],
+  "limitations": [
+    "Clean nanosecond values are below meaningful timing resolution; no speed claim.",
+    "Small local component sample; unrelated baseline/after difference is within observed noise.",
+    "Cascade adds bounded source indexing/conditional scan; no cross-platform or whole-app latency guarantee.",
+    "The fixture has no conditionals; semantic guard behavior is separately covered by8 current-source tests."
+  ]
+}

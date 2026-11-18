@@ -1,0 +1,754 @@
+{
+  "date": "2026-11-18",
+  "updated_utc": "2026-11-18T16:48:09.922169+00:00",
+  "status": "incomplete: partial source reveal fixed and native roundtrip verified; full source reveal and synthetic wheel checks remain failed",
+  "scope": "Native input and read-only state in isolated temporary fixtures. No aggregate56-pass claim, no latency benchmark, no composed-window geometry claim.",
+  "latest_tested_artifact_sha256": "5257c156d9225ae4546d4d332fe0e8565e1488b9f69941c866d801a340c80bd6",
+  "artifacts": {
+    "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795011693)",
+      "executable": "/private/tmp/ttt-complete-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "6e4af9a3b43bca014e1e0d490ada2999f78add43643c4789cf6089bffca916cc": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795006486)",
+      "executable": "/private/tmp/ttt-pairs-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1794995823)",
+      "executable": "/private/tmp/ttt-state-final-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "86246c21efd8bd4fb37c9bb2d9bd036dac324b743380c9c609425a0c4927fc55": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795007509)",
+      "executable": "/private/tmp/ttt-pairs-final-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "8d02fc96b8887eb6b714c9fae68adbeaab2e6398c2d212f9b6d89c9418d93755": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795017301)",
+      "executable": "/private/tmp/ttt-wheel-all-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "125e78452fa2e40a2f5d5ec3b499011819608e191c60f84487b460e0cf3914d7": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795015343)",
+      "executable": "/private/tmp/ttt-wheel-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "dbaebb31d7108537887dcbdf6505eaf7b2cd92d17b32485ef1cc4231a5ff13ed": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795016279)",
+      "executable": "/private/tmp/ttt-wheel-v2-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "aa30753181ad9165cf7ff0bfd506e1543162ccebbf555ac29663f9a4ffe3152b": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795018680)",
+      "executable": "/private/tmp/ttt-location-owner-app",
+      "profile": "debug",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O"
+    },
+    "5257c156d9225ae4546d4d332fe0e8565e1488b9f69941c866d801a340c80bd6": {
+      "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795019778)",
+      "executable": "/private/tmp/ttt-navigation-trace-app",
+      "profile": "dev",
+      "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+      "build_receipt": "/private/tmp/ttt-navigation-trace-app.receipt.json",
+      "source_sha256_at_build": {
+        "src/preview_navigation.js": "e0b70c732ac684c051b5c5351acfb512689a617591e5a1da94ae259ab2021cdf",
+        "src/app/native_views.rs": "c3689d763ec1529267c287a27c0776788114a7d26614304edd0ee7401cfe66f0",
+        "src/desktop_test.rs": "113c4b03d20338036460fd6f617880ae31aeef2bdd92b7c8499448d70311a69b",
+        "src/app/desktop_inspection.rs": "a727abea883af99173a19420e508139fb52a2f9ba463a7afffd7b1a9c55ca030",
+        "src/app/table_editor.rs": "b8575cfd0c61cfe2b42768865237e23ab4b4237f4e67d8d3f722cdf7b6910c5b",
+        "src/app/table_workbench.rs": "6b967f087a51b25ced167f9791db98b6275dc0d22a804efbf282fcda4b581c23",
+        "vendor/eframe/src/native/glow_integration.rs": "dfc429315f82ff54977420e24ef3b05c92807467ac409380e8e8ede9c7b8d49a",
+        "scripts/desktop-ui-driver.swift": "9080c16c07fb7bde706f53b3cee4f251b9add52a78e15efee03c54c40aee0876"
+      },
+      "features": [
+        "desktop-ui-tests"
+      ]
+    }
+  },
+  "permissions_for_all_listed_runs": {
+    "desktop": true,
+    "accessibility": true,
+    "input": true,
+    "locked": false
+  },
+  "fixture_scope": {
+    "temporary_local_workspaces": true,
+    "overleaf": "Owned loopback HTTP fixture, isolated browser profiles and test accounts; no real Overleaf service session.",
+    "github": "Owned loopback service and synthetic CLI login; no real GitHub account or repository.",
+    "models": "Actual isolated Liquid foundation/grammar models and actual installed LTeX+ used in targeted model journeys.",
+    "user_documents_preserved": true,
+    "cookie_values_and_source_text_omitted": true
+  },
+  "successful_complete_runs": [
+    {
+      "run_id": "run-xugisgqc",
+      "artifact_sha256": "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445",
+      "passed": true,
+      "completed": [
+        "overleaf"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-xugisgqc/result.json"
+    },
+    {
+      "run_id": "run-fcl0k3wv",
+      "artifact_sha256": "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445",
+      "passed": true,
+      "completed": [
+        "overleaf_session"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-fcl0k3wv/result.json"
+    },
+    {
+      "run_id": "run-1krlvfoh",
+      "artifact_sha256": "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445",
+      "passed": true,
+      "completed": [
+        "indentation"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-1krlvfoh/result.json"
+    }
+  ],
+  "successful_feature_runs_before_storage_only_deltas": [
+    {
+      "run_id": "run-nzz3kvy3",
+      "artifact_sha256": "6e4af9a3b43bca014e1e0d490ada2999f78add43643c4789cf6089bffca916cc",
+      "passed": true,
+      "completed": [
+        "tex_editing"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-nzz3kvy3/result.json"
+    },
+    {
+      "run_id": "run-m4zkczdd",
+      "artifact_sha256": "6e4af9a3b43bca014e1e0d490ada2999f78add43643c4789cf6089bffca916cc",
+      "passed": true,
+      "completed": [
+        "indentation"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-m4zkczdd/result.json"
+    },
+    {
+      "run_id": "run-noz5togt",
+      "artifact_sha256": "6e4af9a3b43bca014e1e0d490ada2999f78add43643c4789cf6089bffca916cc",
+      "passed": true,
+      "completed": [
+        "selection_wrap"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-noz5togt/result.json"
+    }
+  ],
+  "successful_earlier_targeted_runs": [
+    {
+      "run_id": "run-r9mhlt5o",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "tex_editing"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-r9mhlt5o/result.json"
+    },
+    {
+      "run_id": "run-_bqxwy2x",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "tex_intelligence"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-_bqxwy2x/result.json"
+    },
+    {
+      "run_id": "run-ov2du8ln",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "workspace_switch"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-ov2du8ln/result.json"
+    },
+    {
+      "run_id": "run-si7xvqn6",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "startup_preview"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-si7xvqn6/result.json"
+    },
+    {
+      "run_id": "run-qhqknf2b",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "inactive_preview"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-qhqknf2b/result.json"
+    },
+    {
+      "run_id": "run-j_iizjjm",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "citation_import"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-j_iizjjm/result.json"
+    },
+    {
+      "run_id": "run-gnk4zgv7",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "latexdiff"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-gnk4zgv7/result.json"
+    },
+    {
+      "run_id": "run-zor6prgd",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "tex_documentation"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-zor6prgd/result.json"
+    },
+    {
+      "run_id": "run-jm2b4smo",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "tex_magic"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-jm2b4smo/result.json"
+    },
+    {
+      "run_id": "run-ftyasmm4",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "git_setup"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-ftyasmm4/result.json"
+    },
+    {
+      "run_id": "run-s_jve53v",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "git_github"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-s_jve53v/result.json"
+    },
+    {
+      "run_id": "run-jxyg045z",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "diagnostic_fix"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-jxyg045z/result.json"
+    },
+    {
+      "run_id": "run-83sawmx0",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "ltex"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-83sawmx0/result.json"
+    },
+    {
+      "run_id": "run-4tmefs2x",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "liquid_selection"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-4tmefs2x/result.json"
+    },
+    {
+      "run_id": "run-u9cue3mc",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": true,
+      "completed": [
+        "partial_zoom_stress"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-u9cue3mc/result.json"
+    }
+  ],
+  "partial_runs_not_aggregate_passes": [
+    {
+      "run_id": "run-nn4b7mbx",
+      "artifact_sha256": "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445",
+      "passed": false,
+      "completed": [
+        "explorer_files",
+        "overleaf",
+        "activity",
+        "indentation",
+        "problems_focus",
+        "preview_find"
+      ],
+      "completed_count": 6,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-nn4b7mbx/result.json",
+      "failure": "typst table grid did not scroll after wheel input",
+      "classification": "Full56 stopped at tables after6 completed journeys; aggregate did not pass."
+    },
+    {
+      "run_id": "run-8akzf_ka",
+      "artifact_sha256": "8d02fc96b8887eb6b714c9fae68adbeaab2e6398c2d212f9b6d89c9418d93755",
+      "passed": false,
+      "completed": [
+        "arxiv_tables",
+        "math_grids",
+        "file_versions",
+        "command_palette"
+      ],
+      "completed_count": 4,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-8akzf_ka/result.json",
+      "selection": {
+        "requested": "all",
+        "start_at": "arxiv_tables",
+        "planned": [
+          "arxiv_tables",
+          "math_grids",
+          "file_versions",
+          "command_palette",
+          "preview_jump",
+          "terminal_theme",
+          "panels",
+          "terminal_find",
+          "terminal_load",
+          "find",
+          "editing",
+          "search",
+          "tabs",
+          "tab_drag",
+          "dialogs",
+          "diagnostics",
+          "completion",
+          "layout",
+          "pdf_layout",
+          "explorer_toggle",
+          "explorer_scroll",
+          "folding",
+          "selection_wrap",
+          "git_hunks",
+          "preview_keyboard",
+          "pdfium_resize",
+          "closing",
+          "focus",
+          "settings_search",
+          "tool_defaults",
+          "editor_preferences",
+          "background",
+          "background_fades",
+          "context_menu",
+          "pdf_output",
+          "preview",
+          "partial_preview",
+          "controls",
+          "empty",
+          "snippets",
+          "ime",
+          "drawing",
+          "images",
+          "tex_editing",
+          "tex_intelligence",
+          "tex_save",
+          "tex_preview_scroll",
+          "harper_math_prose",
+          "harper_settings"
+        ]
+      },
+      "failure": "timed out: source context action reveals the last paper",
+      "classification": "Explicit49 suffix stopped at partial-preview source reveal timeout after4 completed journeys; not a49-pass result."
+    },
+    {
+      "run_id": "run-70sxkwm5",
+      "artifact_sha256": "8d02fc96b8887eb6b714c9fae68adbeaab2e6398c2d212f9b6d89c9418d93755",
+      "passed": false,
+      "completed": [
+        "tex_editing",
+        "tex_intelligence",
+        "tex_save"
+      ],
+      "completed_count": 3,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-70sxkwm5/result.json",
+      "selection": {
+        "requested": "tex",
+        "start_at": null,
+        "planned": [
+          "tex_editing",
+          "tex_intelligence",
+          "tex_save",
+          "tex_preview_scroll",
+          "harper_math_prose",
+          "harper_settings"
+        ]
+      },
+      "failure": "TeX preview did not settle at a nonzero native-wheel offset",
+      "classification": "All6 TeX selection stopped at initial PDFium wheel setup after3 completed journeys. Latest tex_editing/intelligence/save completed; later cases did not run."
+    }
+  ],
+  "failed_native_diagnostic_runs": [
+    {
+      "run_id": "run-466g6e_b",
+      "artifact_sha256": "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-466g6e_b/result.json",
+      "failure": "typst table grid did not scroll after wheel input",
+      "classification": "Unchanged focused full table reproduction: second Typst Apply wheel did not move outer grid."
+    },
+    {
+      "run_id": "run-er00o12c",
+      "artifact_sha256": "125e78452fa2e40a2f5d5ec3b499011819608e191c60f84487b460e0cf3914d7",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-er00o12c/result.json",
+      "failure": "typst table grid did not scroll after wheel input",
+      "classification": "Initial test-only route receipt merged reused viewport/frame identities; its apparent consumer inference was invalidated, while native failure remains valid."
+    },
+    {
+      "run_id": "run-42nyqwbe",
+      "artifact_sha256": "dbaebb31d7108537887dcbdf6505eaf7b2cd92d17b32485ef1cc4231a5ff13ed",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-42nyqwbe/result.json",
+      "failure": "tex table grid did not scroll after wheel input",
+      "classification": "Corrected route identity: both Typst wheel subcases passed; later TeX Apply wheel failed before full journey completion. TeX path was not yet instrumented."
+    },
+    {
+      "run_id": "run-3fh9adi1",
+      "artifact_sha256": "8d02fc96b8887eb6b714c9fae68adbeaab2e6398c2d212f9b6d89c9418d93755",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-3fh9adi1/result.json",
+      "failure": "tex table grid did not scroll after wheel input",
+      "classification": "Both Typst subcases passed. First TeX wheel produced no third native MouseWheel event despite independent 512-event wheel trace capacity. Correct foreground/child focus and unchanged configured CG fields; exact delivery cause unresolved. No retry or app-routing workaround."
+    },
+    {
+      "run_id": "run-ffq56ks1",
+      "artifact_sha256": "aa30753181ad9165cf7ff0bfd506e1543162ccebbf555ac29663f9a4ffe3152b",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-ffq56ks1/result.json",
+      "selection": {
+        "requested": "preview_jump",
+        "start_at": null,
+        "planned": [
+          "preview_jump"
+        ]
+      },
+      "failure": "timed out: source context action reveals the last paper",
+      "classification": "After deterministic resize-anchor ownership fix, native TeX/PDFium and Typst partial roundtrips passed, including detached partial inverse. Whole journey then failed full Tinymist source reveal with healthy3-page renderer/fresh cache at scroll0. No retry or aggregate pass.",
+      "completed_subcases": [
+        {
+          "backend": "Pdfium",
+          "source_and_inverse_roundtrip": true
+        },
+        {
+          "backend": "InteractivePartial",
+          "source_and_inverse_roundtrip": true,
+          "detached_inverse": true
+        }
+      ]
+    }
+  ],
+  "failed_stale_harness_receipts_not_passes": [
+    {
+      "run_id": "run-nhoxrksc",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-nhoxrksc/result.json",
+      "failure": "timed out: Badness reports only the actual display-math paragraph issue",
+      "classification": "Diagnostic code JSON-string normalization mismatch; focused negative contract added before correction."
+    },
+    {
+      "run_id": "run-e1cxrnia",
+      "artifact_sha256": "8ddb13683caf56013e9fe76b6308ffb3faccce2030d013caf73f9f38e41e7105",
+      "passed": false,
+      "completed": [
+        "explorer_files"
+      ],
+      "completed_count": 1,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-e1cxrnia/result.json",
+      "failure": "timed out: Overleaf phase returns to the unchanged local file in its local workspace",
+      "classification": "Required departed-workspace tabs to survive; corrected to retired IDs and current-workspace per-tab provenance."
+    },
+    {
+      "run_id": "run-emwwntc4",
+      "artifact_sha256": "6e4af9a3b43bca014e1e0d490ada2999f78add43643c4789cf6089bffca916cc",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-emwwntc4/result.json",
+      "failure": "timed out: exact fixture content",
+      "classification": "Indentation expected no generated environment end when pairing enabled; corrected exact source/caret fixture."
+    },
+    {
+      "run_id": "run-b209by0w",
+      "artifact_sha256": "86246c21efd8bd4fb37c9bb2d9bd036dac324b743380c9c609425a0c4927fc55",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-b209by0w/result.json",
+      "failure": "timed out: Workspace creation opens the usual Overleaf window with its new storage folder",
+      "classification": "Expected staged account to remain online; current account-isolation contract deliberately pauses old account."
+    },
+    {
+      "run_id": "run-glwm0xos",
+      "artifact_sha256": "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-glwm0xos/result.json",
+      "failure": "timed out: Reset restores the original online account and its retained draft",
+      "classification": "Expected manager to remain visible after successful Reset; actual successful return focuses original editor."
+    },
+    {
+      "run_id": "run-nh3j61y6",
+      "artifact_sha256": "cae0aa61ed2c764750c004c026247d5811f9a2dee3a0c29652e62dc955205445",
+      "passed": false,
+      "completed": [
+        "explorer_files",
+        "overleaf",
+        "activity"
+      ],
+      "completed_count": 3,
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-nh3j61y6/result.json",
+      "failure": "timed out: Saving the original fixture restores its file history",
+      "classification": "Waited transient Saved toast; correct no-edit formatter feedback replaced it. Corrected to durable atomic-write receipt, exact source/disk and idle save/format phases."
+    }
+  ],
+  "unavailable_or_limited_checks": [
+    {
+      "run_id": "run-lt2bcn56",
+      "journey": "partial_cache_edges",
+      "status": "unavailable",
+      "reason": "Host scroll-to-zoom enabled; harness refused global Ctrl-wheel before posting input. Host settings left unchanged."
+    },
+    {
+      "receipt": "docs/performance-results/state-machines-native-zoom-correctness-2026-11-18.json",
+      "status": "limited",
+      "reason": "Partial native controller43transitions passed; full-mode fresh-idle-cache admission unavailable before firsttransition in matching pre-refactor and current binaries. No regression or speed claim."
+    }
+  ],
+  "visual_evidence": {
+    "tex_feature_pngs_inspected": [
+      ".tiptoptyp/screenshots/agent-review/pairing-2026-11-18/1795006872883-0003-main.png",
+      ".tiptoptyp/screenshots/agent-review/pairing-2026-11-18/1795006881624-0004-main.png"
+    ],
+    "tex_result": "Innermost round pair and full environment tokens highlighted by background without outline; alignment/clipping checked.",
+    "gallery": "Root captured and validated25-image maintained gallery in one session plus additional Typst delimiter-match framebuffer; root inspected fresh Typst interior highlight."
+  },
+  "unresolved_failure_evidence": {
+    "table_delivery": {
+      "run_id": "run-3fh9adi1",
+      "files": [
+        "native-wheel-posts.json",
+        "wheel-receipts.json",
+        "failure-final-snapshot.json",
+        "failure-native-window-list.json",
+        "app.log",
+        "failed-table-fixtures"
+      ],
+      "note": "Configured CG window_under_pointer/can_handle both0 on pass and fail; current failed point lies inside owned 620x420 window. Lifecycle trace 256 cap does not suppress separate512wheel trace. No differing causal flag/phase/timestamp established.",
+      "cause": "Unresolved. This receipt bounds the missing event before observed winit delivery; it does not prove an operating-system, test-driver or product cause."
+    },
+    "partial_source_reveal": {
+      "run_id": "run-8akzf_ka",
+      "files": [
+        "failure-final-snapshot.json",
+        "failed-preview-jump-fixtures",
+        "failure-screenshot-receipt.json"
+      ],
+      "note": "Actual Tinymist partial loaded 3 pages with fresh cache; source context Reveal in Preview expected the last paper, stayed at scroll 0/page 0 and reveal retired as arrival-timeout-or-disconnected. Separate from known full-mode initial cache limitation.",
+      "status": "before-fix receipt retained; corresponding partial source/inverse roundtrip passed in run-ffq56ks1"
+    },
+    "pdfium_wheel_setup": {
+      "run_id": "run-70sxkwm5",
+      "files": [
+        "native-wheel-posts.json",
+        "failure-final-snapshot.json",
+        "failed-tex-preview-fixtures",
+        "failure-screenshot-receipt.json"
+      ],
+      "note": "Actual PDFium settled 3 pages; wheel setup never reached a nonzero offset. Native-route tracing was off, so this run does not establish where input was lost."
+    },
+    "full_source_reveal": {
+      "run_id": "run-ffq56ks1",
+      "files": [
+        "failure-final-snapshot.json",
+        "failed-preview-jump-fixtures",
+        "failure-screenshot-receipt.json"
+      ],
+      "note": "Effective full Tinymist renderer loaded/ready/populated3 pages, fresh cache/frame_ready; source menu requested last paper but scroll/page remained0. Reveal locations1/intents1 expired arrival-timeout-or-disconnected. Cause under review; not the initial empty-cache limitation.",
+      "direct_control": {
+        "run_id": "run-ueq_fj8q",
+        "files": [
+          "navigation-first-observed.json",
+          "navigation-last-observed.json",
+          "failure-final-snapshot.json",
+          "failed-direct-full-fixtures",
+          "diagnostic-script.py"
+        ],
+        "received_page": 3,
+        "received_position": [
+          20,
+          29.933
+        ],
+        "current_owner_admitted": true,
+        "native_scroll_target": [
+          16.740000000000002,
+          1125.795288408307
+        ],
+        "behavior": "smooth",
+        "scroll_extent": [
+          558,
+          830,
+          2029
+        ],
+        "anchor": null,
+        "rescale_calls": 2,
+        "final_scroll": [
+          0,
+          0
+        ],
+        "note": "Same failure without chooser or previous Partial/detached flow. No causal patch selected from this receipt; valid target reached native smooth-scroll call but did not progress."
+      },
+      "cause": "Unresolved. The trace does not prove CSS/browser cancellation, a host fault, or any other specific cause."
+    }
+  },
+  "not_run_after_latest_failures": [
+    "terminal_theme",
+    "panels",
+    "terminal_find",
+    "terminal_load",
+    "find",
+    "editing",
+    "search",
+    "tabs",
+    "tab_drag",
+    "dialogs",
+    "diagnostics",
+    "completion",
+    "layout",
+    "pdf_layout",
+    "explorer_toggle",
+    "explorer_scroll",
+    "folding",
+    "selection_wrap",
+    "git_hunks",
+    "preview_keyboard",
+    "pdfium_resize",
+    "closing",
+    "focus",
+    "settings_search",
+    "tool_defaults",
+    "editor_preferences",
+    "background",
+    "background_fades",
+    "context_menu",
+    "pdf_output",
+    "preview",
+    "partial_preview",
+    "controls",
+    "empty",
+    "snippets",
+    "ime",
+    "drawing",
+    "images",
+    "harper_math_prose",
+    "harper_settings"
+  ],
+  "privacy": "Only run metadata, paths, fingerprints/identities and result categories are summarized. No cookies, credentials or document source text.",
+  "native_setup_failures_not_navigation_checks": [
+    {
+      "run_id": "run-xc_ts04z",
+      "artifact_sha256": "5257c156d9225ae4546d4d332fe0e8565e1488b9f69941c866d801a340c80bd6",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "selection": {
+        "requested": "preview_jump",
+        "start_at": null,
+        "planned": [
+          "preview_jump"
+        ]
+      },
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-xc_ts04z/result.json",
+      "failure": "native dialog control is missing, disabled, ambiguous, or exceeded its lookup budget\n",
+      "classification": "Native Open setup failed before preview fixture loading. Passive complete AX ancestry showed PathTextField inside GoToWindow/open-panel sheets when Open was requested. This run did not exercise preview navigation; no input retry or field value read."
+    }
+  ],
+  "focused_diagnostic_runs_not_journey_coverage": [
+    {
+      "run_id": "run-ueq_fj8q",
+      "artifact_sha256": "5257c156d9225ae4546d4d332fe0e8565e1488b9f69941c866d801a340c80bd6",
+      "passed": false,
+      "completed": [],
+      "completed_count": 0,
+      "selection": {
+        "requested": "preview_jump",
+        "start_at": null,
+        "planned": [
+          "diagnostic_direct_full_reveal"
+        ]
+      },
+      "receipt": ".tiptoptyp/desktop-ui-tests/run-ueq_fj8q/result.json",
+      "failure": "timed out: diagnostic direct-full-control reveals the last paper",
+      "classification": "One-off real Typst file launched through normal app CLI; Full selected through native UI before first forward reveal. Direct Full failed, so Partial/detached/Full transition control was not attempted. Explicit diagnostic_only; does not replace failed preview_jump/Open-panel coverage.",
+      "diagnostic_only": true,
+      "diagnostic_scope": "Real-file CLI startup plus native Full forward reveal; optional Partial/detached/Full transition. Does not replace preview_jump or native Open-panel coverage.",
+      "maintained_runner_sha256": "5827c47fed10b31ad894f04b31e82aa2259a6d65f4d0918f5ff9e7ae0d3bd7cc",
+      "diagnostic_script_sha256": "8aa748b1373268102197f8489224724186d73783b862d06134ea5905fd4e2a35",
+      "diagnostic_script_receipt": ".tiptoptyp/desktop-ui-tests/run-ueq_fj8q/diagnostic-script.py"
+    }
+  ],
+  "cleanup": {
+    "fixture_directories_remaining": [],
+    "owned_fixture_processes_remaining": [],
+    "gui_input_observers_created_by_ui_agent": false,
+    "retained_receipts_and_diagnostic_scripts_are_evidence": true,
+    "all_native_runner_sessions_completed": true,
+    "passive_activation_observer": "Owned by Services; previously exited via fixed time limit and removed its observers, as separately reported.",
+    "persistent_model_reference_caches": "Retained intentionally; copied fixtures removed."
+  }
+}

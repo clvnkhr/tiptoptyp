@@ -1,0 +1,282 @@
+{
+  "kind": "correctness evidence; not a speed benchmark",
+  "date": "2026-11-18",
+  "recorded_at_utc": "2026-11-18T11:58:42.625745+00:00",
+  "host": {
+    "os": "macOS",
+    "version": "14.6.1",
+    "architecture": "arm64",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)"
+  },
+  "host_filesystem_probe": {
+    "method": "Disposable Python fixture; host filesystem observation, separate from production-module tests. Case-only os.rename probes describe stored spelling and inode preservation. No user files are used.",
+    "observations": [
+      {
+        "requested_temporary_base": "/private/tmp",
+        "root": "/private/tmp/ttt-case-alias-evidence-pt_uo_g7",
+        "device": 16777230,
+        "case_insensitive": true,
+        "same_device_and_inode": true,
+        "readdir_before": [
+          "copy.tex"
+        ],
+        "readdir_after_leaf_rename": [
+          "Copy.tex"
+        ],
+        "inode_preserved_after_leaf_rename": true,
+        "readdir_after_parent_rename": [
+          "Notes"
+        ],
+        "parent_inode_preserved": true,
+        "fixture_bytes_preserved": true,
+        "temporary_removed_on_completion": true
+      },
+      {
+        "requested_temporary_base": "system default",
+        "root": "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-case-alias-evidence-lhteesoa",
+        "device": 16777230,
+        "case_insensitive": true,
+        "same_device_and_inode": true,
+        "readdir_before": [
+          "copy.tex"
+        ],
+        "readdir_after_leaf_rename": [
+          "Copy.tex"
+        ],
+        "inode_preserved_after_leaf_rename": true,
+        "readdir_after_parent_rename": [
+          "Notes"
+        ],
+        "parent_inode_preserved": true,
+        "fixture_bytes_preserved": true,
+        "temporary_removed_on_completion": true
+      }
+    ]
+  },
+  "before": {
+    "result": {
+      "passed": 0,
+      "failed": 2,
+      "ignored": 0,
+      "filtered_out": 99
+    },
+    "findings": [
+      "sync_document returned Ok but both alias spellings were absent after cleanup",
+      "OfflineStore::load restored fixture source from the journal but removed the aliased current file"
+    ],
+    "run_command": [
+      "/private/tmp/ttt-case-rename-before",
+      "case_only_",
+      "--nocapture"
+    ],
+    "build_command": [
+      "/opt/homebrew/bin/rustc",
+      "--edition=2024",
+      "--test",
+      "/private/tmp/ttt-case-rename-probe/main.rs",
+      "-L",
+      "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+      "--extern",
+      "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+      "--extern",
+      "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+      "--extern",
+      "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/liburl-1b20e5ba73f43ca3.rlib",
+      "--extern",
+      "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libnix-a22959a272f56c0f.rlib",
+      "--extern",
+      "sha2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libsha2-78ca47f81e577311.rlib",
+      "--extern",
+      "unicode_normalization=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libunicode_normalization-7992375cceba4c07.rlib",
+      "--extern",
+      "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtempfile-6d1c1a1e6a75ac5e.rlib",
+      "--extern",
+      "hex=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libhex-e94b026f4b7f4279.rlib",
+      "--extern",
+      "md5=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libmd5-3aeb5aba0fccf08a.rlib",
+      "-o",
+      "/private/tmp/ttt-case-rename-before"
+    ],
+    "frozen_sources": "/private/tmp/ttt-case-rename-probe",
+    "command_and_hashes": "/private/tmp/ttt-case-rename-command.json",
+    "log": "/private/tmp/ttt-case-rename-before.log"
+  },
+  "after": {
+    "result": {
+      "passed": 108,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 0
+    },
+    "composition": "106 maintained real Overleaf module tests plus the two original external regression probes",
+    "build_warning_count": 0,
+    "run_command": [
+      "/private/tmp/ttt-case-rename-final",
+      "--nocapture"
+    ],
+    "build_command": [
+      "/opt/homebrew/bin/rustc",
+      "--edition=2024",
+      "--test",
+      "/private/tmp/ttt-case-rename-probe-final/main.rs",
+      "-L",
+      "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+      "--extern",
+      "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+      "--extern",
+      "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+      "--extern",
+      "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/liburl-1b20e5ba73f43ca3.rlib",
+      "--extern",
+      "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libnix-a22959a272f56c0f.rlib",
+      "--extern",
+      "sha2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libsha2-78ca47f81e577311.rlib",
+      "--extern",
+      "unicode_normalization=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libunicode_normalization-7992375cceba4c07.rlib",
+      "--extern",
+      "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtempfile-6d1c1a1e6a75ac5e.rlib",
+      "--extern",
+      "hex=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libhex-e94b026f4b7f4279.rlib",
+      "--extern",
+      "md5=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libmd5-3aeb5aba0fccf08a.rlib",
+      "-o",
+      "/private/tmp/ttt-case-rename-final"
+    ],
+    "frozen_sources": "/private/tmp/ttt-case-rename-probe-final",
+    "command_and_hashes": "/private/tmp/ttt-case-rename-final-command.json",
+    "log": "/private/tmp/ttt-case-rename-final.log",
+    "source_hashes": {
+      "src/overleaf.rs": {
+        "sha256": "0682445cc4bcdcce12d0470823060ad93de22f10401097fea834a7b83600f3c3",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/offline.rs": {
+        "sha256": "bd645722b68b7ad330977b85e372958d515dbebbdc404b87431fbe5508b722ac",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/presence.rs": {
+        "sha256": "b4f83271d84211a846888bd69eb0d14ea464bb8a32ca01d520f2be376f56882e",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/workspace_session.rs": {
+        "sha256": "7dc4be087e7295fc4d16f5a5999e8e35200abced372c93e69e2a8d0f079b1d35",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/mirror.rs": {
+        "sha256": "68c0ed5ce9b31f9762cc2ac1e0bc7f07683693ec838a9b1fbfda222e9cbd5556",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/tests.rs": {
+        "sha256": "e907353167f9906079fba152343fc79018aef44e4d30bc3746b2b4c583a96b41",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/storage.rs": {
+        "sha256": "2f8e3cd719c3fb7ab468389f3dc9617d4f488c64aea3716b5634732add667c49",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/model.rs": {
+        "sha256": "ed9ba371ee2b56caff3fa8832c80ec746a3b91106112a82da9561bab691bf971",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/tests/save_journal.rs": {
+        "sha256": "52c7ba59454b2056f5fd7bec3230e22012521ced59ea8b9464e37a728570287b",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/storage/tests.rs": {
+        "sha256": "164b49ce06c6dd9c63e5280fe08bedb032d1256871df0bbbeaada78935579cf0",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/presence/tests.rs": {
+        "sha256": "49f4fe3214812a60c3fba0a04aa9ec15946d006b4703118043a949d491e6b67f",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/model/merge.rs": {
+        "sha256": "766f522aa1c6c0fe89f0eb793e2eb34fa811911f545f23d0e50143d074c0c832",
+        "current_repository_source_matches": true
+      },
+      "src/overleaf/offline/tests.rs": {
+        "sha256": "dc0abf58b64e4f2789f39ad316b99d63127e59025e57448b72cb2ade482ad0e8",
+        "current_repository_source_matches": true
+      }
+    },
+    "external_probe_main_sha256": "f1abaf8abd186553ea20513e4b5e24ffde72509b9e42a3b60cc0dffb0138c639",
+    "new_maintained_tests": [
+      "case_only_document_and_parent_renames_preserve_clean_and_dirty_saved_sources",
+      "case_only_rename_retains_external_edits_and_checkpoint_authority",
+      "renamed_hard_links_keep_both_names_and_later_writes_do_not_change_the_old_link",
+      "case_only_owned_folder_renames_preserve_empty_directories_and_untracked_children",
+      "case_only_asset_rename_keeps_its_bytes_until_refresh_and_repairs_stored_spelling",
+      "an_unverifiable_asset_rename_destination_cannot_retire_the_saved_source",
+      "physical_file_identity_rejects_symlinks_and_non_regular_files"
+    ]
+  },
+  "verified_outcomes": {
+    "case_alias_matrix": {
+      "combinations": 12,
+      "dimensions": [
+        "leaf only / owned parent only / both",
+        "clean / saved dirty draft",
+        "direct save / offline reopen before save"
+      ],
+      "actual_host_case_tests_executed": true,
+      "checks": [
+        "committed source remains readable",
+        "draft and baseline authority survive reopen",
+        "unchanged source inode preserved",
+        "actual readdir spelling matches the project",
+        "subsequent saves succeed",
+        "owned parent inode and untracked contents preserved"
+      ]
+    },
+    "additional_checks": [
+      "empty and nested owned directory aliases keep inode and untracked children",
+      "clean asset aliases keep bytes until refresh and expose correct stored spelling",
+      "external source changes are preserved and stale checkpoint writers are rejected",
+      "same-inode hardlinks retain both names; subsequent atomic save does not change the old hardlink",
+      "genuine distinct-path document cleanup still removes the prior path",
+      "regular-file type and no-follow parent/final-leaf checks reject unsafe identity probes",
+      "Darwin exclusive alias rename refuses distinct destinations and distinct hardlink names",
+      "uncertain asset destination identity returns an error without retiring old source"
+    ],
+    "asset_guard_control": {
+      "method": "Only the tightened identity-error guard was reverted in a disposable copy of the real module; the new regression then failed.",
+      "result": "0 passed; 1 failed; 107 filtered out",
+      "log": "/private/tmp/ttt-case-asset-before.log",
+      "frozen_sources": "/private/tmp/ttt-case-asset-guard-before"
+    }
+  },
+  "implementation_scope": {
+    "physical_identity": "Retained no-follow descriptors, expected regular/directory kind, matching device and inode; no lowercased-path assumptions.",
+    "document_cleanup": "Exact prior source bytes plus positively distinct physical target are required before old-path unlink. Identity errors never authorize document cleanup.",
+    "spelling": "macOS-only RENAME_EXCL metadata rename after same-ID/same-kind journal/tree ownership and identical physical identity. No unsafe rename fallback on other platforms.",
+    "receipt_safety": "Document spelling repair is optional after durable journal/source commit; spelling failures cannot discard the committed save receipt.",
+    "worker_only_io": "Changes run only during explicit mirror sync/offline load. Renamed entries add bounded descriptor and metadata checks; actual alias repair adds an exclusive metadata rename and directory sync.",
+    "idle_frame_polling_changes": false,
+    "speed_or_cross_platform_performance_claim": false,
+    "native_gui_or_visual_coverage_claim": false,
+    "cargo_run_by_this_component_check": false
+  },
+  "git_staging_limitation": {
+    "production_git_index_or_config_mutation": false,
+    "probe": "/private/tmp/ttt-case-git-probe.json",
+    "observed": {
+      "case_alias_volume": true,
+      "physical_names": [
+        "Copy.tex"
+      ],
+      "ignorecase": "true",
+      "status_before_add": "",
+      "index_before": "copy.tex",
+      "status_after_add": "",
+      "index_after": "copy.tex"
+    },
+    "conclusion": "Physical spelling is repaired, but Git core.ignorecase=true may still hide a case-only change and git add --all can retain the old index spelling. Automatic case-only index staging is outside this storage fix."
+  },
+  "review": "Final exact guards and tests independently reviewed by the core storage agent; no further concrete defect found.",
+  "limits": [
+    "Component correctness evidence on this Mac, not whole-app native interaction or composed-window evidence.",
+    "Only explicitly owned folder names and tracked document/asset basenames are repaired.",
+    "Temporary evidence paths are local receipts and may be cleaned later; source hashes, exact build commands and outcomes are retained here.",
+    "Root owns final full Cargo checks and preserved desktop build."
+  ]
+}

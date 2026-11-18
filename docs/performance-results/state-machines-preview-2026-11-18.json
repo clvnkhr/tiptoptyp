@@ -1,0 +1,148 @@
+{
+  "date": "2026-11-18",
+  "component": "Preview zoom state-machine representation: bounded work invariance",
+  "host": {
+    "system": "Darwin",
+    "release": "23.6.0",
+    "architecture": "arm64"
+  },
+  "runtime": {
+    "node": "v26.9.0",
+    "v8": "14.6.202.34-node.32",
+    "profile": "Same Node/V8 default optimizing runtime, no profiling or artificial polling."
+  },
+  "workload": {
+    "fixture": "Production script in the existing native-capture metadata fixture",
+    "viewport": {
+      "width": 900,
+      "height": 700,
+      "fitWidth": 880,
+      "density": 2
+    },
+    "theme": "No palette/theme transformations in this metadata-only fixture",
+    "warmup_runs": 10,
+    "warmup_idle_queries": 100,
+    "warmup_gestures": 2,
+    "measured_idle_queries": 1000,
+    "measured_gestures": 20,
+    "render_observations_per_gesture": 100,
+    "cache": "Warm admitted capture before the measured stable and gesture phases"
+  },
+  "sources": {
+    "before_sha256": "c4a93c757cb6bfa8cd47cb51a011ed4eabda1ec6945684cd60eede3a74a733d4",
+    "after_sha256": "ca181191e3277f913cb58061e2ff9197176bd96dfe617134feff24ef817b372c"
+  },
+  "before": {
+    "idle": {
+      "reads": 1000,
+      "frames": 0,
+      "captures": 0,
+      "messages": 0
+    },
+    "final": {
+      "captures": 21,
+      "hits": 20,
+      "misses": 0,
+      "failures": 0,
+      "handoffs": 20
+    },
+    "queued": {
+      "frames": 0,
+      "timers": 0
+    },
+    "total_reads": 3208
+  },
+  "after": {
+    "idle": {
+      "reads": 1000,
+      "frames": 0,
+      "captures": 0,
+      "messages": 0
+    },
+    "final": {
+      "captures": 21,
+      "hits": 20,
+      "misses": 0,
+      "failures": 0,
+      "handoffs": 20
+    },
+    "queued": {
+      "frames": 0,
+      "timers": 0
+    },
+    "total_reads": 3208
+  },
+  "limitations": [
+    "Deterministic operation counts, not UI latency, CPU time, memory allocation or a cross-platform performance guarantee.",
+    "Uses native bridge protocol/RAF/timer fixtures; whole-window composition and real WebKit scheduling require the native journey.",
+    "No geometry formulas, debounce intervals, worker/thread counts or polling behavior were changed."
+  ],
+  "navigation": {
+    "sources": {
+      "before_sha256": "d4ee13608abd4dad1fdf0217d0c830fa2cf499a1ee732b8f94489ba2b45d0611",
+      "after_sha256": "57a430c717047ffbb5d2916db642a22a6ca7623d5aae8ab184263b32809e6355"
+    },
+    "workload": {
+      "fixture": "Existing production partial SVG fixture with decorated source pages",
+      "pages": 48,
+      "viewport": {
+        "width": 646,
+        "height": 374
+      },
+      "theme": "Fixture default light palette",
+      "warmup_runs": 10,
+      "warmup_gestures": 2,
+      "read_only_phase_queries": 1000,
+      "scroll_zoom_resize_cycles": 20,
+      "frames_per_operation": 2
+    },
+    "before": {
+      "idle": {
+        "frames": 0,
+        "reads": 0,
+        "layouts": 0,
+        "timeouts": 0,
+        "rectReads": 0,
+        "domReads": 0,
+        "windows": 0,
+        "messages": 0
+      },
+      "final": {
+        "frames": 0,
+        "reads": 1,
+        "layouts": 82,
+        "timeouts": 0,
+        "rectReads": 545,
+        "domReads": 264,
+        "windows": 21,
+        "messages": 40,
+        "postRenders": 21,
+        "scale": 1
+      }
+    },
+    "after": {
+      "idle": {
+        "frames": 0,
+        "reads": 0,
+        "layouts": 0,
+        "timeouts": 0,
+        "rectReads": 0,
+        "domReads": 0,
+        "windows": 0,
+        "messages": 0
+      },
+      "final": {
+        "frames": 0,
+        "reads": 1,
+        "layouts": 82,
+        "timeouts": 0,
+        "rectReads": 545,
+        "domReads": 264,
+        "windows": 21,
+        "messages": 40,
+        "postRenders": 21,
+        "scale": 1
+      }
+    }
+  }
+}

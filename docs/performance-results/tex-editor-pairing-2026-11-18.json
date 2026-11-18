@@ -1,0 +1,74 @@
+{
+  "scope": "One PairingBuffer insertion only; excludes the highlighter, EditorDerivedData and GUI layout/rendering",
+  "host": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+  "flags": "--edition=2024 -C opt-level=3 --test",
+  "viewport_theme": "not applicable: component operation",
+  "fixture": "1500 generated TeX rows: 96000 UTF-8 bytes plus iteration comment header and final newline",
+  "warmup_per_phase": 5,
+  "samples_per_phase": 60,
+  "workload": "Insert one opening curly at EOF; changed-header iterations measure misses; resetting unchanged source measures hits",
+  "baseline": "Previous native TeX pairing gate disabled: literal insertion",
+  "after": "Native TeX pairing enabled: opening curly inserts its matching closer",
+  "measurements": [
+    {
+      "phase": "baseline-disabled",
+      "fixture_bytes": 96000,
+      "samples": 60,
+      "median_us": 155.125,
+      "p95_us": 170.666,
+      "index_builds": 0
+    },
+    {
+      "phase": "enabled-miss",
+      "fixture_bytes": 96000,
+      "samples": 60,
+      "median_us": 1238.7920000000001,
+      "p95_us": 1419.25,
+      "index_builds": 65
+    },
+    {
+      "phase": "enabled-hit",
+      "fixture_bytes": 96000,
+      "samples": 60,
+      "median_us": 322.708,
+      "p95_us": 347.5,
+      "index_builds": 1
+    }
+  ],
+  "source_hashes": {
+    "auto_pairs.rs": "7917a92c681a781a715e271dfd2d9e294acf120651e5ff85ef7b67ed611ae1ed",
+    "auto_pairs/tex.rs": "60eadaab6dcc2067078f4ea7e577f7a6a15060a141640e7033b7036dd917ae7a",
+    "auto_pairs/indentation.rs": "08df24fbb4677bdd649d1c227c11a0506fd113e0df079c99bd724a5b41eda594",
+    "delimiters.rs": "950f0a9a111e40ff6a2dedcbbeb3d322bc846cdcdf9c643e4fc37da1035fb904",
+    "delimiters/tex.rs": "aefd7723848bf617af4a1eabf32afb0d07c8c930ee0591ca724c35b4ab9333a3",
+    "editor_math_guides.rs": "d2139d33e371b01e1342d4bc48eaab7abcd6bbff125b065ca135627397cabfcf"
+  },
+  "adapter_sha256": "6f5b2b14249993542f259831e3eb834c2ae90ee4b10b0e43109ca95c9fca2935",
+  "dependency_artifacts": {
+    "eframe": "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libeframe-50564616d159ea8a.rlib",
+    "typst_syntax": "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtypst_syntax-8f696df5a5bb84ab.rlib",
+    "tiptoptyp_core": "/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtiptoptyp_core-2f5049c0dff81cfc.rlib"
+  },
+  "compile_command": [
+    "/opt/homebrew/bin/rustc",
+    "--edition=2024",
+    "-C",
+    "opt-level=3",
+    "--test",
+    "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-tex-pairing-wnob802o/main.rs",
+    "-L",
+    "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+    "-o",
+    "/var/folders/p8/d728c3090pl_2q11s2tw8rjr0000gn/T/ttt-tex-pairing-wnob802o/probe",
+    "--extern",
+    "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libeframe-50564616d159ea8a.rlib",
+    "--extern",
+    "typst_syntax=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtypst_syntax-8f696df5a5bb84ab.rlib",
+    "--extern",
+    "tiptoptyp_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtiptoptyp_core-2f5049c0dff81cfc.rlib"
+  ],
+  "limitations": "Local component feature overhead, not a whole-editor or cross-platform speed guarantee; identical cached development dependency rlibs are reused for every phase",
+  "date": "2026-11-18",
+  "probe": "docs/performance-results/tex-editor-pairing-2026-11-18.py"
+}

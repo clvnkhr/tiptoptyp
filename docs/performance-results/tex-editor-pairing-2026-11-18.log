@@ -1,0 +1,9 @@
+
+running 1 test
+test auto_pairs::component_measurement::tex_pairing_cache_hit_and_miss ... {"phase":"baseline-disabled","fixture_bytes":96000,"samples":60,"median_us":155.125,"p95_us":170.666,"index_builds":0}
+{"phase":"enabled-miss","fixture_bytes":96000,"samples":60,"median_us":1238.7920000000001,"p95_us":1419.25,"index_builds":65}
+{"phase":"enabled-hit","fixture_bytes":96000,"samples":60,"median_us":322.708,"p95_us":347.5,"index_builds":1}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 54 filtered out; finished in 0.12s
+

@@ -1,0 +1,36 @@
+
+running 1 test
+test tex::diagnostics::tests::paragraph_normalization_cost_probe ... paragraph_normalization_cost,case=clean,enabled=false,source_bytes=95011,findings=0,iterations=10,batch=0,ns_per_event=16
+paragraph_normalization_cost,case=clean,enabled=false,source_bytes=95011,findings=0,iterations=10,batch=1,ns_per_event=4
+paragraph_normalization_cost,case=clean,enabled=false,source_bytes=95011,findings=0,iterations=10,batch=2,ns_per_event=4
+paragraph_normalization_cost,case=clean,enabled=false,source_bytes=95011,findings=0,iterations=10,batch=3,ns_per_event=0
+paragraph_normalization_cost,case=clean,enabled=false,source_bytes=95011,findings=0,iterations=10,batch=4,ns_per_event=4
+paragraph_normalization_cost,case=clean,enabled=true,source_bytes=95011,findings=0,iterations=10,batch=0,ns_per_event=20
+paragraph_normalization_cost,case=clean,enabled=true,source_bytes=95011,findings=0,iterations=10,batch=1,ns_per_event=4
+paragraph_normalization_cost,case=clean,enabled=true,source_bytes=95011,findings=0,iterations=10,batch=2,ns_per_event=4
+paragraph_normalization_cost,case=clean,enabled=true,source_bytes=95011,findings=0,iterations=10,batch=3,ns_per_event=0
+paragraph_normalization_cost,case=clean,enabled=true,source_bytes=95011,findings=0,iterations=10,batch=4,ns_per_event=4
+paragraph_normalization_cost,case=unrelated,enabled=false,source_bytes=95011,findings=1000,iterations=10,batch=0,ns_per_event=1417025
+paragraph_normalization_cost,case=unrelated,enabled=false,source_bytes=95011,findings=1000,iterations=10,batch=1,ns_per_event=1462554
+paragraph_normalization_cost,case=unrelated,enabled=false,source_bytes=95011,findings=1000,iterations=10,batch=2,ns_per_event=1453295
+paragraph_normalization_cost,case=unrelated,enabled=false,source_bytes=95011,findings=1000,iterations=10,batch=3,ns_per_event=1450875
+paragraph_normalization_cost,case=unrelated,enabled=false,source_bytes=95011,findings=1000,iterations=10,batch=4,ns_per_event=1438995
+paragraph_normalization_cost,case=unrelated,enabled=true,source_bytes=95011,findings=1000,iterations=10,batch=0,ns_per_event=1487420
+paragraph_normalization_cost,case=unrelated,enabled=true,source_bytes=95011,findings=1000,iterations=10,batch=1,ns_per_event=1453845
+paragraph_normalization_cost,case=unrelated,enabled=true,source_bytes=95011,findings=1000,iterations=10,batch=2,ns_per_event=1373666
+paragraph_normalization_cost,case=unrelated,enabled=true,source_bytes=95011,findings=1000,iterations=10,batch=3,ns_per_event=1503162
+paragraph_normalization_cost,case=unrelated,enabled=true,source_bytes=95011,findings=1000,iterations=10,batch=4,ns_per_event=1453433
+paragraph_normalization_cost,case=cascade,enabled=false,source_bytes=95011,findings=1002,iterations=10,batch=0,ns_per_event=1446370
+paragraph_normalization_cost,case=cascade,enabled=false,source_bytes=95011,findings=1002,iterations=10,batch=1,ns_per_event=1445162
+paragraph_normalization_cost,case=cascade,enabled=false,source_bytes=95011,findings=1002,iterations=10,batch=2,ns_per_event=1453816
+paragraph_normalization_cost,case=cascade,enabled=false,source_bytes=95011,findings=1002,iterations=10,batch=3,ns_per_event=1420545
+paragraph_normalization_cost,case=cascade,enabled=false,source_bytes=95011,findings=1002,iterations=10,batch=4,ns_per_event=1479904
+paragraph_normalization_cost,case=cascade,enabled=true,source_bytes=95011,findings=1002,iterations=10,batch=0,ns_per_event=1804158
+paragraph_normalization_cost,case=cascade,enabled=true,source_bytes=95011,findings=1002,iterations=10,batch=1,ns_per_event=1787050
+paragraph_normalization_cost,case=cascade,enabled=true,source_bytes=95011,findings=1002,iterations=10,batch=2,ns_per_event=1935045
+paragraph_normalization_cost,case=cascade,enabled=true,source_bytes=95011,findings=1002,iterations=10,batch=3,ns_per_event=1943245
+paragraph_normalization_cost,case=cascade,enabled=true,source_bytes=95011,findings=1002,iterations=10,batch=4,ns_per_event=1927608
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 35 filtered out; finished in 0.38s
+

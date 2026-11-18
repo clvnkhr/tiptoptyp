@@ -1,0 +1,270 @@
+{
+  "schema": 1,
+  "kind": "native correctness/diagnostic evidence, not a performance benchmark",
+  "recorded_utc": "2026-11-18T16:48:13.769180+00:00",
+  "outcome": "Unresolved full Tinymist source navigation: valid positive smooth-scroll request reaches the current DOM scroller, but no movement is observed. No additional behavior patch selected.",
+  "run": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q",
+  "coverage_scope": {
+    "diagnostic_only": true,
+    "complete_journey_pass": false,
+    "real_native_input": true,
+    "method": "Owned real Typst fixture supplied on normal application CLI startup; native Full backend selection followed by native source Last target context-menu Reveal in Preview.",
+    "excluded_from_reproduction": [
+      "native file chooser",
+      "wheel input",
+      "partial/full backend transition",
+      "detached preview transition"
+    ],
+    "note": "The first Full control failed before optional transition checks; this is a diagnostic reproduction, not a complete preview_jump pass or Open-panel coverage."
+  },
+  "binary": {
+    "reused_binary": "/private/tmp/ttt-navigation-trace-app",
+    "binary_sha256": "5257c156d9225ae4546d4d332fe0e8565e1488b9f69941c866d801a340c80bd6",
+    "version": "tiptoptyp Dev 0.1.0 (a096fa6e94f6-dirty.1795019778)",
+    "git_head": "a096fa6e94f6de1d3dda6ac136b190bfda75d5d0",
+    "build_profile": "debug",
+    "build_profile_note": "Declared profile of preserved binary; verify against its original build receipt. Current source does not establish this binary's provenance."
+  },
+  "environment": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "native_preflight": {
+      "accessibility": true,
+      "desktop": true,
+      "input": true,
+      "locked": false,
+      "screens": [
+        {
+          "height": 982,
+          "scale": 2,
+          "width": 1512
+        }
+      ],
+      "system_scroll_zoom": true
+    }
+  },
+  "artifacts": [
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q/result.json",
+      "sha256": "fd7a322e1e2528f22c2f8e081370aa87311f70988da69a1e1aede0f2e07c40d3"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q/diagnostic-script.py",
+      "sha256": "8aa748b1373268102197f8489224724186d73783b862d06134ea5905fd4e2a35"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q/navigation-first-observed.json",
+      "sha256": "a57710967963b326c9abb6e42eaa2c291b0d117f852a88c03b2d061b43c19f2d"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q/navigation-last-observed.json",
+      "sha256": "1cf40f58aa97f604ee03c32d6837d3eaa9db85f327a3f8212ea830f495d7b599"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q/failure-final-snapshot.json",
+      "sha256": "1cf40f58aa97f604ee03c32d6837d3eaa9db85f327a3f8212ea830f495d7b599"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q/events.jsonl",
+      "sha256": "901037e744211fccd01fcbc0adbb78790fcaa95fd27daa22f3b14e0873f074fd"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ueq_fj8q/app.log",
+      "sha256": "7115c652936beca56c8516a11f4fbd2de836a8373d458a62729db6448dc37a98"
+    }
+  ],
+  "source_at_diagnostic_freeze": [
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+      "sha256": "e0b70c732ac684c051b5c5351acfb512689a617591e5a1da94ae259ab2021cdf"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-navigation.mjs",
+      "sha256": "21db87ca3fa035e2dd815783072572c81f1595ec426ed6359f54723947ace7df"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/app/native_views.rs",
+      "sha256": "c3689d763ec1529267c287a27c0776788114a7d26614304edd0ee7401cfe66f0"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_zoom_snapshot.js",
+      "sha256": "ca181191e3277f913cb58061e2ff9197176bd96dfe617134feff24ef817b372c"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+      "sha256": "92f1d92e7822be822a054aa29a97b4099439ee907c6676034a5002d572ae2f67"
+    }
+  ],
+  "native_observation": {
+    "backend": "Tinymist",
+    "requested_backend": "Interactive",
+    "partial": false,
+    "loaded": true,
+    "ready": true,
+    "page_count": 3,
+    "populated_pages": 3,
+    "preview_failure": null,
+    "first_age_ms": 41,
+    "received": {
+      "admitted": true,
+      "before": {
+        "anchor": null,
+        "last_ratio": 1,
+        "last_scale": 2.79,
+        "ratio": 1,
+        "scroll": [
+          0,
+          0
+        ],
+        "scroll_extent": [
+          558,
+          830,
+          2029
+        ],
+        "width": 558,
+        "window_size": [
+          558,
+          830
+        ]
+      },
+      "connected": true,
+      "page": 3,
+      "same_document": true,
+      "same_svg": true,
+      "same_window": true,
+      "x": 20,
+      "y": 29.933
+    },
+    "hooks": {
+      "doc": true,
+      "native": true
+    },
+    "doc_scroll_arguments": [
+      205.2949981689453,
+      3,
+      55.8,
+      1442.8552884083072
+    ],
+    "native_scroll_request": {
+      "left": 16.740000000000002,
+      "top": 1125.795288408307,
+      "behavior": "smooth"
+    },
+    "native_scroll_extent": [
+      558,
+      830,
+      2029
+    ],
+    "maximum_vertical_scroll": 1199,
+    "requested_top_is_positive_and_within_extent": true,
+    "first_scroll": [
+      0,
+      0
+    ],
+    "last_scroll": [
+      0,
+      0
+    ],
+    "rescale_calls": 2,
+    "cached_rescale_skips": 1,
+    "rescale_receipts": [
+      {
+        "sequence": 1,
+        "failed": false,
+        "before_scroll": [
+          0,
+          0
+        ],
+        "after_scroll": [
+          0,
+          0
+        ],
+        "before_anchor": null,
+        "after_anchor": null,
+        "before_scale": 2.79,
+        "after_scale": 2.79
+      },
+      {
+        "sequence": 2,
+        "failed": false,
+        "before_scroll": [
+          0,
+          0
+        ],
+        "after_scroll": [
+          0,
+          0
+        ],
+        "before_anchor": null,
+        "after_anchor": null,
+        "before_scale": 2.79,
+        "after_scale": 2.79
+      }
+    ],
+    "retired_reason": "arrival-timeout-or-disconnected",
+    "wait_ms": 20012.000000000004,
+    "last_ready_pre_intent": {
+      "time": 1981470.824819166,
+      "scroll": [
+        0,
+        0
+      ],
+      "zoom_snapshot": {
+        "active": false,
+        "admitting": false,
+        "cache_phase": "fresh",
+        "cached": true,
+        "capture_deferred": false,
+        "captures": 1,
+        "capturing": false,
+        "enabled": true,
+        "failures": 0,
+        "frame_ready": true,
+        "frame_scale": 1,
+        "handoff_pending": false,
+        "handoffs": 0,
+        "hits": 0,
+        "misses": 0,
+        "native_phase": "idle",
+        "pixels": [
+          1322,
+          2950
+        ],
+        "request": null,
+        "warming_phase": "idle"
+      }
+    }
+  },
+  "proven_boundary": [
+    "Expected final-page source coordinates and current connected document/window/SVG ownership reached the adapter; all admission checks passed.",
+    "Both temporary instrumentation hooks installed and captured original document.scrollTo arguments plus actual DOM element.scrollTo({behavior:smooth,top:1125.795288408307,left:16.740000000000002}).",
+    "Target1125.795 is positive and below max1199. The actual element had client size558x830 and scrollHeight2029. No resize anchor existed in received/doc/native snapshots or either recorded rescale.",
+    "First snapshot at41ms had no actual rescale yet and scroll0. Over the external20second wait, two actual rescale receipts remained scroll0 before/after at unchanged scale2.79; one further rescale was skipped by cache.",
+    "The exact lower cause is unresolved. These observations do not prove all DOM setters/style mutations/browser cancellations are absent and do not establish a host or WebKit defect."
+  ],
+  "read_only_source_review": {
+    "scroller_identity": "Pinned original document.scrollTo and adapter renderer inspection both use current doc.hookedElem.parentElement. No separate wrong scroller found in source.",
+    "static_css": "Pinned #typst-container-main has flex:1, overflow:auto, position:relative. Adapter does not add overflow-y or scroll-snap restrictions. Computed style at call was not captured.",
+    "native_owner": "Native zoom inputs/revision remained0 in the diagnostic; no active zoom/resize request was reported.",
+    "limitations": "Visibility/occlusion/computed CSS at the exact call and every potential scroll-position setter are outside these receipts."
+  },
+  "related_evidence": {
+    "partial_repair_and_full_pre_diagnostic_failure": "docs/performance-results/state-machines-preview-source-navigation-2026-11-19.json",
+    "partial_before_run": ".tiptoptyp/desktop-ui-tests/run-8akzf_ka",
+    "partial_repair_native_progress": ".tiptoptyp/desktop-ui-tests/run-ffq56ks1 progressed through partial source/inverse and PDF roundtrip, then failed Full source reveal.",
+    "full_before_diagnostic_run": ".tiptoptyp/desktop-ui-tests/run-ffq56ks1",
+    "separate_component_proof": "Exact pinned resize/scroll methods prove and verify the repaired competing resize-anchor invariant; that proof is separate from this unresolved null-anchor Full case."
+  },
+  "diagnostic_default_and_validation": {
+    "normal_build": "Compiler flag is absent: no diagnostic trace allocation or temporary method overrides; normal production fixture proves this while preserving source navigation behavior.",
+    "desktop_test_build": "Creation-time compiler flag enables pending-explicit-reveal-only receipts; max16 actual rescale records retain first plus latest15. Exact method descriptor/inheritance cleanup preserves this/return/exception and later replacement owner. No new timers, idle work, repaint or I/O.",
+    "controller_tests": "421passed,0failed,0skipped across6pure controller/probe modules",
+    "controller_log": "/private/tmp/ttt-preview-full-navigation-diagnostics/tracked-full-js.log",
+    "controller_log_sha256": "98e16f48788cd3e8339d012143eb026abbe1cb7c8a1f8e1ed2b4908f4ab25162"
+  },
+  "decision": "Retain proven partial resize-anchor fix and bounded desktop-only diagnostics. Do not add retry, timer, instant-scroll workaround, or further behavior change without causal proof.",
+  "limits": [
+    "No speed benchmark or GUI performance claim.",
+    "No visual composition verification claimed.",
+    "A native diagnostic failure is not a passed interaction journey."
+  ]
+}

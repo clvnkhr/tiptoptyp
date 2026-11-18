@@ -1,0 +1,236 @@
+{
+  "format": 1,
+  "date_utc": "2026-11-05T10:57:55Z",
+  "profile": "release",
+  "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "architecture": "arm64",
+  "threads": 4,
+  "probe_sha256": "fda4c7c6763f322d0bdfbfecc892b505a409d940bf2b990fec85e83827bf7327",
+  "implementation": {
+    "backend_sha256": "651fda49067e0671a1973d07341e8c0ce84dbc4f20960a0759e1340749fccdb1",
+    "catalog_sha256": "ccd2ab7bb7b6cd4b70299eb333e132eaa6cea740f4ab6d23af764fc0599e4ddb",
+    "format": 1,
+    "model_id": "lfm3-1.7b-q4-k-m",
+    "request_sha256": "479da5695e5781ac31980b1fe6df9009e35fb67221ace9a52c04c9c062abc59f",
+    "setup_sha256": "bafba8fb8de53d84c8549c17d38fc3e01f294cfcaaed54b1b8c3800d84a74006"
+  },
+  "fixture_sha256": {
+    "scripts/fixtures/diagnostic-fixes.json": "5e79bcd5be488811f149066f0387ce8ec5d05c394f454aef3a4a9cc4b0350be1",
+    "scripts/fixtures/diagnostic-fixes-heldout.json": "6287c81b0dd38687cec614db84b6f790545879439134a4490ea73848929d5dda"
+  },
+  "workload": "Exact production diagnostic requests, local generation and proposal validation. First request includes cached-file SHA checks and model process startup; network downloads excluded. Repeats use the identical first fixture and the same loaded process. No viewport or theme applies to this worker-only probe.",
+  "limitations": "Small authored corpus, not general accuracy. OS filesystem/Metal caches are uncontrolled; no physical Intel measurement. Compiler fixture checks are separate; model proposals are never executed by this runner.",
+  "results": [
+    {
+      "elapsed_ms": 2821.556958,
+      "id": "typst-local-name",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#let count = 3\n#let total = count + 1\nTotal: #total\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#let total = count + 1"
+      },
+      "group": "initial",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 1807.026125,
+      "id": "typst-builtin-name",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#hedging(level: 1)[Introduction]\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#hedging(level: 1)[Introduction]"
+      },
+      "group": "initial",
+      "matched_expected": false
+    },
+    {
+      "elapsed_ms": 2060.443542,
+      "id": "typst-missing-comma",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#rect(width: 30pt, height: 20pt)\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#rect(width: 30pt, height: 20pt)"
+      },
+      "group": "initial",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2610.272417,
+      "id": "typst-color-name",
+      "ok": true,
+      "result": {
+        "corrected": null,
+        "proposal_error": "The suggested replacement introduces a Typst syntax error.",
+        "proposal_valid": false,
+        "replacement": "#define bleu \"...\" #set text(fill: $bleu)"
+      },
+      "group": "initial",
+      "matched_expected": false
+    },
+    {
+      "elapsed_ms": 2387.974375,
+      "id": "tex-section-name",
+      "ok": true,
+      "result": {
+        "corrected": "\\documentclass{article}\n\\begin{document}\n% outside before\n\\section{Introduction}\nUnchanged afterward.\n\\end{document}\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "\\section{Introduction}"
+      },
+      "group": "initial",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2412.169583,
+      "id": "tex-textbf-name",
+      "ok": true,
+      "result": {
+        "corrected": "\\documentclass{article}\n\\begin{document}\n% outside before\n\\textbf{Important}\nUnchanged afterward.\n\\end{document}\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "\\textbf{Important}"
+      },
+      "group": "initial",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2347.334708,
+      "id": "typst-ambiguous-name",
+      "ok": true,
+      "result": {
+        "corrected": null,
+        "proposal_error": "No change suggested.",
+        "proposal_valid": false,
+        "replacement": "The value is #missing_value."
+      },
+      "group": "initial",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2408.801625,
+      "id": "heldout-typst-local-radius",
+      "ok": true,
+      "result": {
+        "corrected": "// untouched before\n#let radius = 14pt\n#circle(radius: raduis = 14pt)\n// untouched after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#circle(radius: raduis = 14pt)"
+      },
+      "group": "heldout",
+      "matched_expected": false
+    },
+    {
+      "elapsed_ms": 2358.015708,
+      "id": "heldout-typst-ellipse-comma",
+      "ok": true,
+      "result": {
+        "corrected": "// untouched before\n#ellipse(width: 24pt, height: 12pt)\n// untouched after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#ellipse(width: 24pt, height: 12pt)"
+      },
+      "group": "heldout",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2390.360458,
+      "id": "heldout-tex-fraction-name",
+      "ok": true,
+      "result": {
+        "corrected": "\\documentclass{article}\n\\begin{document}\n% untouched before\n$\\frac{1}{2}$\n% untouched after\n\\end{document}\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "$\\frac{1}{2}$"
+      },
+      "group": "heldout",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2394.2413340000003,
+      "id": "repeat-0",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#let count = 3\n#let total = count + 1\nTotal: #total\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#let total = count + 1"
+      },
+      "group": "repeat",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2405.413792,
+      "id": "repeat-1",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#let count = 3\n#let total = count + 1\nTotal: #total\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#let total = count + 1"
+      },
+      "group": "repeat",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2364.976167,
+      "id": "repeat-2",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#let count = 3\n#let total = count + 1\nTotal: #total\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#let total = count + 1"
+      },
+      "group": "repeat",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2423.405417,
+      "id": "repeat-3",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#let count = 3\n#let total = count + 1\nTotal: #total\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#let total = count + 1"
+      },
+      "group": "repeat",
+      "matched_expected": true
+    },
+    {
+      "elapsed_ms": 2386.008084,
+      "id": "repeat-4",
+      "ok": true,
+      "result": {
+        "corrected": "// outside before\n#let count = 3\n#let total = count + 1\nTotal: #total\n// outside after\n",
+        "proposal_error": null,
+        "proposal_valid": true,
+        "replacement": "#let total = count + 1"
+      },
+      "group": "repeat",
+      "matched_expected": true
+    }
+  ],
+  "summary": {
+    "initial": {
+      "matched": 5,
+      "total": 7
+    },
+    "heldout": {
+      "matched": 2,
+      "total": 3
+    },
+    "cold_first_ms": 2821.556958,
+    "warm_identical_median_ms": 2394.2413340000003,
+    "warm_identical_min_ms": 2364.976167,
+    "warm_identical_max_ms": 2423.405417
+  },
+  "hardware": "Apple M2 Max",
+  "runtime_device_policy": "llama.cpp defaults; no forced CPU/GPU offload policy. Effective offloaded layer count was not measured."
+}

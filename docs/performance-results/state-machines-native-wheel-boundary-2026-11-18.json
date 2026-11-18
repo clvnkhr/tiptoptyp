@@ -1,0 +1,257 @@
+{
+  "kind": "read-only native input delivery boundary review; not a fix or performance benchmark",
+  "created_utc": "2026-11-18T16:09:12.523744+00:00",
+  "run": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-3fh9adi1",
+  "evidence": [
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-3fh9adi1/native-wheel-posts.json",
+      "sha256": "39055b4323607b38c32f0dd91cd852b9c96adab3dab218073c20295bd0f5286e"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-3fh9adi1/wheel-receipts.json",
+      "sha256": "ceac9a5ce87f3df5187c715a3532e005baeb0cf9d791671813d4599869d08d2c"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-3fh9adi1/app.log",
+      "sha256": "94640b5b533307284fe581b3e7704f87dfe6cebf92b815373186f10d52935aab"
+    }
+  ],
+  "current_sources_at_review": [
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/desktop-ui-driver.swift",
+      "sha256": "9080c16c07fb7bde706f53b3cee4f251b9add52a78e15efee03c54c40aee0876"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/vendor/eframe/src/native/glow_integration.rs",
+      "sha256": "dfc429315f82ff54977420e24ef3b05c92807467ac409380e8e8ede9c7b8d49a"
+    },
+    {
+      "path": "/Users/calvinkhor/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/macos/view.rs",
+      "sha256": "de63351d7a757d58883600c3f1702fc369cb77b2ae323a4efca7cb520e9da90e"
+    },
+    {
+      "path": "/Users/calvinkhor/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/macos/app.rs",
+      "sha256": "14ba9f49d955a906a115c34fd12fdbbda13ac9b75740606e9fe0daeffa903c5b"
+    },
+    {
+      "path": "/Users/calvinkhor/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winit-0.30.13/src/platform_impl/macos/app_state.rs",
+      "sha256": "cb346eda09cfb7ddb4941fead441e3242eec0c64639a621e7f3116702531b7a4"
+    }
+  ],
+  "wheel_observations": [
+    {
+      "ordinal": 1,
+      "driver_return_monotonic": 1978772.8059615,
+      "driver_fields": {
+        "continuous": 0,
+        "delta_lines": [
+          0,
+          -8
+        ],
+        "delta_points": [
+          0,
+          -80
+        ],
+        "flags": 536870912,
+        "foreground_pid": 344,
+        "momentum_phase": 0,
+        "point": [
+          636,
+          337.75
+        ],
+        "posted_to": "cghidEventTap",
+        "scroll_phase": 0,
+        "source_pid": 3077,
+        "source_state": 1,
+        "timestamp": 0,
+        "unix": 1795017551.636671,
+        "uptime": 1978772.7911149168,
+        "window_can_handle": 0,
+        "window_under_pointer": 0
+      },
+      "exit": 0,
+      "driver_return_minus_prepost_uptime_ms": 14.846583129838109,
+      "native_log_line": 8571,
+      "native_trace": "ui.native.event_route sequence=226 elapsed=99.179392 unix=1795017551.668365 incoming=WindowId(5016972528) mapped=Some(\"E3B7\") current=Some(WindowId(5016972528)) matches=Some(true) event=MouseWheel { device_id: DeviceId(DeviceId), delta: LineDelta(0.0, -8.0), phase: Moved }",
+      "native_minus_prepost_wall_ms": 31.69393539428711,
+      "native_after_driver_return_estimated_ms": 16.847352264449
+    },
+    {
+      "ordinal": 2,
+      "driver_return_monotonic": 1978784.78076225,
+      "driver_fields": {
+        "continuous": 0,
+        "delta_lines": [
+          0,
+          -8
+        ],
+        "delta_points": [
+          0,
+          -80
+        ],
+        "flags": 536870912,
+        "foreground_pid": 344,
+        "momentum_phase": 0,
+        "point": [
+          636,
+          337.75
+        ],
+        "posted_to": "cghidEventTap",
+        "scroll_phase": 0,
+        "source_pid": 3270,
+        "source_state": 1,
+        "timestamp": 0,
+        "unix": 1795017563.611464,
+        "uptime": 1978784.7657029585,
+        "window_can_handle": 0,
+        "window_under_pointer": 0
+      },
+      "exit": 0,
+      "driver_return_minus_prepost_uptime_ms": 15.059291617944837,
+      "native_log_line": 9645,
+      "native_trace": "ui.native.event_route sequence=241 elapsed=111.158953 unix=1795017563.648132 incoming=WindowId(5016964768) mapped=Some(\"E3B7\") current=Some(WindowId(5016964768)) matches=Some(true) event=MouseWheel { device_id: DeviceId(DeviceId), delta: LineDelta(0.0, -8.0), phase: Moved }",
+      "native_minus_prepost_wall_ms": 36.66806221008301,
+      "native_after_driver_return_estimated_ms": 21.60877059213817
+    },
+    {
+      "ordinal": 3,
+      "driver_return_monotonic": 1978801.497553708,
+      "driver_fields": {
+        "continuous": 0,
+        "delta_lines": [
+          0,
+          -8
+        ],
+        "delta_points": [
+          0,
+          -80
+        ],
+        "flags": 536870912,
+        "foreground_pid": 344,
+        "momentum_phase": 0,
+        "point": [
+          636,
+          346.828125
+        ],
+        "posted_to": "cghidEventTap",
+        "scroll_phase": 0,
+        "source_pid": 3713,
+        "source_state": 1,
+        "timestamp": 0,
+        "unix": 1795017580.329284,
+        "uptime": 1978801.48323725,
+        "window_can_handle": 0,
+        "window_under_pointer": 0
+      },
+      "exit": 0,
+      "driver_return_minus_prepost_uptime_ms": 14.316458022221923,
+      "native_trace": null
+    }
+  ],
+  "fresh_receipt_summaries": [
+    {
+      "stage": "before",
+      "language": "typst",
+      "disposition": "cancel",
+      "time": 1978772.620243625,
+      "viewport": "\"E3B7\"",
+      "grid_frame": 432,
+      "grid_offset": 0.0,
+      "raw_sequence": null,
+      "raw_time": null,
+      "raw_context": null
+    },
+    {
+      "stage": "after",
+      "language": "typst",
+      "disposition": "cancel",
+      "time": 1978772.925963583,
+      "viewport": "\"E3B7\"",
+      "grid_frame": 446,
+      "grid_offset": 276.58831787109375,
+      "raw_sequence": 1,
+      "raw_time": 99.801295917,
+      "raw_context": 1
+    },
+    {
+      "stage": "before",
+      "language": "typst",
+      "disposition": "apply",
+      "time": 1978784.585986541,
+      "viewport": "\"E3B7\"",
+      "grid_frame": 428,
+      "grid_offset": 0.0,
+      "raw_sequence": 1,
+      "raw_time": 99.801295917,
+      "raw_context": 1
+    },
+    {
+      "stage": "after",
+      "language": "typst",
+      "disposition": "apply",
+      "time": 1978784.920643583,
+      "viewport": "\"E3B7\"",
+      "grid_frame": 440,
+      "grid_offset": 263.8584899902344,
+      "raw_sequence": 2,
+      "raw_time": 111.780675917,
+      "raw_context": 1
+    },
+    {
+      "stage": "before",
+      "language": "tex",
+      "disposition": "cancel",
+      "time": 1978801.317228916,
+      "viewport": "\"E3B7\"",
+      "grid_frame": 434,
+      "grid_offset": 0.0,
+      "raw_sequence": 2,
+      "raw_time": 111.780675917,
+      "raw_context": 1
+    },
+    {
+      "stage": "timeout",
+      "language": "tex",
+      "disposition": "cancel",
+      "time": 1978805.53611825,
+      "viewport": "\"E3B7\"",
+      "grid_frame": 597,
+      "grid_offset": 0.0,
+      "raw_sequence": 2,
+      "raw_time": 111.780675917,
+      "raw_context": 1
+    }
+  ],
+  "native_route_summary": {
+    "total": 258,
+    "wheel": 2,
+    "lifecycle": 256,
+    "last_route": {
+      "app_log_line": 10147,
+      "trace": "ui.native.event_route sequence=258 elapsed=118.418104 unix=1795017570.907406 incoming=WindowId(5302814864) mapped=Some(\"FFFF\") current=Some(WindowId(5302814864)) matches=Some(true) event=CursorLeft { device_id: DeviceId(DeviceId) }"
+    },
+    "cap_caveat": "The 256 lifecycle receipts were exhausted before the failed TeX wheel. No conclusion may be drawn from absent later Focused/CursorLeft/Destroyed logs. Wheels have an independent cap of512, with only2 used, so absence of a third native MouseWheel is meaningful."
+  },
+  "proven_boundary": [
+    "Both Typst wheels reached the native boundary with matching incoming/current E3B7 WindowId and produced fresh raw sequences1 and2, then table offsets changed.",
+    "The configured TeX wheel was posted with foreground PID344, but no third native MouseWheel was logged and no fresh raw sequence/time appeared during the timeout; the TeX grid offset remained0.",
+    "The trace does not establish whether the failed wheel reached NSApplication, which NSWindow/NSView AppKit selected, or whether it was discarded before Winit callback. It therefore isolates failure upstream of the observed native window-event boundary, not a precise OS/AppKit cause.",
+    "All3 configured events share flags536870912, scroll/momentum phases0, timestamp0, source_state1, and window metadata0. Those fields do not distinguish the failure.",
+    "Successful native arrivals occurred after the driver subprocess had already returned/reaped (~17/22ms estimated). A requirement that the posting process remain alive is contradicted by these controls; immediate exit is not a demonstrated cause."
+  ],
+  "source_analysis": [
+    "Driver posts globally to cghidEventTap; its foreground PID guard does not target a native window. posted stdout and exit0 acknowledge emission only. CGEventPost returns void, and SDK documentation describes stream insertion before taps, not delivery acknowledgment.",
+    "Winit NSApplication sendEvent override special-cases only Command KeyUp and forwards scroll events to the original implementation.",
+    "Winit NSView scrollWheel calls mouse_motion then unconditionally queues MouseWheel. mouse_motion outside-bounds return is confined to that helper and cannot itself suppress subsequent scroll-wheel queueing. Phase0 maps to Moved.",
+    "Winit maybe_queue_event dispatches immediately or queues a run-loop closure on reentrancy. No focus/viewport wheel filter is present before the observed eframe entry. Live subsequent inspection frames exclude a globally stopped event loop, but no instrumentation proves whether this particular wheel reached that queue."
+  ],
+  "reliable_test_contract": [
+    "Separate configured input emission from fresh native delivery and fresh egui consumption. A table-scroll result is interpretable only after a new native receipt tied to the current window incarnation and a new raw sequence/time for this post.",
+    "A single globally posted event with no delivery acknowledgment must remain an unavailable/failed input check, not evidence that a TextEdit consumed or blocked scrolling. No automatic retry or alternate event route was added."
+  ],
+  "limits": [
+    "No GUI input, app launch, Cargo, source edit, or product fix was performed for this review.",
+    "No compositor or visual correctness claim.",
+    "No proven upstream cause; source lifetime, flags, phases, pointer targeting and AppKit routing remain hypotheses unless separately isolated."
+  ]
+}

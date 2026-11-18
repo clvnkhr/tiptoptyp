@@ -1,0 +1,140 @@
+{
+  "scope": "Editor delimiter glyph coordinate component and paint-shape correctness; not app latency, idle or composed native geometry",
+  "created_utc": "2026-11-18T12:34:03.055240+00:00",
+  "host": {
+    "platform": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)"
+  },
+  "fixture": {
+    "source": "\\begin{align} followed by20000 x+y lines and \\end{align}",
+    "bytes": 120025,
+    "rows": 20002,
+    "font": "egui default monospace16",
+    "wrap": "none"
+  },
+  "workload": {
+    "warmup_pair_queries_per_condition": 5,
+    "batches": 5,
+    "pair_queries_per_batch": 100,
+    "index_construction": "outside timed region; production reuses existing per-galley CursorIndex",
+    "conditions": "same real galley, old exact delimiter_rects vs current indexed delimiter_rects; identical rectangles asserted"
+  },
+  "build": {
+    "command": "/opt/homebrew/bin/rustc --edition=2024 --test -C opt-level=3 /private/tmp/ttt-bracket-coordinates.rs --extern eframe=target/debug/deps/libeframe-50564616d159ea8a.rlib -L dependency=target/debug/deps -o /private/tmp/ttt-bracket-coordinates",
+    "dependencies": "same existing optimized-dev rlibs for both conditions",
+    "run": "/private/tmp/ttt-bracket-coordinates cached_endpoint_coordinates_match_and_stay_bounded --exact --nocapture",
+    "harness_sha256": "3f59719173dda15833e7cdda9ef01460826b9854cac960d2e88e0e758f6ff17f",
+    "production_sha256": {
+      "src/app/editor_view.rs": "868d93526be529acac1b7eafb274111221190ef09f0fbe93c7fc9ce2e9707895",
+      "src/app/editor_layout.rs": "662eba1de99381103ba7a1616f55d089acbbcad3a5ea15a23193a1b255317684"
+    }
+  },
+  "samples": [
+    {
+      "indexed": false,
+      "batch": 0,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 29774208,
+      "ns_per_pair": 297742.08
+    },
+    {
+      "indexed": false,
+      "batch": 1,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 27049000,
+      "ns_per_pair": 270490.0
+    },
+    {
+      "indexed": false,
+      "batch": 2,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 26790208,
+      "ns_per_pair": 267902.08
+    },
+    {
+      "indexed": false,
+      "batch": 3,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 27348000,
+      "ns_per_pair": 273480.0
+    },
+    {
+      "indexed": false,
+      "batch": 4,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 27322292,
+      "ns_per_pair": 273222.92
+    },
+    {
+      "indexed": true,
+      "batch": 0,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 99625,
+      "ns_per_pair": 996.25
+    },
+    {
+      "indexed": true,
+      "batch": 1,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 91833,
+      "ns_per_pair": 918.33
+    },
+    {
+      "indexed": true,
+      "batch": 2,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 91750,
+      "ns_per_pair": 917.5
+    },
+    {
+      "indexed": true,
+      "batch": 3,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 91791,
+      "ns_per_pair": 917.91
+    },
+    {
+      "indexed": true,
+      "batch": 4,
+      "pair_queries": 100,
+      "galley_rows": 20002,
+      "source_bytes": 120025,
+      "elapsed_ns": 91667,
+      "ns_per_pair": 916.67
+    }
+  ],
+  "median_ns_per_pair": {
+    "False": 273222.92,
+    "True": 917.91
+  },
+  "style_regression": {
+    "before": "actual paint block:2 fills+2 outlines; expected0 outlines FAILED",
+    "after": "actual paint block and indexed geometry:2 fills+0 outlines PASSED",
+    "before_log": "/private/tmp/ttt-bracket-style-before.log",
+    "after_log": "/private/tmp/ttt-bracket-coordinates-style.log"
+  },
+  "caveats": [
+    "Component timing includes endpoint rectangle allocations, excludes galley/index construction and rendering.",
+    "No cross-platform or whole-app performance guarantee.",
+    "New scalar/byte/environment queries measured separately by delimiter-index evidence."
+  ]
+}

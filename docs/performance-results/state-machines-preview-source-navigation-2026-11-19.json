@@ -1,0 +1,574 @@
+{
+  "schema": 1,
+  "kind": "correctness evidence, not a speed benchmark",
+  "recorded_utc": "2026-11-18T16:18:25.053520+00:00",
+  "environment": {
+    "os": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+    "node": "v25.0.0",
+    "workspace": "/Users/calvinkhor/Documents/GitHub/mytypst"
+  },
+  "problem": "A pinned SVG resize anchor may survive into source navigation; its subsequent unchanged-scale rescale writes scrollTop and cancels a pending smooth jump.",
+  "native_before": {
+    "run": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-8akzf_ka",
+    "snapshot": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-8akzf_ka/failure-final-snapshot.json",
+    "observed_transitions": [
+      {
+        "time": 1979339.45163675,
+        "caret": [
+          0,
+          0
+        ],
+        "page": 2,
+        "scroll": null,
+        "loaded": null,
+        "ready": null,
+        "pages": null,
+        "populated": null,
+        "reveal": {}
+      },
+      {
+        "time": 1979339.987342125,
+        "caret": [
+          0,
+          0
+        ],
+        "page": 0,
+        "scroll": [
+          0,
+          0
+        ],
+        "loaded": true,
+        "ready": true,
+        "pages": 3,
+        "populated": 3,
+        "reveal": {
+          "active": false,
+          "center": null,
+          "debug": {
+            "explicit": 0,
+            "intent_age_ms": null,
+            "intents": 0,
+            "location_age_ms": null,
+            "locations": 0,
+            "retired": null
+          },
+          "elapsed_ms": 0,
+          "options": {
+            "duration_ms": 900,
+            "enabled": true,
+            "size_percent": 100,
+            "style": "Rings"
+          },
+          "page": null,
+          "pending": false,
+          "phase": "idle",
+          "viewport": [
+            0,
+            0,
+            558,
+            830
+          ]
+        }
+      },
+      {
+        "time": 1979342.975191666,
+        "caret": [
+          0,
+          0
+        ],
+        "page": 0,
+        "scroll": null,
+        "loaded": true,
+        "ready": false,
+        "pages": null,
+        "populated": null,
+        "reveal": {}
+      },
+      {
+        "time": 1979343.177048458,
+        "caret": [
+          0,
+          0
+        ],
+        "page": 0,
+        "scroll": [
+          0,
+          0
+        ],
+        "loaded": true,
+        "ready": true,
+        "pages": 3,
+        "populated": 3,
+        "reveal": {
+          "active": false,
+          "center": null,
+          "debug": {
+            "explicit": 0,
+            "intent_age_ms": null,
+            "intents": 0,
+            "location_age_ms": null,
+            "locations": 0,
+            "retired": null
+          },
+          "elapsed_ms": 0,
+          "options": {
+            "duration_ms": 900,
+            "enabled": true,
+            "size_percent": 100,
+            "style": "Rings"
+          },
+          "page": null,
+          "pending": false,
+          "phase": "idle",
+          "viewport": [
+            0,
+            0,
+            558,
+            830
+          ]
+        }
+      },
+      {
+        "time": 1979348.827218916,
+        "caret": [
+          156,
+          156
+        ],
+        "page": 0,
+        "scroll": [
+          0,
+          0
+        ],
+        "loaded": true,
+        "ready": true,
+        "pages": 3,
+        "populated": 3,
+        "reveal": {
+          "active": true,
+          "center": null,
+          "debug": {
+            "explicit": 1,
+            "intent_age_ms": 32,
+            "intents": 1,
+            "location_age_ms": 31.00000000000091,
+            "locations": 1,
+            "retired": null
+          },
+          "elapsed_ms": 32,
+          "options": {
+            "duration_ms": 900,
+            "enabled": true,
+            "size_percent": 100,
+            "style": "Rings"
+          },
+          "page": 2,
+          "pending": true,
+          "phase": "awaiting-visibility",
+          "viewport": [
+            0,
+            0,
+            558,
+            830
+          ]
+        }
+      },
+      {
+        "time": 1979351.813142875,
+        "caret": [
+          156,
+          156
+        ],
+        "page": 0,
+        "scroll": [
+          0,
+          0
+        ],
+        "loaded": true,
+        "ready": true,
+        "pages": 3,
+        "populated": 3,
+        "reveal": {
+          "active": false,
+          "center": null,
+          "debug": {
+            "explicit": 1,
+            "intent_age_ms": 3069.999999999999,
+            "intents": 1,
+            "location_age_ms": 3069,
+            "locations": 1,
+            "retired": "arrival-timeout-or-disconnected"
+          },
+          "elapsed_ms": 0,
+          "options": {
+            "duration_ms": 900,
+            "enabled": true,
+            "size_percent": 100,
+            "style": "Rings"
+          },
+          "page": null,
+          "pending": false,
+          "phase": "idle",
+          "viewport": [
+            0,
+            0,
+            558,
+            830
+          ]
+        }
+      }
+    ],
+    "interpretation": "Correct final-page location2 reached JS. Scroll remained0. The cue expired at3seconds; Python waited20seconds. This is partial preview with3loaded/ready/populated pages and fresh snapshot cache, not the known full-renderer readiness limitation. Native receipts do not directly expose the retained resize anchor, so the exact native cause remains subject to focused after native verification."
+  },
+  "proven_component_invariant": {
+    "production_method_provenance": "Exact rescale$svg and scrollTo methods extracted read-only from the pinned Tinymist binary; same actual adapter/partial-scheduler fixture and legal retained-anchor state in each run.",
+    "before_refactor_control": "Frozen pre-state-machine adapter also cancels the smooth target; therefore this ownership conflict predates the phase refactor.",
+    "before": "smoothTarget=null,1scrollTop assignment,anchorRetained=true,scrollTop0",
+    "after": "smoothTarget1385.4,0scrollTop assignments,anchorRetained=false,scrollTop0; frontend remains responsible for actual movement.",
+    "temporary_harness": "/private/tmp/ttt-preview-jump-anchor-review/review.mjs",
+    "extracted_methods": [
+      {
+        "path": "/private/tmp/ttt-preview-jump-anchor-review/pinned-rescale-method.js",
+        "sha256": "217adbee4559e75eaa0a0ad250c8a4e46075ca6cd6b6499ac97574909dd96c6a"
+      },
+      {
+        "path": "/private/tmp/ttt-preview-jump-anchor-review/pinned-scroll-method.js",
+        "sha256": "810d4b60f2b9d0d0810599593efe51a19a5aed0491c0587fea3fc7d5c500e1e4"
+      }
+    ]
+  },
+  "change": {
+    "files": [
+      "src/preview_navigation.js",
+      "scripts/test-preview-navigation.mjs"
+    ],
+    "authority": "A finite, in-range page location belongs to the current connected SVG/current unambiguous renderer and its window. Admission retires that document resize anchor before forwarding to original frontend navigation. Stale, foreign, disconnected and invalid locations do not revoke another owner.",
+    "behavior": "Original handler, smooth scroll, partial geometry, queue scheduling and error propagation preserved. Rule applies with beacon on/off and explicit/automatic follow.",
+    "cost": "One bounded current-owner/page check on a location event, usually cached node indexing; existing full SVG fallback examines page children only on that location event. No new animation frame, repaint, idle work, timer or I/O. No performance claim."
+  },
+  "maintained_tests": {
+    "before": {
+      "pass": 1,
+      "fail": 8
+    },
+    "after": {
+      "pass": 9,
+      "fail": 0
+    },
+    "coverage": [
+      "full/partial",
+      "explicit/automatic",
+      "beacon on/off",
+      "anchor retired before original handler",
+      "cursor diff preserves pending smooth target",
+      "invalid page0/99 or nonfinite point",
+      "foreign/stale SVG",
+      "disconnected SVG",
+      "retired document",
+      "original handler forwarding"
+    ]
+  },
+  "commands": [
+    {
+      "command": "node --test --test-name-pattern='source location retires a resize anchor|invalid, foreign and retired source locations' scripts/test-preview-navigation.mjs",
+      "before": "maintained-before.log",
+      "after": "maintained-after.log"
+    },
+    {
+      "command": "node --test scripts/test-preview-navigation.mjs",
+      "after": "navigation-full-after.log"
+    },
+    {
+      "command": "node --test scripts/test-preview-zoom-snapshot.mjs",
+      "after": "zoom-full-after.log"
+    },
+    {
+      "command": "node --test scripts/test-preview-snapshot-buffer.mjs scripts/test-preview-native-probe.mjs",
+      "after": "remaining-js-after.log"
+    },
+    {
+      "command": "node --test --test-name-pattern='REVIEW actual' /private/tmp/ttt-preview-jump-anchor-review/review.mjs",
+      "before": "current.log",
+      "pre_refactor_control": "before.log",
+      "after": "pinned-after.log",
+      "setup": "Copy the desired recorded adapter source into /private/tmp/ttt-preview-jump-anchor-review/navigation.js; review.mjs loads it and the exact extracted pinned methods."
+    },
+    {
+      "command": "git diff --check -- src/preview_navigation.js scripts/test-preview-navigation.mjs",
+      "result": "passed"
+    },
+    {
+      "command": "node --test scripts/test-preview-navigation.mjs scripts/test-preview-zoom-snapshot.mjs scripts/test-preview-snapshot-buffer.mjs scripts/test-preview-native-probe.mjs scripts/test-desktop-preview-probe.mjs scripts/test_overleaf_bridge.cjs",
+      "after": "/private/tmp/ttt-preview-jump-anchor-review/browser-controllers-full-after.log",
+      "result": {
+        "tests": 416,
+        "pass": 416,
+        "fail": 0
+      }
+    }
+  ],
+  "source_before": [
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+      "sha256": "57a430c717047ffbb5d2916db642a22a6ca7623d5aae8ab184263b32809e6355"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_zoom_snapshot.js",
+      "sha256": "ca181191e3277f913cb58061e2ff9197176bd96dfe617134feff24ef817b372c"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+      "sha256": "92f1d92e7822be822a054aa29a97b4099439ee907c6676034a5002d572ae2f67"
+    },
+    {
+      "path": "/private/tmp/ttt-state-preview-before/src/preview_navigation.js",
+      "sha256": "d4ee13608abd4dad1fdf0217d0c830fa2cf499a1ee732b8f94489ba2b45d0611"
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/review.mjs",
+      "sha256": "94ea934332d209b50d082bc756a9b109659b3ca64cf14471839fb0b78de50072"
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/pinned-rescale-method.js",
+      "sha256": "217adbee4559e75eaa0a0ad250c8a4e46075ca6cd6b6499ac97574909dd96c6a"
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/pinned-scroll-method.js",
+      "sha256": "810d4b60f2b9d0d0810599593efe51a19a5aed0491c0587fea3fc7d5c500e1e4"
+    }
+  ],
+  "source_after": [
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+      "sha256": "e74f5ae3041d69c89ed855952b1b85b43f5c180c4785f011b393188c74cd8d2c"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-navigation.mjs",
+      "sha256": "70eaab964dc5efd3fad1930577e34b8eef01c6bd309afdf5b51e923f826831da"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_zoom_snapshot.js",
+      "sha256": "ca181191e3277f913cb58061e2ff9197176bd96dfe617134feff24ef817b372c"
+    },
+    {
+      "path": "/Users/calvinkhor/Documents/GitHub/mytypst/toolchain/bin/tinymist-aarch64-apple-darwin",
+      "sha256": "92f1d92e7822be822a054aa29a97b4099439ee907c6676034a5002d572ae2f67"
+    }
+  ],
+  "logs": [
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/maintained-before.log",
+      "sha256": "0e96ac214432c94aa81dedaa0673a9aa636f789818443226f23315901f8b3cdb",
+      "counts": {
+        "tests": 9,
+        "pass": 1,
+        "fail": 8
+      },
+      "result_receipt": null
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/maintained-after.log",
+      "sha256": "a9dac29472e2220c20748a3597f314ba07ec0d2b44c16793138d51d138826dcf",
+      "counts": {
+        "tests": 9,
+        "pass": 9,
+        "fail": 0
+      },
+      "result_receipt": null
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/navigation-full-after.log",
+      "sha256": "118c4de9d945aebdbbda75abc3701b4a75d5323993315857e6c2617f9c1b65da",
+      "counts": {
+        "tests": 171,
+        "pass": 171,
+        "fail": 0
+      },
+      "result_receipt": null
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/zoom-full-after.log",
+      "sha256": "ce500902beed78418c6817f81d4b079f0ded8bf3b47119db12a4df2ae9a9ddba",
+      "counts": {
+        "tests": 67,
+        "pass": 67,
+        "fail": 0
+      },
+      "result_receipt": null
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/remaining-js-after.log",
+      "sha256": "1a2eee72f80a4b97ed45dbb63651929145dfb791ad100c5d2883d62fc01667a7",
+      "counts": {
+        "tests": 17,
+        "pass": 17,
+        "fail": 0
+      },
+      "result_receipt": null
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/pinned-after.log",
+      "sha256": "dd94ddc8b292614b505a4e7048f988afec599acf08a1074d5f91ea113a770a28",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0
+      },
+      "result_receipt": "REVIEW_RESULT {\"smoothTarget\":1385.4,\"assignments\":0,\"anchorRetained\":false,\"scrollTop\":0}"
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/current.log",
+      "sha256": "d295fd8f530c3541e2d9b0b8fd190ef0b4ec0d6281afdcf8d6f43a8b2c76a6ab",
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1
+      },
+      "result_receipt": "REVIEW_RESULT {\"smoothTarget\":null,\"assignments\":1,\"anchorRetained\":true,\"scrollTop\":0}"
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/before.log",
+      "sha256": "84993aee4ba1b20150972a0f426cbc47c0a9a9aedb13accc8c14f7c33263244a",
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1
+      },
+      "result_receipt": "REVIEW_RESULT {\"smoothTarget\":null,\"assignments\":1,\"anchorRetained\":true,\"scrollTop\":0}"
+    },
+    {
+      "path": "/private/tmp/ttt-preview-jump-anchor-review/browser-controllers-full-after.log",
+      "sha256": "99886701f8cf614b9df17f26493dc7b72f7ddf330f6cd2cfac4b37b940c580ed",
+      "counts": {
+        "tests": 416,
+        "pass": 416,
+        "fail": 0
+      }
+    }
+  ],
+  "native_after": {
+    "status": "partial source/inverse and PDF roundtrip passed; whole preview_jump remains failed at subsequent full Tinymist source jump",
+    "run": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ffq56ks1",
+    "snapshot": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/desktop-ui-tests/run-ffq56ks1/failure-final-snapshot.json",
+    "snapshot_sha256": "ab22167eab72953bfb01e2b081db6b01bbadfc2cb0abe68e0d563be1fd2b5506",
+    "full_observation": {
+      "backend": "Tinymist",
+      "partial": false,
+      "loaded": true,
+      "ready": true,
+      "pages": 3,
+      "populated": 3,
+      "scroll": [
+        0,
+        0
+      ],
+      "reveal": {
+        "active": false,
+        "center": null,
+        "debug": {
+          "explicit": 1,
+          "intent_age_ms": 19990,
+          "intents": 1,
+          "location_age_ms": 19989,
+          "locations": 1,
+          "retired": "arrival-timeout-or-disconnected"
+        },
+        "elapsed_ms": 0,
+        "options": {
+          "duration_ms": 900,
+          "enabled": true,
+          "size_percent": 100,
+          "style": "Rings"
+        },
+        "page": null,
+        "pending": false,
+        "phase": "idle",
+        "viewport": [
+          0,
+          0,
+          558,
+          830
+        ]
+      },
+      "zoom_snapshot": {
+        "active": false,
+        "admitting": false,
+        "cache_phase": "fresh",
+        "cached": true,
+        "capture_deferred": false,
+        "captures": 2,
+        "capturing": false,
+        "enabled": true,
+        "failures": 0,
+        "frame_ready": true,
+        "frame_scale": 1,
+        "handoff_pending": false,
+        "handoffs": 0,
+        "hits": 0,
+        "misses": 0,
+        "native_phase": "idle",
+        "pixels": [
+          1322,
+          2950
+        ],
+        "request": null,
+        "warming_phase": "idle"
+      }
+    },
+    "classification": "Current full source location reaches correct page2 but viewport does not move. Cache/frame are ready before request; the known full idle cache limitation does not explain this failure. Full exact pinned-method controller replay passes, so no further behavior fix selected. A bounded diagnostic-only source proposal is being tested in scratch; tracked source remains frozen until parent gate completes.",
+    "full_component_replay": {
+      "harness": "/private/tmp/ttt-preview-jump-anchor-review/review-full.mjs",
+      "log": "/private/tmp/ttt-preview-jump-anchor-review/pinned-full-after.log",
+      "result": "1passed, pending smooth target1385.4,0scrollTop writes,anchorfalse"
+    }
+  },
+  "limits": [
+    "No speed benchmark, GUI timing or visual correctness claim.",
+    "No GUI input or app launch during this component work.",
+    "No claim that deterministic tests substitute for the required affected native journey."
+  ],
+  "edge_probe": {
+    "status": "not rerun for this narrow location-admission change",
+    "prior_evidence_log": "/private/tmp/ttt-state-edges-js-final.log",
+    "prior_result": "24 real pinned Tinymist full/partial edge cases passed before this source revision",
+    "source_version_caveat": "Earlier geometry evidence does not validate the current source-admission revision. The current change leaves zoom geometry/scheduling unchanged; current416purecontroller cases and exact pinned-method regression pass. No dependency download performed."
+  },
+  "diagnostic_followup": {
+    "kind": "bounded observation only, no further navigation behavior change",
+    "flag": "TIPTOPTYP_NAVIGATION_DIAGNOSTICS is compiler-injected in the same initialization script only with desktop-ui-tests; creation-time captured, no normal-build flag/header/trace allocation or method wrappers.",
+    "receipts": "Latest received point/current document/window/SVG eligibility; whether temporary hooks installed; actual original document.scrollTo arguments and native element.scrollTo requested target/behavior; first plus latest15 pending actual-rescale before/after scroll/anchor/scale/dimensions, max16 receipts with sequence. No source payload.",
+    "cleanup": "Temporary scroll methods wrap only synchronous admitted pending explicit location calls; exact original own descriptor or inheritance restored in finally on return/exception. An intentionally replaced owner is preserved. No persistent override, idle work, timer, repaint or I/O.",
+    "new_tests": [
+      "own and inherited method exact cleanup and this/return/exception preservation",
+      "later replacement is not overwritten",
+      "first+latest15 cap under100rescale calls and read-only100query/idle proof",
+      "foreign/absent/retired owners do not instrument and report ownership false",
+      "normal production has no trace allocation or temporary overrides; source admission/feedback unchanged"
+    ],
+    "source": [
+      {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+        "sha256": "e0b70c732ac684c051b5c5351acfb512689a617591e5a1da94ae259ab2021cdf"
+      },
+      {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-navigation.mjs",
+        "sha256": "21db87ca3fa035e2dd815783072572c81f1595ec426ed6359f54723947ace7df"
+      },
+      {
+        "path": "/Users/calvinkhor/Documents/GitHub/mytypst/src/app/native_views.rs",
+        "sha256": "c3689d763ec1529267c287a27c0776788114a7d26614304edd0ee7401cfe66f0"
+      }
+    ],
+    "complete_controller_suite": {
+      "command": "node --test scripts/test-preview-navigation.mjs scripts/test-preview-zoom-snapshot.mjs scripts/test-preview-snapshot-buffer.mjs scripts/test-preview-native-probe.mjs scripts/test-desktop-preview-probe.mjs scripts/test_overleaf_bridge.cjs",
+      "result": "421passed,0failed,0skipped",
+      "log": "/private/tmp/ttt-preview-full-navigation-diagnostics/tracked-full-js.log",
+      "log_sha256": "98e16f48788cd3e8339d012143eb026abbe1cb7c8a1f8e1ed2b4908f4ab25162"
+    },
+    "format_check": {
+      "command": "/opt/homebrew/bin/rustfmt --edition 2024 --check src/app/native_views.rs",
+      "result": "passed"
+    },
+    "native_status": "Direct normal-CLI Full control reproduced valid positive smooth request with null resize anchors and no movement; full source navigation remains unresolved. No further behavior patch selected.",
+    "native_record": "docs/performance-results/state-machines-full-navigation-diagnostic-2026-11-19.json"
+  }
+}

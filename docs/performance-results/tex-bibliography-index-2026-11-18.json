@@ -1,0 +1,128 @@
+{
+  "date": "2026-11-18",
+  "component": "Bibliography project indexing: bounded per-pass path-resolution memo",
+  "comparison": "Final bibliography/root-resolution implementation with only path-memo lookup/insertion disabled (before) versus enabled (after). Both perform fresh complete indexing passes; not a full-app speed comparison.",
+  "host": {
+    "system": "Darwin",
+    "macos": "14.6.1",
+    "architecture": "arm64"
+  },
+  "compiler": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "build": {
+    "flags": [
+      "--edition=2024",
+      "-O"
+    ],
+    "profile": "optimized standalone Rust component; same dependency rlib and flags in both builds",
+    "dependencies": [
+      "target/debug/deps/libtypst_syntax-8f696df5a5bb84ab.rlib",
+      "target/debug/deps/libnix-a22959a272f56c0f.rlib"
+    ],
+    "harness": "Same minimal document-extension and TeX setting-enum stubs, with the unmodified shared magic resolver, in both standalone builds; target workload uses .tex entries without magic redirection."
+  },
+  "workload": {
+    "warmup_iterations": 2,
+    "timed_iterations": 10,
+    "cache_policy": "fresh PathNormalizer and complete ProjectIndex for every pass; warm filesystem metadata cache",
+    "viewport": "not applicable to component measurement",
+    "theme": "not applicable"
+  },
+  "artifacts": {
+    "before": "/private/tmp/ttt-project-index-final-benchmark-before",
+    "after": "/private/tmp/ttt-project-index-final-benchmark-after",
+    "fixture": "/private/tmp/ttt-bibliography-benchmark-fixture",
+    "before_binary_sha256": "98b490e1f6f24bbcf74d6789f71cd913daa91a4e7dd22f84c6780d3e1df23469",
+    "before_source_sha256": "5f0bfbb2d4295de2cd4d2fddc80c765ca57f14b9b7505c5138ffdd67749570ce",
+    "after_binary_sha256": "fc29266c14cc4b0d585f388bf5ab5b21e46f1d4b07408a9b9815acd3ff90728f",
+    "after_source_sha256": "e547a9aba5ba9e57cf238faa3ffdc1e66c8248d16408d678f56bf553e282e043"
+  },
+  "cases": {
+    "repeated-10000": {
+      "source_bytes": 260000,
+      "before": {
+        "milliseconds": [
+          64.410041,
+          65.11,
+          64.921333,
+          64.456916,
+          64.997709,
+          64.56370799999999,
+          64.328542,
+          64.517417,
+          64.782708,
+          64.527666
+        ],
+        "median_ms": 64.54568699999999,
+        "min_ms": 64.328542,
+        "max_ms": 65.11
+      },
+      "after": {
+        "milliseconds": [
+          9.198542,
+          9.185875,
+          9.195209,
+          8.999416,
+          9.045375,
+          9.12725,
+          9.2515,
+          9.315666,
+          9.362583,
+          9.161083
+        ],
+        "median_ms": 9.190542,
+        "min_ms": 8.999416,
+        "max_ms": 9.362583
+      }
+    },
+    "distinct-200": {
+      "source_bytes": 4490,
+      "before": {
+        "milliseconds": [
+          1.8411250000000001,
+          1.9072500000000001,
+          1.871708,
+          1.858583,
+          1.904542,
+          1.9350420000000002,
+          1.909416,
+          1.886334,
+          1.893667,
+          1.85775
+        ],
+        "median_ms": 1.8900005,
+        "min_ms": 1.8411250000000001,
+        "max_ms": 1.9350420000000002
+      },
+      "after": {
+        "milliseconds": [
+          1.943417,
+          2.259208,
+          1.8935,
+          1.926666,
+          1.926375,
+          1.8720830000000002,
+          2.218542,
+          1.9572080000000003,
+          1.941166,
+          1.961084
+        ],
+        "median_ms": 1.9422915,
+        "min_ms": 1.8720830000000002,
+        "max_ms": 2.259208
+      }
+    }
+  },
+  "limitations": [
+    "Single local macOS arm64 component measurement; no cross-platform guarantee.",
+    "Does not measure GUI latency, cold startup, or idle rendering.",
+    "Indexing remains on the existing background worker; no frame-level filesystem work or background polling was added.",
+    "Other local activity was not controlled; small distinct-file timing differences are not treated as speed guarantees."
+  ],
+  "deterministic_regressions": [
+    "repeated_dependencies_reuse_resolution_without_filesystem_work",
+    "bibliography_collection_checks_cancellation_before_enumerating_long_lists",
+    "bibliography_dependencies_share_the_source_file_budget",
+    "bibliography_leaves_are_not_read_or_parsed_as_utf8_source"
+  ],
+  "fixture_bibliography_bytes": 7035
+}

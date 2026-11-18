@@ -1,0 +1,327 @@
+{
+  "kind": "staged workspace receipt correctness evidence; not a speed benchmark",
+  "date": "2026-11-18",
+  "recorded_at_utc": "2026-11-18T14:16:53.094314+00:00",
+  "host": {
+    "os": "macOS",
+    "version": "14.6.1",
+    "architecture": "arm64"
+  },
+  "problem": "Staging another workspace creates an isolated login profile while retaining the old connection, local source, root and epoch. A completed old mirror write was rejected at the browser-profile fence before its durable disk head could reach the retained model; subsequent CAS correctly rejected the stale head.",
+  "actual_editor_app_before": {
+    "command": [
+      "cargo",
+      "test",
+      "--bin",
+      "tiptoptyp",
+      "staging_a_workspace_keeps_owned_passive_commit_heads_without_installing_old_source",
+      "--",
+      "--nocapture"
+    ],
+    "features": "default; no desktop-ui-tests or profiling",
+    "log": "/private/tmp/ttt-staged-head-before.log",
+    "result": {
+      "passed": 0,
+      "failed": 1,
+      "ignored": 0,
+      "filtered_out": 3682
+    },
+    "error": "main.tex was updated in another window. Its saved source and sync history were preserved; reopen the workspace before refreshing.",
+    "proof": "Real persistent fixture + committed_document_reply completes the journal/source write, then stage_overleaf_workspace changes the login profile. Applying the held receipt leaves the checkpoint stale; the next real Mirror::sync_document CAS fails. Native key/source/dirty draft/root remain intact."
+  },
+  "actual_prefix_control": {
+    "scope": "Verbatim apply_overleaf_mirror admission/head prefix, actual Model/Mirror/WorkspaceSession modules, real disk commits; minimal editor owner wrapper. This is separate from the full EditorApp regression above.",
+    "before": {
+      "log": "/private/tmp/ttt-staged-profile-head-probe/before.log",
+      "result": "0 passed; 1 failed; 106 filtered out",
+      "observation": {
+        "head_retained": false,
+        "subsequent_cas": "Err(updated in another window)"
+      },
+      "snapshot": "/private/tmp/ttt-staged-profile-head-probe/main.rs",
+      "snapshot_sha256": "9d883a909107c5002a1c70388f3e47442dbb6adecf35cb70a97e8531e04cb77f",
+      "prefix_sha256": "0f94ac996fa019e99f524ec76d381510f9f55028a1d31844328647763c052ea5",
+      "build_command": [
+        "/opt/homebrew/bin/rustc",
+        "--edition=2024",
+        "--test",
+        "/private/tmp/ttt-staged-profile-head-probe/main.rs",
+        "-L",
+        "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+        "--extern",
+        "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+        "--extern",
+        "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+        "--extern",
+        "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/liburl-1b20e5ba73f43ca3.rlib",
+        "--extern",
+        "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libnix-a22959a272f56c0f.rlib",
+        "--extern",
+        "sha2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libsha2-78ca47f81e577311.rlib",
+        "--extern",
+        "unicode_normalization=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libunicode_normalization-7992375cceba4c07.rlib",
+        "--extern",
+        "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtempfile-6d1c1a1e6a75ac5e.rlib",
+        "--extern",
+        "hex=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libhex-e94b026f4b7f4279.rlib",
+        "--extern",
+        "md5=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libmd5-3aeb5aba0fccf08a.rlib",
+        "-o",
+        "/private/tmp/ttt-staged-profile-head-probe/before"
+      ],
+      "run_command": [
+        "/private/tmp/ttt-staged-profile-head-probe/before",
+        "staged_browser_profile",
+        "--nocapture"
+      ]
+    },
+    "after": {
+      "log": "/private/tmp/ttt-staged-profile-head-probe/after.log",
+      "result": "1 passed; 0 failed; 106 filtered out",
+      "observation": {
+        "head_retained": true,
+        "subsequent_cas": "Ok"
+      },
+      "snapshot": "/private/tmp/ttt-staged-profile-head-probe/after.rs",
+      "snapshot_sha256": "7d8bde3a3e66017144106a63ac53c97eb4969f46f3963183629308ba4e23cd4c",
+      "prefix_sha256": "4d91155a87a784a361af96c86ff7e211421223314bd79171058b90ac3627c5e9",
+      "profile_helper_sha256": "0b8661eb8d0a022d3d03c474e8815f060be3a67b70599170de628cbd8d05440a",
+      "build_command": [
+        "/opt/homebrew/bin/rustc",
+        "--edition=2024",
+        "--test",
+        "/private/tmp/ttt-staged-profile-head-probe/after.rs",
+        "-L",
+        "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+        "--extern",
+        "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+        "--extern",
+        "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+        "--extern",
+        "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/liburl-1b20e5ba73f43ca3.rlib",
+        "--extern",
+        "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libnix-a22959a272f56c0f.rlib",
+        "--extern",
+        "sha2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libsha2-78ca47f81e577311.rlib",
+        "--extern",
+        "unicode_normalization=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libunicode_normalization-7992375cceba4c07.rlib",
+        "--extern",
+        "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtempfile-6d1c1a1e6a75ac5e.rlib",
+        "--extern",
+        "hex=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libhex-e94b026f4b7f4279.rlib",
+        "--extern",
+        "md5=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libmd5-3aeb5aba0fccf08a.rlib",
+        "-o",
+        "/private/tmp/ttt-staged-profile-head-probe/after"
+      ],
+      "run_command": [
+        "/private/tmp/ttt-staged-profile-head-probe/after",
+        "staged_browser_profile",
+        "--nocapture"
+      ]
+    },
+    "model_snapshot_hashes": {
+      "overleaf/mirror.rs": "68c0ed5ce9b31f9762cc2ac1e0bc7f07683693ec838a9b1fbfda222e9cbd5556",
+      "overleaf/model/merge.rs": "766f522aa1c6c0fe89f0eb793e2eb34fa811911f545f23d0e50143d074c0c832",
+      "overleaf/model.rs": "ed9ba371ee2b56caff3fa8832c80ec746a3b91106112a82da9561bab691bf971",
+      "overleaf/offline/tests.rs": "dc0abf58b64e4f2789f39ad316b99d63127e59025e57448b72cb2ade482ad0e8",
+      "overleaf/offline.rs": "bd645722b68b7ad330977b85e372958d515dbebbdc404b87431fbe5508b722ac",
+      "overleaf/presence/tests.rs": "49f4fe3214812a60c3fba0a04aa9ec15946d006b4703118043a949d491e6b67f",
+      "overleaf/presence.rs": "b4f83271d84211a846888bd69eb0d14ea464bb8a32ca01d520f2be376f56882e",
+      "overleaf/storage/tests.rs": "164b49ce06c6dd9c63e5280fe08bedb032d1256871df0bbbeaada78935579cf0",
+      "overleaf/storage.rs": "2f8e3cd719c3fb7ab468389f3dc9617d4f488c64aea3716b5634732add667c49",
+      "overleaf/tests/save_journal.rs": "52c7ba59454b2056f5fd7bec3230e22012521ced59ea8b9464e37a728570287b",
+      "overleaf/tests.rs": "e907353167f9906079fba152343fc79018aef44e4d30bc3746b2b4c583a96b41",
+      "overleaf/workspace_session.rs": "7dc4be087e7295fc4d16f5a5999e8e35200abced372c93e69e2a8d0f079b1d35"
+    },
+    "overleaf_module_sha256": "0682445cc4bcdcce12d0470823060ad93de22f10401097fea834a7b83600f3c3",
+    "validation_stage": "Original physical-head fix control; the final implementation additionally admits exact owned save receipts as documented below."
+  },
+  "final_editor_app_tests": {
+    "command": [
+      "/opt/homebrew/bin/cargo",
+      "test",
+      "--bin",
+      "tiptoptyp",
+      "app::overleaf::",
+      "--",
+      "--nocapture"
+    ],
+    "environment": {
+      "PATH": "/Users/calvinkhor/.local/share/mise/installs/zig/0.15.2/bin:/opt/homebrew/bin:/Users/calvinkhor/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "RUSTC": "/opt/homebrew/bin/rustc",
+      "RUSTDOC": "/opt/homebrew/bin/rustdoc",
+      "RUSTC_WRAPPER": "",
+      "CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER": "/usr/bin/env",
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "working_directory": "/Users/calvinkhor/Documents/GitHub/mytypst",
+    "login_shell": false,
+    "features": "default; no desktop-ui-tests or profiling",
+    "log": "/private/tmp/ttt-staged-offline-save-final.log",
+    "result": {
+      "passed": 227,
+      "failed": 0,
+      "ignored": 1,
+      "filtered_out": 3462
+    },
+    "build_warning_count": 0,
+    "regressions": [
+      "staging_a_workspace_keeps_owned_passive_commit_heads_without_installing_old_source",
+      "staged_workspace_heads_reject_unrelated_and_unbound_browser_profiles_roots_and_epochs",
+      "a_staged_owned_old_receipt_cannot_roll_back_a_later_committed_head",
+      "passive_work_queued_before_staging_keeps_its_bound_workspace_profile",
+      "offline_saves_after_staging_complete_only_their_owned_receipts",
+      "a_failed_offline_save_after_staging_retires_only_its_ticket_and_keeps_dirty_source",
+      "a_stale_staged_offline_save_cannot_release_a_newer_operation"
+    ],
+    "source_snapshot_sha256": {
+      "src/app/overleaf.rs": "90021eb76661bced5b80bc721e7ef236525a6ef88c968b5f35c96203b69f02c4",
+      "src/app/overleaf/tests.rs": "fafaac5d229b2dbd41247bc686104e6e5eacb5742fb25d2d6b0accdef728e10a",
+      "src/app/overleaf/offline_tests.rs": "7f89fc8b8dfdbc5b8713cce336cb4d34bb90f52c4f81d330d23bb43eeda9c327"
+    },
+    "stage_controller_sha256": "d9ed64a7e3b713df74d3ad30f2b395590f1a6f5b0905a3777db5e4ab9440dee5",
+    "additional_post_stage_save_coverage": [
+      "offline saves after staging retire the exact Overleaf phase and global workflow ticket",
+      "newer typing remains dirty and its current key/source are preserved while saved snapshot is acknowledged",
+      "a mixed batch does not admit passive errors or browser navigation merely because it contains an owned save",
+      "an actual failed journal write releases its exact save ticket and preserves native dirty source",
+      "a stale completed save advances its owned physical head but cannot release or acknowledge a newer save operation"
+    ]
+  },
+  "ownership_contract": {
+    "physical_ledger": "The retained connection root and model/global epoch plus its bound WorkspaceSession profile own completed disk heads. Unbound connections retain their current browser-profile identity.",
+    "queue_capture": "Mirror work takes the physical owner profile, so old queued work cannot be relabeled as the staged new login.",
+    "head_admission": "Reject wrong root, profile, global epoch or model epoch. Advance only exact predecessor-to-written checkpoint progressions; an old receipt cannot roll back a known later head.",
+    "installation_admission": "Browser identity gates hydration/tree installation, passive files, top-level browser errors and cursor/open-after navigation. Each mismatched-profile file is independently eligible only when its save entity/operation and submitted global operation/key are exact current owners. Its existing success/failure receipt path may retire/acknowledge the original document; the rest of a mixed batch stays excluded.",
+    "preserved_state": [
+      "native source key and dirty draft",
+      "connection root and saved old workspace profile",
+      "strict source/destination and journal CAS checks",
+      "existing hydration/source freshness checks"
+    ],
+    "negative_cases": [
+      "unrelated account profile",
+      "staged current UI profile that does not own the old workspace",
+      "wrong root",
+      "wrong epoch",
+      "older committed receipt after a later head",
+      "stale save operation beside a newer current operation",
+      "mixed passive batch errors/navigation while an exact owned save completes"
+    ],
+    "cost": "Profile lookup and added domain/save-slot comparisons are bounded constant-size identity checks per already-bounded batch member; existing checkpoint map and save completion work is unchanged. No new job, disk IO, polling, idle repaint, automatic retry or per-frame source scan.",
+    "performance_claim": false,
+    "exact_save_identity": "Compare global current_save().key to the submitted save.key, not to the currently edited document key. Later typing remains dirty and cannot prevent the original owned save ticket from reaching its terminal state."
+  },
+  "limits": [
+    "Correctness evidence only; no wall-time, whole-app speed, GUI composition or screenshot claim.",
+    "Root owns final full Cargo/Clippy checks, final native build and journeys.",
+    "The separately identified workspace-creation active-save admission issue is handled by the core agent in workspace_creation files; this receipt records the independent passive-mirror ownership fix.",
+    "Temporary commands/logs/snapshots are local receipts and may later be cleaned; their exact commands, outcomes and relevant hashes are retained here."
+  ],
+  "post_staging_offline_save_control": {
+    "problem": "An old offline workspace stays editable after staging another login. A new offline Save can be admitted after staging. Returning at the browser-profile fence retained disk heads but stranded its exact SavePhase/global workflow operation.",
+    "before_scope": "Verbatim mirror ownership/head prefix, actual SavePhase and global DocumentWorkflow admission/retirement types and methods, actual core DocumentKey, Model/Mirror/WorkspaceSession and real disk effects. This is an actual-method control, not a full native editor run.",
+    "before": {
+      "log": "/private/tmp/ttt-staged-offline-save-probe/before.log",
+      "result": "0 passed; 1 failed; 106 filtered out",
+      "physical_head_retained": true,
+      "offline_ticket_released": false,
+      "snapshot": "/private/tmp/ttt-staged-offline-save-probe/before.rs",
+      "snapshot_sha256": "05de40232eeee2e5843c008098d30b57440843113e6a74849f06837561ec4c89",
+      "prefix_sha256": "4d91155a87a784a361af96c86ff7e211421223314bd79171058b90ac3627c5e9",
+      "save_gate_types_sha256": "7f6a2900825ab0198e134bbc8309f280a9142817539401ff9cbe50637cebd665",
+      "save_gate_methods_sha256": "47c56f5c8706f9d7929588d7f60942717b3f33ddbc2b9f6fbfe2461ccc7cbfe7",
+      "build_command": [
+        "/opt/homebrew/bin/rustc",
+        "--edition=2024",
+        "--test",
+        "/private/tmp/ttt-staged-offline-save-probe/before.rs",
+        "-L",
+        "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+        "--extern",
+        "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+        "--extern",
+        "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+        "--extern",
+        "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/liburl-1b20e5ba73f43ca3.rlib",
+        "--extern",
+        "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libnix-a22959a272f56c0f.rlib",
+        "--extern",
+        "sha2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libsha2-78ca47f81e577311.rlib",
+        "--extern",
+        "unicode_normalization=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libunicode_normalization-7992375cceba4c07.rlib",
+        "--extern",
+        "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtempfile-6d1c1a1e6a75ac5e.rlib",
+        "--extern",
+        "hex=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libhex-e94b026f4b7f4279.rlib",
+        "--extern",
+        "md5=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libmd5-3aeb5aba0fccf08a.rlib",
+        "--extern",
+        "tiptoptyp_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtiptoptyp_core-2f5049c0dff81cfc.rlib",
+        "-o",
+        "/private/tmp/ttt-staged-offline-save-probe/before"
+      ],
+      "run_command": [
+        "/private/tmp/ttt-staged-offline-save-probe/before",
+        "offline_save_after_staging",
+        "--nocapture"
+      ]
+    },
+    "after": {
+      "log": "/private/tmp/ttt-staged-offline-save-probe/after.log",
+      "result": "1 passed; 0 failed; 106 filtered out",
+      "physical_head_retained": true,
+      "offline_ticket_released": true,
+      "snapshot": "/private/tmp/ttt-staged-offline-save-probe/after.rs",
+      "snapshot_sha256": "c7483bc3cb80ec03dd44fa961510765608c1f0ed3b35457275bcf3511d4f79d2",
+      "prefix_sha256": "61a10a2e46c9d26422d988f1df7ce61bf873e062785ab4e06c29ef9bd1f15eca",
+      "per_file_admission_sha256": "28736c65f66b0ad6a491daedcd35a2f453e8293e5d5f86840f05196e53595aff",
+      "build_command": [
+        "/opt/homebrew/bin/rustc",
+        "--edition=2024",
+        "--test",
+        "/private/tmp/ttt-staged-offline-save-probe/after.rs",
+        "-L",
+        "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+        "--extern",
+        "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+        "--extern",
+        "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+        "--extern",
+        "url=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/liburl-1b20e5ba73f43ca3.rlib",
+        "--extern",
+        "nix=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libnix-a22959a272f56c0f.rlib",
+        "--extern",
+        "sha2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libsha2-78ca47f81e577311.rlib",
+        "--extern",
+        "unicode_normalization=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libunicode_normalization-7992375cceba4c07.rlib",
+        "--extern",
+        "tempfile=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtempfile-6d1c1a1e6a75ac5e.rlib",
+        "--extern",
+        "hex=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libhex-e94b026f4b7f4279.rlib",
+        "--extern",
+        "md5=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libmd5-3aeb5aba0fccf08a.rlib",
+        "--extern",
+        "tiptoptyp_core=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libtiptoptyp_core-2f5049c0dff81cfc.rlib",
+        "-o",
+        "/private/tmp/ttt-staged-offline-save-probe/after"
+      ],
+      "run_command": [
+        "/private/tmp/ttt-staged-offline-save-probe/after",
+        "offline_save_after_staging",
+        "--nocapture"
+      ]
+    },
+    "actual_editor_app_after": "The final full controller tests below run persistent_fixture \u2192 go_offline \u2192 stage_overleaf_workspace \u2192 edit \u2192 submit_overleaf_local_save \u2192 actual Mirror commit \u2192 apply_overleaf_mirror."
+  },
+  "original_passive_head_validation": {
+    "log": "/private/tmp/ttt-staged-head-final.log",
+    "result": {
+      "passed": 224,
+      "failed": 0,
+      "ignored": 1,
+      "filtered_out": 3461
+    }
+  }
+}

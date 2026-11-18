@@ -1,0 +1,16 @@
+
+running 1 test
+endpoint_coordinates,indexed=false,batch=0,queries=100,rows=20002,source_bytes=120025,ns=29774208
+endpoint_coordinates,indexed=false,batch=1,queries=100,rows=20002,source_bytes=120025,ns=27049000
+endpoint_coordinates,indexed=false,batch=2,queries=100,rows=20002,source_bytes=120025,ns=26790208
+endpoint_coordinates,indexed=false,batch=3,queries=100,rows=20002,source_bytes=120025,ns=27348000
+endpoint_coordinates,indexed=false,batch=4,queries=100,rows=20002,source_bytes=120025,ns=27322292
+endpoint_coordinates,indexed=true,batch=0,queries=100,rows=20002,source_bytes=120025,ns=99625
+endpoint_coordinates,indexed=true,batch=1,queries=100,rows=20002,source_bytes=120025,ns=91833
+endpoint_coordinates,indexed=true,batch=2,queries=100,rows=20002,source_bytes=120025,ns=91750
+endpoint_coordinates,indexed=true,batch=3,queries=100,rows=20002,source_bytes=120025,ns=91791
+endpoint_coordinates,indexed=true,batch=4,queries=100,rows=20002,source_bytes=120025,ns=91667
+test cached_endpoint_coordinates_match_and_stay_bounded ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.15s
+

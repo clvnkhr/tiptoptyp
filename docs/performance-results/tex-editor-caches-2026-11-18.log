@@ -1,0 +1,27 @@
+Rainbow component probe
+
+running 1 test
+test generic_highlight::tests::tex_bracket_cost_probe ... rainbow=false fixture_lines=5000 fixture_bytes=358890 edits=25 palette=default dark=false total_ms=152.359 per_edit_ms=6.094
+rainbow=true fixture_lines=5000 fixture_bytes=358890 edits=25 palette=default dark=false total_ms=368.107 per_edit_ms=14.724
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3563 filtered out; finished in 1.61s
+
+
+Asset-hover component probe
+
+running 1 test
+test editor_data::tests::literal_asset_hover_cost_probe ... asset_hover_cost,cached=false,batch=0,ns=53880
+asset_hover_cost,cached=false,batch=1,ns=54043
+asset_hover_cost,cached=false,batch=2,ns=54511
+asset_hover_cost,cached=false,batch=3,ns=53813
+asset_hover_cost,cached=false,batch=4,ns=53615
+asset_hover_cost,cached=true,batch=0,ns=82
+asset_hover_cost,cached=true,batch=1,ns=82
+asset_hover_cost,cached=true,batch=2,ns=81
+asset_hover_cost,cached=true,batch=3,ns=81
+asset_hover_cost,cached=true,batch=4,ns=82
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3563 filtered out; finished in 0.15s
+

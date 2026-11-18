@@ -1,0 +1,297 @@
+{
+  "scope": "Native production controller over pinned Tinymist in an owned nonactivating WKWebView; not composed editor geometry, physical pinch, or GPU presentation. Correctness-only test/debug opt-level1.",
+  "lanes": {
+    "before": {
+      "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/state-machines-native-zoom-20261118-before/native-full.json",
+      "metadata": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/state-machines-native-zoom-20261118-before/metadata-full.json",
+      "steps": 0,
+      "first_failure": "no usable idle image for before-no-op-page",
+      "actual_tinymist": true,
+      "partial": false,
+      "responsive_during_block": true,
+      "vector_requests": 1,
+      "captures": 3,
+      "capture_outcomes": [
+        "admit",
+        "admit",
+        "admit"
+      ],
+      "provider_frame_ready": false,
+      "cache_frame_ready": false,
+      "cached": false,
+      "active": false,
+      "in_flight": null,
+      "pending": null,
+      "capturing": false,
+      "preparing_raster": false,
+      "retained_capture": false,
+      "render_failures": 0
+    },
+    "current": {
+      "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/state-machines-native-zoom-20261118-current/native-full.json",
+      "metadata": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/state-machines-native-zoom-20261118-current/metadata-full.json",
+      "steps": 0,
+      "first_failure": "no usable idle image for before-no-op-page",
+      "actual_tinymist": true,
+      "partial": false,
+      "responsive_during_block": true,
+      "vector_requests": 1,
+      "captures": 3,
+      "capture_outcomes": [
+        "admit",
+        "admit",
+        "admit"
+      ],
+      "provider_frame_ready": false,
+      "cache_frame_ready": false,
+      "cached": false,
+      "active": false,
+      "in_flight": null,
+      "pending": null,
+      "capturing": false,
+      "preparing_raster": false,
+      "retained_capture": false,
+      "render_failures": 0
+    }
+  },
+  "partial": {
+    "receipt": "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/state-machines-native-zoom-20261118-native/native-partial.json",
+    "steps": 43,
+    "passed": true,
+    "failures": [],
+    "expected_injected_errors": 1,
+    "max_anchor_error_css_pixels": 0.9499999999898137,
+    "capture_phase": "idle",
+    "admission_phase": "empty",
+    "mirror_phase": "parked",
+    "cached": true,
+    "active": false,
+    "in_flight": null,
+    "pending": null
+  },
+  "diagnosis": "In both frozen pre-refactor and current full mode, page0 navigation changes paper.top from the admitted capture (-128) to -1, correctly retiring that image. The live adapter frame remains ready=false, so its existing usable/captureReady admission gates intentionally request no new capture. All three earlier captures were admitted; native capture, raster worker, admission and vector flight are idle with no render failure. The receipt does not expose individual provider/queue/width readiness operands, so the exact false operand is not established. No assertion weakening or production fix selected for this pre-existing unchanged full-renderer/fixture readiness issue.",
+  "inspected_images": [
+    "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/zoom-edge/native-full-state-machines-native-zoom-20261118-before.png",
+    "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/zoom-edge/native-full-state-machines-native-zoom-20261118-native.png",
+    "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/zoom-edge/native-partial-state-machines-native-zoom-20261118-native.png",
+    "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/screenshots/agent-review/zoom-edge/native-full-state-machines-native-zoom-20261118-current.png"
+  ],
+  "comparison_inputs": {
+    "before-command.json": [
+      "/opt/homebrew/bin/rustc",
+      "--edition=2024",
+      "--crate-name",
+      "native_preview_zoom",
+      "--crate-type",
+      "bin",
+      "--cfg",
+      "feature=\"desktop-ui-tests\"",
+      "/private/tmp/ttt-state-native-comparison/before/tests/native_preview_zoom.rs",
+      "-L",
+      "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+      "-C",
+      "opt-level=1",
+      "-C",
+      "debuginfo=2",
+      "-C",
+      "debug-assertions=on",
+      "-C",
+      "overflow-checks=on",
+      "-o",
+      "/private/tmp/ttt-state-native-comparison/native-before",
+      "--extern",
+      "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libeframe-50564616d159ea8a.rlib",
+      "--extern",
+      "objc2_core_foundation=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_core_foundation-a15dba4b5e18a3a3.rlib",
+      "--extern",
+      "objc2_core_graphics=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_core_graphics-22152bd6174dac53.rlib",
+      "--extern",
+      "block2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libblock2-26b4bde72b0f0982.rlib",
+      "--extern",
+      "objc2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2-b6c10fb773d8994b.rlib",
+      "--extern",
+      "objc2_app_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_app_kit-421ce4747eb9c93d.rlib",
+      "--extern",
+      "objc2_foundation=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_foundation-ca9d1db67c894ccf.rlib",
+      "--extern",
+      "objc2_web_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_web_kit-ceb61cc79360f01a.rlib",
+      "--extern",
+      "wry=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libwry-a6cf7eb41c1adee6.rlib",
+      "--extern",
+      "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+      "--extern",
+      "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+      "--extern",
+      "image=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libimage-806554fa0074ed7d.rlib",
+      "--extern",
+      "raw_window_handle=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libraw_window_handle-ee1a221be069d055.rlib",
+      "--extern",
+      "winit=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libwinit-7552330e69602c1d.rlib",
+      "--extern",
+      "dispatch2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libdispatch2-c14a5f6225341962.rlib"
+    ],
+    "current-command.json": [
+      "/opt/homebrew/bin/rustc",
+      "--edition=2024",
+      "--crate-name",
+      "native_preview_zoom",
+      "--crate-type",
+      "bin",
+      "--cfg",
+      "feature=\"desktop-ui-tests\"",
+      "/private/tmp/ttt-state-native-comparison/current/tests/native_preview_zoom.rs",
+      "-L",
+      "dependency=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps",
+      "-C",
+      "opt-level=1",
+      "-C",
+      "debuginfo=2",
+      "-C",
+      "debug-assertions=on",
+      "-C",
+      "overflow-checks=on",
+      "-o",
+      "/private/tmp/ttt-state-native-comparison/native-current",
+      "--extern",
+      "eframe=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libeframe-50564616d159ea8a.rlib",
+      "--extern",
+      "objc2_core_foundation=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_core_foundation-a15dba4b5e18a3a3.rlib",
+      "--extern",
+      "objc2_core_graphics=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_core_graphics-22152bd6174dac53.rlib",
+      "--extern",
+      "block2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libblock2-26b4bde72b0f0982.rlib",
+      "--extern",
+      "objc2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2-b6c10fb773d8994b.rlib",
+      "--extern",
+      "objc2_app_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_app_kit-421ce4747eb9c93d.rlib",
+      "--extern",
+      "objc2_foundation=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_foundation-ca9d1db67c894ccf.rlib",
+      "--extern",
+      "objc2_web_kit=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libobjc2_web_kit-ceb61cc79360f01a.rlib",
+      "--extern",
+      "wry=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libwry-a6cf7eb41c1adee6.rlib",
+      "--extern",
+      "serde=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde-8588c1fdfe600c69.rlib",
+      "--extern",
+      "serde_json=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libserde_json-411554177e4f7781.rlib",
+      "--extern",
+      "image=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libimage-806554fa0074ed7d.rlib",
+      "--extern",
+      "raw_window_handle=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libraw_window_handle-ee1a221be069d055.rlib",
+      "--extern",
+      "winit=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libwinit-7552330e69602c1d.rlib",
+      "--extern",
+      "dispatch2=/Users/calvinkhor/Documents/GitHub/mytypst/target/debug/deps/libdispatch2-c14a5f6225341962.rlib"
+    ],
+    "before-sources.json": {
+      "tests/native_preview_zoom.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/tests/native_preview_zoom.rs",
+        "sha256": "91df10438226751f3e160085db273315b1bbe11f0752195d258f334586602c52"
+      },
+      "src/preview_zoom_snapshot.rs": {
+        "from": "/private/tmp/ttt-native-preview-state-before.rs",
+        "sha256": "e1877fe25d33987955fc092f92f726e9e7c49861ea32a7eb06b626b4232d8356"
+      },
+      "src/preview_zoom_snapshot/raster.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_zoom_snapshot/raster.rs",
+        "sha256": "7f102dd6dfd3197c9d8824b9ae1c360b5c5b1e3ddfd5f8f393af595e0d67ad71"
+      },
+      "src/worker/latest_queue.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/worker/latest_queue.rs",
+        "sha256": "72473c5d9156794ba4b000f9d43da5582c492c4f5202d913a0209d1ede228020"
+      },
+      "src/native_window.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/native_window.rs",
+        "sha256": "a445960d9406a44f63b6278715959407d30bc63ddd55b4ec0356e71c1ba0151c"
+      },
+      "src/window_fade.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/window_fade.rs",
+        "sha256": "54c13277fde4fbf60996e14c0014338c29acab2dc795c87162d12b1688ff6987"
+      },
+      "src/native_blur_gradient.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/native_blur_gradient.rs",
+        "sha256": "dc4c1455bbcfa9be88ea8604d02df1ae913170200a8e9b217cfa880a0c66238a"
+      },
+      "src/preview_snapshot_buffer.js": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_snapshot_buffer.js",
+        "sha256": "793a0392cfbfc0e7e8fce470d07c28c62e2415a399b7b8f659bfef20d02961d5"
+      },
+      "src/preview_zoom_snapshot.js": {
+        "from": "/private/tmp/ttt-state-preview-before/src/preview_zoom_snapshot.js",
+        "sha256": "c4a93c757cb6bfa8cd47cb51a011ed4eabda1ec6945684cd60eede3a74a733d4"
+      },
+      "src/preview_navigation.js": {
+        "from": "/private/tmp/ttt-state-preview-before/src/preview_navigation.js",
+        "sha256": "d4ee13608abd4dad1fdf0217d0c830fa2cf499a1ee732b8f94489ba2b45d0611"
+      }
+    },
+    "current-sources.json": {
+      "tests/native_preview_zoom.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/tests/native_preview_zoom.rs",
+        "sha256": "91df10438226751f3e160085db273315b1bbe11f0752195d258f334586602c52"
+      },
+      "src/preview_zoom_snapshot.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_zoom_snapshot.rs",
+        "sha256": "4ecff75f5c6b5bbb8abc7d4d7bcf939be831f717e8f8d665dcba61602f8acada"
+      },
+      "src/preview_zoom_snapshot/raster.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_zoom_snapshot/raster.rs",
+        "sha256": "7f102dd6dfd3197c9d8824b9ae1c360b5c5b1e3ddfd5f8f393af595e0d67ad71"
+      },
+      "src/worker/latest_queue.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/worker/latest_queue.rs",
+        "sha256": "72473c5d9156794ba4b000f9d43da5582c492c4f5202d913a0209d1ede228020"
+      },
+      "src/native_window.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/native_window.rs",
+        "sha256": "a445960d9406a44f63b6278715959407d30bc63ddd55b4ec0356e71c1ba0151c"
+      },
+      "src/window_fade.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/window_fade.rs",
+        "sha256": "54c13277fde4fbf60996e14c0014338c29acab2dc795c87162d12b1688ff6987"
+      },
+      "src/native_blur_gradient.rs": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/native_blur_gradient.rs",
+        "sha256": "dc4c1455bbcfa9be88ea8604d02df1ae913170200a8e9b217cfa880a0c66238a"
+      },
+      "src/preview_snapshot_buffer.js": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_snapshot_buffer.js",
+        "sha256": "793a0392cfbfc0e7e8fce470d07c28c62e2415a399b7b8f659bfef20d02961d5"
+      },
+      "src/preview_zoom_snapshot.js": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_zoom_snapshot.js",
+        "sha256": "ca181191e3277f913cb58061e2ff9197176bd96dfe617134feff24ef817b372c"
+      },
+      "src/preview_navigation.js": {
+        "from": "/Users/calvinkhor/Documents/GitHub/mytypst/src/preview_navigation.js",
+        "sha256": "57a430c717047ffbb5d2916db642a22a6ca7623d5aae8ab184263b32809e6355"
+      }
+    },
+    "before-run-command.json": [
+      "/opt/homebrew/bin/python3",
+      "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-zoom-native.py",
+      "--binary",
+      "/private/tmp/ttt-state-native-comparison/native-before",
+      "--mode",
+      "full",
+      "--transition-regression",
+      "--scroll-race",
+      "--refresh-race",
+      "--output",
+      "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/state-machines-native-zoom-20261118-before"
+    ],
+    "current-run-command.json": [
+      "/opt/homebrew/bin/python3",
+      "/Users/calvinkhor/Documents/GitHub/mytypst/scripts/test-preview-zoom-native.py",
+      "--binary",
+      "/private/tmp/ttt-state-native-comparison/native-current",
+      "--mode",
+      "full",
+      "--transition-regression",
+      "--scroll-race",
+      "--refresh-race",
+      "--output",
+      "/Users/calvinkhor/Documents/GitHub/mytypst/.tiptoptyp/profiles/state-machines-native-zoom-20261118-current"
+    ]
+  }
+}

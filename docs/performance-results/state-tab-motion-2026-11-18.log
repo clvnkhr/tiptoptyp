@@ -1,0 +1,17 @@
+equivalent_updates=320000 before_bytes=24 after_bytes=24
+after=false sample=0 ns=5900417 checksum=1801842834487669
+after=true sample=0 ns=5501792 checksum=1801842834487669
+after=true sample=1 ns=5320292 checksum=1801842834487669
+after=false sample=1 ns=5676958 checksum=1801842834487669
+after=false sample=2 ns=6074708 checksum=1801842834487669
+after=true sample=2 ns=6257291 checksum=1801842834487669
+after=true sample=3 ns=5941958 checksum=1801842834487669
+after=false sample=3 ns=5699000 checksum=1801842834487669
+after=false sample=4 ns=5848584 checksum=1801842834487669
+after=true sample=4 ns=5597000 checksum=1801842834487669
+after=true sample=5 ns=5424292 checksum=1801842834487669
+after=false sample=5 ns=5699625 checksum=1801842834487669
+after=false sample=6 ns=5662709 checksum=1801842834487669
+after=true sample=6 ns=5359791 checksum=1801842834487669
+after=true sample=7 ns=5304625 checksum=1801842834487669
+after=false sample=7 ns=5629458 checksum=1801842834487669
