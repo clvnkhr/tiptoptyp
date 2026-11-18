@@ -478,23 +478,25 @@ fn next_worker_event(
     }
 }
 
-struct OutputFrames {
-    pending: bool,
-    last_publication: Instant,
+enum OutputFrames {
+    Quiet { last_publication: Instant },
+    Pending { last_publication: Instant },
 }
 
 impl OutputFrames {
     fn new(now: Instant) -> Self {
-        Self {
-            pending: false,
+        Self::Quiet {
             last_publication: now,
         }
     }
 
     fn wait_timeout(&self, now: Instant, visible: bool) -> Option<Duration> {
-        (self.pending && visible).then(|| {
-            OUTPUT_FRAME_INTERVAL.saturating_sub(now.duration_since(self.last_publication))
-        })
+        match self {
+            Self::Pending { last_publication } if visible => {
+                Some(OUTPUT_FRAME_INTERVAL.saturating_sub(now.duration_since(*last_publication)))
+            }
+            _ => None,
+        }
     }
 
     fn due(&self, now: Instant, visible: bool) -> bool {
@@ -502,38 +504,50 @@ impl OutputFrames {
             .is_some_and(|wait| wait.is_zero())
     }
 
+    fn received_output(&mut self) {
+        let last_publication = match self {
+            Self::Quiet { last_publication } | Self::Pending { last_publication } => {
+                *last_publication
+            }
+        };
+        *self = Self::Pending { last_publication };
+    }
+
     fn published(&mut self, now: Instant) {
-        self.pending = false;
-        self.last_publication = now;
+        *self = Self::Quiet {
+            last_publication: now,
+        };
     }
 }
 
 /// Ghostty invokes this sink synchronously on the engine thread. Coalescing
 /// replies from one packet avoids exhausting the writer mailbox on a valid
 /// OSC4 query for all 256 palette entries; neither callback nor UI can block.
-#[derive(Default)]
-struct TerminalReplies {
-    bytes: Vec<u8>,
-    overflowed: bool,
+enum TerminalReplies {
+    Collecting(Vec<u8>),
+    Overflowed,
 }
-
+impl Default for TerminalReplies {
+    fn default() -> Self {
+        Self::Collecting(Vec::new())
+    }
+}
 impl TerminalReplies {
     fn push(&mut self, bytes: &[u8]) {
-        if self.overflowed {
+        let Self::Collecting(buffer) = self else {
             return;
-        }
-        if bytes.len() > MAX_TERMINAL_REPLY_BYTES.saturating_sub(self.bytes.len()) {
-            self.overflowed = true;
+        };
+        if bytes.len() > MAX_TERMINAL_REPLY_BYTES.saturating_sub(buffer.len()) {
+            *self = Self::Overflowed;
         } else {
-            self.bytes.extend_from_slice(bytes);
+            buffer.extend_from_slice(bytes);
         }
     }
-
     fn take(&mut self) -> Result<Vec<u8>, String> {
-        if self.overflowed {
-            return Err("Terminal queries exceeded the 64 KiB reply limit".into());
+        match self {
+            Self::Collecting(bytes) => Ok(std::mem::take(bytes)),
+            Self::Overflowed => Err("Terminal queries exceeded the 64 KiB reply limit".into()),
         }
-        Ok(std::mem::take(&mut self.bytes))
     }
 }
 
@@ -674,7 +688,7 @@ fn run(
                     shared.content_revision.fetch_add(1, Ordering::Release);
                     // Retain dirtiness while hidden, but neither render nor wake
                     // for it. A later visibility Wake catches up immediately.
-                    frames.pending = true;
+                    frames.received_output();
                 }
                 WorkerEvent::Output(OutputEvent::Bytes(_)) => {}
                 WorkerEvent::Output(OutputEvent::Eof) => {
@@ -1175,7 +1189,7 @@ mod tests {
         replies.push(&vec![b'x'; MAX_TERMINAL_REPLY_BYTES]);
         replies.push(b"overflow");
         replies.push(b"ignored after overflow");
-        assert_eq!(replies.bytes.len(), MAX_TERMINAL_REPLY_BYTES);
+        assert!(matches!(replies, TerminalReplies::Overflowed));
         assert!(
             replies.take().is_err(),
             "overflow must not silently drop replies"
@@ -1471,7 +1485,7 @@ mod tests {
             None,
             "idle blocks without polling"
         );
-        frames.pending = true;
+        frames.received_output();
         assert_eq!(
             frames.wait_timeout(start, true),
             Some(OUTPUT_FRAME_INTERVAL)
@@ -1484,7 +1498,7 @@ mod tests {
         );
         frames.published(first);
         assert_eq!(frames.wait_timeout(first, true), None);
-        frames.pending = true;
+        frames.received_output();
         for offset in 0..100 {
             assert!(!frames.due(first + Duration::from_micros(offset), true));
         }

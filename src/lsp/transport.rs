@@ -8,20 +8,33 @@ const MAX_HEADER_LINE_BYTES: usize = 8 * 1024;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
+struct Payload(Vec<u8>);
+impl Write for Payload {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > MAX_MESSAGE_BYTES - self.0.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "JSON-RPC message is too large",
+            ));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 pub(crate) fn write_lsp_message(
     writer: &mut impl Write,
     message: &impl Serialize,
 ) -> io::Result<()> {
-    let payload = serde_json::to_vec(message)
+    let mut payload = Payload(Vec::new());
+    serde_json::to_writer(&mut payload, message)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if payload.len() > MAX_MESSAGE_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "JSON-RPC message is too large",
-        ));
-    }
-    write!(writer, "Content-Length: {}\r\n\r\n", payload.len())?;
-    writer.write_all(&payload)?;
+    write!(writer, "Content-Length: {}\r\n\r\n", payload.0.len())?;
+    writer.write_all(&payload.0)?;
     writer.flush()
 }
 
@@ -100,6 +113,40 @@ pub(crate) fn read_lsp_message(reader: &mut impl BufRead) -> io::Result<Option<V
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn invariant_outbound_budget_stops_serialization_without_writing_a_partial_frame() {
+        use serde::ser::{SerializeSeq, Serializer};
+        use std::cell::Cell;
+        struct LargeMessage<'a>(&'a Cell<usize>);
+        impl Serialize for LargeMessage<'_> {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                let mut sequence = serializer.serialize_seq(Some(4096))?;
+                let chunk = "x".repeat(32 * 1024);
+                for _ in 0..4096 {
+                    self.0.set(self.0.get() + 1);
+                    sequence.serialize_element(&chunk)?;
+                }
+                sequence.end()
+            }
+        }
+        let visited = Cell::new(0);
+        let mut output = Vec::new();
+        assert_eq!(
+            write_lsp_message(&mut output, &LargeMessage(&visited))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(
+            output.is_empty(),
+            "a rejected frame must leave the connection untouched"
+        );
+        assert!(
+            visited.get() < 4096,
+            "reject excess data while serializing, rather than allocating the whole payload"
+        );
+    }
 
     #[test]
     fn unterminated_header_read_is_bounded_before_allocation() {

@@ -236,12 +236,54 @@ impl<C> DocumentSession<C> {
     }
 
     pub fn rename(&mut self, path: PathBuf, kind: DocumentKind) {
-        if self.path.as_ref() != Some(&path) {
+        if self.path.as_ref() != Some(&path) || self.kind != kind {
             self.path = Some(path);
             self.kind = kind;
             self.epoch = self.epoch.wrapping_add(1);
             self.revision = self.revision.wrapping_add(1);
         }
+    }
+
+    /// Install an authoritative update to the same file without replacing its
+    /// identity. Old whole-buffer undo snapshots cannot safely undo a peer's
+    /// changes, so only a real buffer change retires them. Identical snapshots
+    /// keep history and cache keys untouched.
+    pub fn synchronize_external(
+        &mut self,
+        source: String,
+        saved_source: String,
+        disk_fingerprint: u64,
+        canonical_changed: bool,
+        undo_cursor: C,
+    ) -> bool {
+        let buffer_changed = self.source != source;
+        let changed = buffer_changed || canonical_changed;
+        if buffer_changed {
+            // The caller already owns the complete authoritative buffer and
+            // mapped its diff. Move it instead of scanning the same source
+            // again to rediscover a replacement span.
+            self.source = source;
+            self.source_snapshot = Arc::from(self.source.as_str());
+            self.clear_history();
+            if self.source != saved_source {
+                self.push_undo_snapshot(EditorSnapshot {
+                    source: Arc::from(saved_source.as_str()),
+                    cursor: undo_cursor,
+                });
+            }
+        }
+        if self.saved_source != saved_source {
+            self.saved_source = saved_source;
+            self.unsaved_changes.take();
+        }
+        if changed {
+            self.revision = self.revision.wrapping_add(1);
+            self.pending_edit = true;
+            self.unsaved_changes.take();
+        }
+        self.saved_revision = self.revision;
+        self.disk_fingerprint = Some(disk_fingerprint);
+        changed
     }
 
     pub fn restore_saved_source(&mut self) {
@@ -469,6 +511,63 @@ impl TypesettingLanguage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rename_can_reclassify_an_already_committed_destination_without_reloading_source() {
+        let mut document =
+            DocumentSession::<usize>::new(WindowSessionId::new(1), "source", DocumentKind::Tex);
+        let request = document.prepare_save("renamed.txt".into(), DocumentKind::Tex);
+        document.record_save(request.committed(5)).unwrap();
+        let before = document.key();
+        let snapshot = document.snapshot();
+        document.rename("renamed.txt".into(), DocumentKind::Text);
+        assert_eq!(document.kind(), DocumentKind::Text);
+        assert_ne!(document.key(), before);
+        assert_eq!(
+            document.snapshot().source().as_ptr(),
+            snapshot.source().as_ptr()
+        );
+        assert_eq!(document.saved_source(), "source");
+        let before = document.key();
+        document.rename("renamed.txt".into(), DocumentKind::Text);
+        assert_eq!(document.key(), before);
+    }
+
+    #[test]
+    fn external_updates_keep_document_identity_and_retire_unsafe_history_only_on_change() {
+        let mut document = DocumentSession::new(WindowSessionId::new(1), "old", DocumentKind::Tex);
+        document.replace_loaded("old".into(), "paper.tex".into(), DocumentKind::Tex, Some(1));
+        document.edit(2usize, |text| text.push_str(" local"));
+        let key = document.key();
+        document.reset_editor_history = false;
+        assert!(!document.synchronize_external(
+            "old local".into(),
+            "old local".into(),
+            2,
+            false,
+            0
+        ));
+        assert_eq!(document.key(), key);
+        assert_eq!(document.history_availability(), (true, false));
+        assert!(!document.reset_editor_history);
+        assert!(!document.is_dirty());
+        let _ = document.take_edit();
+        assert!(document.synchronize_external(
+            "α😀 remote".into(),
+            "α😀 baseline".into(),
+            3,
+            false,
+            0
+        ));
+        assert_eq!(document.key(), key.after_edit());
+        assert_eq!(document.source(), "α😀 remote");
+        assert_eq!(document.saved_source(), "α😀 baseline");
+        assert_eq!(document.disk_fingerprint(), Some(3));
+        assert!(document.is_dirty());
+        assert_eq!(document.history_availability(), (true, false));
+        assert!(document.take_edit().is_some());
+        assert!(document.take_edit().is_none());
+    }
 
     #[test]
     fn representation_change_retains_disk_identity_but_invalidates_old_coordinates_and_receipts() {

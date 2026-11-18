@@ -99,7 +99,11 @@ impl DocumentDiff {
 
 // Myers with prefix/suffix trimming and a bounded trace. Very different large
 // files fall back to a valid coarse replacement rather than quadratic memory.
-fn matches(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
+fn matches(
+    a: &[&str],
+    b: &[&str],
+    equivalent: impl Fn(&str, &str) -> bool + Copy,
+) -> Vec<(usize, usize)> {
     if a.is_empty() || b.is_empty() {
         return vec![];
     }
@@ -120,7 +124,10 @@ fn matches(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
                 v[i - 1] + 1
             };
             let mut y = x - k;
-            while x < a.len() as isize && y < b.len() as isize && a[x as usize] == b[y as usize] {
+            while x < a.len() as isize
+                && y < b.len() as isize
+                && equivalent(a[x as usize], b[y as usize])
+            {
                 x += 1;
                 y += 1;
             }
@@ -158,19 +165,38 @@ fn matches(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
 pub(crate) fn align_lines(before: &str, current: &str) -> Vec<Pair> {
     let a: Vec<_> = before.split_inclusive('\n').collect();
     let b: Vec<_> = current.split_inclusive('\n').collect();
-    let prefix = a.iter().zip(&b).take_while(|(a, b)| a == b).count();
+    align_line_slices(&a, &b, |a, b| a == b)
+}
+
+/// Reuse the same bounded alignment with caller-selected equality while
+/// retaining indices into the original raw lines. Git keeps terminators
+/// significant; cursor mapping can retain anchors whose terminators changed.
+pub(crate) fn align_line_slices(
+    a: &[&str],
+    b: &[&str],
+    equivalent: impl Fn(&str, &str) -> bool + Copy,
+) -> Vec<Pair> {
+    let prefix = a
+        .iter()
+        .zip(b)
+        .take_while(|(a, b)| equivalent(a, b))
+        .count();
     let suffix = a[prefix..]
         .iter()
         .rev()
         .zip(b[prefix..].iter().rev())
-        .take_while(|(a, b)| a == b)
+        .take_while(|(a, b)| equivalent(a, b))
         .count();
     let equal = (0..prefix)
         .map(|i| (i, i))
         .chain(
-            matches(&a[prefix..a.len() - suffix], &b[prefix..b.len() - suffix])
-                .into_iter()
-                .map(|(i, j)| (i + prefix, j + prefix)),
+            matches(
+                &a[prefix..a.len() - suffix],
+                &b[prefix..b.len() - suffix],
+                equivalent,
+            )
+            .into_iter()
+            .map(|(i, j)| (i + prefix, j + prefix)),
         )
         .chain((0..suffix).map(|i| (a.len() - suffix + i, b.len() - suffix + i)))
         .chain(std::iter::once((a.len(), b.len())));
@@ -419,6 +445,21 @@ mod tests {
             assert!(diff.revert_line(changed).is_some());
         }
     }
+    #[test]
+    fn git_alignment_keeps_final_newlines_and_line_endings_significant() {
+        for (before, after) in [
+            ("same", "same\n"),
+            ("same\n", "same"),
+            ("same\r\n", "same\n"),
+            ("same\n", "same\r\n"),
+        ] {
+            let diff = DocumentDiff::new(before.into(), after);
+            assert!(diff.pairs.iter().any(|pair| pair.changed));
+            assert!(!diff.hunks.is_empty());
+            assert_eq!(DocumentDiff::baseline(after, &diff.hunks).unwrap(), before);
+        }
+    }
+
     #[test]
     fn exhaustive_short_sequences_preserve_every_line_and_checked_baseline() {
         let texts: Vec<String> = (0..81)

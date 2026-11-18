@@ -382,29 +382,156 @@ fn map_char_offset(source_len: usize, index: usize, edits: &[ResolvedTextEdit<'_
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// Independent protocol coordinates, built from complete lines rather
+    /// than the index or either production offset-conversion function.
+    fn protocol_boundaries(source: &str) -> Vec<(usize, LspPosition)> {
+        let mut base = 0;
+        let mut result = Vec::new();
+        for (line, raw) in source.split('\n').enumerate() {
+            let content = raw.strip_suffix('\r').unwrap_or(raw);
+            for scalar in 0..=content.chars().count() {
+                let column: usize = content.chars().take(scalar).map(char::len_utf16).sum();
+                result.push((base + scalar, LspPosition::new(line as u32, column as u32)));
+            }
+            base += raw.chars().count() + 1;
+        }
+        result
+    }
+
+    fn short_sources() -> Vec<String> {
+        const TOKENS: [&str; 6] = ["a", "😀", "文", "\u{301}", "\n", "\r\n"];
+        let mut result = vec![String::new()];
+        let mut generation = vec![String::new()];
+        for _ in 0..3 {
+            generation = generation
+                .iter()
+                .flat_map(|prefix| TOKENS.map(|token| format!("{prefix}{token}")))
+                .collect();
+            result.extend(generation.iter().cloned());
+        }
+        result
+    }
+
     #[test]
-    fn unicode_positions_round_trip_at_valid_protocol_boundaries() {
-        for source in ["", "a😀文e\u{301}\n", "😀\r\n文\r\n", "\n\n", "😀😀😀"] {
-            let index = super::SourceIndex::new(source);
-            for (scalar, byte) in source
-                .char_indices()
-                .map(|(byte, _)| byte)
-                .chain([source.len()])
-                .enumerate()
-            {
-                // Between CR and LF is not a protocol column in CRLF text.
-                if source[..byte].ends_with('\r') {
-                    continue;
+    fn generated_coordinate_and_batch_edits_match_scalar_splices_and_bookmarks() {
+        // Exhaustive 259 documents (at most six scalars), all legal pairs of
+        // boundaries, three replacement pairs, and every selection endpoint.
+        // Reverse Vec<char> splices are independent of UTF-16 indexing and
+        // the production ascending edit/delta algorithm.
+        for source in short_sources() {
+            let original = source.chars().collect::<Vec<_>>();
+            let boundaries = protocol_boundaries(&source);
+            for &(scalar, position) in &boundaries {
+                assert_eq!(
+                    lsp_position_at_scalar(&source, ScalarOffset::new(scalar)),
+                    position,
+                    "source={source:?}, scalar={scalar}"
+                );
+            }
+            for left in 0..boundaries.len() {
+                for right in left..boundaries.len() {
+                    let (left_scalar, left_position) = boundaries[left];
+                    let (right_scalar, right_position) = boundaries[right];
+                    for (prefix, suffix) in [("", "文"), ("😀", "\r\n"), ("e\u{301}", "")] {
+                        let mut edits = [
+                            LspTextEdit {
+                                range: LspRange {
+                                    start: right_position,
+                                    end: boundaries.last().unwrap().1,
+                                },
+                                new_text: suffix.into(),
+                            },
+                            LspTextEdit {
+                                range: LspRange {
+                                    start: boundaries[0].1,
+                                    end: left_position,
+                                },
+                                new_text: prefix.into(),
+                            },
+                        ];
+                        if original.is_empty() {
+                            edits.reverse();
+                        }
+                        let ranges = [
+                            (0..left_scalar, prefix),
+                            (right_scalar..original.len(), suffix),
+                        ];
+                        let mut expected = original.clone();
+                        for (range, replacement) in ranges.iter().rev() {
+                            expected.splice(range.clone(), replacement.chars());
+                        }
+                        let expected = expected.iter().collect::<String>();
+                        for cursor in (0..=original.len()).chain([original.len() + 7, usize::MAX]) {
+                            let offsets = [cursor, original.len().saturating_sub(cursor)];
+                            let expected_offsets = offsets.map(|offset| {
+                                let mut bookmark = offset.min(original.len());
+                                for (range, replacement) in ranges.iter().rev() {
+                                    let inserted = replacement.chars().count();
+                                    if bookmark >= range.end {
+                                        bookmark = bookmark - range.len() + inserted;
+                                    } else if bookmark > range.start {
+                                        bookmark = range.start + inserted;
+                                    }
+                                }
+                                bookmark
+                            });
+                            let actual =
+                                apply_text_edits(&source, &edits, offsets.map(ScalarOffset::new))
+                                    .unwrap();
+                            assert_eq!(actual.text, expected, "source={source:?}, edits={edits:?}");
+                            assert_eq!(
+                                actual.mapped_offsets.map(ScalarOffset::get),
+                                expected_offsets,
+                                "source={source:?}, edits={edits:?}, offsets={offsets:?}"
+                            );
+                        }
+                    }
                 }
-                let position =
-                    super::lsp_position_at_scalar(source, super::ScalarOffset::new(scalar));
-                let resolved = index.strict_offset(&position).unwrap();
-                assert_eq!(resolved.character, scalar, "{source:?} at {byte}");
-                assert_eq!(resolved.byte.get(), byte, "{source:?} at {byte}");
             }
         }
     }
-    use super::*;
+
+    #[test]
+    fn generated_invalid_utf16_endpoints_reject_the_whole_edit_batch() {
+        for source in short_sources() {
+            let boundaries = protocol_boundaries(&source);
+            let valid = LspTextEdit {
+                range: LspRange {
+                    start: boundaries[0].1,
+                    end: boundaries[0].1,
+                },
+                new_text: "valid insertion".into(),
+            };
+            let mut invalid = vec![LspPosition::new(u32::MAX, 0), LspPosition::new(0, u32::MAX)];
+            for pair in boundaries.windows(2) {
+                if pair[0].1.line == pair[1].1.line
+                    && pair[1].1.character.get() - pair[0].1.character.get() == 2
+                {
+                    invalid.push(LspPosition::new(
+                        pair[0].1.line.get(),
+                        pair[0].1.character.get() + 1,
+                    ));
+                }
+            }
+            for position in invalid {
+                let invalid = LspTextEdit {
+                    range: LspRange {
+                        start: position,
+                        end: position,
+                    },
+                    new_text: "invalid insertion".into(),
+                };
+                for edits in [[valid.clone(), invalid.clone()], [invalid, valid.clone()]] {
+                    assert!(
+                        apply_text_edits(&source, &edits, [ScalarOffset::new(0); 2]).is_err(),
+                        "source={source:?}, edits={edits:?}"
+                    );
+                }
+            }
+        }
+    }
 
     fn position_to_char(source: &str, position: &LspPosition) -> usize {
         SourceIndex::new(source).permissive_char_offset(position)

@@ -645,6 +645,7 @@ pub(crate) const EXPLORER_MIN_WIDTH: f32 = 160.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExplorerPanelPhase {
+    Opening,
     Open,
     Closed,
 }
@@ -658,7 +659,6 @@ impl ExplorerPanelPhase {
 pub(crate) struct ExplorerPanelState {
     phase: ExplorerPanelPhase,
     width: Option<f32>,
-    restore_pending: bool,
     startup_pending: bool,
     queries: [String; ExplorerSection::ALL.len()],
     focus_search: Option<ExplorerSection>,
@@ -674,7 +674,6 @@ impl Default for ExplorerPanelState {
         Self {
             phase: ExplorerPanelPhase::Open,
             width: None,
-            restore_pending: false,
             startup_pending: true,
             queries: std::array::from_fn(|_| String::new()),
             focus_search: None,
@@ -778,8 +777,9 @@ impl ExplorerPanelState {
         }
     }
     pub(crate) fn open(&mut self) {
-        self.restore_pending |= !self.phase.panel_visible();
-        self.phase = ExplorerPanelPhase::Open;
+        if self.phase == ExplorerPanelPhase::Closed {
+            self.phase = ExplorerPanelPhase::Opening;
+        }
     }
     pub(crate) fn clear_keyboard_focus(&mut self) {
         self.focused_section = None;
@@ -818,15 +818,40 @@ impl ExplorerPanelState {
         }
     }
     pub(crate) fn take_restored_width(&mut self) -> Option<f32> {
-        std::mem::take(&mut self.restore_pending)
-            .then_some(self.width)
-            .flatten()
+        if self.phase == ExplorerPanelPhase::Opening {
+            self.phase = ExplorerPanelPhase::Open;
+            self.width
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod panel_tests {
     use super::*;
+
+    #[test]
+    fn only_a_visible_opening_can_consume_width_restoration() {
+        let mut panel = ExplorerPanelState::default();
+        panel.remember_width(280.0);
+        for _ in 0..20 {
+            panel.hide();
+            assert_eq!(panel.take_restored_width(), None);
+            panel.open();
+            panel.open();
+            assert_eq!(panel.phase, ExplorerPanelPhase::Opening);
+            assert_eq!(panel.take_restored_width(), Some(280.0));
+            assert_eq!(panel.take_restored_width(), None);
+            assert_eq!(panel.phase, ExplorerPanelPhase::Open);
+        }
+        panel.hide();
+        panel.open();
+        panel.hide();
+        assert_eq!(panel.take_restored_width(), None);
+        panel.open();
+        assert_eq!(panel.take_restored_width(), Some(280.0));
+    }
 
     #[test]
     fn presentation_requests_are_owner_local_and_consumed_once() {

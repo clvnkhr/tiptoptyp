@@ -177,8 +177,7 @@ pub(crate) struct GitEditorState {
     pub(crate) statuses: FileStatuses,
     pub(crate) hunks: Vec<Hunk>,
     pub(crate) chunk: Option<ChunkDiff>,
-    scan_deadline: Instant,
-    refresh_requested: bool,
+    refresh: tiptoptyp_core::scheduling::Debounce<Instant>,
 }
 
 impl Default for GitEditorState {
@@ -190,15 +189,14 @@ impl Default for GitEditorState {
             statuses: FileStatuses::default(),
             hunks: Vec::new(),
             chunk: None,
-            scan_deadline: Instant::now(),
-            refresh_requested: true,
+            refresh: tiptoptyp_core::scheduling::Debounce::at(Instant::now()),
         }
     }
 }
 
 impl GitEditorState {
     pub(crate) fn activity(&self) -> crate::activity::Activity {
-        if self.refresh_requested
+        if self.refresh.is_pending()
             && !matches!(self.job.activity(), crate::activity::Activity::Failed(_))
         {
             crate::activity::Activity::Pending("Hunks stale; waiting for edits to settle")
@@ -215,8 +213,7 @@ impl GitEditorState {
     /// repository. Git decorations are event driven; the editor does not
     /// wake up on a periodic timer just to rediscover an unchanged snapshot.
     pub(crate) fn request_refresh(&mut self) {
-        self.refresh_requested = true;
-        self.scan_deadline = Instant::now();
+        self.refresh.schedule(Instant::now());
     }
 
     pub(crate) fn line_change_counts(&self) -> LineChangeCounts {
@@ -256,12 +253,12 @@ impl GitEditorState {
             }
             LatestJobPoll::Idle | LatestJobPoll::Pending => {}
         }
-        if !self.job.is_running() && self.refresh_requested && now >= self.scan_deadline {
+        if !self.job.is_running() && self.refresh.remaining(now) == Some(Duration::ZERO) {
             let source = projection
                 .map_or(source, |snapshot| snapshot.source())
                 .to_owned();
             let projection = projection.cloned();
-            self.refresh_requested = false;
+            self.refresh.clear();
             let work = move || {
                 let BufferStatus { snapshot, hunks } =
                     Repository::new(&key.workspace).scan_buffer(key.path.as_deref(), &source)?;
@@ -284,17 +281,18 @@ impl GitEditorState {
             };
             let result = self.job.start_and_repaint("git-editor", context, work);
             if result.is_err() {
-                self.refresh_requested = true;
+                self.refresh.schedule(now);
             }
         }
-        if self.refresh_requested && !self.job.is_running() {
-            context.request_repaint_after(self.scan_deadline.saturating_duration_since(now));
+        if !self.job.is_running()
+            && let Some(remaining) = self.refresh.remaining(now)
+        {
+            context.request_repaint_after(remaining);
         }
     }
 
     fn prepare_request(&mut self, key: &RequestKey, now: Instant) {
         if self.current.as_ref() != Some(key) {
-            self.refresh_requested = true;
             let same_file = self
                 .current
                 .as_ref()
@@ -329,12 +327,13 @@ impl GitEditorState {
             // produced it. Keep stale text from surviving a file switch or a
             // subsequent edit while the replacement scan is pending.
             self.chunk = None;
-            self.scan_deadline = now
-                + if same_file {
+            self.refresh.schedule(
+                now + if same_file {
                     EDIT_DEBOUNCE
                 } else {
                     Duration::ZERO
-                };
+                },
+            );
             self.current = Some(key.clone());
         }
     }
@@ -363,7 +362,7 @@ impl GitEditorState {
     }
 
     pub(crate) fn current_hunks(&self, key: DocumentKey, path: &Path) -> Option<&[Hunk]> {
-        (!self.refresh_requested
+        (!self.refresh.is_pending()
             && !self.job.is_running()
             && self.current.as_ref().is_some_and(|current| {
                 current.document == key && current.path.as_deref() == Some(path)
@@ -882,12 +881,12 @@ mod tests {
             let now = Instant::now();
             state.prepare_request(&key(root, 2), now);
             assert!(state.job.is_running(), "typing reuses the active scan");
-            assert_eq!(state.scan_deadline, now + EDIT_DEBOUNCE);
+            assert_eq!(state.refresh.remaining(now), Some(EDIT_DEBOUNCE));
             assert_eq!(state.repository.as_deref(), Some(root));
 
             state.prepare_request(&next, now);
             assert!(!state.job.is_running(), "a new file can scan immediately");
-            assert_eq!(state.scan_deadline, now);
+            assert_eq!(state.refresh.remaining(now), Some(Duration::ZERO));
             assert_eq!(state.current.as_ref(), Some(&next));
             assert_eq!(state.repository.is_none(), next.workspace != root);
             release.send(()).unwrap();
@@ -902,8 +901,7 @@ mod tests {
         let mut state = GitEditorState {
             current: Some(request.clone()),
             repository: Some(root.into()),
-            scan_deadline: Instant::now() - Duration::from_secs(10),
-            refresh_requested: false,
+            refresh: Default::default(),
             ..Default::default()
         };
 
@@ -917,7 +915,7 @@ mod tests {
         );
 
         assert!(!state.job.is_running());
-        assert!(!state.refresh_requested);
+        assert!(!state.refresh.is_pending());
     }
 
     #[test]
@@ -933,7 +931,7 @@ mod tests {
         let mut state = GitEditorState {
             current: Some(request.clone()),
             repository: Some(root.into()),
-            refresh_requested: false,
+            refresh: Default::default(),
             ..Default::default()
         };
         state

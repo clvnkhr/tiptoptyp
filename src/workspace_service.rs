@@ -22,6 +22,74 @@ enum EventImpact {
     Structure,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuedImpact {
+    Content,
+    Structure,
+}
+
+struct ChangeBatch {
+    paths: BTreeSet<PathBuf>,
+    impact: QueuedImpact,
+    deadline: Instant,
+}
+
+/// A quiet deadline always owns the exact paths and scan requirement it will
+/// flush. Content events can upgrade the batch to structure but never demote it.
+#[derive(Default)]
+enum PendingChanges {
+    #[default]
+    Idle,
+    Queued(ChangeBatch),
+}
+
+impl PendingChanges {
+    fn deadline(&self) -> Option<Instant> {
+        match self {
+            Self::Idle => None,
+            Self::Queued(batch) => Some(batch.deadline),
+        }
+    }
+
+    /// Returns true only for a newly queued structural batch, preserving the
+    /// existing activity announcement policy while coalescing later events.
+    fn queue(
+        &mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+        impact: QueuedImpact,
+        deadline: Instant,
+    ) -> bool {
+        let first_structure = matches!(self, Self::Idle) && impact == QueuedImpact::Structure;
+        match self {
+            Self::Idle => {
+                *self = Self::Queued(ChangeBatch {
+                    paths: paths.into_iter().collect(),
+                    impact,
+                    deadline,
+                })
+            }
+            Self::Queued(batch) => {
+                batch.paths.extend(paths);
+                if impact == QueuedImpact::Structure {
+                    batch.impact = QueuedImpact::Structure;
+                }
+                batch.deadline = deadline;
+            }
+        }
+        first_structure
+    }
+
+    fn take_due(&mut self, now: Instant) -> Option<ChangeBatch> {
+        if !self.deadline().is_some_and(|deadline| deadline <= now) {
+            return None;
+        }
+        let Self::Queued(batch) = std::mem::take(self) else {
+            unreachable!()
+        };
+        Some(batch)
+    }
+}
+
 fn event_impact(kind: &EventKind) -> EventImpact {
     match kind {
         EventKind::Access(_) => EventImpact::Ignore,
@@ -180,13 +248,13 @@ fn root_worker(
         WorkspaceEvent::Watcher(watcher_state.clone())
     });
 
-    let mut changed_paths = BTreeSet::new();
-    let mut structural_change = false;
-    let mut flush_at = None::<Instant>;
+    let mut changes = PendingChanges::default();
     let mut verify_at = Instant::now() + VERIFICATION_INTERVAL;
     loop {
         let now = Instant::now();
-        let deadline = flush_at.map_or(verify_at, |flush| flush.min(verify_at));
+        let deadline = changes
+            .deadline()
+            .map_or(verify_at, |flush| flush.min(verify_at));
         let timeout = deadline.saturating_duration_since(now);
         match receiver.recv_timeout(timeout) {
             Ok(RootCommand::Subscribe { owner, subscriber }) => {
@@ -211,8 +279,11 @@ fn root_worker(
             }
             Ok(RootCommand::Refresh) => {
                 publish(&subscribers, || WorkspaceEvent::VerifyActiveFile);
-                structural_change = true;
-                flush_at = Some(Instant::now() + EVENT_QUIET_PERIOD);
+                changes.queue(
+                    [],
+                    QueuedImpact::Structure,
+                    Instant::now() + EVENT_QUIET_PERIOD,
+                );
             }
             Ok(RootCommand::Notification(Ok(mut event))) => {
                 if matches!(watcher_state, crate::activity::Activity::Failed(_)) {
@@ -224,16 +295,24 @@ fn root_worker(
                 let impact = event_impact(&event.kind);
                 event.paths.retain(|path| observed_path(&root, path));
                 if impact != EventImpact::Ignore && !event.paths.is_empty() {
-                    if flush_at.is_none() && impact == EventImpact::Structure {
+                    let queued_impact = match impact {
+                        EventImpact::Content => QueuedImpact::Content,
+                        EventImpact::Structure => QueuedImpact::Structure,
+                        EventImpact::Ignore => {
+                            unreachable!("ignored events are excluded before admission")
+                        }
+                    };
+                    if changes.queue(
+                        event.paths,
+                        queued_impact,
+                        Instant::now() + EVENT_QUIET_PERIOD,
+                    ) {
                         publish(&subscribers, || {
                             WorkspaceEvent::Activity(crate::activity::Activity::Pending(
                                 "Changes queued",
                             ))
                         });
                     }
-                    structural_change |= impact == EventImpact::Structure;
-                    changed_paths.extend(event.paths);
-                    flush_at = Some(Instant::now() + EVENT_QUIET_PERIOD);
                 }
             }
             Ok(RootCommand::Notification(Err(error))) => {
@@ -243,25 +322,25 @@ fn root_worker(
                 publish(&subscribers, || {
                     WorkspaceEvent::Watcher(watcher_state.clone())
                 });
-                structural_change = true;
-                flush_at = Some(Instant::now() + EVENT_QUIET_PERIOD);
+                changes.queue(
+                    [],
+                    QueuedImpact::Structure,
+                    Instant::now() + EVENT_QUIET_PERIOD,
+                );
             }
             Ok(RootCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
 
         let now = Instant::now();
-        if flush_at.is_some_and(|deadline| deadline <= now) {
-            let paths = std::mem::take(&mut changed_paths)
-                .into_iter()
-                .collect::<Vec<_>>();
+        if let Some(batch) = changes.take_due(now) {
+            let paths = batch.paths.into_iter().collect::<Vec<_>>();
             if !paths.is_empty() {
                 publish(&subscribers, || WorkspaceEvent::PathsChanged(paths.clone()));
             }
-            if std::mem::take(&mut structural_change) {
+            if batch.impact == QueuedImpact::Structure {
                 scan_and_publish(&root, &mut snapshot, &mut scan_serial, &subscribers, false);
             }
-            flush_at = None;
         }
         if verify_at <= now {
             publish(&subscribers, || WorkspaceEvent::VerifyActiveFile);
@@ -438,6 +517,40 @@ impl Drop for WorkspaceClient {
 mod tests {
     use super::*;
     use notify::event::{CreateKind, DataChange, ModifyKind, RemoveKind, RenameMode};
+
+    #[test]
+    fn queued_workspace_changes_own_one_deadline_and_preserve_upgraded_scan_work() {
+        let now = Instant::now();
+        let mut changes = PendingChanges::default();
+        assert_eq!(changes.deadline(), None);
+        assert!(!changes.queue(["a.typ".into()], QueuedImpact::Content, now));
+        assert!(!changes.queue(
+            ["b.typ".into()],
+            QueuedImpact::Structure,
+            now + EVENT_QUIET_PERIOD
+        ));
+        assert!(!changes.queue(
+            ["a.typ".into()],
+            QueuedImpact::Content,
+            now + EVENT_QUIET_PERIOD * 2
+        ));
+        assert!(changes.take_due(now + EVENT_QUIET_PERIOD).is_none());
+        let batch = changes.take_due(now + EVENT_QUIET_PERIOD * 2).unwrap();
+        assert_eq!(
+            batch.paths,
+            BTreeSet::from(["a.typ".into(), "b.typ".into()])
+        );
+        assert_eq!(batch.impact, QueuedImpact::Structure);
+        assert_eq!(changes.deadline(), None);
+        assert!(changes.take_due(now + EVENT_QUIET_PERIOD * 3).is_none());
+        assert!(changes.queue([], QueuedImpact::Structure, now));
+        let refresh = changes.take_due(now).unwrap();
+        assert!(
+            refresh.paths.is_empty(),
+            "a requested scan need not invent changed paths"
+        );
+        assert_eq!(refresh.impact, QueuedImpact::Structure);
+    }
 
     fn next_snapshot(client: &WorkspaceClient) -> (Arc<WorkspaceSnapshot>, u64) {
         let deadline = Instant::now() + Duration::from_secs(5);
