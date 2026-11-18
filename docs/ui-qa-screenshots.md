@@ -65,7 +65,7 @@ The accepted scenes and their framebuffer targets are:
 | `snippets` | `snippets` | Real independent snippet library and source workbench, with pinned Save/Revert |
 | `shortcuts` | `shortcuts` | Real shortcut editor with compact action groups and key bindings |
 | `packages` | `packages` | Real package browser with deterministic installed, available, local and update records; no registry request |
-| `latexdiff` | `latexdiff` | TeX diff wizard with deterministic older/newer file paths |
+| `latexdiff` | `latexdiff` | Single-page TeX diff form with deterministic older/newer/output file paths |
 | `table-editor` | `table-editor` | Resizable table workbench with a merged heading, compact toolbar, Format popup and read-only source |
 | `table-editor-narrow` | `table-editor` | The table workbench at its minimum width |
 | `table-editor-tex` | `table-editor` | Real named TeX/booktabs fixture in the same table workbench |
@@ -78,7 +78,7 @@ The accepted scenes and their framebuffer targets are:
 | `window-color` | `logo-color` | Per-window logo background picker |
 | `rainbow-brackets` | `main` | Independent bracket-family color cycles, nesting, and literal exclusions |
 | `bracket-settings` | `settings` | Automatic pairing and per-family rainbow palette controls |
-| `delimiter-match` | `main` | Matching delimiters at the caret without relaying out the source |
+| `delimiter-match` | `main` | Innermost enclosing delimiters highlighted by background only, with the caret inside the body and unchanged source layout |
 | `sticky-context` | `main` | Scrolled source editor with stacked headings and a multiline function header pinned independently of the caret |
 | `folding` | `main` | Collapsed Typst, Markdown and TeX regions alongside expanded siblings and Git markers, using the unchanged gutter width |
 | `mitex-dollars` | `main` | Active TeX mode toolbar control and inline/display TeX highlighting |
