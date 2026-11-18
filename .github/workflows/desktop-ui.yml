@@ -8,20 +8,28 @@ on:
         type: choice
         options: [
           "all",
-          "overleaf_connection",
+          "overleaf",
+          "overleaf_session",
+          "git_setup",
+          "git_github",
           "indentation",
           "tool_defaults",
           "settings_links",
           "ltex",
           "liquid_selection",
           "liquid_streaming",
-          "latexdiff_wizard",
+          "diagnostic_fix",
+          "diagnostic_fix_setup",
+          "latexdiff",
+          "comment_controls",
+          "comment_controls_settings",
           "tex_documentation",
           "citation_import",
           "file_versions",
           "command_palette",
           "preview_jump",
           "tex",
+          "tex_magic",
           "tex_editing",
           "tex_intelligence",
           "tex_save",
@@ -45,6 +53,7 @@ on:
           "find",
           "rectangle",
           "empty",
+          "workspace_switch",
           "focus",
           "preview",
           "pdf_output",
@@ -61,6 +70,7 @@ on:
           "inactive_preview",
           "explorer_toggle",
           "explorer_scroll",
+          "explorer_files",
           "folding",
           "selection_wrap",
           "git_hunks",
@@ -86,6 +96,11 @@ on:
         type: string
         required: false
         default: ""
+      diagnostic_fix_model_dir:
+        description: Prepared Liquid foundation-model cache for diagnostic-fix journey
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -107,10 +122,14 @@ jobs:
         env:
           JOURNEY: ${{ inputs.journey }}
           LIQUID_MODEL_DIR: ${{ inputs.liquid_model_dir }}
+          DIAGNOSTIC_FIX_MODEL_DIR: ${{ inputs.diagnostic_fix_model_dir }}
         run: |
           args=(--journey "$JOURNEY")
           if [[ -n "$LIQUID_MODEL_DIR" ]]; then
             args+=(--liquid-model-dir "$LIQUID_MODEL_DIR")
+          fi
+          if [[ -n "$DIAGNOSTIC_FIX_MODEL_DIR" ]]; then
+            args+=(--diagnostic-fix-model-dir "$DIAGNOSTIC_FIX_MODEL_DIR")
           fi
           python3 scripts/test-desktop-ui.py "${args[@]}"
       - name: Preserve evidence
