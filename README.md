@@ -26,7 +26,9 @@ platform.
   [table support and limits](docs/table-editor.md).
 - **Work with projects:** Explorer files, contents, subfiles, symbols, packages,
   labels and references; multi-file entry points; Git status, staging, commits,
-  history and remote operations. The [Git diff editor](docs/git-diff-editor.md)
+  guided repository setup, GitHub sign-in and repository creation, history and
+  remote operations. [Back up an Overleaf workspace](docs/git-workspaces.md)
+  directly from the app. The [Git diff editor](docs/git-diff-editor.md)
   shows the whole document, with an editable right column and an overview of
   changes. On macOS, [local file versions](docs/local-file-versions.md) provide
   native save history, comparisons and restore.
@@ -159,11 +161,11 @@ configured or disabled independently; enabling both may produce overlapping
 suggestions. Normal and verbose diagnostic presets expose different levels of
 advice, with their actual configuration available to edit.
 
-LTeX+ and its matching Temurin Java runtime ship in macOS packages; enable the
-checker in Settings. No system Java installation is needed for that bundled
-configuration.
+LTeX+ and its matching Temurin Java runtime ship in macOS packages. LTeX+ is on
+by default and Harper is off; saved preferences are preserved. No system Java
+installation is needed for that bundled configuration.
 
-**Liquid** is optional and runs only on selected text. Right-click a selection
+**Liquid selection grammar** is optional and runs only on selected text. Right-click a selection
 and choose **Check selection with Liquid**. The first use downloads its model
 and native ONNX Runtime for this Mac; later checks run offline without Python.
 Long selections are checked in chunks, with suggestions shown as they arrive.
@@ -171,25 +173,36 @@ Settings controls which prose and formatting bodies reach the model, and how
 math and other protected content are represented. Review the exact input and
 before/after diff before applying a correction.
 
-Liquid currently supports Intel Macs on macOS 12+ and Apple Silicon Macs on
+Liquid selection grammar supports Intel Macs on macOS 12+ and Apple Silicon Macs on
 macOS 14+. Model/export research is documented in
 [grammar comparisons](docs/grammar-comparison.md); Python is used there only
 for developer experiments and model preparation.
+
+For diagnostic repairs, right-click an error line or a Problems diagnostic and
+choose **Suggest fix**. The separate Liquid LFM3 1.7B model downloads on first use,
+or through **Grammar & spelling → Liquid fix suggestions → Download fix model**.
+Review the diff before accepting. This model requires macOS 13.3+.
+
+**Settings → Comment controls** customizes the formatting-only,
+diagnostics-only and combined off/on comment markers.
 
 ## Overleaf
 
 Choose **File → Connect to Overleaf**, also available in the command palette,
 and open a project in the app's browser. Sign in there once; Safari's session
-is separate. Hide the browser to keep the connection running while you edit
-source in the native editor.
+is separate. Each retained workspace remembers its own browser login, so
+different workspaces can use different accounts. Hide the browser to keep the
+connection running while you edit source in the native editor.
 
 Overleaf remains the saved source of truth. With Auto-save enabled, edits are
 sent after a typing pause; saving completes only after server acknowledgement.
 The local workspace supplies the compiler copy. Choose whether to keep that
 copy and where it lives in the connection window. Temporary copies are removed
-when no longer in use. Reopening a project requires a successful sync before
-editing; offline drafts and conflicts require review rather than silently
-overwriting the server.
+when no longer in use. Reopening a retained workspace restores its project,
+open pages and preview. **Work offline** saves downloaded text files locally;
+the mode and saved drafts survive reopening. **Reconnect** refreshes files and
+merges separate edits; overlapping edits use the diff review. **Save** publishes
+the reconciled draft after the connection is ready.
 
 This integration is experimental and depends on Overleaf's internal frontend
 interfaces. Upstream changes or authentication requirements can interrupt it.
@@ -260,10 +273,10 @@ cargo xtask verify-package --target universal-apple-darwin
 | Component | Pinned version / distribution |
 | --- | --- |
 | Typst | 0.15.1 |
-| Tinymist | 0.15.2 |
+| Tinymist | 0.15.12 |
 | Tectonic | 0.17.0 |
 | TexLab | 5.26.0 |
-| Badness | 0.24.0 |
+| Badness | 0.29.0 |
 | tex-fmt | 0.5.7 |
 | LTeX+ | 18.7.0 |
 | Java for LTeX+ | Temurin 21.0.10+7 |
@@ -326,6 +339,7 @@ apps. The task runner has its own target directory; clean it separately with
 - [PDFium preview](docs/pdfium-preview.md)
 - [TeX completions](docs/tex-completion.md)
 - [Table and mathematical grid editor](docs/table-editor.md)
+- [Git workspace setup and Overleaf backups](docs/git-workspaces.md)
 - [Git diff editor](docs/git-diff-editor.md)
 - [Local file versions](docs/local-file-versions.md)
 - [Terminal](docs/terminal.md)

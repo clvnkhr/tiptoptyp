@@ -23,8 +23,8 @@ Windows ARM release: that target uses its official Windows x64 executable.
 
 The shared TeX finite-build adapter owns a private source mirror and output directory
 below the project's `.tiptoptyp`, along with the child process and its logs.
-The main buffer overlays its on-disk entry; included files remain disk-backed,
-matching the existing Typst policy. Relative paths retain project layout. Build
+The entry buffer and dirty open TeX buffers overlay their on-disk sources in the
+private mirror; other included files remain disk-backed. Relative paths retain project layout. Build
 outputs must never overwrite the user's PDF, source or auxiliary files.
 Tectonic manages its own TeX/BibTeX reruns. System pdfLaTeX, XeLaTeX and LuaLaTeX engines default to finite latexmk builds, which choose BibTeX/Biber from the generated auxiliary files and rerun the engine until references settle. Settings beside the compiler choices expose the latexmk/direct driver, bibliography toggle and a background Biber cache reset. Direct mode retains the basic two/three-pass loop without bibliography automation. The editable latexmk default `-bibtex-cond` preserves a supplied `.bbl` when its source `.bib` is unavailable. The app owns watching, cancellation, source overlays and private output paths; latexmk never runs a persistent viewer/watcher. A cache reset and active system builds exclude one another across editor windows; reset removes only the verified Biber PAR cache leaf, never its parent or TeX installation.
 Shell escape is disabled. Package downloads are allowed by default, with an
@@ -81,18 +81,50 @@ for service behavior; settings controls receive semantic coverage.
 
 ## Concrete limits
 
+### TeX magic comments
+
+TeX builds recognize case and spacing variants of the conventional header
+directives, including `%!TEX program=xelatex`. Header scanning stops at the
+first TeX code line, 256 lines or 64 KiB. The conventions follow the official
+[TeXstudio header reference](https://texstudio-org.github.io/advanced.html#advanced-header-usage)
+and [TeXShop's program/BIB directives](https://pages.uoregon.edu/koch/texshop/changes_3.html).
+
+| Header | Effect in tiptoptyp |
+| --- | --- |
+| `% !TeX root = ../main.tex` | Compile the root document, resolving each relative path from the declaring file. Chains are bounded and cycles/missing files are errors. Root files must stay inside the workspace. |
+| `% !TeX program = xelatex` | Choose `tectonic`, `pdflatex`, `xelatex` or `lualatex` for this build. `TS-program` is supported; known `latexmk` engine names select the corresponding finite driver. |
+| `% !BIB program = biber` | Select BibTeX or Biber for the bibliography build. System engines use latexmk for this request; Tectonic supports BibTeX, while Biber requires a system engine. |
+| `% !TeX encoding = UTF-8` | Validate the UTF-8 declaration. Legacy encodings require explicit encoding import and updating the declaration; comments do not silently transcode source or saved files. |
+| `% !TeX spellcheck = en_GB` | Select the local writing language; underscore and hyphen locale forms are accepted. `none` disables Harper and LTeX+ for this TeX document, preserving Unicode and compiler checks. LTeX+'s explicit language override still wins when following document language is disabled. |
+
+The selected preview document starts root resolution; another active tab cannot
+redirect that preview. The final root's build directives override global build
+defaults without changing Settings. Dirty open TeX buffers are overlaid inside
+the private build mirror. Automatic Compile PDF output follows the resolved root
+name; explicitly chosen Export destinations are retained. The LaTeXdiff wizard
+compiles its generated file with the selected compiler, independent of inherited
+root comments.
+
+Document headers cannot launch arbitrary scripts, commands or command-line
+options. Known unsupported executable directives produce an actionable build
+error. Ordinary editor-only metadata is ignored. See
+[TeX magic snippets](../tex-completion.md#tex-magic-comment-snippets) for insertion
+and the targeted action for adding missing presets to an existing snippet library.
+
+### Other service limits
+
 This implements the editor's existing completion, hover and diagnostic surfaces.
-It does not claim every LSP method. Build roots use the existing preview-entry
-selector, not automatic TeX magic-comment discovery. Included files are read from
-disk, with saves and explicit builds triggering a refresh; external dependency
-watching and multi-buffer overlays remain future work. Build diagnostics retain
+It does not claim every LSP method. The preview-entry selector chooses the initial
+document; TeX builds resolve its magic-comment root chain and use unsaved open TeX
+buffers as private overlays. Saves and explicit builds trigger a refresh;
+external dependency watching remains future work. Build diagnostics retain
 raw output, and known fatal wrapper messages become details of the located error.
 TexLab can publish unversioned diagnostics under LSP; those are accepted only for
 the current URI/session. Edits retain stale annotations until their replacements
 arrive. Versioned diagnostics reject older
 versions. Every formatting/completion/hover response has an exact request key.
 
-The pinned real sidecars are Tectonic 0.17.0, TexLab 5.26.0, Badness 0.24.0 and
+The pinned real sidecars are Tectonic 0.17.0, TexLab 5.26.0, Badness 0.29.0 and
 tex-fmt 0.5.7. Archives are verified against the hashes published in official
 release metadata. `toolchain/tex-licenses.tsv` records each upstream license URL
 and hash; packaging verifies and includes them alongside binary provenance.

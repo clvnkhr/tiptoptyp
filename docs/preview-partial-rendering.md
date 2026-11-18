@@ -4,7 +4,7 @@
 Preview backend also offers the original **Tinymist (Typst only)** complete
 renderer and PDFium. Stored backend choices remain unchanged; new profiles and
 settings without a preview choice use the buffered viewer.
-Both use the same pinned Tinymist 0.15.2 service and source navigation. TeX and
+Both use the same pinned Tinymist 0.15.12 service and source navigation. TeX and
 opened PDFs still use PDFium. This preference changes the live viewer, not PDF
 compilation or export. Switching modes restarts the existing service through the
 normal backend-change path; no second preview worker is created.

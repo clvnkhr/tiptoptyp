@@ -275,8 +275,9 @@ This bounded probe measures the production effects submission path with cached
 1,000- and 20,000-line editor galleys. It reports Off, enabled idle, particles,
 shake, flash, glow and all effects together. Fixtures use an 800 × 640 point
 viewport, a 760 × 600 effects clip, default egui dark visuals, monospace 14,
-scale 1, High particle density, 20 warmup frames and 180 measured frames. The
-logical clock runs at 120 Hz with one accepted typing action every three frames;
+scale 1, High particle density, 20 warmup frames and 180 measured frames. Start
+and near-EOF positions are separate cases; smoke and cursor-afterburner workloads
+are included. The logical clock runs at 120 Hz with one accepted typing action every three frames;
 particle styles cycle through all five choices. Exact emission counts and the
 256-particle bound are checked without wall-time assertions.
 
@@ -866,11 +867,16 @@ egui's full collection copy when creating a font engine and repeated reads for
 later windows/font changes. The font, face index, fallback order and glyph bytes
 are unchanged; user-selected fonts retain their existing loading behavior.
 
-`scripts/measure-startup.py` measures **process spawn to the first fresh editor
-state snapshot**, including native window initialization and document loading.
+`scripts/measure-startup.py` measures **process spawn to the first fresh workspace
+or document snapshot**, including native window initialization and document loading.
 It does not measure compositor presentation or preview readiness. It uses a
 fresh private settings store/workspace and the ordinary interactive app, without
 QA scenes or screenshots. CPU sampling is optional and belongs in separate runs.
+The `empty` workload requires zero tabs and zero source bytes, with no editor
+target or implicit demo. The `typ` and `tex` workloads explicitly write and open
+their named fixtures and still require an editor target. Measurements of the
+former automatic-demo startup are a different workload and cannot serve as a
+matched baseline for the empty-workspace startup.
 The runner saves metadata and completed observations after every launch, builds
 its native driver directory on fresh checkouts, and cleans up the app even if
 sampling or native quit input fails. Comparison launch order reverses each round
@@ -1693,3 +1699,65 @@ profiles and warmups. They do not establish whole-app frame rate, input latency
 or physical Intel performance. Initial-render values are retained separately
 and are not compared as warmed-operation speedups. No new timers, workers, idle
 repaints, per-frame logging or unbounded caches were introduced.
+
+
+## Editor main-thread audit (25 October 2026)
+
+Status and current-line queries now reuse scalar line starts prepared with the
+source revision. Visible line numbers use binary searches and skip collapsed
+zero-height runs. Caret geometry uses the final galley's cached scalar row ends,
+including Unicode, soft-wrap affinity and folded geometry. Diff views request
+only cursor geometry, without building unused sticky or logical-line indexes.
+Finite effects retain their bounded pool without adding idle repaints; enabling
+GPU effects after a CPU-only burst still prewarms their pipeline.
+
+Unsaved Typst backing refreshes and writes run on the existing Tinymist worker,
+ordered before the associated LSP change and formatting. Adjacent newer changes
+coalesce in bounded batches, preserving formatting, lifecycle, URI, version and
+mirror-ownership barriers. Temporary backing files no longer request disk
+persistence; atomic user saves retain their durability guarantees. Initial
+mirror creation and external-file observation remain separate audit targets.
+
+Matched optimized component probes on Apple M2 Max, macOS 14.6.1, Rust 1.98.1,
+release profile, with no concurrent build:
+
+| Cached component, 20,000 Unicode lines | Linear/reference | Indexed |
+| --- | ---: | ---: |
+| Status and current-line queries, median | 2,709.568 µs | 0.029 µs |
+| Caret rectangle near EOF, unwrapped, median | 17.034 µs | 0.030 µs |
+| Caret rectangle near EOF, wrapped, median | 34.020 µs | 0.033 µs |
+
+Source-coordinate results interleave three rounds; geometry results interleave
+five rounds and test both cursor affinities. These exclude index construction,
+layout, widgets, tessellation, GPU work and native presentation. They are not
+whole-app speedup or frame-rate measurements. The temporary-backing probe
+separately reconstructs the previous blocking mirror-refresh/durability path
+and compares queue admission, excluding worker completion; it does not measure
+compile completion latency. Complete samples, hashes and build metadata are in
+`.tiptoptyp/perf-audit-2026-10-25/`.
+
+```sh
+cargo test --release --bin tiptoptyp cursor_coordinate_repaint_cost_probe -- --ignored --nocapture --test-threads=1
+cargo test --release --bin tiptoptyp editor_effect_cursor_lookup_cost_probe -- --ignored --nocapture --test-threads=1
+cargo test --release --bin tiptoptyp backing_update_admission_cost_probe -- --ignored --nocapture --test-threads=1
+```
+
+Remaining candidates include whole-document highlighting/layout-job cloning,
+fold-marker indexing, external-file reads, and settings snapshot cloning.
+Nonempty text selections can clone egui's galley, so selection-heavy cache
+behavior needs its own measurement. GL commands and small paint transforms
+remain on their context owner; particle physics already runs in shaders.
+
+### Retained Overleaf sessions
+
+Session restore reads journals on a worker, with a 128 MiB aggregate read budget
+and bounded per-document records. Only changed documents rewrite source journals.
+The UI opens at most four retained pages per egui frame, once per frame, and
+defers compilation until the restored preview target is selected. Missing online
+downloads wake restoration through the existing worker/browser callbacks; they
+do not add an idle repaint timer. Small page-ID metadata changes use an exclusive
+worker; repeated idle polls preserve its inode/mtime and admit no extra job.
+
+Deterministic tests cover these work bounds, checkpoint reuse, and stale-writer
+rejection. This adds a new offline workflow, so no before/after speed claim is
+made against the former online-only reopening path.

@@ -28,7 +28,7 @@ python3 scripts/test-desktop-ui.py --journey arxiv_tables
 python3 scripts/test-desktop-ui.py --journey math_grids --capture-review
 python3 scripts/test-desktop-ui.py --journey terminal_find
 python3 scripts/test-desktop-ui.py --journey command_palette --capture-review
-python3 scripts/test-desktop-ui.py --journey overleaf_connection
+python3 scripts/test-desktop-ui.py --journey overleaf --trace-preview
 python3 scripts/test-desktop-ui.py --journey file_versions --release --capture-review --trace-preview
 python3 scripts/test-desktop-ui.py --journey preview_jump --capture-review
 python3 scripts/test-desktop-ui.py --journey typing_particles --capture-review
@@ -42,10 +42,16 @@ python3 scripts/test-desktop-ui.py --journey background_fades --capture-review
 python3 scripts/test-desktop-ui.py --journey images
 python3 scripts/test-desktop-ui.py --journey find
 python3 scripts/test-desktop-ui.py --journey empty
+python3 scripts/test-desktop-ui.py --journey workspace_switch
+python3 scripts/test-desktop-ui.py --journey git_setup --capture-review
+python3 scripts/test-desktop-ui.py --journey git_github --capture-review
+python3 scripts/test-desktop-ui.py --journey startup_preview
+python3 scripts/test-desktop-ui.py --journey diagnostic_fix --diagnostic-fix-model-dir /absolute/prepared/liquid-cache
 python3 scripts/test-desktop-ui.py --journey focus
 python3 scripts/test-desktop-ui.py --journey preview
 python3 scripts/test-desktop-ui.py --journey pdf_output
 python3 scripts/test-desktop-ui.py --journey tex
+python3 scripts/test-desktop-ui.py --journey tex_magic
 python3 scripts/test-desktop-ui.py --journey tex_documentation
 python3 scripts/test-desktop-ui.py --journey citation_import
 python3 scripts/test-desktop-ui.py --journey tex_editing
@@ -53,12 +59,20 @@ python3 scripts/test-desktop-ui.py --journey tex_intelligence
 python3 scripts/test-desktop-ui.py --journey tex_save
 python3 scripts/test-desktop-ui.py --journey tex_preview_scroll --capture-review
 python3 scripts/test-desktop-ui.py --journey harper_math_prose --release
+python3 scripts/test-desktop-ui.py --journey comment_controls --release
+python3 scripts/test-desktop-ui.py --journey comment_controls_settings
 ```
 
 The runner compiles a separate `desktop-ui-tests` feature build and copies it
 into a uniquely identified temporary app bundle. It launches one editor window
-with a disposable document, fresh settings and session storage. Use `--release`
-for the optimized production profile; the profile is recorded in `result.json`.
+with a disposable document, fresh settings and session storage.
+The `startup_preview` journey launches with no document argument and requires an
+empty workspace with zero tabs. It then opens the runner's explicitly written
+`journey.typ` and checks its actual visible Tinymist preview. Ordinary startup,
+new windows and empty workspaces do not receive an automatic demo. Snapshot and
+QA scenes select their fixtures explicitly.
+
+Use `--release` for the optimized production profile; the profile is recorded in `result.json`.
 The focused `explorer_toggle` fixture adds 1,800 long comment rows to exercise
 source reflow while preserving the three-page preview. It also closes, reopens,
 and drags Explorer while Code/Preview-only views hide the split editor, then
@@ -124,6 +138,35 @@ they do not click the field to compensate for an incorrect Cmd+F handoff.
 See [the promotion audit](desktop-ui-audit.md) for the original tests, the portions
 now exercised through the real app, and the lower-level coverage retained.
 
+The `overleaf` journey also exercises **Local folders → New Workspace…** with
+native input: Cancel leaves no folder, invalid names and existing folders are
+rejected, and a new local folder is created. Changing to it asks about the dirty
+project source; Cancel retains its current root and every page. **Use for an Overleaf project** reveals
+no project field in the creation form. Create opens the usual Overleaf window
+with the new empty folder selected for offline storage. The browser phase starts
+from login without a project connection, verifies the usual storage row and
+folder remain visible through project-address edits, and uses Reset at login to
+clear the pending choice and hide the row. The connected-project phase also
+chooses a project in that window while retaining the folder without connecting;
+the new workspace gets a separate login profile while its original account is
+paused and its dirty pages remain bound. Returning to the active project and
+choosing Reset restores its original profile and storage, refreshes the
+connection, then returns focus to the unchanged source editor.
+Actual workspace changes close the departing workspace's pages after the usual
+unsaved-change choices, as covered by `workspace_switch`. The Overleaf journey
+also Cancels genuine root changes and requires the current dirty source,
+selection, preview and connection to survive. Merely toggling the chooser
+between Local folders and Overleaf does not change the workspace.
+Deterministic tests cover input validation, labelled controls, disabled busy
+controls and filesystem collisions.
+
+The macOS **Passwords…** action has deterministic launch/fallback/error coverage.
+The automated journey does not open or unlock the user's password store. A
+manual check can open it, unlock a saved Overleaf login, and paste that login into
+the embedded sign-in page; report that result separately. Opening Passwords alone
+does not establish successful sign-in, automatic autofill or Safari-session
+sharing.
+
 | Journey | Input and assertions |
 | --- | --- |
 | explorer_files | Selects an actual folder row, captures its idle selected disclosure when requested, and collapses/expands it through the existing arrow hit rectangle; fresh child targets must disappear/reappear without changing the source owner. Folder and file context menus create empty named documents in the correct directory and open their tabs. Typing filenames stays in the native prompt; Cancel creates no artifact and colliding names report an error without overwriting bytes. Duplicates a file and a folder, verifies their initial copy names and exact recursive bytes (including a binary payload), renames each through the native prompt, and proves the original document, originals and preview owner remain intact. All fixtures live in the runner’s disposable workspace; no user files are touched. |
@@ -145,18 +188,24 @@ now exercised through the real app, and the lower-level coverage retained.
 | pdf_layout | A generated PDF opens beside a designated Tinymist partial preview; repeated Code/Preview/Split layout-picker changes and shortcuts hide the chosen pane, preserve both tab identities, render the PDF through PDFium, leave its bytes untouched, and restore the original source after closing |
 | images | Image dark mode, an explicit original-color baseline, repeated toggles and Dark/Light/Follow page choices; initial image preference restored; exact bounded RGBA/alpha observations, unchanged original file, original source restored on close; optional fresh framebuffers for separate visual inspection |
 | find | Cmd+F with Find focused, repeated Replace clicks, one close-button click; expected popup state and stable measured native height after every action |
-| empty | Cmd+W on the only tab, then Cmd+N; original window remains, new tab has no path and zero source bytes |
-| tex_editing | Named `.tex` file, Unicode caret and undo/redo, 320-line source, `%` comment round trips including active line endpoints, math/bracket selection wrapping, literal TeX command search/replace with undo/redo; native TeX project index includes headings, macros, packages, labels/references and an included file; Explorer selects a different `.tex` preview through its context menu without switching source, with PDFium readiness and index ownership checked; palette New Table opens a 2×2 TeX grid, cell edits stay private until Apply, Cancel is unchanged and Apply has one-step Undo/Redo; Cmd+N creates a clean blank TeX tab while preserving the pinned preview, and Cmd+W returns to the original source without a modal; template picker defaults to TeX, Cancel preserves ownership, Create is typed TeX before its native Save and closes cleanly afterward; disabled autosave leaves the original source and included files unchanged |
+| empty | Close every tab and require a zero-tab workspace. File → Make Demo File opens a real save panel: Cancel leaves no tab or file; Save creates a named `.typ` whose disk bytes match the opened source. Closing it restores the empty workspace; explicit Cmd+N then creates one blank document |
+| workspace_switch | Focused workspace replacement through the real local chooser: a clean active file and parked dirty file remain intact after Cancel; Discard closes every old-owned page and opens an empty destination. A dirty destination retains its tabs when the same root is selected. Save persists its exact bytes before returning to the parent workspace, closes its owned tab even though the file is physically inside that parent, and a later visit restores only the destination’s saved remembered file. Uses private text files and excludes this destructive-to-fixture lifecycle from `all`. |
+| startup_preview | No-path launch has zero tabs and no demo source. Native Open chooses the runner's real `journey.typ`; that sole tab must own its ready, visible three-page Tinymist preview |
+| tex_editing | Named `.tex` file, Unicode caret and undo/redo, 320-line source, `%` comment round trips including active line endpoints, math/bracket selection wrapping, literal TeX command search/replace with undo/redo; separate source fixture checks the actual TeX highlighter, cached scalar matching ranges, automatic pairs including `\[...\]` and `\(...\)`, closer skipping without an edit, atomic pair deletion, Undo/Redo and display-dollar creation; Enter-generated environment ends with indentation, raw/custom/nested environments, existing-end suppression and disabled pairing; persistent innermost environment/math and Typst body matches with stable source/ownership; repeated fold shortcut and palette collapse/expand, sticky-context shortcut/palette controls, and a real link context action dismissed without opening a browser; TeX project index includes headings, macros, packages, labels/references, an included source and its real bibliography; Subfiles opens that database and closing it plus explicit source-tab selection preserves the original source/caret/pinned preview and Explorer layout; Explorer selects a different `.tex` preview through its context menu without switching source, with PDFium readiness and index ownership checked; palette New Table opens a 2×2 TeX grid, cell edits stay private until Apply, Cancel is unchanged and Apply has one-step Undo/Redo; Cmd+N creates a clean blank TeX tab while preserving the pinned preview, and Cmd+W returns to the original source without a modal; template picker defaults to TeX, Cancel preserves ownership, Create is typed TeX before its native Save and closes cleanly afterward; original source bytes, included source and bibliography remain unchanged |
 | tex_intelligence | Real TexLab/Badness readiness and Badness lint output; Harper prose versus math/text boundaries, old Harper/Badness diagnostics retained until refreshed, Problems navigation, accepting a document-defined TexLab command with undo/redo |
+| tex_magic | TeX magic snippets through the real manager and completion menu, editable root placeholder, comment/header prefixes and Undo/Redo; a pinned child resolves its root compiler, unsaved root compiler edits and root redirects produce a fresh PDF at the resolved root, global TeX settings and original files remain unchanged, unrelated source tabs preserve the pinned preview, and Typst excludes TeX snippets. Owned synthetic engines verify routing and PDFium artifact admission; this journey does not establish TeX rendering accuracy |
 | tex_save | New untyped buffer saved as `.tex` through the native panel, exact disk contents, manual save, clean close and reopening the saved file |
 | tex_preview_scroll | A separate tall three-page TeX fixture receives three real edits with default scroll preservation, then three with optional TeX edit-follow enabled through Settings JSON. Each automatic compile must admit a new exact PDF revision, retain the source caret and keyboard focus, and either keep the user's visible page/offset or place the mapped baseline comfortably inside freshly painted bounds. No edit triggers an explicit Compile or Reveal action; automatic navigation remains silent and the original preference is restored |
-| harper_math_prose | Real Typst and TeX mathematical-prose fixtures; clean completed diagnostics across display punctuation and compounds, native typing of a typo and repeated words (including across Typst inline formatting) at exact source locations/original paths, stale results retained after correction until a fresh clean result arrives; Typst and TeX ttt: on/off regions retain six raw Harper findings while exact visible before/after rows change 6 → 4 → 6, restoring source and disk afterward |
-| harper_settings | Real Harper checks after editing Harper dictionary in Grammar & spelling settings and removing its entry; capitalized-name filtering switches on/off without suppressing lowercase spelling errors or repeated-word grammar; an editable Harper style-rule override adds then removes only its own finding, and the source remains unchanged |
+| harper_math_prose | Real Typst and TeX mathematical-prose fixtures; clean completed diagnostics across display punctuation and compounds, native typing of a typo and repeated words (including across Typst inline formatting) at exact source locations/original paths, stale results retained after correction until a fresh clean result arrives; Typst and TeX ttt: off/on regions retain all six prose findings in the raw Harper payload while exact visible prose rows change 6 → 4 → 6. Additional raw findings are allowed only on standalone configured control-comment lines, and every provider's metadata findings must stay hidden. Source and disk are restored afterward. |
+| comment_controls | Focused native Settings and source workflow for TeX and Typst. Settings → Comment controls exposes six editable marker bodies in Both, Formatting and Diagnostics pairs. Clearing a marker or entering a whitespace-equivalent duplicate shows an error while the effective settings remain unchanged; correcting it applies exact text and Reset restores defaults. Native Copy receipts plus reopening Settings prove all six custom values persist with their entered spacing. Source markers ignore whitespace: compact `%ttt:off` / `//ttt:off` openings and internally spaced closing markers exercise default common and all independent custom pairs in both languages. Real Tinymist/Typstyle and tex-fmt format both outer regions while preserving the exact protected source and every control line; one Undo restores the input. Common markers control both features; formatting-only markers leave prose diagnostics visible and diagnostics-only markers leave formatting active. Real Harper retains all six prose findings and any findings on configured control comments in its raw payload. Exact visible prose rows remain before and after the disabled region, on resumes all six, and metadata findings from every provider stay hidden. Additional raw findings at unexpected source locations fail the check. Keeps original file bytes and tab ownership, and restores settings. Requires bundled formatters; excluded from `all`. |
+| comment_controls_settings | Settings discovery without formatter, network or model actions. Clicks the dedicated Comment controls category, verifies all six marker values through native Copy receipts, and repeats navigation using literal `ttt:off`, `diag: off/on`, `%fmt:on` and `//diag:off` searches. Every navigation requires all six editable fields to be freshly observed. Compares complete applied preferences, source bytes on disk, document selection and tab/preview ownership before and after. Excluded from `all`. |
+| harper_settings | Real Harper Problems actions add a spelling word to the editable dictionary, fix one grammar problem, and fix all eligible problems with one Undo for each transaction; Settings can remove/re-add that dictionary word; capitalized-name filtering preserves sentence-initial and lowercase spelling errors and repeated-word grammar; an editable Harper style-rule override adds then removes only its own finding |
 | liquid_selection | Opt-in real local Liquid model: wrapped Typst/TeX prose selected by keyboard and opened through right-click; disabled empty-selection action, exact outside-selection preservation, unchanged source before Apply and after Cancel, modal Undo/Cmd+W ownership, one-step Undo after Apply, complete before/after selection fingerprints including unchanged context and wrappers in both Unified and Side by Side settings, optional fresh review framebuffer for every language/style pair. Uses a prepared read-only model reference, verifies automatic first-use preparation into an empty temporary cache without an Install action or Python, and is excluded from `all`. |
+| diagnostic_fix | Opt-in real local Liquid foundation-model inference for a live Typst compiler diagnostic: Problems/source-line right-click → Suggest fix, exact full-line Unified and Side by Side reviews, source unchanged before Accept and after Cancel, modal Undo ownership, local-line acceptance and one-step Undo, outside-source and owner preservation. Copies the prepared read-only reference into a private cache; no fixed responses, source injection or Python inference. Requires `--diagnostic-fix-model-dir`; excluded from `all`. |
+| diagnostic_fix_setup | Fresh defaults require Harper off and LTeX+ on. Native Settings search opens Comment controls and reads all six marker fields, then finds Liquid fix suggestions, starts the actual download into an empty private cache and cancels it. Requires fresh busy/disabled-download/enabled-Cancel controls and cancellation completion, no published model, unchanged complete preferences and source ownership, and exact original preference restoration. No prepared model is required; a bounded real download is initiated. Excluded from `all`. |
 | liquid_streaming | Focused opt-in long-selection subset: wrapped Typst and TeX paragraphs selected across visual word-wrap rows through native document navigation, then streamed partial suggestions with disabled Apply, complete model-token-bounded chunks, source fences, and one-step Undo. Uses its own initially absent cache and is excluded from `all`. |
-| overleaf_connection | Opens Connect to Overleaf from the actual command palette; blank, insecure HTTP and token-bearing URLs fail before browser allocation. Toggles local-copy storage, verifies temporary mode hides folder controls, types an absolute custom folder and retains it after URL rejection. A relative folder with a syntactically valid project URL on reserved `overleaf.invalid` fails before any storage worker or connection is allocated. Native Select All, typing, Undo/Redo stay in their fields; Find and New cannot affect the source owner. Cmd+W and Hide close only the connection window, reopening retains its unsent URL and folder, and document Find shortcuts work normally afterward. Checks source/disk/tab/preview ownership with bounded metadata and fingerprints. Offline and included in `all`; does not authenticate, contact Overleaf, or prove remote synchronization/hydration or temporary-file deletion. |
-| overleaf_storage | The unchanged three-page Typst fixture is pinned and its actual visible Tinymist backend/readiness is required before connecting, so chooser switching preserves a real preview path and the docked review stays beside it. A localhost HTTP fixture serves the official frontend socket/store surfaces to the real WebView bridge; no account, native IPC shortcuts or direct app-state injection. Holds one binary asset while source is shown, proves native typing is blocked until every file reaches disk, then edits and undoes source. Explicit Disconnect, hiding the manager and closing the temporary project remove its owned directory; a second connection retains an exact custom namespaced local copy. With a real unsaved draft, a remote Explorer root opens Overleaf, its chooser switches Local folders → Overleaf → Local folders and selects the original local root without losing the bound source, selection or connection; the normal root then opens Local folders, repeats the switch and dismisses with Escape. Optional fresh framebuffers capture both chooser surfaces and the root-docked comparison; current panel/diff bounds must contain the review without covering a visible preview. Server-side loopback transport loss plus collaborator edits exercise disjoint auto-merge and an overlapping full-source docked review: Cancel retains the draft, an explicit local resolution still requires Save and a server acknowledgment, then source and autosave are restored before cleanup. This checks integration lifecycle and transport, not compatibility with Overleaf Cloud authentication or its production frontend. |
-| latexdiff_wizard | Opt-in real LaTeXdiff through command palette and three wizard steps; native path/argument typing, Back draft retention, output/input collision rejection, original file and owner preservation, actual generated body additions/deletions, Open selects the complete `.tex` result in a separate tab, Cmd+W closes only the wizard/result, and a private sleeping tool configured through Settings JSON makes busy Cancel observable and proves its process is reaped without an output file. Requires installed LaTeXdiff; excluded from `all`. |
+| overleaf | One browser → file actions → storage/reconnect workflow in a single app session. Every phase returns to the unchanged saved local source with a ready preview, hides the manager and disconnects the transport. Browser-only transitions retain its tab owners; actual project-root adoption closes the old local pages, and returning through the chooser opens the saved local file with fresh owners. The browser phase intentionally retains its disconnected browser; the final storage phase retains only its offline persistent-project metadata. This detects leaked state between phases as well as their individual interactions. **Browser:** Opens the real browser on Overleaf login without creating a project connection; signed-in login redirects are accepted without claiming authentication coverage. Navigates to an ordinary loopback HTTP page and requires an actual page request. Invalid local/code URLs and URL credentials preserve the existing browser and source owner. Storage controls appear for canonical project addresses; a relative folder is rejected before connecting. Native Select All, typing, Undo/Redo and child shortcuts stay in their fields; Cmd+W and Hide retain the browser and unsent project options. Offline fixture data and no cloud writes. **Files:** Uses real pinned Tinymist previews and an authoritative localhost file API with CSRF protection. Connection must retire the old local preview and source tabs. After adoption, Explorer opens and pins a real server-owned `preview.typ` document that was hydrated through the authoritative project tree and document API. Native wheel input first scrolls a long local Files list past 80 points; connecting the small remote workspace must expose current nonempty `main.txt` and `fixture.bin` hit targets without any corrective scrolling. Through Explorer context menus and native prompts, creates a folder and TeX document, edits and confirms its save, duplicates it into a distinct server ID, renames and moves the copy, and deletes the original file and folder. Server contents, mirrored paths and active document are checked after receipts; unrelated server source and the current workspace’s pinned preview stay intact. No direct native IPC/state injection or cloud project writes. **Storage and reconnect:** The unchanged three-page Typst fixture has a ready, visible Tinymist preview before connecting. Actual project adoption closes its old pages. After hydration, Explorer opens the authoritative server’s real `preview.typ` document, which supplies the current workspace’s pinned preview for chooser and docked-review checks. A localhost HTTP fixture serves the official frontend socket/store surfaces to the real WebView bridge; no account, native IPC shortcuts or direct app-state injection. Holds one binary asset while source is shown, proves native typing is blocked until every file reaches disk, then edits and undoes source. Blocked native typing during held hydration and sign-in must start with no rejection warning, paint a visible acknowledgment, then let it expire while preserving the exact source, cursor/selection, tabs, preview owner and keyboard focus. The held-hydration attempt also captures a fresh root warning framebuffer when `--capture-review` is enabled. Its deliberately long Unicode project name must leave the separate thin status column aligned through hydration and readiness; a native hover opens status text without changing the source or selection. Ordinary local headers before connection and after temporary-project cleanup must have no current status target. Existing optional root framebuffers show the held and ready long-name header states. Explicit Disconnect, hiding the manager and returning to the original local root close all temporary-project pages and remove its owned directory; a second connection retains an exact custom namespaced local copy. Authentication is then enabled on that local HTTP server: a genuine project redirect to `/login` locks the exact dirty draft and selection; a native click submits an ordinary CSRF-protected form, receives a host-only HttpOnly session cookie, and lands on the `/project` dashboard. The native browser must return once to its bound project using a fresh browser, inbox and epoch on the same persistent session profile; the old login inbox is retired while the workspace lease and dirty source stay intact. Manual Reconnect advances one epoch, a successful login/dashboard handoff advances exactly one more, and cookie reuse without sign-in advances only the manual epoch. Editing stays locked until fresh source and the held binary asset reach disk. Recreating the browser through Reconnect must reuse that session without another login request; server-side expiry must require the form again and preserve the same workspace, source, tabs and selection. After the valid parent is fully ready, one native HTML button creates a same-project iframe and popup that attempt malformed native IPC; both must actually report IPC availability and the parent must stay healthy. Only sanitized counts and capability booleans are observed, never cookie values. This checks browser recreation, not persistence across an application restart. With a dirty selected source, changing its storage folder exposes Apply/Reset: Apply asks before leaving the dirty project root; Cancel preserves the session without creating a directory. The main Reconnect retains the current workspace and exact draft/selection and waits for fresh source and held-asset hydration. Reset restores the active storage settings and removes both pending controls; no save is sent. With a real unsaved draft, a remote Explorer root opens Overleaf, its chooser switches Local folders → Overleaf → Local folders without changing roots. Selecting the original local root opens the unsaved-change prompt; Cancel preserves every project page, source and selection. The remote root then reopens its existing Overleaf connection, returns to Local folders and dismisses with Escape. Optional fresh framebuffers capture both chooser surfaces and the root-docked comparison; current panel/diff bounds must contain the review without covering a visible preview. Server-side loopback transport loss plus collaborator edits exercise disjoint auto-merge and an overlapping full-source docked review: Cancel retains the draft, an explicit local resolution still requires Save and a server acknowledgment, then source and autosave are restored before cleanup. The same HTTP fixture emits official collaborator tracking events: single-click seeks once; double-click follows the viewport while preserving the local selection across the Save shortcut, including a distant cursor in a second document; local arrow navigation cancels follow; repeated double-click keeps follow active; triple-click stops; peer departure clears follow. Every followed location must publish a fresh visible root-editor caret, and the pinned Typst preview and both source documents stay unchanged. This checks local HTTP authentication, native session reuse, integration lifecycle and transport; it does not establish compatibility with Overleaf Cloud authentication or its production frontend. Main-frame navigation to a separate loopback sign-in origin must lock the exact unsaved draft and selection without a socket-disconnect shortcut; entering the project URL and reconnecting requires fresh source and asset hydration before editing. |
+| latexdiff | Opt-in real LaTeXdiff through the command palette and one form: all file/options controls are directly available, native path/argument typing rejects output/input collisions, and editing the destination recovers on the same page. Create automatically opens the exact generated `.tex` in a separate pinned tab, shows creation/compile feedback, saves a fresh adjacent PDF with selected pdfLaTeX, and requires the effective PDFium renderer to display that artifact. Original files and prior tabs remain intact; closing the result restores its original source owner. A private sleeping executable configured through Settings makes busy Cancel observable and proves its process is reaped without a source or PDF output. Requires installed LaTeXdiff, latexmk and pdfLaTeX; excluded from `all`. |
 | editing | Typing and Unicode replacement, undo/redo caret and saved-state indicator, acknowledged multiline paste, upward mouse/keyboard newline selection, direction-preserving comment round trips including a zero-column or blank active endpoint |
 | search | Query focus, next/previous, case/regex toggles, replace one/all, undo and Escape |
 | tabs | Previous/next with separate unsaved buffers and carets; original preview retained |
@@ -164,6 +213,8 @@ now exercised through the real app, and the lower-level coverage retained.
 | layout | Code/preview/split shortcuts and every compact Layout picker row with a live Tinymist child behind the native popup; Explorer hide/maximize/restore, editor setting shortcuts, panel maximize/Activity/close and picker hide/reopen preserve manual height and selected tab; Appearance’s Compact layout controls toggle restores every separate toolbar action and retains panel state |
 | explorer_scroll | Native wheel input over long Files and Contents lists, then Files with Cmd+F's sticky search open; measured offsets advance and remain advanced across fresh frames |
 | git_hunks | Three changes across a 180-line Typst Git document in a split editor/preview window; a thin right-edge overview includes the offscreen last hunk, stays inside the code pane and retains its global positions during real wheel scrolling without changing pane width; double-clicking the Git file row opens the docked whole-document diff without changing source or pane width; marker hover preserves focus, clicks open all lines at the selected change, navigation moves the live cursor and an offscreen hunk receives its finite reveal pulse after scrolling into view, individual reversions and edits outside the original hunk refresh immediately and undo/redo, Find retains keyboard ownership, Escape preserves the pane width, independent/fixed-width divider settings are exercised by real drags, selected text survives right-click/Copy and direct math conversion in the docked editor, and a diff button tooltip opens in a native window with Tinymist active |
+| git_setup | Create and connect a real Overleaf storage workspace against a loopback fixture, work offline and save native source, then enter author, branch and local bare remote through Set up Git. Stage, commit and explicitly push the first backup; verify exact source/asset bytes, local author, origin/upstream and exclusion of all `.tiptoptyp` data. Configure Git prefills saved author choices; Cancel preserves configuration, its modal blocks workspace navigation, and switching after Cancel leaves no stale form. All fields and footer controls fit the actual native child viewport. Uses isolated Git configuration and no real account; excluded from `all`. |
+| git_github | Real native GitHub mode, Sign in, Copy code and Open GitHub actions against an owned synthetic CLI and loopback provider. Approval is explicitly simulated service state, never real browser OAuth. A changed account is rejected before POST. Private repository creation leaves the remote empty until native stage/commit/Push. A delayed creation acknowledgement followed by Cancel/workspace change preserves an uncertain receipt across reopening; explicit Retry connection performs GET and connects without another POST. Source/asset bytes, private metadata exclusion and child form bounds are checked. No real GitHub credentials, accounts or repositories are used; excluded from `all`. |
 | file_versions | Creates a fresh private named Typst file, edits and explicitly saves two- and three-page revisions through the actual editor, then opens File → Revert To. History opened from Code-only must occupy the code pane in Split view with its full diff beside a visible preview and no separate native history window. Real version selectors must identify the expected older/current fingerprints; typing into the read-only comparison leaves the buffer and disk untouched. Each side’s Preview PDF button must display that side’s fingerprint and exact page count in PDFium, hide the native Tinymist view, and preserve the current source. Restore replaces the complete buffer and disk; the pre-restore newer revision remains available for a second restore. Escape from a rendered older PDF returns to the current live preview; Cmd+W and Close also leave the source tab/window intact. Only the disposable tab is closed afterward. Optional fresh main-viewport framebuffer for separate visual inspection |
 | folding | Repeated shortcut and gutter collapse/expand without losing headers or source |
 | closing | Dirty-close Cancel/Escape preserve text; explicit Discard closes only the requested tab |
@@ -178,7 +229,7 @@ now exercised through the real app, and the lower-level coverage retained.
 | partial_zoom_stress | The higher-resolution viewport cache is admitted, its setting disables/releases and reenables it, and real keyboard zoom records fresh cache hits/handoffs in both Tinymist viewers and advances the production native compositor counters; Home/End work after zoom/fit; opt-in dense 48-page matrix/nested-math fixture with unequal fractional widths; real-app partial zoom/refills on the dense fixture, full-viewer keyboard zoom and last-page tracking on the standard 48-page fixture, then return to the dense partial entry; actual paper-scale/ink assertions, cached native feedback through three narrow/widen cycles in each viewer, no stranded render flight after delayed duplicate resize notifications, and native/sharp scroll-anchor comparisons within 1.1 CSS pixels, and identity-based session cleanup |
 | background_fades | Edit independent blur/transparency directions in Appearance through their actual dropdowns, require the requested and applied native directions on document and Settings windows, and reject uniform fallback for a requested directional effect. Transparency changes and repeated focus/Find typing preserve each controller and its application count; fullscreen removes both effects and restores the chosen directions afterward; both directions return to Uniform. No preview backend switching |
 | background | Hidden Tinymist frontend loads before reveal; WindowServer accepts separate document/Settings blur configurations in Tinymist and PDFium; Settings/Find focus, theme changes and native maximize/restore retain their accepted radius and controller identity without reapplying blur; repeated off/on, Find typing and source preservation. Accepted radius records a successful native call, not compositor readback or composed pixel verification |
-| focus | Two document windows; Settings opened/closed from alternating owners; native focus returns to each owner; minimize/restore, Finder app switch, close second window once |
+| focus | New Window starts with zero tabs and no demo. Targeted observations preserve that empty state and the original document throughout Settings opened/closed from alternating owners, minimize/restore, Finder app switch and closing the second window once |
 | pdfium_resize | Compile an isolated three-page tall TeX fixture through the normal pinned-preview controls into the effective PDFium viewer without changing the Typst backend preference, fit width, and repeatedly drag the actual editor/preview divider with native mouse down/move/up. Every held frame retains the resident batch, active scale and request/admission counters, including a stationary hold beyond the settle deadline; each release publishes exactly one sharp batch at the final physical scale. Positioned native Command-wheel then zooms in/out on page three and checks the PDF point under the cursor against fresh painted-page geometry. It does not change macOS Accessibility Zoom preferences. Source and original session ownership survive. Bounded snapshot latencies are observations, not a presentation-rate benchmark |
 | preview | Pin a real Typst fixture; switch PDFium → Tinymist through Settings; require the selected renderer to become ready; light/dark × comfy transitions; applied palette and live Tinymist DOM checks |
 | pdf_output | Tinymist live preview and engine refresh do not create an adjacent PDF; PDF button and Cmd+R commit actual PDF bytes, edits mark it stale without overwriting it, failed builds retain the old file and clear the queue, corrected builds recover, and PDFium cache refresh does not write the adjacent file |
@@ -217,7 +268,7 @@ The existing `scripts/test-native-windows.py` covers a separate native lifecycle
 fixture, not those complete editor journeys.
 
 Use `--capture-review` to retain the initial toolbar/root framebuffer and, with
-`settings_search`, `tool_defaults`, `controls`, `preview_find`, `tables`, `problems_focus`, `terminal_find`, `command_palette`, `images`, `explorer_toggle` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
+`settings_search`, `tool_defaults`, `controls`, `preview_find`, `tables`, `problems_focus`, `terminal_find`, `command_palette`, `images`, `explorer_toggle`, `git_setup`, `git_github` or `all`, the affected settings/popup/search framebuffers for separate inspection. This is opt-in, never a visual
 pass by itself. Use `--trace-preview` to retain native bounds/property traces.
 `--review-failure` retains a failed fixture for up to three minutes and prints its
 exact app path; writing the printed resume file allows cleanup, without changing
@@ -402,15 +453,42 @@ Use a separate run for CPU-stack attribution. See the
 
 ### Native TeX editing
 
-The three `tex_*` journeys, `harper_math_prose` and `harper_settings` run individually, together with `--journey tex`,
+The `tex_editing`, `tex_intelligence`, `tex_save`, `tex_preview_scroll`, `harper_math_prose` and `harper_settings` journeys run individually, together with `--journey tex`,
 or as part of `all`, against named files. Initial settings are changed through the real JSON editor and restored after
-the journey. `harper_settings` edits the dictionary and capitalized-name filter through their Harper configuration controls in Grammar & spelling,
-reopens the dictionary before removing its entry, and requires a fresh real Harper result after every change. They do not inject diagnostics, completion responses or editor
+the journey. `harper_settings` adds an unknown word through its actual Problems row, then removes, re-adds and removes it in Grammar & spelling Settings.
+It checks that name filtering still reports sentence-initial `Misspelld`, applies one real grammar correction and undoes it, then fixes both a repeated word and an incorrect article together and restores both with one Undo.
+Problem actions are resolved from fresh Harper provider/source locations rather than assuming provider order, and every change requires a completed real Harper result.
+Optional review captures show the main viewport with the actual dictionary and fix buttons visible. They do not inject diagnostics, completion responses or editor
 handlers. The intelligence journey requires working pinned TexLab and Badness;
 Harper runs normally in its background worker. The Typst fixture also keeps clean sentences continuous through `#emph`, `#strong` and `#text` bodies, then checks a repetition crossing an `#emph` boundary through real typing. Both math-prose fixtures include Barbato/Romito at the beginning of a sentence and repeated straight/curly possessives in ordinary prose; none may produce spelling diagnostics. Its completion fixture includes
 a full document and a locally defined command, so it does not require external
 package completion databases. Read-only observations include provider readiness,
 diagnostic counts/current revision and fingerprints, never diagnostic text.
+
+`tex_editing` first opens a separate named editor fixture with compilation paused.
+It requires the actual cached TeX syntax and observes the effective rainbow
+preference. Native typing creates a brace pair and checks its matching ranges in
+Unicode scalar positions; typing its closer must move the caret without changing
+the revision, and Backspace removes the empty pair as one edit. Undo/Redo and
+inline-to-display dollar-pair creation preserve exact source fingerprints. Real
+fold headers come from a section, a command definition and an environment. The
+fold shortcut is repeated with stable-frame checks, and palette collapse/expand
+must affect those same headers. Sticky-context controls are exercised through
+both shortcut and palette. A native context menu offers the URL action at a TeX
+link and is dismissed. The fixture restores preferences, compilation pause,
+source/caret, layout and pinned preview; an identical-byte Save restores the
+private original fixture's file history. With `--capture-review`, the live
+brace-pair state is captured for separate syntax/rainbow/highlight inspection.
+
+The project fixture writes a minimal real `.bib` file, declares its bibliography
+and style in the TeX source, and requires both the included `.tex` and database
+identities in the completed index. It temporarily maximizes Subfiles, clicks the
+observed bibliography row, verifies the opened database's bytes and clean tab,
+then closes it. Closing can select the adjacent pinned master; the journey
+explicitly selects the original source tab before checking its source, caret,
+dirty state and preview ownership. It restores the prior Explorer section layout
+and verifies every fixture's disk contents. Magic-root chains and unsaved parent
+bibliography declarations also have deterministic worker regressions.
 
 These are interaction checks, not typing-latency benchmarks or PDF rendering
 proof. TeX formatting, SyncTeX navigation and mixed Typst/TeX preview transitions
@@ -542,34 +620,74 @@ still run in ordinary CI. It changes preferences through the real JSON editor,
 uses disposable named files, and restores its settings. Framebuffers are
 separately inspected evidence, not proof of native child-view composition.
 
-## LaTeXdiff wizard
+## LaTeXdiff
 
 ```sh
-python3 scripts/test-desktop-ui.py --journey latexdiff_wizard --release
+python3 scripts/test-desktop-ui.py --journey latexdiff --release
 ```
 
-This opt-in journey requires a working `latexdiff` on PATH or in MacTeX. A missing
-binary is a failed/unavailable interaction check, never a skip or pass. The
-wizard is opened through **Create LaTeX Diff** in the real command palette. All
-fields are typed into fresh focused native controls, and their path/options
-fingerprints must match the inspection state before navigation. The private
-fixtures have spaces in their names and contain both changed prose and math.
+This opt-in journey requires working `latexdiff`, `latexmk` and `pdflatex` on PATH
+or in MacTeX. A missing tool is a failed/unavailable interaction check, never a
+skip or pass. It explicitly selects pdfLaTeX and PDFium through the real Settings
+JSON editor in its disposable profile. **Create LaTeX Diff** opens from the real
+command palette, with Older file, Newer file, Output file, options and Create on
+one form. Native controls must be fresh and focused, and path/options fingerprints
+must match the inspection state; multi-page navigation and its old inspection
+field cannot pass. Private fixtures have spaces in their names and changed prose
+and math.
 
-The journey checks Cmd+W ownership, Files → Output and options → Review, Back
-retention, an attempted output/input collision, and recovery with a fresh output
-path plus `--math-markup=1`. It reads the actual generated file and requires
-additions/deletions in the document body, so preamble macro definitions alone
-cannot pass. Opening the result must expose its complete exact source in a new
-TeX tab; neither original input nor the previous editor buffer may change.
+The journey checks Cmd+W ownership, an attempted output/input collision and
+recovery on the same page with a fresh output path plus `--math-markup=1`. It
+reads the generated source and requires additions/deletions in the document body,
+so preamble macro definitions alone cannot pass. Creating the result must close
+the form, expose the complete exact source in a new pinned TeX tab, visibly report
+creation/compilation, and save its adjacent PDF without another confirmation.
+A matching current **Saved** receipt, PDFium requested and effective readiness,
+and a fresh bounded PDF with a pdfTeX producer are all required. Neither original
+input nor the prior editor buffer may change; closing the result must restore its
+previous tab owner and exact source.
 
-A second run temporarily chooses a private sleeping shell executable through the
-real Settings JSON editor. After its PID receipt and busy state are observed,
-the native Cancel button must stop/reap that process without writing output.
-The wizard closes and the executable setting returns to automatic detection in
-the disposable profile. The test never edits the user's settings or runs a
-configured shell against a real document. `--capture-review` additionally saves
-fresh wizard framebuffers at each step for separate pixel inspection; the
-semantic/native journey does not itself claim visual verification.
+A second run temporarily chooses a private sleeping executable through the real
+Settings JSON editor. After its PID receipt and busy state are observed, Cancel
+must stop/reap that process without writing either source or PDF output. The form
+closes, and the executable, compiler and renderer settings return to their initial
+values in the disposable profile. The test never edits the user's settings or
+runs a configured shell against a real document. `--capture-review` additionally
+saves a fresh form framebuffer for separate pixel inspection; the semantic/native
+journey does not itself claim visual verification.
+
+## Local diagnostic-fix review
+
+`--journey diagnostic_fix_setup` checks Settings discoverability and the explicit
+foundation-model download without requiring a prepared model. It begins with a
+fresh profile, verifies Harper off and LTeX+ on, reads the six comment markers
+through their real fields, searches for Liquid fix suggestions, starts its real
+resource worker and cancels it promptly. It requires the busy controls and a
+terminal cancellation, checks that no complete model was published and compares
+the complete applied preferences before and after. Source ownership and original
+preferences must be restored. This focused check initiates a bounded real network
+download, is excluded from `all`, and does not claim model inference coverage.
+
+`--journey diagnostic_fix --diagnostic-fix-model-dir /absolute/prepared/liquid-cache`
+is an opt-in real-model check, excluded from `all`. The reference folder contains
+the prepared `foundation/lfm3-1.7b-q4-k-m` model and current-architecture runtime.
+The runner reads it without modification and copies regular files into the
+disposable journey cache. It rejects symlinks and writable aliases. The app then
+verifies its compiled asset pins, loads the real model and performs inference;
+the journey does not inject a proposal or a diagnostic. Download/setup integrity
+and cancellation have separate deterministic coverage, so this interaction check
+does not redownload the model.
+
+The journey opens a disposable Typst source containing a real compiler error,
+matches the live Problems row by line and diagnostic-message fingerprint, then
+right-clicks **Suggest fix** in Problems for Unified review and on the actual
+source line for Side by Side review. In both styles it checks the exact
+complete target line before and after, unchanged source before Accept and after
+Cancel, modal Undo ownership, one-step Undo after Accept, preserved source
+outside the line, and the original tab/path. The source file is not autosaved.
+This native interaction evidence is separate from framebuffer or composed-window
+visual verification. Missing models, inference errors or unavailable macOS input
+permissions fail the check; they never become a simulated pass.
 
 ## Local TeX documentation
 
@@ -600,6 +718,70 @@ the live metadata services were reachable. This focused journey is excluded from
 
 ### Bundled local LTeX+
 
-`python3 scripts/test-desktop-ui.py --journey ltex` uses the bundled server and Java runtime (never a diagnostic mock), without requiring an external launcher. The runner restricts PATH and supplies invalid inherited Java paths so the real check must use the app's runtime. It verifies the effective Bundled mode, clicks Redownload LTeX+, observes the busy state and available Cancel control, waits for the architecture-specific pinned distribution to download and verify, and proves that source and applied preferences remain unchanged by reopening the complete validated Settings JSON. This explicit journey needs network access and downloads approximately 315 MB (ARM) or 316 MB (Intel), with a three-minute resource budget. It then enables the checker through Settings, checks both TeX and Typst with mapped rules and correction suggestions, retains stale results during native source replacement, waits for the corrected clean response, checks that the original files were not written, then disables the provider. This focused resource journey remains excluded from `all`. A development build needs the staged `toolchain/ltex` package; the packaged app uses its own resources.
+`python3 scripts/test-desktop-ui.py --journey ltex` uses the bundled server and Java runtime (never a diagnostic mock), without requiring an external launcher. The runner restricts PATH and supplies invalid inherited Java paths so the real check must use the app's runtime. It verifies the effective Bundled mode, clicks Redownload LTeX+, observes the busy state and available Cancel control, waits for the architecture-specific pinned distribution to download and verify, and proves that source and applied preferences remain unchanged by reopening the complete validated Settings JSON. This explicit journey needs network access and downloads approximately 315 MB (ARM) or 316 MB (Intel), with a three-minute resource budget. It ensures the checker is enabled through Settings without blindly toggling an already enabled default, checks both TeX and Typst with mapped rules and correction suggestions, retains stale results during native source replacement, waits for the corrected clean response, checks that the original files were not written, then disables the provider to verify retirement and restores its original activation. This focused resource journey remains excluded from `all`. A development build needs the staged `toolchain/ltex` package; the packaged app uses its own resources.
+
+Both modes also check a mathematical Typst template containing code, author string arguments, equations, eponyms and valid British spelling. Only deliberately inserted grammar errors may be reported, at their original positions with corrections. Replacing those errors must produce a stable clean result without saving the original file.
 
 To check a custom server instead, pass `--ltex-executable /path/to/ltex-ls-plus/bin/ltex-ls-plus`. The journey selects Custom path through the real Settings controls; it preserves the inherited environment for that explicit override. A missing custom executable fails preflight. Resource cancellation and repeated-click suppression have deterministic Settings UI coverage. The custom-server journey skips the bundled resource redownload. `--capture-review` captures fresh expanded Grammar & spelling settings before and after resource recovery; inspect those PNGs separately from interaction results.
+
+### Overleaf workspace sessions
+
+`python3 scripts/test-desktop-ui.py --journey overleaf_session` uses a loopback
+fixture and native input to create two real workspaces, save offline, switch and
+reopen the selected base, refresh and merge nonoverlapping changes, cancel and
+resolve an overlapping diff, and verify distinct synthetic logins in the same
+origin/project. Returning to the first workspace must reuse its original login.
+The fixture observes only synthetic server session ordinals, never cookie values.
+This journey performs no real Overleaf account or project writes.
+
+### Git backups of an Overleaf working copy
+
+`python3 scripts/test-desktop-ui.py --journey git_setup` connects a private local
+HTTP project through the ordinary Overleaf workspace flow, switches to offline
+mode and performs a real native Save before configuring Git. A separate local
+bare repository receives only the first explicit Push. The journey checks the
+real working repository and remote commit rather than relying on success text.
+Private session metadata and source journals stay out of the commit through the
+repository's local exclude file; the project's `.gitignore` is not changed.
+Pull and Revert remain disabled for the managed Overleaf source, whose file
+updates must continue through the Overleaf merge model.
+
+Both the app and verification commands use a temporary empty global Git config,
+disable system Git configuration and discard inherited Git overrides. No real
+repository, global author settings, Git host or Overleaf account is modified.
+The form's native child viewport and hit rectangles provide bounded geometry
+evidence. `--capture-review` additionally retains its fresh framebuffer for
+separate inspection; that image does not prove composed native window pixels.
+The destructive-to-fixture setup/backup workflow is deliberately outside `all`.
+
+### GitHub setup with a synthetic provider
+
+`python3 scripts/test-desktop-ui.py --journey git_github` uses the same real
+Overleaf offline Save and native Git controls, plus a private executable at
+`github-helper/gh` under the existing desktop-test directory. Only a build with
+`desktop-ui-tests` and the active inspection harness recognizes that fixture;
+production does not accept a helper URL or authentication override.
+
+The CLI double implements the exact production `auth status`, device sign-in,
+public identity and repository API command schema. Its only service endpoint is
+an authenticated localhost fixture. The native form displays the synthetic
+device code; the existing clipboard watcher verifies Copy without exposing
+clipboard contents and restores the user's previous clipboard. Open GitHub is
+clicked and records its validated loopback destination while the test build
+suppresses external navigation. The journey then explicitly simulates provider
+approval. This establishes native app interaction and synthetic protocol
+behavior; it does **not** establish real GitHub sign-in, browser approval or
+system credential-store behavior.
+
+The fixture API returns the same canonical `github.com` repository addresses as
+production. Private Git configuration rewrites those addresses to actual local
+bare repositories, and the app's test environment permits only the local file
+transport: a broken rewrite fails before external Git networking. The first
+commit is sent only after clicking Push. Account replacement,
+cancelled creation acknowledgements, workspace departure and durable recovery
+are separate checks: reopening restores the uncertain receipt, and explicit
+Retry connection reads the known repository through GET without repeating POST. All inherited GitHub
+token/configuration variables are removed, and both Git and the CLI use private
+configuration folders. No real GitHub account, token, keychain entry or remote
+Git service is read or changed. Git mutations stay inside the fixture; the
+runner reads the source checkout only for build provenance.

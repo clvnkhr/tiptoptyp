@@ -111,7 +111,7 @@ cargo test --release --bin tiptoptyp system_emoji_sequences_render -- --nocaptur
 
 ## Native dependency and build
 
-`libghostty-vt = 0.2.1` is pinned; Cargo.lock pins its matching sys crate, which
+`libghostty-vt = 0.2.2` is pinned; Cargo.lock pins its matching sys crate, which
 builds Ghostty commit `a887df42c56f6de86c0fe6da9c4eeca37931e083`. This is the real
 Ghostty VT C library, linked statically through the safe Rust wrappers, with
 `portable-pty` managing the shell. No Ghostty application installation or
@@ -129,7 +129,7 @@ Native dependency notices are tracked in [licenses](licenses/README.md) and
 included by `cargo xtask generate-notices` in the packaged notices.
 
 Upstream references: [Ghostty's embedding example](https://github.com/ghostty-org/ghostling),
-[versioned Rust bindings](https://docs.rs/libghostty-vt/0.2.1/libghostty_vt/),
+[versioned Rust bindings](https://docs.rs/libghostty-vt/0.2.2/libghostty_vt/),
 [portable-pty](https://docs.rs/portable-pty/0.9.0/portable_pty/).
 
 ## Ownership and bounded work

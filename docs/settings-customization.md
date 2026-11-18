@@ -1,6 +1,6 @@
 # Settings customization
 
-Settings uses compact categories: Appearance, Editor, Grammar & spelling, Writing,
+Settings uses compact categories: Appearance, Editor, Comment controls, Grammar & spelling, Writing,
 Preview, Tools, Shortcuts, Snippets and Templates. Wide windows show the categories beside the
 form; narrow windows use a selector next to search. Search spans every category.
 Choose a result to switch to its category and briefly highlight its control.
@@ -28,6 +28,57 @@ directories are rejected. Tool-specific configuration must be a JSON object. Kno
 types are checked before applying; app-owned preview keys and entry overrides
 are rejected. Other provider keys are validated by the receiving tool. Editing
 a draft does not change the app.
+
+## Startup and upgrade checks
+
+Saved preferences use the same validation as the Settings JSON editor. Startup
+checks the complete settings before creating windows, starting tools or enabling
+persistence. Unsupported keys, old value types and invalid choices stop startup
+with the settings path and offending field. The original preferences file stays
+unchanged; the app does not replace it with defaults or stash a rewritten copy.
+Correct the reported value before reopening the app.
+
+Incomplete form entries remain editable drafts until valid. Publication and
+session-construction checks also reject invalid settings produced internally.
+
+Use the read-only command to check a profile without launching the editor:
+
+```sh
+/Applications/tiptoptyp.app/Contents/MacOS/tiptoptyp --check-settings
+tiptoptyp --check-settings "/path/to/app.ron"
+```
+
+Without a path, it checks that binary's usual `app.ron` preferences file. A missing
+profile validates the built-in defaults, so first installation remains possible.
+Invalid input exits with a failure status. The macOS installer runs this check
+with the newly packaged executable after package verification and before
+replacing the installed app. A failed check or an executable that cannot run
+leaves the existing installation intact.
+
+Known Tinymist defaults use typed choices shared with runtime validation.
+The build script rejects invalid defaults and a bundled Tinymist version whose
+configuration contract has not been reviewed. For example, `formatterProseWrap`
+accepts `"none"`, `"fill"` or `"sentence"`; the old Boolean `false` is rejected.
+`"none"` preserves authored source wrapping. A defensive Tinymist configuration
+failure reports the exact field immediately and does not enter the restart loop.
+
+## Comment controls
+
+Open **Settings → Comment controls** to customize the paired off/on comments for
+formatting and diagnostics. It has its own category immediately after Editor.
+Search accepts the comments themselves, including `ttt:off`, `diag: off/on`,
+`%fmt:on` and `//diag:off`.
+
+| Pair | Default off / on markers |
+|---|---|
+| Both formatting and diagnostics | `ttt: off` / `ttt: on` |
+| Formatting only | `fmt: off` / `fmt: on` |
+| Diagnostics only | `diag: off` / `diag: on` |
+
+Use a standalone TeX `%` or Typst `//` comment before each marker. Whitespace is
+ignored, so `%diag:off` and `// diag: off` are valid. Each off marker takes effect
+until its matching on marker. The six fields accept custom marker bodies; invalid
+or ambiguous values show an error without changing the applied settings.
 
 ## Tool commands
 
@@ -97,11 +148,12 @@ an argument to pass to the binary. Search Settings for “ignored codes” to fi
 ## Grammar & spelling
 
 Settings → **Grammar & spelling** keeps **Harper spelling and grammar**,
-**LTeX+ spelling and grammar**, **Liquid selection grammar**, and **TeX prose rules**
+**LTeX+ spelling and grammar**, **Liquid fix suggestions**, **Liquid selection grammar**, and **TeX prose rules**
 together. TeX prose rules apply to Harper and Liquid; LTeX+ uses its own LaTeX
 configuration. Harper and LTeX+ remain independent background checkers, with
-separate provider names in Problems. Liquid checks selected text only and opens a
-correction review. Writing retains handwriting, punctuation, Unicode and math
+separate provider names in Problems. Liquid selection grammar checks selected
+text; Liquid fix suggestions target a diagnostic. Both open a review before
+applying changes. Writing retains handwriting, punctuation, Unicode and math
 formatting preferences.
 
 Expand **Harper configuration** for **Harper language**, **Harper dictionary**,
@@ -125,8 +177,17 @@ shows the language-specific disabled-rule lists, accepted mathematical vocabular
 enabled rules and ignored findings. Picky rules remain off. **Follow document language**
 uses the same document language policy as Harper; disable it to use the JSON `language`
 value explicitly. UK English is the fallback. Accepted words affect spelling only.
-Both background grammar providers remain off in factory defaults; existing user
-preferences are not replaced. Liquid remains an explicit selected-text review.
+Harper defaults off and LTeX+ defaults on; existing user preferences are not
+replaced. Liquid remains an explicit review.
+
+In **LTeX+ setup and configuration**, **Suggest Oxford spelling variants** defaults
+off: valid British spellings such as “generalised” do not need replacing. Turn it
+on to request Oxford spelling advice. Typst checks use a source-aligned prose
+mirror that excludes code, configuration/author strings and equations while
+preserving rendered content and original correction positions. Capitalized mathematical
+compounds such as “Leray–Hopf” are exempt from spelling reports; ordinary spelling
+and grammar checks remain active. These filters do not rewrite your dictionary
+or configuration JSON.
 
 ## Diagnostic lifetime contract
 
@@ -165,7 +226,7 @@ Each snippet has **Opening delimiter** and **Closing delimiter**, defaulting to 
 
 The JSON fields are `placeholder_open` and `placeholder_close`. Bundled suggestions live in `snippet_presets`, custom entries in `snippets`. **Enabled** temporarily pauses an entry; **Duplicate** copies it; **Save snippets** applies the editor draft; **Revert changes** restores saved definitions. **Restore suggestions** resets the bundled list while keeping your own entries. An enabled, eligible custom entry overrides a suggestion with the same prefix. Invalid definitions cannot be saved even when disabled.
 
-`scope` is `anywhere`, `text`, `math` or `code` (Typst code); `line_start` allows indentation. Comments and raw/verbatim text are excluded. Fractions and sums appear inside equations; `mk` starts inline math from text. Auto-miTeX dollar regions use TeX snippets. `fn` inserts a markup declaration beginning with `#let`; `fncode` inserts bare `let` inside a code block.
+`scope` is `anywhere`, `text`, `math` or `code` (Typst code); `line_start` allows indentation. Ordinary comments and raw/verbatim text are excluded. TeX magic-comment snippets are offered in the initial TeX header, including after `% !TeX`; **Add TeX magic comments** in the full snippet editor adds missing presets while preserving customizations. See [TeX completion](tex-completion.md). Fractions and sums appear inside equations; `mk` starts inline math from text. Auto-miTeX dollar regions use TeX snippets. `fn` inserts a markup declaration beginning with `#let`; `fncode` inserts bare `let` inside a code block.
 
 Type the prefix, open completions (Ctrl+Space by default), choose the snippet and press Enter. Tab/Shift+Tab navigate fields; Escape ends linked editing. Undo/redo applies to mirrored copies together. Multiline expansions retain indentation; recognized TeX package imports are inserted atomically. Editing outside the active field or switching documents ends linked editing. Keep editable fields flat rather than nesting them. Templates do not execute code, transformations or choice menus.
 
@@ -239,6 +300,23 @@ option such as `--type=CFONT` can override the selected markup. Input paths are
 supplied by the app. Environment is a JSON object of strings, for example
 `{"LC_ALL":"C"}`; blank working directory uses the newer file's directory.
 See the [official manual](https://mirrors.ctan.org/support/latexdiff/doc/latexdiff-man.pdf).
+
+## Optional Liquid fix suggestions
+
+Settings → **Grammar & spelling → Liquid fix suggestions** offers **Download fix
+model** to prepare or repair Liquid LFM3 1.7B (about 1.1 GB) and its local runtime.
+The download runs in the background, shows its result in that section, and can be
+cancelled. Opening Settings never starts a download or loads the model.
+
+Right-click an error line or a diagnostic in Problems and choose **Suggest fix**.
+First use also downloads the model automatically. Review the proposed replacement
+in the diff window, then choose **Accept** or **Cancel**. Accept changes the bound
+source in one undo step; edits made while a suggestion is pending invalidate its
+review. This model requires macOS 13.3 or later and works offline after setup.
+
+The **Model folder** and **CPU threads** controls in Liquid selection grammar
+apply to both Liquid models. **Download Liquid** prepares only the selection
+grammar model; **Download fix model** prepares the foundation model for fixes.
 
 ## Optional Liquid grammar
 

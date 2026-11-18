@@ -32,6 +32,37 @@ The built-in vocabulary is intentionally finite rather than a complete package
 catalog. Definition syntax follows the
 [LaTeX author guide](https://www.latex-project.org/help/documentation/usrguide.pdf).
 
+## TeX magic comment snippets
+
+TeX documents include five editable header snippets. Type a trigger on a blank
+line near the top of the file, open completions with Ctrl+Space, and accept the
+suggestion. The value is selected for editing; Tab moves to the final cursor.
+
+| Trigger | Inserted header | Editable value |
+| --- | --- | --- |
+| `texroot` | `% !TeX root = main.tex` | Root document path |
+| `texprogram` | `% !TeX program = pdflatex` | `tectonic`, `pdflatex`, `xelatex`, or `lualatex` |
+| `texencoding` | `% !TeX encoding = UTF-8` | `UTF-8` |
+| `texspellcheck` | `% !TeX spellcheck = en-US` | Language such as `en-US`, `en-GB`, `de-DE`, or `none` |
+| `texbibprogram` | `% !BIB program = biber` | `bibtex` or `biber` |
+
+Completion also works after a comment prefix: `% texroot` becomes one canonical
+header, without a duplicate `%`. Type `% !TeX` to discover the TeX directives,
+`% !TeX ro` to narrow to `root`, or `% !BIB` for the bibliography tool. Marker
+case and spacing are flexible. The value fields remain ordinary editable text;
+these snippets do not offer choice menus.
+
+Find and edit these entries in **Settings → Snippets → Edit snippets…**. If the
+saved library predates these entries, choose **Add TeX magic comments**, then
+**Save snippets**. This adds missing entries and keeps existing edits, disabled
+entries, and custom snippets. Search for `magic` to find the supplied headers.
+
+Magic snippets appear only in TeX documents' initial header: blank lines and
+full-line comments before the first TeX code, within the first 256 lines and
+64 KiB. They are excluded from Typst, embedded TeX, math, and verbatim. Ordinary
+snippets remain excluded from comments. Compiler options and executable script
+directives are not supplied as snippets.
+
 ## Follow-ups 171–172: suggestions and block Enter
 
 The initial math/text filter was too restrictive: a tagged TeX block starts in

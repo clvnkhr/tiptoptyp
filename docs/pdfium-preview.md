@@ -75,7 +75,7 @@ has its own directory, so fetching an Intel renderer cannot replace an Apple
 Silicon renderer used by a source build, or vice versa. `package-build` prepares
 these same target directories automatically and also prepares the host renderer
 when building only for another architecture. The library is PDFium chromium/7881,
-paired with `pdfium-render = 0.9.4` and its `pdfium_7881` ABI feature. The download
+paired with `pdfium-render = 0.9.5` and its `pdfium_7881` ABI feature. The download
 has a per-target SHA-256 pin in `xtask/src/pdfium.rs`; extraction validates archive
 paths and entry types. The library is compressed in the app's target-specific
 `toolchain` resources; provenance and dependency licenses are in its `pdfium`

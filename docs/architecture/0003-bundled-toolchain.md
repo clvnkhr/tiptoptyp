@@ -15,7 +15,7 @@ decision:
 
 - [Typst 0.15.1](https://github.com/typst/typst/releases/tag/v0.15.1) publishes
   platform CLI archives containing its binary, license, and notice.
-- [Tinymist 0.15.2](https://github.com/Myriad-Dreamin/tinymist/releases/tag/v0.15.2)
+- [Tinymist 0.15.12](https://github.com/Myriad-Dreamin/tinymist/releases/tag/v0.15.12)
   publishes separate `tinymist` and `tinymist-viewer` artifacts. tiptoptyp needs
   the former: its LSP process embeds and serves the interactive preview.
 - [cargo-packager external binaries](https://docs.rs/cargo-packager/latest/cargo_packager/config/struct.Config.html)
@@ -29,8 +29,8 @@ decision:
 
 ### 1. Package a pinned, matched toolchain
 
-Packages ship Typst 0.15.1 and Tinymist 0.15.2. These were the latest stable
-releases on the decision date and share the 0.15 Typst generation. The exact
+Packages ship Typst 0.15.1 and Tinymist 0.15.12. The November 2026 dependency
+review updated Tinymist within the matched 0.15 Typst generation. The exact
 per-target archive names and SHA-256 digests live in
 `toolchain/manifest.tsv`. Since 2026-09-17, `build.rs` derives the runtime labels
 from that manifest at compile time; there is no second version literal to update

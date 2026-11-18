@@ -8,6 +8,49 @@ The first question is whether each model catches real grammar errors without
 rewriting correct mathematical prose. Release date, model size and one successful
 example are insufficient to choose a checker.
 
+## Diagnostic fixes in the editor
+
+Right-click a located diagnostic in Problems, or right-click its source line,
+and choose **Suggest fix**. The app sends the diagnostic, its line and bounded
+nearby source to a local Liquid foundation model. The complete target line and
+proposed replacement appear in the same Unified or Side by Side diff renderer
+used by the existing Liquid review. **Accept** makes one undoable edit;
+**Cancel** preserves the document. The captured document revision and exact
+original line must still match before a proposal can be accepted.
+For Typst, proposals are parsed in the complete captured document and rejected
+when they introduce new syntax errors. Existing unrelated parse errors are
+matched across the replacement's byte-offset change. This parser check runs on
+the worker, permits documents up to 2 MB, and does not execute document code.
+
+This action uses the official [LFM3-1.7B Q4_K_M checkpoint](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF),
+approximately 1.1 GB, with a native llama.cpp runtime on macOS 13.3 or later. The explicit first request
+downloads and verifies the optional model and current-architecture runtime into
+the configured Liquid cache. Later requests reuse the loaded model; the action
+does no model setup or inference at app startup. Source remains on the Mac.
+Its response supplies replacement text for the captured line, not a file
+path or a source range. The existing **Check selection with Liquid** action
+continues using its specialized spelling/grammar tagger.
+
+`scripts/fixtures/diagnostic-fixes.json` contains small Typst and TeX evaluation
+inputs with compiler diagnostics, expected minimal replacements and an
+ambiguous-name case that should leave the line unchanged. These are evaluation
+data only; the application never uses them as generated suggestions. A model's
+performance on this small set does not establish general repair accuracy.
+
+The [recorded production-model evaluation](performance-results/diagnostic-fix-lfm3-2026-11-05.json)
+matched the expected minimal replacement on **4 of 6 initial repair cases** and
+**2 of 3 held-out cases**; the separate ambiguous-name case correctly returned
+the original line. All five repeated requests for the local-variable typo
+produced the expected fix. The failures include valid-syntax but incorrect
+repairs, so syntax validation cannot establish that a diagnostic is resolved.
+On an Apple M2 Max running macOS 14.6.1 ARM64, using the release probe with the thread setting at four,
+repeated requests for that identical fixture took a median **2.394 s** (2.365–2.423 s).
+The first request in a new model process took 2.822 s with already-warm OS/Metal
+caches. The runtime used llama.cpp's default device/offload policy; effective
+GPU offload was not measured. Downloads were excluded; these results do not
+measure a fully cold machine, physical Intel performance, or general correction accuracy. The receipt
+retains source/catalog/fixture hashes, every outcome and the workload metadata.
+
 ## Manual Liquid checks in the editor
 
 Select prose in a Typst or TeX document, then right-click → **Check selection

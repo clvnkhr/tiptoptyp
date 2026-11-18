@@ -9,6 +9,15 @@ to the settings search. The JSON button returns to the JSON editor.
 
 Under **Settings → Editor**:
 
+- **Auto-close delimiters** is on by default. In TeX it also closes
+  `\[` with `\]` and `\(` with `\)`. Return after `\begin{env}` creates an
+  indented body and a closing `\end{env}` at the opener's indentation; an
+  existing matching end is reused. The `document` environment keeps its
+  unindented body convention. Paste remains literal.
+- The nearest enclosing matched pair has a background highlight while its
+  contents are edited, in both TeX and Typst. Nested pairs take precedence.
+  TeX environment commands also participate in matching and rainbow colors;
+  bracket-like text inside comments and literal payloads stays excluded.
 - **Wrap lines** toggles soft wrapping without rewriting source. The existing
   Toggle line wrapping action is available in View and Keyboard shortcuts.
 - **Indentation guides** is on by default. **Guide character** accepts one

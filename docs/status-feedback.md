@@ -15,7 +15,7 @@ reports do not reset or erase measured timing, and server readiness does not
 overwrite compilation status. Startup without a measured cycle shows no duration;
 positive sub-millisecond cycles display 1 ms.
 
-Protocol reference: [bundled Tinymist v0.15.2 editor actor](https://raw.githubusercontent.com/Myriad-Dreamin/tinymist/v0.15.2/crates/tinymist/src/actor/editor.rs).
+Protocol reference: [bundled Tinymist v0.15.12 editor actor](https://raw.githubusercontent.com/Myriad-Dreamin/tinymist/v0.15.12/crates/tinymist/src/actor/editor.rs).
 
 New-document, successful open, save, and auto-save actions now show feedback;
 open/save include elapsed time. Existing failure feedback remains intact. These
