@@ -11,6 +11,15 @@ keys, environment variables, temporary-file conventions, or compatibility
 aliases unless the user explicitly asks for a migration path. Prefer a clean
 break and remove the obsolete behavior completely.
 
+## Git cadence
+
+- Commit coherent, reviewable pieces as work progresses. Do not accumulate
+  multiple completed features in the working tree.
+- Push validated checkpoints regularly to the task's tracking branch; the user
+  has requested frequent commits and pushes for this repository.
+- Keep unrelated personal edits out of feature commits. Preserve them locally
+  and obtain a decision before publishing credentials or discarding edits.
+
 ## Risk-based UI workflow
 
 For changes that affect UI behavior, layout, preview rendering, native child
