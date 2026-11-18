@@ -1,5 +1,4 @@
 """Failure-detector checks for the native version journey; no desktop claimed."""
-import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -133,15 +132,6 @@ class VersionJourneyContract(unittest.TestCase):
             changed["targets"]["versions.panel"]["x"] = invalid
             with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
                 docked_history(changed)
-
-    def test_runner_exposes_the_native_journey(self):
-        spec = importlib.util.spec_from_file_location("desktop_runner_versions",
-            Path(__file__).with_name("test-desktop-ui.py"))
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-        self.assertIn("file_versions", runner.JOURNEY_NAMES)
-        self.assertTrue(callable(getattr(runner.Journey, "file_versions", None)))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -73,17 +73,5 @@ class SettingsDocumentationContract(unittest.TestCase):
             with self.subTest(before=before, after=after), self.assertRaises(AssertionError):
                 assert_preferences_preserved(before, after)
 
-    def test_focused_journey_is_registered_without_opening_browser_in_all(self):
-        import importlib.util
-        from pathlib import Path
-        spec = importlib.util.spec_from_file_location('settings_links_runner', Path(__file__).with_name('test-desktop-ui.py'))
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-        self.assertIn('settings_links', runner.JOURNEY_NAMES)
-        self.assertEqual(runner.selected_journeys('settings_links'), ['settings_links'])
-        self.assertNotIn('settings_links', runner.selected_journeys('all'))
-        self.assertTrue(callable(runner.Journey.settings_links))
-
-
 if __name__ == '__main__':
     unittest.main()

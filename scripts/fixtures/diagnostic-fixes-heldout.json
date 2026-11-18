@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "notes": "Held-out examples authored after choosing bounded reasoning, evaluated without prompt tuning. Complete logical replacement lines, one-based diagnostic locations.",
+  "cases": [
+    {
+      "id": "heldout-typst-local-radius",
+      "language": "typst",
+      "source": "// untouched before\n#let radius = 14pt\n#circle(radius: raduis)\n// untouched after\n",
+      "line": 3,
+      "diagnostic": "unknown variable: raduis",
+      "replacement": "#circle(radius: radius)"
+    },
+    {
+      "id": "heldout-typst-ellipse-comma",
+      "language": "typst",
+      "source": "// untouched before\n#ellipse(width: 24pt height: 12pt)\n// untouched after\n",
+      "line": 2,
+      "diagnostic": "expected comma",
+      "replacement": "#ellipse(width: 24pt, height: 12pt)"
+    },
+    {
+      "id": "heldout-tex-fraction-name",
+      "language": "tex",
+      "source": "\\documentclass{article}\n\\begin{document}\n% untouched before\n$\\frca{1}{2}$\n% untouched after\n\\end{document}\n",
+      "line": 4,
+      "diagnostic": "Undefined control sequence.",
+      "replacement": "$\\frac{1}{2}$"
+    }
+  ]
+}

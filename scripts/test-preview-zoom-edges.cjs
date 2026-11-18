@@ -1,7 +1,7 @@
 // Real pinned Tinymist edge geometry. Headless, owned browser/server only.
 // The snapshot notification stub exposes the production geometry reader;
 // it does not fake document layout, scroll clamping or SVG rendering.
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -10,6 +10,21 @@ const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const fixture = path.join(__dirname, 'fixtures/tinymist-zoom-stress.typ');
 const read = file => fs.readFileSync(file, 'utf8');
+function sidecarReceipt() {
+  const executable = process.env.TIPTOPTYP_TEST_TINYMIST;
+  assert.ok(executable, 'Set TIPTOPTYP_TEST_TINYMIST to the pinned sidecar');
+  const version = spawnSync(executable, ['--version'], {encoding: 'utf8'});
+  assert.ifError(version.error);
+  assert.equal(version.status, 0, `Cannot inspect the tested sidecar: ${version.stderr}`);
+  const actual = version.stdout.match(/^Build Git Describe:\s+v(\d+\.\d+\.\d+)\s*$/m)?.[1];
+  assert.ok(actual, 'The tested sidecar must report its release version');
+  const pinned = [...new Set(read(path.join(root, 'toolchain/manifest.tsv')).split(/\r?\n/)
+    .map(line => line.trim().split(/\s+/)).filter(fields => fields[0] === 'tinymist')
+    .map(fields => fields[3]))];
+  assert.deepEqual(pinned, [actual], 'The tested sidecar must match the pinned toolchain');
+  return {tinymist: actual, tinymist_version_output: version.stdout.trim(),
+    tinymist_sha256: crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex')};
+}
 async function lane(mode) {
   const { chromium } = require(process.env.TIPTOPTYP_PLAYWRIGHT || 'playwright');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ttt-zoom-edges-'));
@@ -77,8 +92,9 @@ async function lane(mode) {
   }
 }
 (async () => {
+  const receipt = sidecarReceipt();
   const cases = [...await lane('full'), ...await lane('partial')];
-  const output = {tinymist: '0.15.2', fixture_sha256: crypto.createHash('sha256').update(fs.readFileSync(fixture)).digest('hex'), viewport: [900, 700], cases};
+  const output = {...receipt, fixture_sha256: crypto.createHash('sha256').update(fs.readFileSync(fixture)).digest('hex'), viewport: [900, 700], cases};
   // Preserve observed geometry on failure; stale references must not hide the
   // actual viewer layout that produced a failing comparison.
   const destination = process.env.TIPTOPTYP_ZOOM_EDGE_RECEIPT;

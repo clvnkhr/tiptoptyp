@@ -10,7 +10,7 @@ INDENTATION_JOURNEYS = ('indentation',)
 INDENT_PREFERENCES = ('auto_save', 'auto_pair_delimiters', 'indent_spaces')
 
 
-def indentation_cases(suffix, unit='  '):
+def indentation_cases(suffix, unit='  ', *, pairs=False):
     """Literal expected outputs; source is loaded from disk, never typed setup."""
     def case(name, source, expected, cursor=None, expected_cursor=None):
         return dict(name=name, source=source, expected=expected,
@@ -26,9 +26,15 @@ def indentation_cases(suffix, unit='  '):
             case('closed-block', '#let f() = {\n  1\n}', '#let f() = {\n  1\n}\n'),
         ]
     if suffix == 'tex':
+        align_body = '\t \\begin{align}\n\t ' + unit
+        document_body = '\\begin{document}\n'
         return [
-            case('align', '\t \\begin{align}', '\t \\begin{align}\n\t ' + unit),
-            case('document', '\\begin{document}', '\\begin{document}\n'),
+            case('align', '\t \\begin{align}',
+                 align_body + ('\n\t \\end{align}' if pairs else ''),
+                 expected_cursor=len(align_body)),
+            case('document', '\\begin{document}',
+                 document_body + ('\n\\end{document}' if pairs else ''),
+                 expected_cursor=len(document_body)),
             case('literal-prefix', ' \t  \\alpha', ' \t  \\alpha\n \t  '),
             case('crlf', '  first\r\n\t second', '  first\r\n\t second\r\n\t '),
         ]
@@ -80,6 +86,27 @@ def indentation_preference_edits(document, desired):
 
 
 class IndentationJourneys:
+    def indentation_restore_file_history(self, path, original_bytes, before):
+        from desktop_ui_tex_editor_features import tex_editor_disk_receipt
+        receipt = tex_editor_disk_receipt(path)
+
+        def saved(document):
+            if (tex_editor_disk_receipt(path) == receipt
+                    or document['save_operation'] is not None
+                    or document['formatting_phase'] != 'idle'
+                    or path.read_bytes() != original_bytes):
+                return False
+            try:
+                assert_original_document_restored(document, before)
+            except AssertionError:
+                return False
+            return True
+
+        self.key(1)
+        self.wait('Saving the original fixture restores its file history', saved, timeout=20)
+        self.record('editor.indentation.original_save', durable_write_observed=True,
+                    original_source_preserved=True, save_and_formatting_idle=True)
+
     def indentation_preferences(self, desired):
         """Use the real validated editor, preserving arbitrary incoming values."""
         replacements = indentation_preference_edits(self.snapshot()['document'], desired)
@@ -165,12 +192,13 @@ class IndentationJourneys:
             for case in indentation_cases(suffix):
                 self.indentation_case(suffix, case, 'pairs-off')
         self.indentation_preferences(dict(auto_pair_delimiters=True))
-        for suffix, index in (('typ', 2), ('tex', 0)):
-            self.indentation_case(suffix, indentation_cases(suffix)[index], 'pairs-on')
+        for suffix, indices in (('typ', [2]), ('tex', [0, 1])):
+            for index in indices:
+                self.indentation_case(suffix, indentation_cases(suffix, pairs=True)[index], 'pairs-on')
             self.indentation_paste(suffix)
         self.indentation_preferences(dict(indent_spaces=0))
         for suffix in ('typ', 'tex'):
-            self.indentation_case(suffix, indentation_cases(suffix, unit='\t')[0], 'tab-unit')
+            self.indentation_case(suffix, indentation_cases(suffix, unit='\t', pairs=True)[0], 'tab-unit')
         self.indentation_preferences(original)
         self.wait('Indentation journey restores its original source tab and preview owner', lambda d:
                   d['active_tab_id'] == before['active_tab_id']
@@ -180,15 +208,9 @@ class IndentationJourneys:
         # Opening named fixtures legitimately changes last_opened_files. A real
         # Save of the untouched original restores that history too; reselecting
         # an existing tab does not. Keep the complete settings comparison below.
-        # Identical-byte saves may skip a disk write, so require the fresh
-        # native Save completion receipt rather than a changed modification time.
-        previous_notice = self.snapshot()['document']['completion_notice']
-        self.key(1)
-        self.wait('Saving the original fixture restores its file history', lambda d:
-                  d['completion_notice'] != previous_notice
-                  and isinstance(d['completion_notice'], str)
-                  and d['completion_notice'].startswith('Saved ')
-                  and original_path.name in d['completion_notice'], timeout=15)
+        # No-edit formatting may replace the Save notice immediately. Require
+        # the actual atomic-write receipt and completed operation instead.
+        self.indentation_restore_file_history(original_path, original_bytes, before)
         if original_path.read_bytes() != original_bytes:
             raise AssertionError('Restoring file history changed the original source on disk')
         assert_original_document_restored(self.snapshot()['document'], before)

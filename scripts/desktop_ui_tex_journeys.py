@@ -1,4 +1,5 @@
 """Native TeX journeys; fixtures are real files and tools are never mocked."""
+from desktop_ui_tex_editor_features import TexEditorFeaturesJourneys
 
 TEX_JOURNEYS = ("tex_editing", "tex_intelligence", "tex_save", "tex_preview_scroll", "harper_math_prose", "harper_settings")
 TEX_SOURCE = "\\documentclass{article}\n\\begin{document}\nA sample with $\\alpha + \\alpha$.\n\\end{document}\n"
@@ -14,12 +15,23 @@ TEX_PARITY_SOURCE = (
     "\\input{parity-child}\n"
     "See \\ref{sec:parity} and \\ref{sec:child}.\n"
     "% table insertion\n\n"
+    "\\nocite{parityreference}\n"
+    "\\bibliographystyle{plain}\n"
+    "\\bibliography{parity-references}\n"
     "\\end{document}\n"
 )
 TEX_PARITY_CHILD = (
     "\\subsection{Included parity section}\n"
     "\\label{sec:child}\n"
     "Included body.\n"
+)
+TEX_PARITY_BIBLIOGRAPHY = (
+    "@article{parityreference,\n"
+    "  author = {Native, Test},\n"
+    "  title = {Bibliography dependency},\n"
+    "  journal = {Editor Test Journal},\n"
+    "  year = {2026}\n"
+    "}\n"
 )
 
 
@@ -66,6 +78,7 @@ def tex_parity_index_ready(document, main, child):
         raise AssertionError("Incomplete TeX project-index warning state")
     if index["pending"] or index["warning"] is not None:
         return False
+    bibliography = child.with_name("parity-references.bib")
     main, child = fingerprint(str(main.resolve())), fingerprint(str(child.resolve()))
     expected = {
         "outline": [("Native parity section", main, 5, 1),
@@ -84,7 +97,7 @@ def tex_parity_index_ready(document, main, child):
                        for row in index[field]):
                 return False
     return (index["packages"] == [fingerprint("amsmath")]
-            and index["subfiles"] == [child])
+            and index["subfiles"] == [child, fingerprint(str(bibliography.resolve()))])
 
 
 HARPER_TYPOS = "This sentence contains a misspelld word.\nThis is the the simple result.\n"
@@ -134,6 +147,27 @@ def harper_fresh(document, source, path, locations):
         and document["writing_paths"] == [str(path)] * len(locations)
 
 
+def harper_problem_index(document, source, path, locations, location):
+    """Resolve a live Harper row by source position, independent of provider order."""
+    if not harper_fresh(document, source, path, locations):
+        return None
+    rows, count = document.get("diagnostic_rows"), document.get("raw_diagnostic_count")
+    if type(count) is not int or count < 0 or not isinstance(rows, list) or len(rows) != count:
+        raise AssertionError("Harper problem source identities are unavailable")
+    for index, row in enumerate(rows):
+        if (not isinstance(row, dict) or type(row.get("index")) is not int or row["index"] != index
+                or "provider" not in row or row["provider"] is not None and not isinstance(row["provider"], str)
+                or type(row.get("suppressed")) is not bool
+                or any(key not in row or row[key] is not None
+                       and (type(row[key]) is not int or row[key] <= 0) for key in ("line", "column"))):
+            raise AssertionError("Harper problem source identities are incomplete")
+    matches = [row["index"] for row in rows if row["provider"] == "Harper"
+               and not row["suppressed"] and [row["line"], row["column"]] == location]
+    if len(matches) > 1:
+        raise AssertionError("Harper problem position is ambiguous")
+    return matches[0] if matches else None
+
+
 def diagnostic_suppression_fixture(suffix):
     """Keep line positions fixed while switching one real exclusion on and off."""
     if suffix not in ("typ", "tex"):
@@ -141,18 +175,60 @@ def diagnostic_suppression_fixture(suffix):
     marker = "//" if suffix == "typ" else "%"
     header = "" if suffix == "typ" else "\\documentclass{article}\n\\begin{document}\n"
     footer = "" if suffix == "typ" else "\\end{document}\n"
-    source = header + (marker + " ttt: off\n").join([HARPER_TYPOS] * 3) + footer
-    active = source.replace("ttt: off", "ttt: on", 1)
+    source = header + (marker + " ttt: on\n").join([HARPER_TYPOS] * 3) + footer
+    active = source.replace("ttt: on", "ttt: off", 1)
     offset = header.count("\n")
     locations = [[line + offset, column] for line, column in
                  ((1, 26), (2, 9), (4, 26), (5, 9), (7, 26), (8, 9))]
     return source, active, locations
 
 
-def harper_suppression_result(document, source, path, locations, visible_locations):
+def diagnostic_control_marker_lines(document, source, path, markers=None):
+    """Identify only standalone fixture comments matching effective marker identities."""
+    from desktop_ui_comment_controls_journeys import (
+        DEFAULT_COMMENT_MARKERS, comment_marker_body, comment_markers_applied,
+    )
+    markers = DEFAULT_COMMENT_MARKERS if markers is None else markers
+    if not comment_markers_applied(document, markers):
+        raise AssertionError('Expected comment-control marker settings are not effective')
+    identities = {comment_marker_body(value) for pair in markers.values() for value in pair}
+    suffix = path.suffix.lower()
+    if suffix not in ('.typ', '.tex'):
+        raise AssertionError('Comment-control diagnostic evidence requires a Typst or TeX file')
+    prefix = '//' if suffix == '.typ' else '%'
+    return {index for index, line in enumerate(source.split('\n'), 1)
+            if line.lstrip().startswith(prefix)
+            and comment_marker_body(line.lstrip()[len(prefix):]) in identities}
+
+
+def harper_suppression_result(document, source, path, locations, visible_locations, *, markers=None):
     """Prove actual raw findings survive while exact Problems rows are excluded."""
     from desktop_ui_problems_journeys import problems_state
-    if not harper_fresh(document, source, path, locations) or document.get("panel") != "Problems":
+    from desktop_ui_comment_controls_journeys import DEFAULT_COMMENT_MARKERS, comment_markers_applied
+    markers = DEFAULT_COMMENT_MARKERS if markers is None else markers
+    if not comment_markers_applied(document, markers):
+        return False
+    ltex = document.get('ltex')
+    if (not isinstance(ltex, dict)
+            or any(type(ltex.get(field)) is not bool for field in ('enabled', 'current'))):
+        raise AssertionError('LTeX diagnostic readiness inspection is unavailable')
+    # Both providers publish into Problems. A current Harper result must not
+    # authorize stability while an enabled LTeX request can still add rows.
+    if ltex['enabled'] and not ltex['current']:
+        return False
+    metadata = diagnostic_control_marker_lines(document, source, path, markers)
+    raw_locations = document.get('writing_locations')
+    lines = source.split('\n')
+    if (not isinstance(raw_locations, list) or any(
+            not isinstance(location, list) or len(location) != 2
+            or any(type(value) is not int or value < 1 for value in location)
+            for location in raw_locations)):
+        raise AssertionError('Harper raw source locations are incomplete')
+    if (any(location[0] > len(lines) or location[1] > len(lines[location[0] - 1]) + 1
+            for location in raw_locations)
+            or [location for location in raw_locations if location[0] not in metadata] != locations
+            or not harper_fresh(document, source, path, raw_locations)
+            or document.get("panel") != "Problems"):
         return False
     count, rows = document.get("raw_diagnostic_count"), document.get("diagnostic_rows")
     if type(count) is not int or count < 0 or not isinstance(rows, list) or len(rows) != count:
@@ -169,7 +245,8 @@ def harper_suppression_result(document, source, path, locations, visible_locatio
             or layout["grouped"]):
         return False
     harper_rows = [row for row in rows if row["provider"] == "Harper"]
-    if [[row["line"], row["column"]] for row in harper_rows] != locations:
+    if ([[row["line"], row["column"]] for row in harper_rows] != raw_locations
+            or any(row['line'] in metadata and not row['suppressed'] for row in rows)):
         return False
     unsuppressed = [row["index"] for row in rows if not row["suppressed"]]
     visible = layout["visible_indices"]
@@ -179,7 +256,8 @@ def harper_suppression_result(document, source, path, locations, visible_locatio
             and type(document.get("diagnostic_count")) is int
             and document["diagnostic_count"] == len(unsuppressed) == layout["total_count"]
             and layout["visible_count"] == layout["displayed_count"] == len(unsuppressed)
-            and all(row["suppressed"] is ([row["line"], row["column"]] not in visible_locations)
+            and all(row["suppressed"] is (row['line'] in metadata
+                                          or [row["line"], row["column"]] not in visible_locations)
                     for row in harper_rows))
 
 
@@ -206,7 +284,7 @@ def harper_rule_result(document, source, path, locations, enabled):
             and isinstance(rules, list) and rules.count("NoFrenchSpaces") == int(enabled)
             and document.get("writing_count") == len(locations) + int(enabled)
             and isinstance(actual, list)
-            and actual == locations + ([[5, 26]] if enabled else [])
+            and actual == sorted(locations + ([[5, 26]] if enabled else []))
             and document.get("writing_paths") == [str(path)] * len(actual))
 
 
@@ -219,6 +297,19 @@ def quiet_badness_result(document):
             and isinstance(codes, list) and bool(codes)
             and all(isinstance(code, str) and code.strip('"') != "redundant-script-braces"
                     for code in codes))
+
+
+def display_paragraph_result(document, invalid):
+    """Require the complete current Badness result for this fixture state."""
+    current = document.get('tex_diagnostics_current')
+    counts = document.get('tex_diagnostic_counts')
+    codes = document.get('badness_visible_codes')
+    expected = ['math-paragraph-break'] if invalid else []
+    return (isinstance(current, list) and len(current) >= 2 and current[1] is True
+            and isinstance(counts, list) and len(counts) >= 2
+            and type(counts[1]) is int and counts[1] == len(expected)
+            and isinstance(codes, list) and all(isinstance(code, str) for code in codes)
+            and [code.strip('"') for code in codes] == expected)
 
 
 def assert_harper_stale(document, previous):
@@ -246,7 +337,7 @@ def settings_json_query_selected(state):
             and sorted(selection) == [0, len(query)])
 
 
-class TexJourneys:
+class TexJourneys(TexEditorFeaturesJourneys):
     def wait_settings_json_query_selection(self):
         import time
         deadline = time.monotonic() + 6
@@ -407,7 +498,8 @@ class TexJourneys:
                 self.key(126, "none")
                 self.key(123, "cmd")
                 prefix = source.removesuffix("\\end{document}\n")
-                expected = prefix + typos + "\\end{document}\n"
+                # Smart Return keeps an extra blank line before the closing environment.
+                expected = prefix + typos + "\n\\end{document}\n"
             else:
                 prefix = source
                 expected = source + typos
@@ -448,6 +540,65 @@ class TexJourneys:
                            ('"auto_save": false', '"auto_save": true'),
                            ('"build_enabled": false', '"build_enabled": true')])
 
+    def click_harper_problem_action(self, source, path, locations, location, action):
+        """Find the actual row afresh before clicking its visible native action."""
+        if action not in ("dictionary", "fix"):
+            raise ValueError("Unknown Harper problem action")
+        ready = self.wait("Current Harper problem action has an exact source owner", lambda d:
+                          harper_problem_index(d, source, path, locations, location) is not None,
+                          timeout=30)["document"]
+        index = harper_problem_index(ready, source, path, locations, location)
+        target = f"problem.{index}.{action}"
+        self.wait_target(target)
+        current = self.snapshot()["document"]
+        if harper_problem_index(current, source, path, locations, location) != index:
+            raise AssertionError("Harper row changed ownership before its action")
+        self.click(target)
+        return current
+
+    def harper_problem_fixes(self, path):
+        """Use real Harper suggestions; each source transaction must undo once."""
+        from desktop_ui_journeys import fingerprint
+        source = "This is the the result.\nThis is an useful result.\n"
+        locations = [[1, 9], [2, 9]]
+        self.click("editor.source")
+        self.key(0)
+        self.paste_source(source)
+        self.wait("Both real Harper grammar corrections are current", lambda d:
+                  harper_fresh(d, source, path, locations), timeout=30)
+        self.scroll_problems(100)
+        self.wait_target("problems.fix_all")
+        for location in locations:
+            ready = self.snapshot()["document"]
+            index = harper_problem_index(ready, source, path, locations, location)
+            if index is None:
+                raise AssertionError("Real Harper correction has no Problems row")
+            self.wait_target(f"problem.{index}.fix")
+        if self.capture_review:
+            self.record("harper.review", mode="automatic-fixes")
+            self.capture_viewport("main")
+        self.click_harper_problem_action(source, path, locations, locations[0], "fix")
+        single = "This is the result.\nThis is an useful result.\n"
+        self.wait("One row fix changes only the selected real grammar problem", lambda d:
+                  harper_fresh(d, single, path, [locations[1]]), timeout=30)
+        self.click("editor.source")
+        self.key(6)
+        self.wait("One Undo restores the individual correction", lambda d:
+                  harper_fresh(d, source, path, locations), timeout=30)
+        self.wait_target("problems.fix_all")
+        self.click("problems.fix_all")
+        fixed = "This is the result.\nThis is a useful result.\n"
+        self.wait("Fix all applies both current unambiguous corrections", lambda d:
+                  harper_fresh(d, fixed, path, []), timeout=30)
+        self.stable_state(lambda d: harper_fresh(d, fixed, path, []))
+        self.click("editor.source")
+        self.key(6)
+        self.wait("One Undo restores both bulk corrections together", lambda d:
+                  harper_fresh(d, source, path, locations), timeout=30)
+        self.record("harper.problem_fixes", individual_undo=True, bulk_undo=True,
+                    before_fingerprint=self.snapshot()["document"]["source_fingerprint"],
+                    fixed_fingerprint=fingerprint(fixed))
+
     def harper_settings(self):
         """Form edits must refresh real Harper results without editing the source."""
         from desktop_ui_journeys import fingerprint
@@ -459,13 +610,41 @@ class TexJourneys:
                   "We inspect QzorNim today.\n"
                   "This sentence contains a misspelld word.\n"
                   "This is the the simple result.\n"
-                  "This is a short sentence.  This is another short sentence.\n")
+                  "This is a short sentence.  This is another short sentence.\n"
+                  "Misspelld follows.\n")
         path = self.directory / "harper-settings.typ"
         path.write_text(source)
         self.open_harper_fixture(path)
-        locations = [[1, 12], [2, 12], [3, 26], [4, 9]]
-        self.wait("Harper reports the unknown word, name, typo and repetition",
+        locations = [[1, 12], [2, 12], [3, 26], [4, 9], [6, 1]]
+        self.wait("Harper reports unknown words, sentence-initial typo and repetition",
                   lambda d: harper_fresh(d, source, path, locations), timeout=30)
+        panel = self.snapshot()["document"]["panel"]
+        if panel is None:
+            self.key(23)
+        self.click("panel.problems")
+        self.key(3)
+        self.wait_target("problems.search", focused=True)
+        layout = self.snapshot()["document"]["problems"]
+        if layout["query"] or any(layout[key] is not None for key in ("source", "type", "category")):
+            self.click("problems.reset")
+        if layout["grouped"]:
+            self.click("problems.grouping")
+        self.click("problems.source")
+        self.click("problems.source.Harper")
+        self.scroll_problems(100)
+        row = harper_problem_index(self.snapshot()["document"], source, path, locations, locations[0])
+        if row is None:
+            raise AssertionError("The actual qzorthal spelling problem is missing")
+        self.wait_target(f"problem.{row}.dictionary")
+        if self.capture_review:
+            self.record("harper.review", mode="dictionary-action")
+            self.capture_viewport("main")
+        before_add = self.click_harper_problem_action(source, path, locations, locations[0], "dictionary")
+        self.wait("Problems Add word applies the editable dictionary without source edits", lambda d:
+                  harper_settings_applied(d, "qzorthal", False)
+                  and tex_source_owner_preserved(d, before_add)
+                  and harper_fresh(d, source, path, locations[1:]), timeout=30)
+        self.stable_state(lambda d: harper_fresh(d, source, path, locations[1:]))
 
         def dictionary_edit(value, ignore_names, expected):
             self.settings()
@@ -499,11 +678,13 @@ class TexJourneys:
                       harper_fresh(d, source, path, expected), timeout=30)
             self.stable_state(lambda d: harper_fresh(d, source, path, expected))
 
-        dictionary_edit("qzorthal", False, locations[1:])
         toggle_names(True, "qzorthal", locations[2:])
-        # Reopen Settings: its applied dictionary must remain editable, and
-        # removing the entry must immediately restore that word's diagnostic.
-        dictionary_edit("", True, [locations[0], *locations[2:]])
+        # The word added from Problems remains editable in Settings, including
+        # removal, re-adding, and restoring the original empty dictionary.
+        without_name = [locations[0], *locations[2:]]
+        dictionary_edit("", True, without_name)
+        dictionary_edit("qzorthal", True, locations[2:])
+        dictionary_edit("", True, without_name)
         toggle_names(False, "", locations)
         self.tex_settings([('"NoFrenchSpaces": false', '"NoFrenchSpaces": true')])
         self.wait("enabling a style rule refreshes results without dropping real errors", lambda d:
@@ -515,8 +696,20 @@ class TexJourneys:
         if path.read_text() != source:
             raise AssertionError("Harper settings altered the fixture on disk")
         self.record("harper.settings", source_fingerprint=fingerprint(source),
-                    dictionary_restored=True, names_restored=True,
+                    dictionary_added_from_problem=True, dictionary_restored=True, names_restored=True,
+                    sentence_initial_typo_preserved=True,
                     original_paths=self.snapshot()["document"]["writing_paths"])
+        self.harper_problem_fixes(path)
+        if path.read_text() != source:
+            raise AssertionError("Problems fixes wrote the fixture despite disabled autosave")
+        self.scroll_problems(100)
+        self.click("problems.reset")
+        if panel is None:
+            self.click("panel.close")
+            self.wait("Harper actions restore the closed bottom panel", lambda d: d["panel"] is None)
+        elif panel != "Problems":
+            self.click("panel." + panel.lower())
+            self.wait("Harper actions restore the original bottom tab", lambda d: d["panel"] == panel)
         self.close_scratch(count)
         self.tex_settings([('"english_grammar": true', '"english_grammar": false'),
                            ('"auto_save": false', '"auto_save": true'),
@@ -528,6 +721,7 @@ class TexJourneys:
         self.tex_settings([('"auto_save": true', '"auto_save": false')])
         self.key(0)
         self.paste_source(TEX_SOURCE)
+        self.tex_editor_features()
         self.key(125, "cmd")
         suffix = "% café 🙂"
         self.native("text", suffix)
@@ -622,8 +816,10 @@ class TexJourneys:
         explorer = original["explorer_visible"]
         child = self.directory / "parity-child.tex"
         main = self.directory / "parity-main.tex"
+        bibliography = self.directory / "parity-references.bib"
         child.write_text(TEX_PARITY_CHILD)
         main.write_text(TEX_PARITY_SOURCE)
+        bibliography.write_text(TEX_PARITY_BIBLIOGRAPHY)
         self.click("editor.source")
         self.key(0)
         self.paste_source(TEX_PARITY_SOURCE)
@@ -652,6 +848,7 @@ class TexJourneys:
             self.capture_viewport("main")
         self.record("tex.explorer_preview", source=path.name, preview=main.name,
                     active_tab_preserved=True, included_file_index=True)
+        self.tex_parity_bibliography(path, bibliography)
         self.tex_parity_tables(TEX_PARITY_SOURCE)
         self.tex_parity_new_tab()
         self.tex_parity_templates(path)
@@ -669,8 +866,53 @@ class TexJourneys:
         self.key({"Code": 19, "Split": 20, "Preview": 21}[view])
         self.wait("TeX parity restores the original layout", lambda d: d["view_mode"] == view)
         if path.read_text() != TEX_SOURCE or child.read_text() != TEX_PARITY_CHILD \
-                or main.read_text() != TEX_PARITY_SOURCE:
+                or main.read_text() != TEX_PARITY_SOURCE \
+                or bibliography.read_text() != TEX_PARITY_BIBLIOGRAPHY:
             raise AssertionError("TeX parity changed a fixture on disk despite disabled autosave")
+
+    def tex_parity_bibliography(self, source, bibliography):
+        """Open the real included database through its Subfiles row, then return."""
+        from desktop_ui_journeys import fingerprint
+        before = self.snapshot()["document"]
+        previous_section = before["explorer_maximized"]
+        if previous_section not in (None, "Subfiles"):
+            self.click("explorer.maximize." + previous_section)
+            self.wait("restore all Explorer headers before bibliography navigation",
+                      lambda d: d["explorer_maximized"] is None)
+        if previous_section != "Subfiles":
+            self.click("explorer.maximize.Subfiles")
+            self.wait("Subfiles shows its included bibliography", lambda d:
+                      d["explorer_maximized"] == "Subfiles")
+        self.click("explorer.subfile." + bibliography.name)
+        self.wait("included bibliography opens from Subfiles", lambda d:
+                  d["path"] == str(bibliography)
+                  and d["source_fingerprint"] == fingerprint(TEX_PARITY_BIBLIOGRAPHY)
+                  and d["source_bytes"] == len(TEX_PARITY_BIBLIOGRAPHY.encode("utf-8"))
+                  and not d["dirty"] and d["active_tab_id"] != before["active_tab_id"])
+        self.key(13)
+        closed = self.wait("bibliography closes without disturbing the pinned preview", lambda d:
+                           d["tabs"] == before["tabs"] and d["path"] != str(bibliography)
+                           and d["preview_tab_id"] == before["preview_tab_id"]
+                           and d["preview_path"] == before["preview_path"])["document"]
+        # Closing selects an adjacent tab, which can be the separate pinned
+        # master. Return explicitly to the original editor through its tab.
+        if closed["active_tab_id"] != before["active_tab_id"]:
+            self.click("tab." + str(before["active_tab_id"]))
+        self.wait("closing bibliography restores the TeX source and preview", lambda d:
+                  d["path"] == str(source) and tex_source_owner_preserved(d, before)
+                  and d["preview_path"] == before["preview_path"])
+        if previous_section != "Subfiles":
+            self.click("explorer.maximize.Subfiles")
+            self.wait("bibliography navigation restores normal Explorer sections",
+                      lambda d: d["explorer_maximized"] is None)
+            if previous_section is not None:
+                self.click("explorer.maximize." + previous_section)
+                self.wait("bibliography navigation restores the prior maximized section",
+                          lambda d: d["explorer_maximized"] == previous_section)
+        if bibliography.read_text() != TEX_PARITY_BIBLIOGRAPHY:
+            raise AssertionError("Bibliography navigation changed the database on disk")
+        self.record("tex.bibliography_subfile", file=bibliography.name,
+                    opened_from_subfiles=True, original_source_restored=True)
 
     def tex_parity_tables(self, source):
         from desktop_ui_journeys import fingerprint
@@ -834,6 +1076,31 @@ class TexJourneys:
         if formatter != "disabled":
             self.tex_settings([('"formatter": "disabled"', f'"formatter": "{formatter}"')])
 
+    def tex_display_paragraph_regression(self):
+        """Real Badness distinguishes a paragraph break from ordinary math lines."""
+        for spacing, invalid in [('\n', True), (' \t\n', True), ('', False),
+                                 ('%\n', False), ('  % keep readable spacing\n', False)]:
+            source = TEX_SOURCE.replace('A sample with $\\alpha + \\alpha$.\n',
+                                        '\\[\nx + y\n' + spacing + '\\]\n')
+            self.click('editor.source')
+            self.key(0)
+            self.paste_source(source)
+            self.source_is(source)
+            self.wait('Badness reports only the actual display-math paragraph issue', lambda d:
+                      display_paragraph_result(d, invalid), timeout=30)
+            self.stable_state(lambda d: display_paragraph_result(d, invalid), frames=4)
+            if invalid and spacing == '\n' and self.capture_review:
+                self.capture_viewport('main')
+        self.click('editor.source')
+        self.key(0)
+        self.paste_source(TEX_SOURCE)
+        self.source_is(TEX_SOURCE)
+        self.wait('Paragraph regression restores clean Badness results', lambda d:
+                  d['tex_diagnostics_current'][1] and d['tex_diagnostic_counts'][1] == 0, timeout=30)
+        self.record('tex.math_paragraph', real_badness=True, multiline_valid=True,
+                    blank_and_whitespace_lines_explained=True, comment_spacing_valid=True,
+                    original_source_restored=True)
+
     def tex_intelligence(self):
         from desktop_ui_journeys import fingerprint
         self.tex_document()
@@ -866,6 +1133,7 @@ class TexJourneys:
             raise AssertionError("TeX editing dropped stale Badness diagnostics before replacement")
         self.wait("fresh TeX prose replaces stale warnings", lambda d: not d["writing_pending"] and d["writing_count"] == 0, timeout=30)
         self.stable_state(lambda d: d["writing_count"] == 0)
+        self.tex_display_paragraph_regression()
         self.key(23)
         self.wait("TeX Problems closes", lambda d: d["panel"] is None)
         self.click("editor.source")

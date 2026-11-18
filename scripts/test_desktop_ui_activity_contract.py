@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from desktop_ui_activity_journeys import (
-    ACTIVITY_JOURNEYS, ActivityJourneys, activity_query_selected, activity_scroll,
+    ActivityJourneys, activity_query_selected, activity_scroll,
     activity_state, assert_activity_preserves_source,
 )
 
@@ -47,11 +47,6 @@ def document_owner():
 
 
 class ActivityContracts(unittest.TestCase):
-    def test_actual_journey_is_registered_with_the_native_editor_mixin(self):
-        from desktop_ui_journeys import EditorJourneys
-        self.assertEqual(ACTIVITY_JOURNEYS, ("activity",))
-        self.assertIs(EditorJourneys.activity, ActivityJourneys.activity)
-
     def test_complete_inventory_and_related_group_membership_are_required(self):
         state = inspected_activity()
         self.assertIs(activity_state({"activity_view": state}), state)

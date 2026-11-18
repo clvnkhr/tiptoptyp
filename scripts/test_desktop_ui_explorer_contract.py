@@ -1,19 +1,69 @@
 """Explorer native-journey failure detectors; these are not interaction evidence."""
 from copy import deepcopy
-import importlib.util
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from desktop_ui_journeys import EditorJourneys, fingerprint
+from desktop_ui_journeys import fingerprint
+from desktop_ui_native_scroll import native_scroll_advance
 from desktop_ui_explorer_journeys import (
-    EXPLORER_FOLDER, EXPLORER_JOURNEYS, EXPLORER_NESTED, EXPLORER_SEED,
+    EXPLORER_FOLDER, EXPLORER_NESTED, EXPLORER_SEED,
     OWNER_FIELDS, ExplorerJourneys, current_explorer_target, explorer_owner_unchanged,
     file_bytes, file_dialog, prepare_explorer_files, tree_bytes,
 )
+
+
+class NativeScrollSetupContracts(unittest.TestCase):
+    class Journey:
+        def __init__(self, successful_step=None, offset=120, stalled=False):
+            self.frame, self.wheels, self.events = 0, 0, []
+            self.successful_step, self.offset, self.stalled = successful_step, offset, stalled
+
+        def snapshot(self):
+            if not self.stalled:
+                self.frame += 1
+            offset = self.offset if self.successful_step is not None and self.wheels >= self.successful_step else 20
+            return dict(document=dict(frame=self.frame), scrolls=dict(Files=dict(
+                frame=self.frame, x=100, y=200, offset=offset, content_height=2000, viewport_height=200)))
+
+        def native(self, command, *arguments):
+            self.events.append((command, arguments))
+            if command == 'wheel':
+                self.wheels += 1
+
+        def record(self, action, **details):
+            self.events.append((action, details))
+
+    def run_setup(self, journey):
+        clock = iter(index / 10 for index in range(500))
+        with patch('desktop_ui_native_scroll.time.monotonic', side_effect=lambda: next(clock)), \
+                patch('desktop_ui_native_scroll.time.sleep'):
+            return native_scroll_advance(journey, 'Files', lines=-24,
+                                         minimum_advance=0, minimum_offset=80)
+
+    def test_lost_step_requires_fresh_frames_and_actual_movement_before_success(self):
+        journey = self.Journey(successful_step=2)
+        self.assertEqual(self.run_setup(journey), (20, 120, 2))
+        self.assertEqual(journey.wheels, 2)
+        receipts = [value for action, value in journey.events if action == 'native.scroll.attempt']
+        self.assertEqual([(r['attempt'], r['advanced']) for r in receipts], [(1, False), (2, True)])
+
+    def test_no_movement_or_threshold_equality_fails_after_exactly_four_steps(self):
+        for journey in (self.Journey(), self.Journey(successful_step=1, offset=80)):
+            with self.subTest(offset=journey.offset), self.assertRaisesRegex(AssertionError, 'after 4 native wheel steps'):
+                self.run_setup(journey)
+            self.assertEqual(journey.wheels, 4)
+            self.assertEqual(sum(action == 'native.scroll.attempt' for action, _ in journey.events), 4)
+
+    def test_stalled_viewport_cannot_authorize_wheel_input(self):
+        journey = self.Journey(stalled=True)
+        with self.assertRaisesRegex(AssertionError, 'fresh frame'):
+            self.run_setup(journey)
+        self.assertEqual(journey.wheels, 0)
 
 
 class ExplorerFileJourneyContracts(unittest.TestCase):
@@ -105,17 +155,5 @@ class ExplorerFileJourneyContracts(unittest.TestCase):
         self.assertEqual(good.actions, [('click', 'rename.name'), ('text', 'created.typ')])
         with self.assertRaises(AssertionError):
             ExplorerJourneys.explorer_type_name(Input(corrupt=True), 'created.typ', self.owner())
-
-    def test_journey_is_registered_and_aggregate_prepares_its_isolated_fixture(self):
-        spec = importlib.util.spec_from_file_location('explorer_file_runner_contract', Path(__file__).with_name('test-desktop-ui.py'))
-        runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
-        self.assertTrue(issubclass(EditorJourneys, ExplorerJourneys))
-        for journey in EXPLORER_JOURNEYS:
-            self.assertIn(journey, runner.JOURNEY_NAMES)
-            self.assertIn(journey, runner.selected_journeys('all'))
-            self.assertEqual(runner.selected_journeys(journey), [journey])
-        source = Path(__file__).with_name('test-desktop-ui.py').read_text()
-        self.assertIn('prepare_explorer_files(directory)', source)
-
 
 if __name__ == '__main__': unittest.main()

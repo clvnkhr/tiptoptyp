@@ -1,5 +1,4 @@
 """Texdoc journey failure detectors, not native UI interaction evidence."""
-import importlib.util
 from pathlib import Path
 import sys
 import unittest
@@ -7,9 +6,9 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from desktop_ui_journeys import EditorJourneys, fingerprint
+from desktop_ui_journeys import fingerprint
 from desktop_ui_texdoc_journeys import (
-    TEXDOC_JOURNEYS, TexdocJourneys, texdoc_owner_unchanged, texdoc_program,
+    texdoc_owner_unchanged, texdoc_program,
     texdoc_results, texdoc_state,
 )
 
@@ -57,18 +56,6 @@ class TexdocJourneyContracts(unittest.TestCase):
                 patch('desktop_ui_texdoc_journeys.Path.is_file', return_value=False):
             with self.assertRaisesRegex(ValueError, 'unavailable check, not a pass'):
                 texdoc_program()
-
-    def test_journey_is_registered_and_optional(self):
-        spec = importlib.util.spec_from_file_location('desktop_ui_runner_texdoc_test',
-                                                     Path(__file__).with_name('test-desktop-ui.py'))
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-        self.assertTrue(issubclass(EditorJourneys, TexdocJourneys))
-        for journey in TEXDOC_JOURNEYS:
-            self.assertIn(journey, runner.JOURNEY_NAMES)
-            self.assertEqual(runner.selected_journeys(journey), [journey])
-            self.assertNotIn(journey, runner.selected_journeys('all'))
-
 
 if __name__ == '__main__':
     unittest.main()

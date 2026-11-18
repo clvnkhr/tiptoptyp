@@ -972,21 +972,34 @@ class NewestJourneys(ProblemsJourneys):
         self.wait("table journey restores the split editor", lambda d: d["view_mode"] == "Split")
 
     def scroll_table_grid_to_top(self, language, disposition, *, require_overflow=True):
-        scroll, footer = table_grid_geometry(self.snapshot(), require_overflow=require_overflow)
+        state = self.snapshot()
+        scroll, footer = table_grid_geometry(state, require_overflow=require_overflow)
         before = scroll["offset"]
         if before > 1:
+            self.record_table_wheel(state, "before", language, disposition, 20)
             self.native("move", scroll["x"], scroll["y"])
             self.native("wheel", scroll["x"], scroll["y"], 20)
         deadline, stable_samples = time.monotonic() + 4, 0
         while time.monotonic() < deadline:
-            scroll, _ = table_grid_geometry(self.snapshot(), footer, require_overflow=require_overflow)
+            state = self.snapshot()
+            scroll, _ = table_grid_geometry(state, footer, require_overflow=require_overflow)
             stable_samples = stable_samples + 1 if scroll["offset"] <= 1 else 0
             if stable_samples >= 3:
+                if before > 1:
+                    self.record_table_wheel(state, "after", language, disposition, 20)
                 self.record("table.scroll_top", language=language, disposition=disposition,
                             before=before, after=scroll["offset"], stable_samples=stable_samples)
                 return
             time.sleep(0.05)
+        if before > 1:
+            self.record_table_wheel(state, "timeout", language, disposition, 20)
         raise AssertionError(language + " table grid did not settle at its first row after wheel input")
+
+    def record_table_wheel(self, state, stage, language, disposition, delta):
+        self.record("table.wheel_observation", stage=stage, language=language,
+                    disposition=disposition, delta=delta,
+                    viewport=state.get("targets", {}).get("table.apply", {}).get("viewport"),
+                    grid=state.get("scrolls", {}).get("table.grid"), wheel=state.get("wheel"))
 
     def type_table_cell_text(self, text):
         # The native driver deliberately paces 16-unit key batches. Bound each
@@ -1061,14 +1074,18 @@ class NewestJourneys(ProblemsJourneys):
             pitch = assert_compact_table_rows(state)
             scroll, footer = table_grid_geometry(state)
             before = scroll["offset"]
+            self.record_table_wheel(state, "before", language, action, -8)
             self.native("move", scroll["x"], scroll["y"])
             self.native("wheel", scroll["x"], scroll["y"], -8)
             deadline = time.monotonic() + 4
             while True:
-                scroll, _ = table_grid_geometry(self.snapshot(), footer)
+                state = self.snapshot()
+                scroll, _ = table_grid_geometry(state, footer)
                 if scroll["offset"] > before + 20:
+                    self.record_table_wheel(state, "after", language, action, -8)
                     break
                 if time.monotonic() >= deadline:
+                    self.record_table_wheel(state, "timeout", language, action, -8)
                     raise AssertionError(language + " table grid did not scroll after wheel input")
                 time.sleep(0.05)
             for _ in range(4):

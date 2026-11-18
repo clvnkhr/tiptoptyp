@@ -9,7 +9,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from desktop_ui_tex_journeys import (
     TexJourneys, settings_json_query_selected, tex_parity_index_ready,
-    tex_source_owner_preserved,
+    tex_source_owner_preserved, harper_problem_index, TEX_PARITY_BIBLIOGRAPHY,
 )
 
 
@@ -106,6 +106,101 @@ class SettingsSelectionContracts(unittest.TestCase):
 
 
 
+class HarperProblemActionContracts(unittest.TestCase):
+    def fixture(self):
+        from desktop_ui_journeys import fingerprint
+        source = "This is the the result.\nThis is an useful result.\n"
+        path = Path("/private/tmp/harper-actions.typ")
+        locations = [[1, 9], [2, 9]]
+        rows = [{"index": 0, "provider": "Tinymist", "line": 1, "column": 9, "suppressed": False},
+                {"index": 1, "provider": "Harper", "line": 2, "column": 9, "suppressed": False},
+                {"index": 2, "provider": "LTeX+", "line": 1, "column": 9, "suppressed": False},
+                {"index": 3, "provider": "Harper", "line": 1, "column": 9, "suppressed": False}]
+        document = {"path": str(path), "source_fingerprint": fingerprint(source),
+                    "source_bytes": len(source.encode("utf-8")), "writing_current": True,
+                    "writing_pending": False, "writing_count": 2,
+                    "writing_locations": locations, "writing_lines": [1, 2],
+                    "writing_paths": [str(path)] * 2,
+                    "raw_diagnostic_count": len(rows), "diagnostic_rows": rows}
+        return source, path, locations, document
+
+    def test_provider_and_source_location_determine_row_after_reordering(self):
+        source, path, locations, document = self.fixture()
+        self.assertEqual(harper_problem_index(document, source, path, locations, [1, 9]), 3)
+        self.assertEqual(harper_problem_index(document, source, path, locations, [2, 9]), 1)
+        document["diagnostic_rows"].reverse()
+        for index, row in enumerate(document["diagnostic_rows"]):
+            row["index"] = index
+        self.assertEqual(harper_problem_index(document, source, path, locations, [1, 9]), 0)
+        self.assertEqual(harper_problem_index(document, source, path, locations, [2, 9]), 2)
+
+    def test_stale_missing_or_suppressed_findings_cannot_authorize_a_click(self):
+        source, path, locations, document = self.fixture()
+        for change in ({"writing_current": False}, {"writing_pending": True},
+                       {"path": "/private/tmp/other.typ"}, {"source_fingerprint": "stale"},
+                       {"source_bytes": 1}, {"writing_locations": [[1, 8], [2, 9]]}):
+            with self.subTest(change=change):
+                self.assertIsNone(harper_problem_index({**document, **change}, source, path, locations, [1, 9]))
+        self.assertIsNone(harper_problem_index(document, source, path, locations, [1, 8]))
+        document["diagnostic_rows"][3]["suppressed"] = True
+        self.assertIsNone(harper_problem_index(document, source, path, locations, [1, 9]))
+        document["diagnostic_rows"][3]["provider"] = "Tinymist"
+        document["diagnostic_rows"][3]["suppressed"] = False
+        self.assertIsNone(harper_problem_index(document, source, path, locations, [1, 9]))
+
+    def test_ambiguous_or_malformed_row_identity_is_an_evidence_failure(self):
+        source, path, locations, document = self.fixture()
+        duplicate = deepcopy(document)
+        duplicate["diagnostic_rows"][0]["provider"] = "Harper"
+        with self.assertRaisesRegex(AssertionError, "ambiguous"):
+            harper_problem_index(duplicate, source, path, locations, [1, 9])
+        for field, value in (("index", True), ("index", 4), ("line", 0),
+                             ("column", True), ("suppressed", 0), ("provider", 1)):
+            changed = deepcopy(document)
+            changed["diagnostic_rows"][3][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(AssertionError):
+                harper_problem_index(changed, source, path, locations, [1, 9])
+        for change in ({"diagnostic_rows": None}, {"raw_diagnostic_count": True},
+                       {"raw_diagnostic_count": 3}):
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                harper_problem_index({**document, **change}, source, path, locations, [1, 9])
+
+    def test_action_refuses_a_reordered_row_after_waiting_for_target(self):
+        source, path, locations, document = self.fixture()
+        case = self
+        class Recorder(TexJourneys):
+            def wait(self, description, predicate, timeout):
+                case.assertTrue(predicate(document))
+                return {"document": document}
+            def wait_target(self, name):
+                case.assertEqual(name, "problem.3.fix")
+            def snapshot(self):
+                changed = deepcopy(document)
+                changed["diagnostic_rows"][3]["provider"] = "LTeX+"
+                return {"document": changed}
+            def click(self, name):
+                case.fail("A row lost its source identity before the action")
+        with self.assertRaisesRegex(AssertionError, "ownership"):
+            Recorder().click_harper_problem_action(source, path, locations, [1, 9], "fix")
+
+    def test_row_zero_remains_a_valid_action_target(self):
+        source, path, locations, document = self.fixture()
+        document["diagnostic_rows"].reverse()
+        for index, row in enumerate(document["diagnostic_rows"]):
+            row["index"] = index
+        case = self
+        class Recorder(TexJourneys):
+            def wait(self, description, predicate, timeout):
+                case.assertTrue(predicate(document))
+                return {"document": document}
+            def wait_target(self, name):
+                case.assertEqual(name, "problem.0.dictionary")
+            def snapshot(self): return {"document": document}
+            def click(self, name): case.assertEqual(name, "problem.0.dictionary")
+        before = Recorder().click_harper_problem_action(source, path, locations, [1, 9], "dictionary")
+        self.assertIs(before, document)
+
+
 class TexSourceOwnershipContracts(unittest.TestCase):
     def fixture(self):
         return {'path': '/private/tmp/parity.tex', 'active_tab_id': 1,
@@ -162,7 +257,8 @@ class TexParityIndexContracts(unittest.TestCase):
             'labels': [row('sec:parity', main, 6), row('sec:child', child, 2)],
             'references': [row('sec:parity', main, 8), row('sec:child', main, 8)],
             'packages': [fingerprint('amsmath')],
-            'subfiles': [fingerprint(str(child.resolve()))],
+            'subfiles': [fingerprint(str(child.resolve())),
+                         fingerprint(str(child.with_name('parity-references.bib').resolve()))],
         }}
 
     def test_completed_graph_requires_expected_macros_sections_and_included_source(self):
@@ -177,6 +273,17 @@ class TexParityIndexContracts(unittest.TestCase):
                 self.assertFalse(tex_parity_index_ready(changed, main, child))
         document['project_index']['pending'] = True
         self.assertFalse(tex_parity_index_ready(document, main, child))
+
+    def test_bibliography_is_required_once_with_its_real_file_identity(self):
+        from desktop_ui_journeys import fingerprint
+        main, child, document = self.fixture()
+        expected = document['project_index']['subfiles']
+        for subfiles in (expected[:1], expected[1:], expected + expected[1:],
+                         [expected[0], fingerprint('/private/tmp/unrelated.bib')]):
+            changed = deepcopy(document)
+            changed['project_index']['subfiles'] = subfiles
+            with self.subTest(subfiles=subfiles):
+                self.assertFalse(tex_parity_index_ready(changed, main, child))
 
     def test_stale_or_malformed_index_evidence_cannot_count_as_native_parity(self):
         from desktop_ui_journeys import fingerprint
@@ -201,6 +308,66 @@ class TexParityIndexContracts(unittest.TestCase):
         self.assertFalse(tex_parity_index_ready(changed, main, child))
         document['project_index']['warning'] = fingerprint('Unreadable included source')
         self.assertFalse(tex_parity_index_ready(document, main, child))
+
+
+class TexBibliographyNavigationContracts(unittest.TestCase):
+    def test_real_subfiles_row_opens_and_closes_bibliography_and_restores_each_layout(self):
+        import tempfile
+        from desktop_ui_journeys import fingerprint
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'chapter.tex'
+            bibliography = Path(temporary) / 'parity-references.bib'
+            bibliography.write_text(TEX_PARITY_BIBLIOGRAPHY)
+            before = {'path': str(source), 'active_tab_id': 3,
+                      'tabs': 2, 'preview_tab_id': 2,
+                      'document_kind': 'Tex', 'source_fingerprint': fingerprint('unsaved source'),
+                      'source_bytes': len('unsaved source'), 'cursor': [8, 4], 'dirty': True,
+                      'preview_path': str(Path(temporary) / 'main.tex')}
+            case = self
+            class Recorder(TexJourneys):
+                def __init__(self, section, adjacent):
+                    self.before = {**before, 'explorer_maximized': section}
+                    self.state = deepcopy(self.before)
+                    self.events = []
+                    self.adjacent = adjacent
+                def snapshot(self): return {'document': deepcopy(self.state)}
+                def click(self, target):
+                    self.events.append(('click', target))
+                    if target.startswith('explorer.maximize.'):
+                        section = target.removeprefix('explorer.maximize.')
+                        self.state['explorer_maximized'] = (
+                            None if self.state['explorer_maximized'] == section else section)
+                    elif target == 'tab.' + str(self.before['active_tab_id']):
+                        self.state = {**self.before, 'explorer_maximized': 'Subfiles'}
+                    else:
+                        case.assertEqual(target, 'explorer.subfile.parity-references.bib')
+                        case.assertEqual(self.state['explorer_maximized'], 'Subfiles')
+                        self.state.update(path=str(bibliography), active_tab_id=4, tabs=3,
+                                          source_fingerprint=fingerprint(TEX_PARITY_BIBLIOGRAPHY),
+                                          source_bytes=len(TEX_PARITY_BIBLIOGRAPHY.encode('utf-8')),
+                                          dirty=False)
+                def key(self, code):
+                    case.assertEqual(code, 13)
+                    self.events.append(('close', code))
+                    self.state = {**self.before, 'explorer_maximized': 'Subfiles'}
+                    if self.adjacent:
+                        self.state.update(path=self.before['preview_path'], active_tab_id=2,
+                                          cursor=[0, 0], dirty=False)
+                def wait(self, description, predicate):
+                    case.assertTrue(predicate(self.state), description)
+                    return {'document': deepcopy(self.state)}
+                def record(self, action, **details): self.events.append((action, details))
+            for section in (None, 'Subfiles', 'Files'):
+                for adjacent in (False, True):
+                    with self.subTest(section=section, adjacent=adjacent):
+                        recorder = Recorder(section, adjacent)
+                        recorder.tex_parity_bibliography(source, bibliography)
+                        self.assertEqual(recorder.state, recorder.before)
+                        self.assertIn(('click', 'explorer.subfile.parity-references.bib'), recorder.events)
+                        self.assertIn(('close', 13), recorder.events)
+                        self.assertEqual(('click', 'tab.3') in recorder.events, adjacent)
+                        self.assertEqual(recorder.events[-1][0], 'tex.bibliography_subfile')
+                        self.assertEqual(bibliography.read_text(), TEX_PARITY_BIBLIOGRAPHY)
 
 
 if __name__ == '__main__': unittest.main()

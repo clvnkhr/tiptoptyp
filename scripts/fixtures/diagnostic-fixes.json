@@ -1,0 +1,63 @@
+{
+  "format": 1,
+  "notes": "One-based diagnostic lines. Replacement is the complete logical line without its newline. Compiler messages were checked with the pinned Typst compiler and local pdfLaTeX; these are evaluation inputs, never inference responses.",
+  "cases": [
+    {
+      "id": "typst-local-name",
+      "language": "typst",
+      "source": "// outside before\n#let count = 3\n#let total = coutn + 1\nTotal: #total\n// outside after\n",
+      "line": 3,
+      "diagnostic": "unknown variable: coutn",
+      "replacement": "#let total = count + 1"
+    },
+    {
+      "id": "typst-builtin-name",
+      "language": "typst",
+      "source": "// outside before\n#heding(level: 1)[Introduction]\n// outside after\n",
+      "line": 2,
+      "diagnostic": "unknown variable: heding",
+      "replacement": "#heading(level: 1)[Introduction]"
+    },
+    {
+      "id": "typst-missing-comma",
+      "language": "typst",
+      "source": "// outside before\n#rect(width: 30pt height: 20pt)\n// outside after\n",
+      "line": 2,
+      "diagnostic": "expected comma",
+      "replacement": "#rect(width: 30pt, height: 20pt)"
+    },
+    {
+      "id": "typst-color-name",
+      "language": "typst",
+      "source": "// outside before\n#set text(fill: bleu)\nA small document.\n// outside after\n",
+      "line": 2,
+      "diagnostic": "unknown variable: bleu",
+      "replacement": "#set text(fill: blue)"
+    },
+    {
+      "id": "tex-section-name",
+      "language": "tex",
+      "source": "\\documentclass{article}\n\\begin{document}\n% outside before\n\\sectoin{Introduction}\nUnchanged afterward.\n\\end{document}\n",
+      "line": 4,
+      "diagnostic": "Undefined control sequence.",
+      "replacement": "\\section{Introduction}"
+    },
+    {
+      "id": "tex-textbf-name",
+      "language": "tex",
+      "source": "\\documentclass{article}\n\\begin{document}\n% outside before\n\\textblf{Important}\nUnchanged afterward.\n\\end{document}\n",
+      "line": 4,
+      "diagnostic": "Undefined control sequence.",
+      "replacement": "\\textbf{Important}"
+    },
+    {
+      "id": "typst-ambiguous-name",
+      "language": "typst",
+      "source": "// outside before\nThe value is #missing_value.\n// outside after\n",
+      "line": 2,
+      "diagnostic": "unknown variable: missing_value",
+      "replacement": "The value is #missing_value.",
+      "expect_no_fix": true
+    }
+  ]
+}

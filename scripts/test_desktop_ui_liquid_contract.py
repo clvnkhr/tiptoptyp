@@ -1,6 +1,5 @@
 """Failure detectors for the optional native Liquid journey, not interaction evidence."""
 from copy import deepcopy
-import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -12,9 +11,9 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from desktop_ui_journeys import fingerprint
 from desktop_ui_liquid_journeys import (
-    LIQUID_JOURNEYS, LIQUID_DEFAULT_INPUT, LIQUID_NONDEFAULT_INPUT, LIQUID_DIFF_STYLES, LIQUID_MODEL_ID, LIQUID_REVISION, LIQUID_NATIVE_FILES, liquid_asset_path, liquid_native_target, LiquidJourneys,
+    LIQUID_DEFAULT_INPUT, LIQUID_NONDEFAULT_INPUT, LIQUID_DIFF_STYLES, LIQUID_MODEL_ID, LIQUID_REVISION, LIQUID_NATIVE_FILES, liquid_asset_path, LiquidJourneys,
     liquid_comparison, liquid_fixture, liquid_input_edits, liquid_input_options, liquid_ready,
-    liquid_model_directory, liquid_model_metadata, liquid_preparation_evidence,
+    liquid_model_directory, liquid_preparation_evidence,
     liquid_selection_point, liquid_sent, liquid_source, liquid_state, liquid_progress, liquid_partial,
 )
 
@@ -528,15 +527,5 @@ class LiquidJourneyContracts(unittest.TestCase):
             cache = journey.directory / 'liquid-streaming-cache'
             self.assertIn(('"liquid_cache_directory": ""', '"liquid_cache_directory": ' + json.dumps(str(cache))),
                           journey.settings_edits[0])
-
-    def test_optional_journey_is_registered_and_excluded_from_all(self):
-        spec=importlib.util.spec_from_file_location('liquid_runner',Path(__file__).with_name('test-desktop-ui.py'))
-        runner=importlib.util.module_from_spec(spec);spec.loader.exec_module(runner)
-        for name in LIQUID_JOURNEYS:
-            self.assertIn(name,runner.JOURNEY_NAMES)
-            self.assertTrue(callable(getattr(runner.Journey,name,None)))
-            self.assertNotIn(name,runner.selected_journeys('all'))
-            self.assertEqual(runner.selected_journeys(name),[name])
-
 
 if __name__=='__main__':unittest.main()

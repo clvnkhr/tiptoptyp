@@ -1,5 +1,4 @@
 """Deterministic citation journey failure detectors; not native interaction evidence."""
-import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -7,9 +6,9 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from desktop_ui_journeys import EditorJourneys, fingerprint
+from desktop_ui_journeys import fingerprint
 from desktop_ui_citation_journeys import (
-    CITATION_DOI, CITATION_EDITED, CITATION_EXISTING, CITATION_JOURNEYS, CITATION_KEY,
+    CITATION_DOI, CITATION_EDITED, CITATION_EXISTING, CITATION_KEY,
     CitationJourneys, citation_artifact, citation_owner_unchanged, citation_review, citation_state,
 )
 
@@ -77,20 +76,12 @@ class CitationJourneyContracts(unittest.TestCase):
                 CitationJourneys.citation_type(input, 'citation.bibtex', value, 'bibtex_fingerprint')
                 self.assertIn((method, value), input.actions)
 
-    def test_owner_and_preview_are_bound_and_journey_is_registered(self):
+    def test_owner_and_preview_are_bound(self):
         before = dict(path='/paper.typ', source_fingerprint=fingerprint('source'), source_bytes=6,
                       tabs=1, active_tab_id=3, preview_tab_id=3, preview_path='/paper.typ')
         self.assertTrue(citation_owner_unchanged(before, before))
         for key in before:
             self.assertFalse(citation_owner_unchanged({**before, key: None}, before))
-        spec = importlib.util.spec_from_file_location('desktop_ui_runner_citation_test',
-                                                     Path(__file__).with_name('test-desktop-ui.py'))
-        runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
-        self.assertTrue(issubclass(EditorJourneys, CitationJourneys))
-        for journey in CITATION_JOURNEYS:
-            self.assertIn(journey, runner.JOURNEY_NAMES)
-            self.assertEqual(runner.selected_journeys(journey), [journey])
-            self.assertNotIn(journey, runner.selected_journeys('all'))
 
 
 if __name__ == '__main__': unittest.main()

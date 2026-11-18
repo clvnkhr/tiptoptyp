@@ -23,18 +23,31 @@ import threading
 import time
 
 sys.dont_write_bytecode = True
-from desktop_ui_journeys import EditorJourneys, PREVIEW_SOURCE, fingerprint
+from desktop_ui_journeys import (EditorJourneys, PREVIEW_SOURCE, fingerprint, empty_workspace_ready,
+                                 demo_file_state, demo_owner_unchanged)
 from desktop_ui_tex_journeys import TEX_JOURNEYS, TEX_SOURCE
+from desktop_ui_tex_magic_journeys import TexMagicJourneys, TEX_MAGIC_JOURNEYS
+from tex_magic_fixture import prepare_tex_magic_fixture, tex_magic_environment
+from desktop_ui_comment_controls_journeys import COMMENT_CONTROLS_JOURNEYS
 from desktop_ui_image_journeys import IMAGE_JOURNEYS
 from desktop_ui_terminal_theme import terminal_theme
 from desktop_ui_newest_journeys import NEWEST_JOURNEYS
 from desktop_ui_effects_journeys import effects_pacing_fixture
 from desktop_ui_liquid_journeys import LIQUID_JOURNEYS, liquid_model_directory
+from desktop_ui_diagnostic_fix_journeys import (DIAGNOSTIC_FIX_JOURNEYS,
+                                               DIAGNOSTIC_FIX_SETUP_JOURNEYS,
+                                               diagnostic_fix_model_directory)
 from desktop_ui_ltex_journeys import LTEX_JOURNEYS, ltex_program, ltex_environment
 from desktop_ui_settings_links_journeys import SETTINGS_LINK_JOURNEYS
 from desktop_ui_tool_defaults_journeys import TOOL_DEFAULTS_JOURNEYS
 from desktop_ui_activity_journeys import ACTIVITY_JOURNEYS
 from desktop_ui_overleaf_journeys import OVERLEAF_JOURNEYS
+from desktop_ui_overleaf_files_journeys import OverleafFileJourneys
+from desktop_ui_overleaf_session_journeys import OverleafSessionJourneys, OVERLEAF_SESSION_JOURNEYS
+from desktop_ui_git_journeys import (GitSetupJourneys, GIT_SETUP_JOURNEYS,
+                                     prepare_git_setup_fixture, git_setup_environment)
+from desktop_ui_github_journeys import GitHubJourneys, GITHUB_JOURNEYS
+from github_service_fixture import prepare_github_helper, github_fixture_environment
 from desktop_ui_explorer_journeys import EXPLORER_JOURNEYS, prepare_explorer_files
 from desktop_ui_indentation_journeys import INDENTATION_JOURNEYS
 from desktop_ui_latexdiff_journeys import LATEXDIFF_JOURNEYS
@@ -46,23 +59,31 @@ from desktop_ui_inactive_preview_journeys import INACTIVE_PREVIEW_JOURNEYS
 ROOT = Path(__file__).resolve().parent.parent
 
 JOURNEY_NAMES = (
-    "all", *EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *IMAGE_JOURNEYS,
+    "all", *EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *OVERLEAF_SESSION_JOURNEYS, *GIT_SETUP_JOURNEYS, *GITHUB_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *TEX_MAGIC_JOURNEYS, *IMAGE_JOURNEYS,
     *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find",
-    "terminal_load", "terminal_theme", "find", "rectangle", "empty", "focus", "preview",
+    "terminal_load", "terminal_theme", "find", "rectangle", "empty", "workspace_switch", "focus", "preview",
     "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
     "diagnostics", "completion", "layout", "explorer_toggle", "explorer_scroll", "folding",
     "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing",
     "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "controls",
-    "settings_search", "editor_preferences", "typing_particles", "effects_pacing", "background",
-    "background_fades", "context_menu",
+    "settings_search", "editor_preferences", *COMMENT_CONTROLS_JOURNEYS, "typing_particles", "effects_pacing", "background",
+    "background_fades", "context_menu", *DIAGNOSTIC_FIX_JOURNEYS, *DIAGNOSTIC_FIX_SETUP_JOURNEYS,
 )
 
 
-def selected_journeys(name):
+def selected_journeys(name, start_at=None):
     # Optional local ML must never become a hidden prerequisite of "all".
     if name == 'all':
-        return [*EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS]
-    return list(TEX_JOURNEYS) if name == 'tex' else [name]
+        journeys = [*EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *TEX_JOURNEYS]
+    else:
+        journeys = list(TEX_JOURNEYS) if name == 'tex' else [name]
+    if start_at is not None:
+        if name != 'all':
+            raise ValueError('--start-at requires --journey all')
+        if start_at not in journeys:
+            raise ValueError('--start-at must name a journey in the all selection')
+        journeys = journeys[journeys.index(start_at):]
+    return journeys
 
 
 def height(document):
@@ -90,10 +111,11 @@ def assert_tinymist_palette(renderer, palette):
     identity_palette = (background[:3] == [255, 255, 255]
                         and foreground[:3] == [0, 0, 0])
     filters = value["filters"]
-    expected_filter = (filters == ["none"] if identity_palette else
+    # The probe omits ancestors whose computed filter is CSS `none`.
+    expected_filter = (filters == [] if identity_palette else
                        len(filters) == 1 and "tiptoptyp-palette" in filters[0])
     if not expected_filter:
-        raise AssertionError("Tinymist page must receive exactly one appropriate palette filter")
+        raise AssertionError("Tinymist page must use appropriate filters: none for identity, exactly one palette filter otherwise")
     expected = "rgb(" + ", ".join(map(str, background[:3])) + ")"
     if value["background"] != expected:
         raise AssertionError("Tinymist paper differs from the effective palette")
@@ -102,6 +124,27 @@ def assert_tinymist_palette(renderer, palette):
             raise AssertionError("Tinymist transfer slope differs from palette")
         if abs(value["intercepts"][channel] - foreground[channel] / 255) > 1e-6:
             raise AssertionError("Tinymist transfer intercept differs from palette")
+
+
+PREVIEW_COMFY_CONTROLS = (("settings.comfy", "comfy_background"),
+                         ("settings.comfy.text", "comfy_text"))
+
+
+def preview_comfy_state(document):
+    fields = ("comfy_background", "comfy_text", "comfy")
+    if not isinstance(document, dict) or any(type(document.get(field)) is not bool for field in fields):
+        raise AssertionError("Preview comfy checkbox inspection is unavailable")
+    if document["comfy"] != (document["comfy_background"] and document["comfy_text"]):
+        raise AssertionError("Preview comfy aggregate disagrees with its checkboxes")
+    return {field: document[field] for _, field in PREVIEW_COMFY_CONTROLS}
+
+
+def preview_comfy_changes(document, expected):
+    """Only change the independent controls that differ from this matrix entry."""
+    if type(expected) is not bool:
+        raise AssertionError("Preview comfy target must be a boolean")
+    state = preview_comfy_state(document)
+    return tuple((target, field) for target, field in PREVIEW_COMFY_CONTROLS if state[field] != expected)
 
 
 def observe_failed_interaction(journey, result):
@@ -126,7 +169,7 @@ def observe_failed_interaction(journey, result):
             result.setdefault("failure_observation_errors", {})[command] = str(error)
 
 
-class Journey(EditorJourneys):
+class Journey(EditorJourneys, OverleafFileJourneys, OverleafSessionJourneys, GitSetupJourneys, GitHubJourneys, TexMagicJourneys):
     terminal_theme = terminal_theme
 
     def __init__(self, process, driver, directory, evidence):
@@ -146,7 +189,7 @@ class Journey(EditorJourneys):
             self.log.flush()
 
     def native(self, command, *args):
-        if command in {"click", "double-click", "drag", "drag-start", "drag-move", "drag-end", "key", "key-burst", "move", "wheel", "pdfium-zoom-wheel", "text", "paste", "right-click", "fullscreen"}:
+        if command in {"click", "double-click", "triple-click", "drag", "drag-start", "drag-move", "drag-end", "key", "key-burst", "move", "wheel", "pdfium-zoom-wheel", "text", "paste", "right-click", "fullscreen"}:
             foreground = subprocess.run(
                 [str(self.driver), "foreground", str(self.process.pid)],
                 capture_output=True,
@@ -300,10 +343,16 @@ class Journey(EditorJourneys):
         self.native("drag", source["x"], source["y"], destination["x"], destination["y"])
 
     def double_click(self, name, minimum_height=0):
+        self.multiple_click(name, "double-click", minimum_height)
+
+    def triple_click(self, name, minimum_height=0):
+        self.multiple_click(name, "triple-click", minimum_height)
+
+    def multiple_click(self, name, command, minimum_height=0):
         def target_in(state, require_fresh=True):
             target = state["targets"].get(name)
             if not target or not target["enabled"] or (require_fresh and target["age_ms"] > 500):
-                raise AssertionError(f"missing, disabled or stale double-click target: {name}")
+                raise AssertionError(f"missing, disabled or stale {command} target: {name}")
             return target
 
         target = target_in(self.snapshot(), require_fresh=False)
@@ -333,10 +382,10 @@ class Journey(EditorJourneys):
                 self.native("move", observed["x"], observed["y"])
                 target = observed
             if now >= deadline:
-                raise AssertionError(f"target did not settle before double-click: {name}")
+                raise AssertionError(f"target did not settle before {command}: {name}")
             time.sleep(0.05)
         self.record("target", name=name, target=observed)
-        self.native("double-click", observed["x"], observed["y"])
+        self.native(command, observed["x"], observed["y"])
 
     def stable(self, baseline, frames=30):
         previous = None
@@ -797,9 +846,70 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
                 self.wait_target("modal.discard")
                 self.click("modal.discard")
                 self.wait("dirty tab discarded", lambda d: d["tabs"] < before and not d["modal_open"])
-        self.wait("window remains after final tab closes", lambda d: d["tabs"] == 0)
+        self.wait("window remains empty after final tab closes", empty_workspace_ready)
+        self.make_demo_file()
         self.key(45)  # Cmd+N
         self.wait("New creates an empty document", lambda d: d["tabs"] == 1 and d["source_bytes"] == 0 and d["path"] is None)
+
+    def make_demo_file(self):
+        """Only an explicit File action and a selected real path create a demo."""
+        before = self.snapshot()['document']
+        destination = self.directory / 'explicit-demo.typ'
+        cancelled = self.directory / 'cancelled-demo.typ'
+        if destination.exists() or cancelled.exists():
+            raise AssertionError('Demo creation needs unused private fixture destinations')
+
+        def open_picker():
+            self.key(122, 'cmd+alt')  # Open the actual File popup.
+            self.wait_target('menu.Make Demo File…')
+            self.click('menu.Make Demo File…')
+            self.wait('Make Demo File opens its native destination picker without adding a tab', lambda d:
+                      demo_file_state(d)['picking'] and demo_owner_unchanged(d, before))
+            deadline = time.monotonic() + 6
+            while True:
+                save = self.native('ax-button-title', 'Save')
+                if save.get('complete') and save.get('count') == 1 and save.get('enabled') is True:
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError('The native demo Save panel did not become ready')
+                time.sleep(.05)
+
+        def fill_picker(path):
+            self.key(5, 'cmd+shift')  # Native Go to Folder.
+            time.sleep(.3)
+            self.key(0)
+            self.native('text', str(path.parent))
+            self.key(36, 'none')
+            time.sleep(.5)
+            self.native('ax-set-text', path.name)
+
+        open_picker()
+        fill_picker(cancelled)
+        self.native('ax-press-title', 'Cancel')
+        self.wait('Cancelling Make Demo File preserves the exact empty workspace', lambda d:
+                  not demo_file_state(d)['busy'] and demo_owner_unchanged(d, before))
+        if cancelled.exists() or destination.exists():
+            raise AssertionError('Cancelling demo creation left a file behind')
+        open_picker()
+        fill_picker(destination)
+        self.native('ax-press-title', 'Save')
+        created = self.wait('Make Demo File creates and opens a real named source file', lambda d:
+                            not demo_file_state(d)['busy'] and d['path'] == str(destination)
+                            and d['tabs'] == before['tabs'] + 1 and not d['dirty']
+                            and destination.is_file(), timeout=20)['document']
+        contents = destination.read_text(encoding='utf-8')
+        if ('= Welcome to tiptoptyp' not in contents or len(contents.encode()) != created['source_bytes']
+                or fingerprint(contents) != created['source_fingerprint']):
+            raise AssertionError('The named demo bytes differ from the opened source')
+        self.key(13)
+        self.wait('Closing the explicit demo returns to the original empty workspace', lambda d:
+                  empty_workspace_ready(d)
+                  and d['workspace_root_fingerprint'] == before['workspace_root_fingerprint'])
+        if destination.read_text(encoding='utf-8') != contents or cancelled.exists():
+            raise AssertionError('Closing the demo changed the saved fixture or created the cancelled file')
+        self.record('file.make_demo_file', native_file_menu=True, real_save_panel=True,
+                    cancel_preserves_source=True, named_file_created=True, saved_bytes_match_source=True,
+                    empty_workspace_restored=True)
 
     def settings(self):
         self.key(43)
@@ -867,14 +977,14 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
                 self.wait_target("settings.theme." + ("Dark" if dark else "Light"))
                 self.click("settings.theme." + ("Dark" if dark else "Light"))
                 self.wait("interface theme applied", lambda d: d["dark"] == dark)
-                if self.snapshot()["document"]["comfy"] != comfy:
-                    self.wait_target("settings.comfy")
-                    self.click("settings.comfy")
-                    self.wait_target("settings.comfy.text")
-                    self.click("settings.comfy.text")
+                for target, field in preview_comfy_changes(self.snapshot()["document"], comfy):
+                    self.wait_target(target)
+                    self.click(target)
+                    self.wait(field + " applied", lambda d, field=field: preview_comfy_state(d)[field] == comfy)
                 self.close_settings()
                 field = "pdfium_palette" if backend == "Pdfium" else "webview_palette"
-                self.wait("renderer palette follows theme/comfy", lambda d: d["dark"] == dark and d["comfy"] == comfy
+                self.wait("renderer palette follows theme/comfy", lambda d: d["dark"] == dark
+                          and not preview_comfy_changes(d, comfy)
                           and d["page_dark"] == dark and d[field] == d["expected_palette"])
                 if backend == "Interactive":
                     deadline = time.monotonic() + 10
@@ -902,11 +1012,18 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
 
     def focus(self):
         self.multiple_windows = True
+        owner_before = self.snapshot()['document']
+        original_viewport = owner_before['viewport']
         original = self.native_wait("original window focused", lambda ws: any(w.get("AXFocused") for w in ws))
         original = next(w["AXTitle"] for w in original if w.get("AXFocused"))
         self.key(45, "cmd+shift")
         windows = self.native_wait("second document focused", lambda ws: any(w.get("AXFocused") and w["AXTitle"] != original for w in ws))
         second = next(w["AXTitle"] for w in windows if w.get("AXFocused"))
+        second_state = self.wait('New Window starts with an empty workspace rather than a demo', lambda d:
+                                 d['viewport'] != original_viewport and d['focused'] and empty_workspace_ready(d))['document']
+        second_viewport = second_state['viewport']
+        if not demo_owner_unchanged(self.snapshot(original_viewport)['document'], owner_before):
+            raise AssertionError('New Window changed the original source or workspace')
         for title in (original, second, original):
             self.native("raise", title)
             self.native_wait("document raised", lambda ws: any(w["AXTitle"] == title and w.get("AXFocused") for w in ws))
@@ -915,6 +1032,8 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
             settings = next(w["AXTitle"] for w in windows if "Settings" in w["AXTitle"] and w.get("AXFocused"))
             self.native("close", settings)
             self.native_wait("Settings returns focus to its last owner", lambda ws: not any("Settings" in w["AXTitle"] for w in ws) and any(w["AXTitle"] == title and w.get("AXFocused") for w in ws))
+            if not empty_workspace_ready(self.snapshot(second_viewport)['document']):
+                raise AssertionError('The new window acquired an implicit document during focus transitions')
         self.key(46)  # Cmd+M
         self.native_wait("document minimized", lambda ws: any(w["AXTitle"] == original and w.get("AXMinimized") for w in ws))
         self.native("restore", original)
@@ -935,13 +1054,18 @@ stop.write_text(json.dumps({"pid": os.getpid(), "rate": rate, "frames": frames, 
         self.multiple_windows = False
         self.viewport = None
         self.wait("restored editor keeps rendering after children close", lambda d: d["focused"] and d["minimized"] is not True)
+        if not demo_owner_unchanged(self.snapshot()['document'], owner_before):
+            raise AssertionError('New-window focus transitions changed the original document')
         self.stable_state(lambda d: d["minimized"] is not True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--journey", choices=JOURNEY_NAMES, default="all")
+    parser.add_argument("--start-at", choices=selected_journeys('all'),
+                        help="run an explicit suffix of --journey all; record the exact selection without counting omitted journeys")
     parser.add_argument("--liquid-model-dir", type=Path, help="Liquid journeys only: read-only prepared model reference; downloads optional assets into a temporary cache")
+    parser.add_argument("--diagnostic-fix-model-dir", type=Path, help="Diagnostic-fix journey only: read-only prepared foundation-model cache copied into its temporary folder")
     parser.add_argument("--ltex-executable", type=Path, help="LTeX journey only: path to an installed ltex-ls-plus launcher")
     parser.add_argument("--release", action="store_true", help="use the optimized production profile for large-document journeys")
     parser.add_argument("--executable", type=Path, help="reuse a preserved build for paired benchmarks; record its version and binary hash")
@@ -955,6 +1079,10 @@ def main():
     modes.add_argument("--observe-only", action="store_true", help="check real-app inspection without input; does not pass the interaction suite")
     modes.add_argument("--prepare-only", action="store_true", help="build runner and editor without launching")
     args = parser.parse_args()
+    try:
+        planned_journeys = selected_journeys(args.journey, args.start_at)
+    except ValueError as error:
+        parser.error(str(error))
     if args.journey in LTEX_JOURNEYS:
         try:
             args.ltex_executable = ltex_program(args.ltex_executable)
@@ -969,6 +1097,13 @@ def main():
             parser.error(str(error))
     elif args.liquid_model_dir is not None:
         parser.error('--liquid-model-dir requires a Liquid journey (liquid_selection or liquid_streaming)')
+    if args.journey in DIAGNOSTIC_FIX_JOURNEYS:
+        try:
+            args.diagnostic_fix_model_dir = diagnostic_fix_model_directory(args.diagnostic_fix_model_dir)
+        except ValueError as error:
+            parser.error(str(error))
+    elif args.diagnostic_fix_model_dir is not None:
+        parser.error('--diagnostic-fix-model-dir requires --journey diagnostic_fix')
     if args.journey != "effects_pacing" and args.effects_preview_snapshots != "on":
         parser.error("--effects-preview-snapshots off requires --journey effects_pacing")
     if args.journey in TEXDOC_JOURNEYS:
@@ -983,6 +1118,8 @@ def main():
     evidence = Path(tempfile.mkdtemp(prefix="run-", dir=evidence_root))
     driver = evidence_root / "desktop-ui-driver"
     result = {"passed": False, "journeys": [], "platform": platform.platform(),
+              "selection": {"requested": args.journey, "start_at": args.start_at,
+                            "planned": planned_journeys},
               "evidence": "native input and read-only state; no visual composition verification"}
     if args.journey == "effects_pacing":
         result["effects_preview_snapshots_requested"] = args.effects_preview_snapshots == "on"
@@ -1041,7 +1178,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in (*TEX_JOURNEYS, *LTEX_JOURNEYS) else "journey.typ" if args.journey in ("all", "overleaf_storage", *LIQUID_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in (*TEX_JOURNEYS, *LTEX_JOURNEYS) else "journey.typ" if args.journey in ("all", *OVERLEAF_JOURNEYS, *LIQUID_JOURNEYS, *DIAGNOSTIC_FIX_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
@@ -1063,7 +1200,7 @@ def main():
                 # Large wrapped source, with the same small three-page preview.
                 with fixture.open("a") as stream:
                     stream.write("".join(f"// Long source row {index:04}: " + "layout transition coverage " * 6 + "\n" for index in range(1800)))
-            if args.journey in ("all", "explorer_scroll"):
+            if args.journey in ("all", "explorer_scroll", *OVERLEAF_JOURNEYS):
                 for index in range(80):
                     (directory / f"file-{index:03}.typ").write_text(f"= File {index:03}\n")
             if args.journey == "explorer_scroll":
@@ -1080,9 +1217,21 @@ def main():
                     .replace("085 original", "085 changed").replace("165 original", "165 changed"))
                 if args.journey == "git_hunks":
                     fixture = hunk_fixture
+            if args.journey in (*GIT_SETUP_JOURNEYS, *GITHUB_JOURNEYS):
+                prepare_git_setup_fixture(directory)
+            if args.journey in GITHUB_JOURNEYS:
+                prepare_github_helper(directory)
+            if args.journey in TEX_MAGIC_JOURNEYS:
+                prepare_tex_magic_fixture(directory)
             environment = {key: value for key, value in os.environ.items()
                            if not key.startswith(("TIPTOPTYP_UI_", "TIPTOPTYP_PROFILE", "TIPTOPTYP_DESKTOP_TEST"))}
             environment["TIPTOPTYP_DESKTOP_TEST_DIR"] = str(directory)
+            if args.journey in (*GIT_SETUP_JOURNEYS, *GITHUB_JOURNEYS):
+                environment = git_setup_environment(directory, environment)
+            if args.journey in GITHUB_JOURNEYS:
+                environment = github_fixture_environment(directory, environment)
+            if args.journey in TEX_MAGIC_JOURNEYS:
+                environment = tex_magic_environment(directory, environment)
             if args.journey in LTEX_JOURNEYS:
                 environment = ltex_environment(environment, directory, args.ltex_executable)
             if args.journey in CITATION_JOURNEYS:
@@ -1114,6 +1263,7 @@ def main():
                     journey.review_preview = args.review_preview
                     journey.capture_review = args.capture_review
                     journey.liquid_model_dir = args.liquid_model_dir
+                    journey.diagnostic_fix_model_dir = args.diagnostic_fix_model_dir
                     journey.ltex_executable = args.ltex_executable
                     journey.effects_preview_snapshots = args.effects_preview_snapshots == "on"
                     journey.explorer_scroll_checks_contents = args.journey == "explorer_scroll"
@@ -1143,8 +1293,7 @@ def main():
                                                    if window.get("AXTitle", "").endswith(" — tiptoptyp")
                                                    and window.get("AXMinimized") is not True),
                                                   None)
-                        if args.journey != "startup_preview":
-                            journey.native("activate")
+                        journey.native("activate")
                         # A renderer child can leave the process key without
                         # changing the document's AX focus flag. Raise the
                         # actual owner once before posting the first event so
@@ -1154,18 +1303,15 @@ def main():
                             journey.native("raise", document_title)
                             journey.wait("document window focused", lambda d: d["focused"])
                         elif args.journey == "startup_preview":
-                            # Some AppKit launches expose only the bundle
-                            # title until the first root hit-test. Focus the
-                            # published editor target instead of attempting
-                            # an AXRaise on that non-document host window.
-                            journey.click("editor.source")
-                            journey.wait("document window focused", lambda d: d["focused"])
+                            # An empty workspace has no source-editor target.
+                            # Process activation focuses its registered root.
+                            journey.wait("empty workspace window focused", lambda d: d["focused"])
                         else:
                             journey.native("raise", fixture.name + " — tiptoptyp")
                             journey.wait("document window focused", lambda d: d["focused"])
                     journey.wait(
                         "fixture document loaded",
-                        (lambda d: d["tabs"] == 1 and d["path"] is None and d["source_bytes"] > 0)
+                        empty_workspace_ready
                         if args.journey == "startup_preview"
                         else (lambda d: d["tabs"] == 1 and d["path"] == str(fixture)),
                         timeout=15,
@@ -1193,7 +1339,7 @@ def main():
                         return
                     if args.capture_review:
                         journey.capture_initial_review()
-                    for name in selected_journeys(args.journey):
+                    for name in planned_journeys:
                         journey.record("journey.start", name=name)
                         getattr(journey, name)()
                         result["journeys"].append(name)

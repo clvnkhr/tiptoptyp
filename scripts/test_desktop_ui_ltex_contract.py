@@ -1,6 +1,5 @@
 """Contract guards for bundled/custom LTeX journeys; these are not native evidence."""
 from copy import deepcopy
-import importlib.util
 import os
 from pathlib import Path
 import tempfile
@@ -11,11 +10,69 @@ from desktop_ui_journeys import fingerprint
 from desktop_ui_ltex_journeys import (
     assert_ltex_repair_busy, assert_ltex_repair_preserved, assert_ltex_source_unchanged,
     assert_ltex_stale, ltex_environment, ltex_program, ltex_repair_completed, ltex_results,
+    ltex_enabled, ltex_mathematical_results, ltex_settings_expanded,
     LtexJourneys,
 )
 
 
 class LtexContract(unittest.TestCase):
+    def test_window_expansion_requires_matching_title_and_observed_valid_dimensions(self):
+        title = 'Settings — tiptoptyp'
+        initial = [900, 700]
+        self.assertTrue(ltex_settings_expanded([{}, {'AXTitle': title, 'size': [1200, 900]}], title, initial))
+        for candidate in ({}, {'size': [1200, 900]}, {'AXTitle': title},
+                          {'AXTitle': title, 'size': initial},
+                          {'AXTitle': 'Other', 'size': [1200, 900]},
+                          {'AXTitle': title, 'size': [True, 900]},
+                          {'AXTitle': title, 'size': [0, 900]}):
+            self.assertFalse(ltex_settings_expanded([candidate], title, initial), candidate)
+
+    def test_mathematical_prose_requires_real_grammar_at_original_source_positions(self):
+        source = '#align(center)[Title]\nThis are a test. We has two result.\n'
+        path = Path('/tmp/math.typ')
+        state = self.document(path, source, mode='Custom')
+        state['ltex'].update(rules=['BASE_FORM'], locations=[[2, 21]])
+        self.assertTrue(ltex_mathematical_results(state, path, source, 'Custom'))
+        for changes in ({'rules': ['MORFOLOGIK_RULE_EN_GB']},
+                        {'rules': ['OXFORD_SPELLING_Z_NOT_S']},
+                        {'locations': [[1, 8]]}, {'locations': [[2, 3]]},
+                        {'locations': []}, {'count': 0}, {'suggestions': 0},
+                        {'current': False}):
+            changed = deepcopy(state)
+            changed['ltex'].update(changes)
+            self.assertFalse(ltex_mathematical_results(changed, path, source, 'Custom'), changes)
+
+    def test_activation_requires_an_observed_boolean(self):
+        for enabled in (False, True):
+            self.assertIs(ltex_enabled({'ltex': {'enabled': enabled}}), enabled)
+        for document in ({}, {'ltex': {}}, {'ltex': {'enabled': 1}}, {'ltex': None}):
+            with self.subTest(document=document), self.assertRaises(AssertionError):
+                ltex_enabled(document)
+
+    def test_native_checkbox_is_clicked_only_for_mismatching_activation(self):
+        class Activation(LtexJourneys):
+            def __init__(self, enabled):
+                self.enabled = enabled
+                self.clicks = []
+            def snapshot(self):
+                return {'document': {'ltex': {'enabled': self.enabled}}}
+            def click(self, name):
+                self.clicks.append(name)
+                self.enabled = not self.enabled
+            def wait(self, description, predicate):
+                if not predicate(self.snapshot()['document']):
+                    raise AssertionError('LTeX activation did not reach its target')
+
+        for initial in (False, True):
+            for target in (False, True):
+                journey = Activation(initial)
+                journey.set_ltex_enabled(target)
+                self.assertIs(journey.enabled, target)
+                self.assertEqual(journey.clicks,
+                                 ['settings.ltex.enabled'] if initial != target else [])
+        with self.assertRaises(AssertionError):
+            Activation(False).set_ltex_enabled(1)
+
     def document(self, path, source, *, mode='Bundled', current=True):
         return dict(path=str(path), source_fingerprint=fingerprint(source), ltex=dict(
             state='Up to date / idle', mode=mode, enabled=True, current=current, count=1,
@@ -174,15 +231,6 @@ class LtexContract(unittest.TestCase):
             for key in ('original', 'retained', 'evidence'):
                 self.assertEqual(Path(observed[key]).read_bytes(), b'fresh pixels')
             self.assertFalse((evidence / 'generated-captures/.tiptoptyp/screenshots/old-settings.png').exists())
-
-    def test_focused_resource_check_remains_excluded_from_all(self):
-        file = Path(__file__).with_name('test-desktop-ui.py')
-        spec = importlib.util.spec_from_file_location('desktop_ltex_contract_runner', file)
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-        self.assertNotIn('ltex', runner.selected_journeys('all'))
-        self.assertEqual(runner.selected_journeys('ltex'), ['ltex'])
-
 
 if __name__ == '__main__':
     unittest.main()

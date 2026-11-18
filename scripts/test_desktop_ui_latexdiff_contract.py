@@ -1,5 +1,4 @@
 """LaTeXdiff native-journey failure detectors; these are not UI interaction evidence."""
-import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -8,42 +7,65 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from desktop_ui_journeys import EditorJourneys, fingerprint
+from desktop_ui_journeys import fingerprint
 from desktop_ui_latexdiff_journeys import (
-    LATEXDIFF_ARGUMENTS, LATEXDIFF_JOURNEYS, LatexdiffJourneys, latexdiff_artifact,
-    latexdiff_complete, latexdiff_draft, latexdiff_inputs_unchanged,
+    LATEXDIFF_ARGUMENTS, LatexdiffJourneys, latexdiff_artifact,
+    latexdiff_complete, latexdiff_created, latexdiff_draft, latexdiff_inputs_unchanged,
+    latexdiff_pdf_artifact,
     latexdiff_owner_unchanged, latexdiff_state,
 )
 
 
 class LatexdiffJourneyContracts(unittest.TestCase):
     def document(self, **changes):
-        state = dict(visible=True, busy=False, step='review', error=None, output_path=None,
+        state = dict(visible=True, busy=False, error=None,
                      older_fingerprint=fingerprint('/older.tex'), newer_fingerprint=fingerprint('/newer.tex'),
                      output_fingerprint=fingerprint('/changes.tex'), arguments_fingerprint=fingerprint(LATEXDIFF_ARGUMENTS))
         state.update(changes)
         return {'latexdiff': state}
 
-    def test_missing_malformed_and_stale_looking_observations_never_pass(self):
+    def owner(self):
+        return dict(path='/main.typ', source_fingerprint=fingerprint('owner'), source_bytes=5,
+                    tabs=1, tab_order=[8], active_tab_id=8,
+                    workspace_root_fingerprint=fingerprint('/'))
+
+    def created(self, **changes):
+        state = {**self.owner(), **self.document(visible=False), 'path': '/changes.tex',
+                 'document_kind': 'Tex', 'dirty': False, 'tabs': 2, 'tab_order': [8, 9],
+                 'active_tab_id': 9, 'preview_tab_id': 9, 'preview_path': '/changes.tex',
+                 'modal_open': False, 'completion_notice': 'Created changes.tex · Compiling PDF…',
+                 'source_fingerprint': fingerprint('diff source'), 'source_bytes': 11,
+                 'pdf_output_state': 'Building', 'pdf_output_pending': True,
+                 'pdf_output_revision': 3, 'revision': '3', 'compile_indicator_spinning': True,
+                 'preview_requested_backend': 'Pdfium', 'preview_backend': 'PDFium',
+                 'preview_pdfium_ready': False}
+        state.update(changes)
+        return state
+
+    def completed(self, **changes):
+        return self.created(**{'pdf_output_state': 'Saved', 'pdf_output_pending': False,
+                            'compile_indicator_spinning': False, 'preview_pdfium_ready': True,
+                            'completion_notice': 'Compiled changes.pdf', **changes})
+
+    def test_missing_malformed_or_old_multistep_inspection_never_passes(self):
         for document in ({}, {'latexdiff': None}, {'latexdiff': {}},
-                         self.document(visible=1), self.document(step='unknown'),
+                         self.document(visible=1), self.document(step='files'),
                          self.document(visible=False, busy=True), self.document(step=None),
                          self.document(older_fingerprint='not-a-fingerprint'),
-                         self.document(arguments_fingerprint=None), self.document(error=''),
-                         self.document(output_path='relative.tex')):
+                         self.document(arguments_fingerprint=None), self.document(error='')):
             with self.subTest(document=document), self.assertRaises(AssertionError):
                 latexdiff_state(document)
-        closed = dict(visible=False, busy=False, step=None, error=None, output_path=None,
+        closed = dict(visible=False, busy=False, error=None,
                       older_fingerprint=None, newer_fingerprint=None,
                       output_fingerprint=None, arguments_fingerprint=None)
         self.assertFalse(latexdiff_state({'latexdiff': closed})['visible'])
 
-    def test_draft_requires_exact_paths_options_step_and_idle_state(self):
+    def test_one_form_draft_requires_exact_paths_options_and_idle_state(self):
         def matches(document):
-            return latexdiff_draft(document, 'review', Path('/older.tex'), Path('/newer.tex'),
+            return latexdiff_draft(document, Path('/older.tex'), Path('/newer.tex'),
                                    Path('/changes.tex'), LATEXDIFF_ARGUMENTS)
         self.assertTrue(matches(self.document()))
-        for changes in ({'step': 'files'}, {'busy': True}, {'visible': False},
+        for changes in ({'busy': True}, {'visible': False},
                         {'older_fingerprint': fingerprint('/other.tex')},
                         {'newer_fingerprint': fingerprint('/older.tex')},
                         {'output_fingerprint': fingerprint('/older.tex')},
@@ -51,20 +73,59 @@ class LatexdiffJourneyContracts(unittest.TestCase):
             with self.subTest(changes=changes):
                 self.assertFalse(matches(self.document(**changes)))
 
-    def test_completed_result_requires_idle_review_exact_artifact_and_no_error(self):
-        self.assertTrue(latexdiff_complete(self.document(output_path='/changes.tex'), Path('/changes.tex')))
-        for changes in ({'busy': True}, {'visible': False}, {'step': 'output'},
-                        {'output_path': None}, {'output_path': '/other.tex'}):
-            self.assertFalse(latexdiff_complete(self.document(**{'output_path': '/changes.tex', **changes}), Path('/changes.tex')))
+    def test_created_result_needs_automatic_new_source_preview_and_visible_feedback(self):
+        output, before = Path('/changes.tex'), self.owner()
+        self.assertTrue(latexdiff_created(self.created(), output, before))
+        for changes in ({'path': '/other.tex'}, {'document_kind': 'Text'}, {'dirty': True},
+                        {'tabs': 1, 'tab_order': [9]}, {'tab_order': [9, 8]},
+                        {'active_tab_id': 8}, {'preview_tab_id': 8}, {'preview_path': '/main.typ'},
+                        {'workspace_root_fingerprint': fingerprint('/other')},
+                        {'modal_open': True}, {'completion_notice': None},
+                        {'completion_notice': ''}, {'completion_notice': 'Unrelated completion'}):
+            with self.subTest(changes=changes):
+                self.assertFalse(latexdiff_created(self.created(**changes), output, before))
+        self.assertFalse(latexdiff_created(self.created(**self.document()), output, before))
         with self.assertRaisesRegex(AssertionError, 'generation failed'):
-            latexdiff_complete(self.document(error='Binary failed'), Path('/changes.tex'))
+            latexdiff_created(self.created(**self.document(error='Binary failed')), output, before)
+        for field in ('source_fingerprint', 'source_bytes', 'tab_order', 'tabs',
+                      'active_tab_id', 'workspace_root_fingerprint'):
+            current = self.created(); current.pop(field)
+            with self.subTest(missing=field), self.assertRaises(AssertionError):
+                latexdiff_created(current, output, before)
+
+    def test_completed_result_needs_saved_current_pdf_and_the_effective_selected_renderer(self):
+        output, before, source = Path('/changes.tex'), self.owner(), 'diff source'
+        self.assertTrue(latexdiff_complete(self.completed(), output, source, before))
+        for changes in ({'pdf_output_state': 'Building'}, {'pdf_output_state': 'Unverified'},
+                        {'pdf_output_pending': True}, {'pdf_output_revision': 2},
+                        {'compile_indicator_spinning': True}, {'preview_pdfium_ready': False},
+                        {'preview_requested_backend': 'Interactive'}, {'preview_backend': 'Tinymist'},
+                        {'source_fingerprint': fingerprint('stale')}, {'source_bytes': 6}):
+            with self.subTest(changes=changes):
+                self.assertFalse(latexdiff_complete(self.completed(**changes), output, source, before))
+        with self.assertRaisesRegex(AssertionError, 'automatic PDF compilation failed'):
+            latexdiff_complete(self.completed(pdf_output_state='Failed'), output, source, before)
+
+    def test_pdf_artifact_needs_complete_bounded_real_selected_engine_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pdf = Path(directory) / 'changes.pdf'
+            with self.assertRaises(AssertionError):
+                latexdiff_pdf_artifact(pdf)
+            good = b'%PDF-1.7\n/Producer (pdfTeX-1.40.28)\n' + b'content' * 30 + b'\n%%EOF\n'
+            for data in (b'', b'%PDF-incomplete' + b'content' * 30,
+                         good.replace(b'pdfTeX', b'XeTeX'), good.replace(b'%PDF-', b'wrong')):
+                pdf.write_bytes(data)
+                with self.subTest(data=data[:50]), self.assertRaises(AssertionError):
+                    latexdiff_pdf_artifact(pdf)
+            pdf.write_bytes(good)
+            self.assertEqual(latexdiff_pdf_artifact(pdf), good)
 
     def test_original_document_identity_and_input_bytes_must_be_preserved(self):
-        before = dict(path='/main.typ', source_fingerprint=fingerprint('owner'), source_bytes=5,
-                      tabs=1, active_tab_id=8)
+        before = self.owner()
         self.assertTrue(latexdiff_owner_unchanged(before, before))
         for change in ({'path': '/other.typ'}, {'source_fingerprint': fingerprint('edited')},
-                       {'source_bytes': 6}, {'tabs': 2}, {'active_tab_id': 9}):
+                       {'source_bytes': 6}, {'tabs': 2, 'tab_order': [8, 9]},
+                       {'active_tab_id': 9, 'tab_order': [9]}):
             self.assertFalse(latexdiff_owner_unchanged({**before, **change}, before))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'older.tex'
@@ -93,36 +154,23 @@ class LatexdiffJourneyContracts(unittest.TestCase):
             path.write_text(good)
             self.assertEqual(latexdiff_artifact(path), good)
 
-    def test_journey_is_registered_but_optional_external_tool_is_not_hidden_in_all(self):
-        spec = importlib.util.spec_from_file_location('latexdiff_desktop_runner', Path(__file__).with_name('test-desktop-ui.py'))
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-        self.assertEqual(LATEXDIFF_JOURNEYS, ('latexdiff_wizard',))
-        self.assertTrue(issubclass(EditorJourneys, LatexdiffJourneys))
-        self.assertIn('latexdiff_wizard', runner.JOURNEY_NAMES)
-        self.assertEqual(runner.selected_journeys('latexdiff_wizard'), ['latexdiff_wizard'])
-        self.assertNotIn('latexdiff_wizard', runner.selected_journeys('all'))
-
     def test_running_cancel_uses_settings_and_checks_process_exit_before_restoring(self):
         owner = self
         class Cancellation(LatexdiffJourneys):
             def __init__(self, folder):
                 self.folder, self.events = folder, []
-                self.before = dict(path='/main.typ', source_fingerprint=fingerprint('owner'),
-                                   source_bytes=5, tabs=1, active_tab_id=8)
-                self.document = {**self.before, **owner.document(step='files')}
+                self.before = owner.owner()
+                self.document = {**self.before, **owner.document()}
             def latexdiff_executable_setting(self, value, previous=''):
                 self.events.append(('settings', str(previous), str(value)))
-            def open_latexdiff_wizard(self):
+            def open_latexdiff(self):
                 self.events.append(('open',))
             def latexdiff_type(self, name, value, key):
                 self.document['latexdiff'][key] = fingerprint(str(value))
             def click(self, name):
                 self.events.append(('click', name))
                 state = self.document['latexdiff']
-                if name == 'latexdiff.next':
-                    state['step'] = 'output' if state['step'] == 'files' else 'review'
-                elif name == 'latexdiff.generate':
+                if name == 'latexdiff.generate':
                     state['busy'] = True
                     (self.folder / 'worker.pid').write_text('12345')
                 elif name == 'latexdiff.cancel':

@@ -1,63 +1,115 @@
-"""LaTeXdiff wizard journeys using real native input and read-only inspection."""
+"""Single-page LaTeXdiff creation through real native input and read-only inspection."""
 import json
 import os
 import re
 import shlex
 from pathlib import Path
 
-LATEXDIFF_JOURNEYS = ('latexdiff_wizard',)
+LATEXDIFF_JOURNEYS = ('latexdiff',)
 LATEXDIFF_ARGUMENTS = '--math-markup=1'
 LATEXDIFF_OLDER = '\\documentclass{article}\n\\begin{document}\nThe original estimate is uniform.\n\\[a^2+b^2=c^2.\\]\n\\end{document}\n'
 LATEXDIFF_NEWER = '\\documentclass{article}\n\\begin{document}\nThe improved estimate is locally uniform.\n\\[a^2+b^2=c^3.\\]\n\\end{document}\n'
 
 
 def latexdiff_state(document):
-    """Missing or malformed observations must never be mistaken for a closed UI."""
+    """Missing, old multi-step, or malformed observations cannot pass."""
     state = document.get('latexdiff')
-    required = {'visible', 'busy', 'step', 'error', 'output_path', 'older_fingerprint',
+    required = {'visible', 'busy', 'error', 'older_fingerprint',
                 'newer_fingerprint', 'output_fingerprint', 'arguments_fingerprint'}
-    if (not isinstance(state, dict) or not required.issubset(state)
+    if (not isinstance(state, dict) or not required.issubset(state) or 'step' in state
             or any(type(state.get(key)) is not bool for key in ('visible', 'busy'))
-            or state['step'] not in (None, 'files', 'output', 'review')
-            or state['visible'] and state['step'] is None
             or state['busy'] and not state['visible']):
-        raise AssertionError('LaTeXdiff wizard inspection is missing or malformed')
+        raise AssertionError('LaTeXdiff form inspection is missing or malformed')
     for key in ('older_fingerprint', 'newer_fingerprint', 'output_fingerprint', 'arguments_fingerprint'):
         value = state[key]
         if value is None and not state['visible']:
             continue
         if not isinstance(value, str) or re.fullmatch(r'[0-9a-f]{16}', value) is None:
-            raise AssertionError('LaTeXdiff wizard path/options fingerprint is invalid')
+            raise AssertionError('LaTeXdiff form path/options fingerprint is invalid')
     error = state['error']
     if error is not None and (not isinstance(error, str) or not error.strip()):
-        raise AssertionError('LaTeXdiff wizard error inspection is invalid')
-    output = state['output_path']
-    if output is not None and (not isinstance(output, str) or not Path(output).is_absolute()):
-        raise AssertionError('LaTeXdiff completed output path is invalid')
+        raise AssertionError('LaTeXdiff form error inspection is invalid')
     return state
 
 
-def latexdiff_draft(document, step, older, newer, output=None, arguments=None):
+def latexdiff_draft(document, older, newer, output=None, arguments=None):
     from desktop_ui_journeys import fingerprint
     state = latexdiff_state(document)
-    return (state['visible'] and not state['busy'] and state['step'] == step
+    return (state['visible'] and not state['busy']
             and state['older_fingerprint'] == fingerprint(str(older))
             and state['newer_fingerprint'] == fingerprint(str(newer))
             and (output is None or state['output_fingerprint'] == fingerprint(str(output)))
             and (arguments is None or state['arguments_fingerprint'] == fingerprint(arguments)))
 
 
-def latexdiff_complete(document, output):
-    state = latexdiff_state(document)
-    if state['visible'] and not state['busy'] and state['error'] is not None:
-        raise AssertionError('LaTeXdiff generation failed: ' + state['error'])
-    return (state['visible'] and not state['busy'] and state['step'] == 'review'
-            and state['output_path'] == str(output) and state['error'] is None)
+def latexdiff_tab_ids(document):
+    from desktop_ui_workspace_switch_journeys import workspace_tab_ids
+    ids = workspace_tab_ids(document)
+    if (not isinstance(document.get('workspace_root_fingerprint'), str)
+            or re.fullmatch(r'[0-9a-f]{16}', document['workspace_root_fingerprint']) is None
+            or not isinstance(document.get('source_fingerprint'), str)
+            or re.fullmatch(r'[0-9a-f]{16}', document['source_fingerprint']) is None
+            or type(document.get('source_bytes')) is not int or document['source_bytes'] < 0
+            or type(document.get('active_tab_id')) is not int or document['active_tab_id'] not in ids
+            or 'path' not in document or document['path'] is not None
+            and (not isinstance(document['path'], str) or not Path(document['path']).is_absolute())):
+        raise AssertionError('LaTeXdiff source ownership inspection is missing or malformed')
+    return ids
 
 
 def latexdiff_owner_unchanged(document, before):
-    return all(document[key] == before[key] for key in
-               ('path', 'source_fingerprint', 'source_bytes', 'tabs', 'active_tab_id'))
+    fields = ('path', 'source_fingerprint', 'source_bytes', 'active_tab_id',
+              'workspace_root_fingerprint')
+    return (latexdiff_tab_ids(document) == latexdiff_tab_ids(before)
+            and all(document[key] == before[key] for key in fields))
+
+
+def latexdiff_created(document, output, before):
+    state = latexdiff_state(document)
+    if state['visible'] and not state['busy'] and state['error'] is not None:
+        raise AssertionError('LaTeXdiff generation failed: ' + state['error'])
+    ids, original = latexdiff_tab_ids(document), latexdiff_tab_ids(before)
+    notice = document.get('completion_notice')
+    return (not state['visible'] and not state['busy'] and not document.get('modal_open', True)
+            and document.get('path') == str(output)
+            and document.get('document_kind') == 'Tex'
+            and document.get('dirty') is False
+            and len(ids) == len(original) + 1 and ids[:-1] == original
+            and ids[-1] not in original and document.get('active_tab_id') == ids[-1]
+            and document.get('preview_tab_id') == ids[-1]
+            and document.get('preview_path') == str(output)
+            and document.get('workspace_root_fingerprint') == before.get('workspace_root_fingerprint')
+            and isinstance(notice, str) and bool(notice.strip())
+            and (output.name in notice or output.with_suffix('.pdf').name in notice))
+
+
+def latexdiff_complete(document, output, source, before):
+    from desktop_ui_journeys import fingerprint
+    if not latexdiff_created(document, output, before):
+        return False
+    if document.get('pdf_output_state') == 'Failed':
+        raise AssertionError('LaTeXdiff automatic PDF compilation failed: '
+                             + str(document.get('completion_notice')))
+    return (document.get('source_fingerprint') == fingerprint(source)
+            and document.get('source_bytes') == len(source.encode('utf-8'))
+            and document.get('pdf_output_state') == 'Saved'
+            and document.get('pdf_output_pending') is False
+            and str(document.get('pdf_output_revision')) == document.get('revision')
+            and document.get('compile_indicator_spinning') is False
+            and document.get('preview_requested_backend') == 'Pdfium'
+            and document.get('preview_backend') == 'PDFium'
+            and document.get('preview_pdfium_ready') is True)
+
+
+def latexdiff_pdf_artifact(path):
+    """A fresh public PDF must be complete and come from the selected pdfLaTeX engine."""
+    if not path.is_file() or not 100 < path.stat().st_size <= 10_000_000:
+        raise AssertionError('LaTeXdiff did not automatically create a bounded PDF file')
+    pdf = path.read_bytes()
+    if (not pdf.startswith(b'%PDF-') or b'%%EOF' not in pdf[-1024:]
+            or re.search(rb'/Producer\s*\([^)]*pdfTeX', pdf) is None):
+        raise AssertionError('LaTeXdiff PDF is incomplete or was not built by selected pdfLaTeX')
+    return pdf
 
 
 def latexdiff_inputs_unchanged(inputs):
@@ -82,7 +134,7 @@ def latexdiff_artifact(path):
 
 
 class LatexdiffJourneys:
-    def open_latexdiff_wizard(self):
+    def open_latexdiff(self):
         self.focus_document_window()
         self.palette_open()
         palette = self.palette_query('Create LaTeX Diff')
@@ -90,9 +142,15 @@ class LatexdiffJourneys:
         if selected is None or selected not in palette['palette_enabled']:
             raise AssertionError('LaTeXdiff palette command is unavailable')
         self.key(36, 'none')
-        self.wait('LaTeXdiff opens on the Files step', lambda d:
+        self.wait('LaTeXdiff opens one form without page navigation', lambda d:
                   not d['palette_visible'] and latexdiff_state(d)['visible']
-                  and latexdiff_state(d)['step'] == 'files' and not latexdiff_state(d)['busy'])
+                  and not latexdiff_state(d)['busy'])
+        for target in ('latexdiff.older', 'latexdiff.newer', 'latexdiff.output',
+                       'latexdiff.options.arguments', 'latexdiff.generate'):
+            self.wait_target(target)
+        if any(name in self.snapshot().get('targets', {})
+               for name in ('latexdiff.next', 'latexdiff.back')):
+            raise AssertionError('LaTeXdiff still exposes multi-page navigation')
 
     def latexdiff_type(self, name, value, fingerprint_key):
         from desktop_ui_journeys import fingerprint
@@ -103,90 +161,80 @@ class LatexdiffJourneys:
         self.wait('LaTeXdiff field receives exact native typing', lambda d:
                   latexdiff_state(d)[fingerprint_key] == fingerprint(str(value)))
 
-    def latexdiff_wizard(self):
+    def latexdiff(self):
         from desktop_ui_journeys import fingerprint
         self.focus_document_window()
+        requested = self.snapshot()['document']['preview_requested_backend']
+        if requested not in ('Interactive', 'InteractivePartial', 'Pdfium'):
+            raise AssertionError('LaTeXdiff renderer setting is unavailable')
+        replacements = [('"build_engine": "tectonic"', '"build_engine": "pdf-latex"')]
+        if requested != 'Pdfium':
+            replacements.append(('"preview_preference": ' + json.dumps(requested),
+                                 '"preview_preference": "Pdfium"'))
+        self.tex_settings(replacements)
+        self.key(20)  # Keep the selected PDF renderer visible after automatic opening.
         before = self.snapshot()['document']
         folder = self.directory / 'latexdiff fixtures'
         folder.mkdir(exist_ok=False)
         older, newer, output = (folder / name for name in
                                 ('older draft.tex', 'newer draft.tex', 'changes.tex'))
+        pdf = output.with_suffix('.pdf')
         older.write_text(LATEXDIFF_OLDER, encoding='utf-8')
         newer.write_text(LATEXDIFF_NEWER, encoding='utf-8')
         inputs = [(older, older.read_bytes()), (newer, newer.read_bytes())]
         unchanged = lambda d: latexdiff_owner_unchanged(d, before) and latexdiff_inputs_unchanged(inputs)
 
-        # Closing the focused child must leave its source owner/tab untouched.
-        self.open_latexdiff_wizard()
+        self.open_latexdiff()
         self.click('latexdiff.older')
         self.wait_target('latexdiff.older', focused=True)
         self.key(13)
-        self.wait('Cmd+W closes only the LaTeXdiff wizard', lambda d:
+        self.wait('Cmd+W closes only the LaTeXdiff form', lambda d:
                   not latexdiff_state(d)['visible'] and unchanged(d))
         self.record('latexdiff.close_preserves_owner', source_fingerprint=before['source_fingerprint'])
 
-        self.open_latexdiff_wizard()
+        self.open_latexdiff()
         self.latexdiff_type('latexdiff.older', older, 'older_fingerprint')
         self.latexdiff_type('latexdiff.newer', newer, 'newer_fingerprint')
-        self.wait('Files step holds both exact paths', lambda d:
-                  latexdiff_draft(d, 'files', older, newer) and unchanged(d))
-        if getattr(self, 'capture_review', False):
-            self.capture_viewport('latexdiff')
-        self.click('latexdiff.next')
-        self.wait('Files advances to Output and options', lambda d:
-                  latexdiff_draft(d, 'output', older, newer) and unchanged(d))
         self.latexdiff_type('latexdiff.output', older, 'output_fingerprint')
         self.latexdiff_type('latexdiff.options.arguments', LATEXDIFF_ARGUMENTS, 'arguments_fingerprint')
-        self.click('latexdiff.back')
-        self.wait('Back retains both files and output/options drafts', lambda d:
-                  latexdiff_draft(d, 'files', older, newer, older, LATEXDIFF_ARGUMENTS) and unchanged(d))
-        self.click('latexdiff.next')
-        self.wait('Output draft survives returning from Files', lambda d:
-                  latexdiff_draft(d, 'output', older, newer, older, LATEXDIFF_ARGUMENTS) and unchanged(d))
-        self.click('latexdiff.next')
-        self.wait('Output advances to Review', lambda d:
-                  latexdiff_draft(d, 'review', older, newer, older, LATEXDIFF_ARGUMENTS) and unchanged(d))
+        self.wait('One form retains both files, output and options together', lambda d:
+                  latexdiff_draft(d, older, newer, older, LATEXDIFF_ARGUMENTS) and unchanged(d))
+        if getattr(self, 'capture_review', False):
+            self.capture_viewport('latexdiff')
         self.click('latexdiff.generate')
         self.wait('An output collision is rejected without altering either input', lambda d:
-                  latexdiff_draft(d, 'review', older, newer, older, LATEXDIFF_ARGUMENTS)
-                  and latexdiff_state(d)['error'] is not None
-                  and latexdiff_state(d)['output_path'] is None and unchanged(d), timeout=15)
+                  latexdiff_draft(d, older, newer, older, LATEXDIFF_ARGUMENTS)
+                  and latexdiff_state(d)['error'] is not None and unchanged(d), timeout=15)
         self.record('latexdiff.input_collision_rejected', source_fingerprint=before['source_fingerprint'])
 
-        self.click('latexdiff.back')
-        self.wait('Review returns to Output after validation error', lambda d:
-                  latexdiff_draft(d, 'output', older, newer, older, LATEXDIFF_ARGUMENTS) and unchanged(d))
         self.latexdiff_type('latexdiff.output', output, 'output_fingerprint')
-        self.wait('A changed output clears the previous error', lambda d:
-                  latexdiff_draft(d, 'output', older, newer, output, LATEXDIFF_ARGUMENTS)
+        self.wait('Changing the output on the same form clears the previous error', lambda d:
+                  latexdiff_draft(d, older, newer, output, LATEXDIFF_ARGUMENTS)
                   and latexdiff_state(d)['error'] is None and unchanged(d))
-        if getattr(self, 'capture_review', False):
-            self.capture_viewport('latexdiff')
-        self.click('latexdiff.next')
-        self.wait('Review contains the final files, destination and option', lambda d:
-                  latexdiff_draft(d, 'review', older, newer, output, LATEXDIFF_ARGUMENTS) and unchanged(d))
-        if output.exists():
-            raise AssertionError('LaTeXdiff generated output before Create was pressed')
-        if getattr(self, 'capture_review', False):
-            self.capture_viewport('latexdiff')
+        if output.exists() or pdf.exists():
+            raise AssertionError('LaTeXdiff generated an artifact before Create was pressed')
         self.click('latexdiff.generate')
-        self.wait('Real LaTeXdiff finishes creating the requested file', lambda d:
-                  latexdiff_complete(d, output) and unchanged(d), timeout=90)
+        self.wait('Creating the diff opens its new source and visibly responds without another confirmation', lambda d:
+                  latexdiff_created(d, output, before) and latexdiff_inputs_unchanged(inputs), timeout=90)
         generated = latexdiff_artifact(output)
+        self.wait('The selected compiler automatically saves a PDF and the selected renderer displays it', lambda d:
+                  latexdiff_complete(d, output, generated, before)
+                  and latexdiff_inputs_unchanged(inputs), timeout=90)
+        pdf_bytes = latexdiff_pdf_artifact(pdf)
         self.record('latexdiff.created', source_fingerprint=fingerprint(generated),
-                    source_bytes=len(generated.encode('utf-8')), arguments=LATEXDIFF_ARGUMENTS)
-        self.click('latexdiff.open')
-        self.wait('Open selects the complete generated TeX source in its own tab', lambda d:
-                  not latexdiff_state(d)['visible'] and d['path'] == str(output)
-                  and d['source_fingerprint'] == fingerprint(generated)
-                  and d['source_bytes'] == len(generated.encode('utf-8'))
-                  and d['tabs'] == before['tabs'] + 1 and d['active_tab_id'] != before['active_tab_id']
-                  and not d['dirty'] and latexdiff_inputs_unchanged(inputs), timeout=20)
+                    source_bytes=len(generated.encode('utf-8')), arguments=LATEXDIFF_ARGUMENTS,
+                    automatic_open=True, visible_creation_response=True, automatic_pdf=True,
+                    compiler='pdfLaTeX', renderer='PDFium', pdf_bytes=len(pdf_bytes))
         self.click('editor.source')
         self.key(13)
         self.wait('Closing the generated tab restores the original source owner', lambda d:
                   unchanged(d) and not latexdiff_state(d)['visible'])
         self.latexdiff_cancel_running(older, newer, folder, before, inputs)
+        replacements = [('"build_engine": "pdf-latex"', '"build_engine": "tectonic"')]
+        if requested != 'Pdfium':
+            replacements.append(('"preview_preference": "Pdfium"',
+                                 '"preview_preference": ' + json.dumps(requested)))
+        self.tex_settings(replacements)
         self.record('latexdiff.complete', source_fingerprint=before['source_fingerprint'])
 
     def latexdiff_executable_setting(self, value, previous=''):
@@ -246,18 +294,14 @@ class LatexdiffJourneys:
                               + '\n/bin/sleep 30\n', encoding='utf-8')
         executable.chmod(0o700)
         self.latexdiff_executable_setting(executable)
-        self.open_latexdiff_wizard()
+        self.open_latexdiff()
         self.latexdiff_type('latexdiff.older', older, 'older_fingerprint')
         self.latexdiff_type('latexdiff.newer', newer, 'newer_fingerprint')
-        self.click('latexdiff.next')
-        self.wait('Cancel fixture reaches Output', lambda d:
-                  latexdiff_draft(d, 'output', older, newer))
         self.latexdiff_type('latexdiff.output', output, 'output_fingerprint')
-        self.click('latexdiff.next')
-        self.wait('Cancel fixture reaches Review', lambda d:
-                  latexdiff_draft(d, 'review', older, newer, output))
+        self.wait('Cancel fixture fills one form', lambda d:
+                  latexdiff_draft(d, older, newer, output))
         self.click('latexdiff.generate')
-        self.wait('Private LaTeXdiff process actually starts and keeps the wizard busy', lambda d:
+        self.wait('Private LaTeXdiff process actually starts and keeps the form busy', lambda d:
                   latexdiff_state(d)['visible'] and latexdiff_state(d)['busy']
                   and receipt.is_file() and receipt.stat().st_size > 0, timeout=15)
         if not 0 < receipt.stat().st_size <= 20:
@@ -269,7 +313,7 @@ class LatexdiffJourneys:
         self.click('latexdiff.cancel')
         self.wait('Cancel stops generation without creating a diff or altering source', lambda d:
                   latexdiff_state(d)['visible'] and not latexdiff_state(d)['busy']
-                  and latexdiff_state(d)['output_path'] is None and not output.exists()
+                  and not output.exists() and not output.with_suffix('.pdf').exists()
                   and latexdiff_owner_unchanged(d, before)
                   and latexdiff_inputs_unchanged(inputs), timeout=15)
         try:
@@ -280,6 +324,6 @@ class LatexdiffJourneys:
             raise AssertionError('LaTeXdiff Cancel left its controlled process alive')
         self.record('latexdiff.running_cancel', process_stopped=True, output_exists=False)
         self.click('latexdiff.close')
-        self.wait('Cancelled wizard closes without changing its owner', lambda d:
+        self.wait('Cancelled form closes without changing its owner', lambda d:
                   not latexdiff_state(d)['visible'] and latexdiff_owner_unchanged(d, before))
         self.latexdiff_executable_setting('', previous=executable)

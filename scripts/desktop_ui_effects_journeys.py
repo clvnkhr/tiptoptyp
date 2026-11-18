@@ -175,6 +175,12 @@ class EffectsPacingJourneys:
         self.click('settings.json.save')
         self.wait('effects pacing preferences apply', lambda d:
                   d['settings_json']['saved'] and d['editor_effects']['enabled'] and d['editor_effects']['density'] == 'Low')
+        # This historical pacing workload measures primary bursts only. Refuse
+        # a mixed setup instead of treating still-live smoke as a retirement bug.
+        preferences = self.snapshot()['document']['editor_effects']
+        if preferences['cursor_afterburner'] or preferences['same_for_all'] or any(
+                effect['lingering'] is not None for effect in preferences['actions'].values()):
+            raise AssertionError('primary effects pacing requires cursor and lingering effects Off')
         self.close_settings()
         self.effects_preview_snapshots_verified = snapshots
 

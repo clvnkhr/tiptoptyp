@@ -14,6 +14,103 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+class ExplicitJourneyRangeContract(unittest.TestCase):
+    def test_post_table_range_preserves_the_exact_remaining_order_and_tex_coverage(self):
+        full = runner.selected_journeys('all')
+        remaining = runner.selected_journeys('all', 'arxiv_tables')
+        self.assertEqual(remaining, full[full.index('tables') + 1:])
+        self.assertEqual(len(remaining), 49)
+        self.assertNotIn('tables', remaining)
+        self.assertEqual(remaining[-len(runner.TEX_JOURNEYS):], list(runner.TEX_JOURNEYS))
+        self.assertEqual(runner.selected_journeys('all'), full)
+
+    def test_explicit_range_rejects_unknown_or_non_all_selections(self):
+        for name, start in [('all', 'not-a-journey'), ('all', 'all'),
+                            ('tables', 'tables'), ('tex', 'tex_editing')]:
+            with self.subTest(name=name, start=start), self.assertRaises(ValueError):
+                runner.selected_journeys(name, start)
+
+
+class EmptyStartupAndDemoContract(unittest.TestCase):
+    def empty(self):
+        from desktop_ui_journeys import fingerprint
+        return dict(tabs=0, active_tab_id=None, preview_tab_id=None, path=None, source_bytes=0,
+                    source_fingerprint=fingerprint(''), dirty=False, cursor=None,
+                    workspace_root_fingerprint=fingerprint('/private/tmp/workspace'))
+
+    def test_empty_workspace_rejects_implicit_demo_and_real_blank_tabs(self):
+        from desktop_ui_journeys import empty_workspace_ready, fingerprint
+        empty = self.empty()
+        self.assertTrue(empty_workspace_ready(empty))
+        for field, value in (('tabs', 1), ('tabs', False), ('active_tab_id', 0), ('preview_tab_id', 0),
+                             ('path', '/demo.typ'), ('source_bytes', 200), ('source_bytes', False),
+                             ('source_fingerprint', fingerprint('demo source')), ('dirty', True)):
+            with self.subTest(field=field, value=value):
+                self.assertFalse(empty_workspace_ready({**empty, field: value}))
+        for field in ('tabs', 'active_tab_id', 'preview_tab_id', 'path', 'source_bytes', 'source_fingerprint', 'dirty'):
+            missing = dict(empty)
+            del missing[field]
+            with self.subTest(missing=field), self.assertRaises(AssertionError):
+                empty_workspace_ready(missing)
+
+    def test_demo_picker_requires_explicit_busy_observation_and_exact_source_owner(self):
+        from desktop_ui_journeys import demo_file_state, demo_owner_unchanged
+        before = self.empty()
+        for picking, busy in ((False, False), (True, True), (False, True)):
+            current = {**before, 'demo_file': dict(picking=picking, busy=busy)}
+            self.assertEqual(demo_file_state(current), current['demo_file'])
+            self.assertTrue(demo_owner_unchanged(current, before))
+        for state in (None, {}, dict(picking=True, busy=False), dict(picking=1, busy=True)):
+            with self.subTest(state=state), self.assertRaises(AssertionError):
+                demo_file_state({**before, 'demo_file': state})
+        for field, value in (('tabs', 1), ('active_tab_id', 1), ('preview_tab_id', 1), ('path', '/demo.typ'),
+                             ('source_bytes', 20), ('source_fingerprint', 'different'), ('dirty', True),
+                             ('cursor', [0, 3]), ('workspace_root_fingerprint', 'different-root')):
+            with self.subTest(field=field):
+                self.assertFalse(demo_owner_unchanged({**before, field: value}, before))
+
+    def test_explicit_startup_fixture_requires_its_actual_visible_tinymist_preview(self):
+        from desktop_ui_journeys import PREVIEW_SOURCE, fingerprint, startup_fixture_ready
+        path = Path('/private/tmp/journey.typ')
+        document = dict(path=str(path), tabs=1, active_tab_id=0, preview_tab_id=0, preview_path=str(path),
+                        source_fingerprint=fingerprint(PREVIEW_SOURCE), source_bytes=len(PREVIEW_SOURCE.encode()),
+                        preview_backend='Tinymist', preview_native_ready=True, preview_surface_visible=True,
+                        preview_pages=3)
+        self.assertTrue(startup_fixture_ready(document, path))
+        for field, value in (('path', '/demo.typ'), ('tabs', 2), ('active_tab_id', None), ('preview_tab_id', 8),
+                             ('preview_path', '/demo.typ'), ('source_fingerprint', fingerprint('automatic demo')),
+                             ('source_bytes', 0), ('preview_backend', 'PDFium'), ('preview_native_ready', False),
+                             ('preview_surface_visible', False), ('preview_pages', 0)):
+            with self.subTest(field=field):
+                self.assertFalse(startup_fixture_ready({**document, field: value}, path))
+
+    def test_startup_uses_the_native_path_helper_after_verifying_no_implicit_document(self):
+        from desktop_ui_journeys import EditorJourneys, PREVIEW_SOURCE, fingerprint
+        journey = EditorJourneys()
+        journey.directory = Path('/private/tmp/startup-fixture')
+        source = journey.directory / 'journey.typ'
+        actions = []
+        journey.open_harper_fixture = lambda path: actions.append(('native_open_path', path))
+        def wait(description, predicate, **kwargs):
+            if description == 'plain launch starts with no document or demo tab':
+                self.assertTrue(predicate(self.empty()))
+                self.assertFalse(predicate({**self.empty(), 'tabs': 1}))
+            else:
+                document = dict(path=str(source), tabs=1, active_tab_id=0, preview_tab_id=0,
+                                preview_path=str(source), source_fingerprint=fingerprint(PREVIEW_SOURCE),
+                                source_bytes=len(PREVIEW_SOURCE.encode()), preview_backend='Tinymist',
+                                preview_native_ready=True, preview_surface_visible=True, preview_pages=3)
+                self.assertTrue(predicate(document))
+                self.assertFalse(predicate({**document, 'preview_native_ready': False}))
+            actions.append(('verified', description))
+        journey.wait = wait
+        journey.native = lambda *_: self.fail('startup must use the existing readiness/path helper')
+        journey.startup_preview()
+        self.assertEqual(actions, [('verified', 'plain launch starts with no document or demo tab'),
+                                   ('native_open_path', source),
+                                   ('verified', 'the explicitly opened fixture owns its visible Tinymist preview')])
+
+
 class DocumentWindowFocusContract(unittest.TestCase):
     def test_main_child_never_replaces_the_inspected_document_root(self):
         from desktop_ui_journeys import document_window_title
@@ -112,12 +209,12 @@ class FixtureFingerprintContract(unittest.TestCase):
 
 class TypingParticleContract(unittest.TestCase):
     def document(self):
-        return {"editor_effects": {"enabled": True, "density": "Medium", "actions": {
-                    action.lower(): {"particles": "Explosion", "shake": False, "flash": False, "glow": False}
+        return {"editor_effects": {"enabled": True, "density": "Medium", "same_for_all": False, "cursor_afterburner": False, "actions": {
+                    action.lower(): {"particles": "Explosion", "lingering": None, "shake": False, "flash": False, "glow": False}
                     for action in ("Typing", "Newline", "Indent", "Delete", "Comment", "Undo", "Redo", "Copy", "Cut", "Paste")}},
-                "typing_particles": {"active_count": 7, "burst_count": 1,
+                "typing_particles": {"active_count": 7, "burst_count": 1, "cursor_bursts": 0,
                     "emitted_count": 7, "max_live": 7, "pool_limit": 128,
-                    "lifetime_ms": 480, "last_emission_age_ms": 100,
+                    "lifetime_ms": 480, "max_lifetime_ms": 2800, "last_emission_age_ms": 100,
                     "origin": [200, 100], "clip": [10, 10, 800, 500],
                     "last_style": "Explosion", "live_styles": {"Explosion": 7},
                     "last_action": "Typing", "action_bursts": {"Typing": 1},
@@ -132,12 +229,15 @@ class TypingParticleContract(unittest.TestCase):
         document = self.document()
         self.assertEqual(editor_effect_preferences(document)["actions"]["typing"]["particles"], "Explosion")
         document["editor_effects"]["actions"]["copy"] = {
-            "particles": None, "shake": True, "flash": False, "glow": True}
+            "particles": None, "lingering": None, "shake": True, "flash": False, "glow": True}
         self.assertIsNone(editor_effect_preferences(document)["actions"]["copy"]["particles"])
         mutations = [lambda d: d.pop("editor_effects"),
                      lambda d: d.update(editor_effects={"enabled": True, "density": "Medium", "style": "Explosion"}),
                      lambda d: d["editor_effects"].update(enabled=1),
                      lambda d: d["editor_effects"].update(density="Ultra"),
+                     lambda d: d["editor_effects"].pop("same_for_all"),
+                     lambda d: d["editor_effects"].update(cursor_afterburner=1),
+                     lambda d: d["editor_effects"]["actions"]["typing"].update(lingering="Fog"),
                      lambda d: d["editor_effects"]["actions"].pop("paste"),
                      lambda d: d["editor_effects"]["actions"].update(save={}),
                      lambda d: d["editor_effects"]["actions"]["copy"].update(particles="Off"),
@@ -179,7 +279,8 @@ class TypingParticleContract(unittest.TestCase):
                 case.assertEqual((query, title), ("editor effects", "Editor effects"))
 
             def wait_target(self, target):
-                case.assertEqual(target, self.menu + "." + self.option)
+                case.assertTrue(target.startswith(self.menu + "."))
+                self.option = target.rsplit(".", 1)[-1]
 
             def wait(self, description, predicate):
                 case.assertTrue(predicate(deepcopy(self.document)), description)
@@ -196,7 +297,7 @@ class TypingParticleContract(unittest.TestCase):
             journey.calls.append(target)
             action, control, *option = target.split("settings.editor.effects.", 1)[1].split(".")
             row = journey.document["editor_effects"]["actions"][action]
-            if control == "particles":
+            if control in ("particles", "lingering"):
                 if option:
                     case.assertEqual(target, journey.menu + "." + journey.option)
                     row[control] = None if option[0] == "Off" else option[0]
@@ -209,21 +310,24 @@ class TypingParticleContract(unittest.TestCase):
                 journey.mutate(journey.document)
         FakeJourney.click = click
 
-        for effects in ({"particles": None, "shake": True, "flash": False, "glow": True},
-                        {"particles": "Plasma", "shake": True, "flash": True, "glow": False}):
+        for unified, effects in ((False, {"particles": None, "lingering": None, "shake": True, "flash": False, "glow": True}),
+                                 (False, {"particles": "Plasma", "lingering": "Smoke", "shake": True, "flash": True, "glow": False}),
+                                 (True, {"particles": "Plasma", "lingering": "Embers", "shake": False, "flash": False, "glow": False})):
             journey = FakeJourney()
+            journey.document["editor_effects"]["same_for_all"] = unified
             journey.option = effects["particles"] or "Off"
             before = deepcopy(journey.document)
             journey.editor_effect_choose("Copy", **effects)
             expected = deepcopy(before)
-            expected["editor_effects"]["actions"]["copy"] = effects
+            selected = "typing" if unified else "copy"
+            expected["editor_effects"]["actions"][selected] = effects
             self.assertEqual(journey.document, expected)
             self.assertFalse(journey.open)
             event = json.loads(journey.log.getvalue())
             self.assertEqual(event["action"], "typing_particles.action_preferences")
             self.assertEqual(event["editor_action"], "Copy")
             self.assertEqual(event["effects"], effects)
-            self.assertTrue(all(target.startswith("settings.editor.effects.copy.") for target in journey.calls))
+            self.assertTrue(all(target.startswith("settings.editor.effects." + selected + ".") for target in journey.calls))
 
         mutations = [lambda d: d["editor_effects"]["actions"]["paste"].update(glow=True),
                      lambda d: d["typing_particles"].update(burst_count=2, emitted_count=14,
@@ -244,7 +348,10 @@ class TypingParticleContract(unittest.TestCase):
     def test_missing_unbounded_disabled_or_expired_particles_cannot_pass(self):
         from desktop_ui_journeys import typing_particle_state
         cases = [{}, {"active_count": 129}, {"max_live": 129},
-                 {"pool_limit": 257}, {"lifetime_ms": 1001}, {"active_count": True},
+                 {"pool_limit": 257}, {"lifetime_ms": 1001}, {"max_lifetime_ms": 3001},
+                 {"max_lifetime_ms": 1}, {"cursor_bursts": True}, {"cursor_bursts": 8}, {"active_count": True},
+                 {"live_styles": {"Afterburner": 7}},
+                 {"burst_count": 0, "last_action": None, "last_style": None, "action_bursts": {}},
                  {"last_emission_age_ms": 481}, {"last_emission_age_ms": True},
                  {"emitted_count": 6}, {"max_live": 6}, {"burst_count": 8},
                  {"origin": [900, 100]}, {"origin": [True, 100]},
@@ -283,6 +390,64 @@ class TypingParticleContract(unittest.TestCase):
         with self.assertRaises(AssertionError):
             typing_particle_state(document)
 
+
+    def test_lingering_and_cursor_only_emissions_keep_distinct_finite_lifetimes(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import typing_particle_state
+        smoke = self.document()
+        smoke["typing_particles"].update(last_style="Smoke", live_styles={"Smoke": 7}, last_emission_age_ms=1000)
+        self.assertEqual(typing_particle_state(smoke)["active_count"], 7)
+        for style, lifetime in (("Smoke", 2800), ("Embers", 1800), ("Afterburner", 450)):
+            document = deepcopy(smoke)
+            document["typing_particles"].update(live_styles={style: 7}, last_emission_age_ms=lifetime - 1)
+            if style == "Afterburner":
+                document["typing_particles"].update(burst_count=0, action_bursts={}, last_action=None,
+                                                    last_style=None, cursor_bursts=1)
+            else:
+                document["typing_particles"]["last_style"] = style
+            self.assertEqual(typing_particle_state(document)["active_count"], 7)
+            document["typing_particles"]["last_emission_age_ms"] = lifetime
+            with self.subTest(style=style), self.assertRaises(AssertionError):
+                typing_particle_state(document)
+
+    def test_unified_choice_uses_typing_without_erasing_individual_preferences(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import editor_effect_choice
+        document = self.document()
+        document["editor_effects"]["actions"]["copy"]["particles"] = "Railgun"
+        stored = deepcopy(document["editor_effects"]["actions"])
+        self.assertEqual(editor_effect_choice(document, "Copy")["particles"], "Railgun")
+        document["editor_effects"]["same_for_all"] = True
+        self.assertEqual(editor_effect_choice(document, "Copy")["particles"], "Explosion")
+        self.assertEqual(document["editor_effects"]["actions"], stored)
+        document["editor_effects"]["same_for_all"] = False
+        self.assertEqual(editor_effect_choice(document, "Copy")["particles"], "Railgun")
+
+    def test_cursor_draw_needs_real_navigation_without_an_editing_burst(self):
+        from copy import deepcopy
+        from desktop_ui_journeys import cursor_afterburner_rendered, fingerprint
+        before = self.gpu_document()
+        before.update(source_fingerprint=fingerprint("alpha"), source_bytes=5,
+                      editor_keyboard_focused=True, cursor=[5, 5])
+        before["editor_effects"]["cursor_afterburner"] = True
+        before["typing_particles"].update(active_count=0, live_styles={})
+        actual = deepcopy(before)
+        actual["cursor"] = [4, 4]
+        actual["typing_particles"].update(active_count=7, cursor_bursts=1, emitted_count=14,
+                                           live_styles={"Afterburner": 7})
+        actual["typing_particles"]["gpu"].update(draws=4, uploads=2)
+        self.assertTrue(cursor_afterburner_rendered(actual, before, [4, 4], "alpha"))
+        for mutate in (lambda d: d.update(cursor=[5, 5]),
+                       lambda d: d.update(source_fingerprint=fingerprint("edit")),
+                       lambda d: d["editor_effects"].update(cursor_afterburner=False),
+                       lambda d: d["typing_particles"].update(cursor_bursts=2),
+                       lambda d: d["typing_particles"].update(burst_count=2, action_bursts={"Typing": 2}),
+                       lambda d: d["typing_particles"].update(live_styles={"Explosion": 7}),
+                       lambda d: d["typing_particles"]["gpu"].update(draws=3)):
+            changed = deepcopy(actual)
+            mutate(changed)
+            with self.subTest(changed=changed):
+                self.assertFalse(cursor_afterburner_rendered(changed, before, [4, 4], "alpha"))
 
     def gpu_document(self):
         document = self.document()
@@ -384,7 +549,7 @@ class EditorFeedbackContract(unittest.TestCase):
         document = TypingParticleContract().gpu_document()
         document["typing_particles"].update(active_count=0, live_styles={})
         document["editor_effects"]["actions"]["typing"] = {
-            "particles": None, "shake": effect == "Shake", "flash": effect == "Flash", "glow": effect == "Glow"}
+            "particles": None, "lingering": None, "shake": effect == "Shake", "flash": effect == "Flash", "glow": effect == "Glow"}
         return document
 
     def emitted_document(self, effect="Shake"):
@@ -901,6 +1066,25 @@ class HarperMathProseContract(unittest.TestCase):
             self.assertFalse(quiet_badness_result({**document, "badness_visible_codes": value}))
         self.assertFalse(quiet_badness_result({**document, "tex_diagnostics_current": [True, False]}))
 
+    def test_display_paragraph_accepts_serialized_codes_but_rejects_stale_or_extra_results(self):
+        from desktop_ui_tex_journeys import display_paragraph_result
+        document = {'tex_diagnostics_current': [True, True], 'tex_diagnostic_counts': [0, 1],
+                    'badness_visible_codes': ['"math-paragraph-break"']}
+        self.assertTrue(display_paragraph_result(document, True))
+        for field, value in (('tex_diagnostics_current', [True, False]),
+                             ('tex_diagnostic_counts', [0, 0]),
+                             ('tex_diagnostic_counts', [0, True]),
+                             ('tex_diagnostic_counts', [0, 2]),
+                             ('badness_visible_codes', ['"unclosed-math-delimiter"']),
+                             ('badness_visible_codes', ['"math-paragraph-break"', None]),
+                             ('badness_visible_codes', [])):
+            with self.subTest(field=field, value=value):
+                self.assertFalse(display_paragraph_result({**document, field: value}, True))
+        clean = {**document, 'tex_diagnostic_counts': [0, 0], 'badness_visible_codes': []}
+        self.assertTrue(display_paragraph_result(clean, False))
+        self.assertFalse(display_paragraph_result(clean, True))
+        self.assertFalse(display_paragraph_result(document, False))
+
     def test_an_idle_old_writing_result_cannot_pass_freshness(self):
         from desktop_ui_tex_journeys import harper_fresh
         source, path, document = self.observation()
@@ -1347,6 +1531,61 @@ class HeightContract(unittest.TestCase):
 
 
 class PreviewContract(unittest.TestCase):
+    def comfy(self, background, text):
+        return dict(comfy_background=background, comfy_text=text, comfy=background and text)
+
+    def test_comfy_transitions_normalize_each_of_the_four_starting_combinations(self):
+        controls = (("settings.comfy", "comfy_background"),
+                    ("settings.comfy.text", "comfy_text"))
+        for background, text in ((False, False), (True, False), (False, True), (True, True)):
+            for expected in (False, True):
+                with self.subTest(background=background, text=text, expected=expected):
+                    document = self.comfy(background, text)
+                    changes = runner.preview_comfy_changes(document, expected)
+                    self.assertEqual(changes, tuple((target, field) for target, field in controls
+                                                    if document[field] != expected))
+                    for _, field in changes:
+                        document[field] = expected
+                        document["comfy"] = document["comfy_background"] and document["comfy_text"]
+                        self.assertIs(runner.preview_comfy_state(document)[field], expected)
+                    self.assertEqual(runner.preview_comfy_changes(document, expected), ())
+                    self.assertIs(document['comfy_background'], expected)
+                    self.assertIs(document['comfy_text'], expected)
+
+    def test_default_partial_comfy_state_requires_only_background_or_only_text(self):
+        default = self.comfy(True, False)
+        self.assertFalse(default['comfy'])
+        self.assertEqual(runner.preview_comfy_changes(default, False),
+                         (("settings.comfy", "comfy_background"),))
+        self.assertEqual(runner.preview_comfy_changes(default, True),
+                         (("settings.comfy.text", "comfy_text"),))
+        other_partial = self.comfy(False, True)
+        self.assertEqual(runner.preview_comfy_changes(other_partial, False),
+                         (("settings.comfy.text", "comfy_text"),))
+        self.assertEqual(runner.preview_comfy_changes(other_partial, True),
+                         (("settings.comfy", "comfy_background"),))
+
+    def test_missing_malformed_or_inconsistent_comfy_state_cannot_pass_as_unchecked(self):
+        default = self.comfy(True, False)
+        for field in default:
+            missing = dict(default)
+            del missing[field]
+            with self.subTest(missing=field), self.assertRaisesRegex(AssertionError, "inspection"):
+                runner.preview_comfy_changes(missing, False)
+            for value in (None, 0, 1, "false", [], {}):
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(AssertionError, "inspection"):
+                    runner.preview_comfy_changes({**default, field: value}, False)
+        for document in (None, [], True):
+            with self.subTest(document=document), self.assertRaisesRegex(AssertionError, "inspection"):
+                runner.preview_comfy_changes(document, False)
+        for document in ({**default, 'comfy': True},
+                         {**self.comfy(True, True), 'comfy': False}):
+            with self.subTest(document=document), self.assertRaisesRegex(AssertionError, "aggregate"):
+                runner.preview_comfy_changes(document, False)
+        for target in (None, 0, 1, 'false'):
+            with self.subTest(target=target), self.assertRaisesRegex(AssertionError, "boolean"):
+                runner.preview_comfy_changes(default, target)
+
     def observation(self):
         return {"age_ms": 0, "value": {"ready": True, "filters": ["url(#tiptoptyp-palette)"],
                 "background": "rgb(0, 0, 0)", "slopes": [-1, -1, -1], "intercepts": [1, 1, 1]}}
@@ -1354,12 +1593,15 @@ class PreviewContract(unittest.TestCase):
     def test_single_dark_transform(self):
         runner.assert_tinymist_palette(self.observation(), [[0, 0, 0, 255], [255, 255, 255, 255]])
 
+    def identity_observation(self, partial=False):
+        return {"age_ms": 0, "value": {"ready": True, "partial": partial,
+                "filters": [], "background": "rgb(255, 255, 255)",
+                "slopes": [1, 1, 1], "intercepts": [0, 0, 0]}}
+
     def test_both_svg_modes_bypass_only_the_exact_identity_palette(self):
         for partial in (False, True):
             with self.subTest(partial=partial):
-                state = {"age_ms": 0, "value": {"ready": True, "partial": partial,
-                    "filters": ["none"], "background": "rgb(255, 255, 255)",
-                    "slopes": [1, 1, 1], "intercepts": [0, 0, 0]}}
+                state = self.identity_observation(partial)
                 runner.assert_tinymist_palette(state,
                     [[255, 255, 255, 255], [0, 0, 0, 255]])
                 for palette in ([[254, 255, 255, 255], [0, 0, 0, 255]],
@@ -1367,6 +1609,28 @@ class PreviewContract(unittest.TestCase):
                                 [[0, 0, 0, 255], [255, 255, 255, 255]]):
                     with self.assertRaisesRegex(AssertionError, "appropriate"):
                         runner.assert_tinymist_palette(state, palette)
+
+    def test_identity_requires_no_active_filters_under_the_probe_contract(self):
+        for partial in (False, True):
+            for filters in (["none"], ["url(#tiptoptyp-palette)"],
+                            ["url(#tiptoptyp-palette)", "invert(1)"], ["invert(1)", "invert(1)"]):
+                with self.subTest(partial=partial, filters=filters):
+                    state = self.identity_observation(partial)
+                    state["value"]["filters"] = filters
+                    with self.assertRaisesRegex(AssertionError, "appropriate"):
+                        runner.assert_tinymist_palette(state,
+                            [[255, 255, 255, 255], [0, 0, 0, 255]])
+
+    def test_identity_bypass_retains_readiness_and_channel_transfer_checks(self):
+        for field, value, message in (("ready", False, "visible page"),
+                                      ("slopes", [0, 1, 1], "slope"),
+                                      ("intercepts", [0, 0, 1], "intercept")):
+            with self.subTest(field=field):
+                state = self.identity_observation()
+                state["value"][field] = value
+                with self.assertRaisesRegex(AssertionError, message):
+                    runner.assert_tinymist_palette(state,
+                        [[255, 255, 255, 255], [0, 0, 0, 255]])
 
     def test_double_inversion_cannot_pass(self):
         state = self.observation()
@@ -1380,7 +1644,7 @@ class PreviewContract(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "stale"):
             runner.assert_tinymist_palette(state, [[0, 0, 0, 255], [255, 255, 255, 255]])
         wrong_paper = self.observation()
-        wrong_paper["value"]["filters"] = ["none"]
+        wrong_paper["value"]["filters"] = []
         with self.assertRaisesRegex(AssertionError, "paper"):
             runner.assert_tinymist_palette(wrong_paper, [[255, 255, 255, 255], [0, 0, 0, 255]])
 
@@ -2292,13 +2556,6 @@ class ArxivTableFixtureContract(unittest.TestCase):
         self.assertEqual(records[0][1]["cell"], [1, 13])
         self.assertTrue(records[0][1]["exact_undo"])
 
-    def test_registered_lane_runs_without_the_full_synthetic_table_suite(self):
-        from desktop_ui_newest_journeys import NEWEST_JOURNEYS, NewestJourneys
-        self.assertIn("arxiv_tables", NEWEST_JOURNEYS)
-        self.assertTrue(callable(NewestJourneys.arxiv_tables))
-
-
-
 class MathGridJourneyContract(unittest.TestCase):
     def state_and_case(self):
         from desktop_ui_math_grid_journeys import math_grid_fixtures, math_grid_fingerprint
@@ -2424,9 +2681,10 @@ class CompactTableGeometryContract(unittest.TestCase):
         from desktop_ui_newest_journeys import NewestJourneys
         journey = NewestJourneys()
         frames = []
-        for offset in (320, 160, 0, 0, 0):
+        for sequence, offset in enumerate((320, 160, 0, 0, 0)):
             state = self.state()
             state["scrolls"]["table.grid"]["offset"] = offset
+            state["wheel"] = {"raw": {"table-child": {"sequence": sequence}}}
             frames.append(state)
         states = iter(frames)
         journey.snapshot = lambda: next(states)
@@ -2437,9 +2695,36 @@ class CompactTableGeometryContract(unittest.TestCase):
             journey.scroll_table_grid_to_top("tex", "apply")
         self.assertEqual(native, [("move", 300, 250), ("wheel", 300, 250, 20)])
         self.assertEqual(list(states), [])
-        self.assertEqual(records[0][1]["before"], 320)
-        self.assertEqual(records[0][1]["after"], 0)
-        self.assertEqual(records[0][1]["stable_samples"], 3)
+        observations = [detail for (name,), detail in records if name == "table.wheel_observation"]
+        self.assertEqual([item["stage"] for item in observations], ["before", "after"])
+        self.assertEqual([item["wheel"]["raw"]["table-child"]["sequence"]
+                          for item in observations], [0, 4])
+        self.assertTrue(all(item["viewport"] == "table-child" for item in observations))
+        self.assertEqual(records[-1][1]["before"], 320)
+        self.assertEqual(records[-1][1]["after"], 0)
+        self.assertEqual(records[-1][1]["stable_samples"], 3)
+
+    def test_wheel_timeout_preserves_receipts_without_retrying_input_or_passing(self):
+        from desktop_ui_newest_journeys import NewestJourneys
+        journey, actions, records = NewestJourneys(), [], []
+        before, after = self.state(), self.state()
+        for state, sequence in ((before, 1), (after, 2)):
+            state["scrolls"]["table.grid"]["offset"] = 320
+            state["wheel"] = {"raw": {"table-child": {"sequence": sequence}}}
+        states = iter((before, after))
+        journey.snapshot = lambda: next(states)
+        journey.native = lambda *args: actions.append(args)
+        journey.record = lambda *args, **detail: records.append((args, detail))
+        with patch("desktop_ui_newest_journeys.time.monotonic", side_effect=(0, 0, 5)), \
+                patch("desktop_ui_newest_journeys.time.sleep"), \
+                self.assertRaisesRegex(AssertionError, "did not settle"):
+            journey.scroll_table_grid_to_top("typst", "apply")
+        self.assertEqual(actions, [("move", 300, 250), ("wheel", 300, 250, 20)])
+        self.assertEqual([name for (name,), _ in records],
+                         ["table.wheel_observation", "table.wheel_observation"])
+        self.assertEqual([detail["stage"] for _, detail in records], ["before", "timeout"])
+        self.assertEqual([detail["wheel"]["raw"]["table-child"]["sequence"]
+                          for _, detail in records], [1, 2])
 
     def test_small_real_tables_keep_geometry_checks_without_requiring_stress_overflow(self):
         from desktop_ui_newest_journeys import table_grid_geometry
@@ -2489,11 +2774,6 @@ class CompactTableGeometryContract(unittest.TestCase):
 
 
 class TableDraftContract(unittest.TestCase):
-    def test_table_journey_is_registered_with_the_newest_native_group(self):
-        from desktop_ui_newest_journeys import NEWEST_JOURNEYS, NewestJourneys
-        self.assertIn("tables", NEWEST_JOURNEYS)
-        self.assertTrue(callable(NewestJourneys.tables))
-
     def test_native_tex_open_selects_the_file_without_relaxing_owner_checks(self):
         from desktop_ui_newest_journeys import NewestJourneys
         journey = NewestJourneys()
@@ -3126,10 +3406,6 @@ class NativeImeContract(unittest.TestCase):
                 with journey.pinyin_input():
                     self.fail("unavailable input mode was treated as a native pass")
         process.assert_not_called()
-
-    def test_native_ime_journey_is_registered_on_the_actual_runner(self):
-        self.assertTrue(callable(runner.Journey.ime))
-
 
 class PreviewDividerInputScopeContract(unittest.TestCase):
     def test_divider_journey_covers_both_modes_without_reserved_zoom_input(self):

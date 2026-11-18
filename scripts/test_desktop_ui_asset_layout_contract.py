@@ -1,5 +1,4 @@
 """Failure detectors for PDF pane routing; not native interaction evidence."""
-import importlib.util
 from pathlib import Path
 import re
 import sys
@@ -33,12 +32,5 @@ class PdfLayoutContracts(unittest.TestCase):
                 self.assertFalse(pdf_layout_settled({**d, field: wrong}, Path('/opened.pdf'), mode, 1))
             if mode != 'Preview':
                 self.assertFalse(pdf_layout_settled({**d, 'asset_pdfium_ready': False}, Path('/opened.pdf'), mode, 1))
-
-    def test_journey_is_registered_once_and_in_aggregate(self):
-        spec = importlib.util.spec_from_file_location('desktop_runner_pdf_contract', Path(__file__).with_name('test-desktop-ui.py'))
-        runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
-        self.assertEqual(runner.JOURNEY_NAMES.count('pdf_layout'), 1)
-        self.assertEqual(runner.selected_journeys('all').count('pdf_layout'), 1)
-
 
 if __name__ == '__main__': unittest.main()

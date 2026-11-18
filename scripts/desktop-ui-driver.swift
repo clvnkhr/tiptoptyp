@@ -380,6 +380,7 @@ if command == "ax-button-title" || command == "ax-press-title" || command == "ax
 }
 guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { fail("refusing input: target app is not foreground (actual: \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown") pid \(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1), target \(pid))") }
 let source = CGEventSource(stateID: .hidSystemState)
+var wheelObservation: [String: Any]? = nil
 if command == "watch-copy" {
     guard args.count == 3 else { fail("watch-copy requires expected fixture text") }
     let board = NSPasteboard.general
@@ -496,12 +497,34 @@ if command == "watch-copy" {
     // PDFium consumes egui's platform Command-wheel zoom. Tinymist's native
     // monitor consumes Control-wheel; that shortcut can belong to macOS Zoom.
     if command == "pdfium-zoom-wheel" { event.flags = .maskCommand }
+    // Observe the configured event without changing flags, routing or phases.
+    // These fields prove what was posted, not which native view received it.
+    wheelObservation = [
+        "flags": event.flags.rawValue,
+        "point": [event.location.x, event.location.y],
+        "delta_lines": [event.getIntegerValueField(.scrollWheelEventDeltaAxis2),
+                        event.getIntegerValueField(.scrollWheelEventDeltaAxis1)],
+        "delta_points": [event.getIntegerValueField(.scrollWheelEventPointDeltaAxis2),
+                         event.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)],
+        "scroll_phase": event.getIntegerValueField(.scrollWheelEventScrollPhase),
+        "momentum_phase": event.getIntegerValueField(.scrollWheelEventMomentumPhase),
+        "continuous": event.getIntegerValueField(.scrollWheelEventIsContinuous),
+        "timestamp": event.timestamp,
+        "source_pid": event.getIntegerValueField(.eventSourceUnixProcessID),
+        "source_state": event.getIntegerValueField(.eventSourceStateID),
+        "window_under_pointer": event.getIntegerValueField(.mouseEventWindowUnderMousePointer),
+        "window_can_handle": event.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent),
+        "foreground_pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1,
+        "uptime": ProcessInfo.processInfo.systemUptime,
+        "unix": Date().timeIntervalSince1970,
+        "posted_to": "cghidEventTap",
+    ]
     event.post(tap: .cghidEventTap)
-} else if command == "click" || command == "double-click" || command == "move" {
+} else if command == "click" || command == "double-click" || command == "triple-click" || command == "move" {
     guard args.count == 4, let x = Double(args[2]), let y = Double(args[3]), x.isFinite, y.isFinite else { fail("click requires finite screen coordinates") }
     let point = CGPoint(x: x, y: y)
     let types: [CGEventType] = command == "move" ? [.mouseMoved] : [.leftMouseDown, .leftMouseUp]
-    let repetitions = command == "double-click" ? 2 : 1
+    let repetitions = command == "triple-click" ? 3 : command == "double-click" ? 2 : 1
     for repetition in 0..<repetitions {
       for type in types {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else { fail("cannot create mouse event") }
@@ -511,7 +534,7 @@ if command == "watch-copy" {
         // Preserve distinct move/down/up delivery across native event-loop turns.
         Thread.sleep(forTimeInterval: 0.05)
       }
-      if repetition == 0 && command == "double-click" {
+      if repetition + 1 < repetitions {
         Thread.sleep(forTimeInterval: 0.08)
       }
     }
@@ -575,4 +598,6 @@ if command == "watch-copy" {
     up.setIntegerValueField(.mouseEventClickState, value: 1)
     up.post(tap: .cghidEventTap)
 } else { fail("unknown command") }
-emit(["posted": command, "pid": pid])
+var observation: [String: Any] = ["posted": command, "pid": pid]
+if let wheelObservation = wheelObservation { observation["wheel"] = wheelObservation }
+emit(observation)

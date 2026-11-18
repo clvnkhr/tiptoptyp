@@ -255,7 +255,7 @@ test('preview focus uses a theme border, never a badge, with no layout or pointe
 
 // Model the pinned SVG frontend's synchronous patcher and asynchronous queue.
 // The first document is pushed before the socket enables partial rendering.
-function partialFixture({ pages = Array.from({length:48}, () => ({width:600, height:300})), startup = true, partial = true, lateContainer = false, initializeLinks = null, decorated = false, configure = null, zoomSnapshot = null, layoutHook = null, nativeSnapshot = false } = {}) {
+function partialFixture({ pages = Array.from({length:48}, () => ({width:600, height:300})), startup = true, partial = true, lateContainer = false, initializeLinks = null, decorated = false, configure = null, zoomSnapshot = null, layoutHook = null, nativeSnapshot = false, navigationDiagnostics = false } = {}) {
   const handlers = new Map(), frames = new Map(), windows = [], merges = [], errors = [];
   let nextFrame = 1, now = 0, canvasPages = 0, postRenders = 0, layouts = 0, reads = 0, timeouts = 0, rectReads = 0, domReads = 0, cursorSearches = 0;
   const classes = {toggle() {}, contains: name => name === 'typst-page'};
@@ -362,6 +362,7 @@ function partialFixture({ pages = Array.from({length:48}, () => ({width:600, hei
     window.tiptoptypCaptureZoomSnapshot=message=>messages.push({type:'preview-zoom-snapshot',...message});
     runInNewContext(snapshotSource,sandbox);
   }
+  if(navigationDiagnostics)sandbox.TIPTOPTYP_NAVIGATION_DIAGNOSTICS=true;
   runInNewContext(source,sandbox);
   if(lateContainer) {availableContainer=container;observers.forEach(callback=>callback());}
   container.documents=[]; // Assignment in the frontend's module initialization.
@@ -1638,7 +1639,7 @@ for (const partial of [false,true]) {
     assert.deepEqual(f.revealState().center,null);
     assert.equal(f.revealState().pending,true);
     f.locate(0,100,80); f.flush();
-    assert.deepEqual({...f.revealState(),debug:undefined},{active:true,pending:false,page:0,center:[123,117],viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined});
+    assert.deepEqual({...f.revealState(),debug:undefined},{active:true,pending:false,page:0,phase:'displaying',center:[123,117],viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined});
     assert.equal(f.beacon().style.left,'123px');
     assert.equal(f.beacon().style.top,'117px');
     assert.equal(f.beacon().children.length,4);
@@ -1655,7 +1656,7 @@ for (const partial of [false,true]) {
     assert.equal(f.frames.size,0);
     assert.ok(f.snapshots.invalidates>=2);
     assert.ok(f.snapshots.settles>=1);
-    assert.deepEqual({...f.revealState(),debug:undefined},{active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined});
+    assert.deepEqual({...f.revealState(),debug:undefined},{active:false,pending:false,page:null,phase:'idle',center:null,viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined});
   });
 }
 
@@ -1670,7 +1671,7 @@ for (const partial of [false,true]) for (const pending of [false,true]) {
     const beacon=f.beacon(),snapshots={...f.snapshots};
     assert.equal(f.frames.size,1);
     f.advance(1);
-    const inactive={active:false,pending:false,page:null,center:null,viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined};
+    const inactive={active:false,pending:false,page:null,phase:'idle',center:null,viewport:[0,0,646,374],elapsed_ms:0,options:defaultRevealOptions,debug:undefined};
     for(let index=0;index<100;index++){
       assert.equal(f.revealActive(),false);
       assert.deepEqual({...f.revealState(),debug:undefined},inactive);
@@ -1845,6 +1846,149 @@ test('frontend location exceptions remain observable and retire the pending beac
   assert.throws(()=>f.locate(),error=>error===expected);
   assert.equal(f.revealActive(),false);
   assert.equal(f.frames.size,0);
+});
+
+for (const partial of [true, false]) for (const explicit of [true, false]) for (const enabled of [true, false]) {
+  test(`${partial?'partial':'full'} admitted ${explicit?'explicit':'automatic'} source location retires a resize anchor with beacon ${enabled?'on':'off'}`, () => {
+    const pages=Array.from({length:3},()=>({width:200,height:240}));
+    let anchor=null, smoothTarget=null, clears=0, anchorAtForward=null;
+    const f=revealFixture({partial,pages,
+      configure(doc) {
+        doc.clearSvgResizeAnchor=()=>{clears++;anchor=null;};
+        doc.windowElem.handleTypstLocation=()=>{
+          anchorAtForward=anchor;
+          f.scroll.scrollTo({top:1385.4,behavior:'smooth'});
+        };
+      },
+      // Pinned rescale$svg restores an existing semantic resize anchor even
+      // at unchanged scale. That assignment cancels WebKit smooth navigation.
+      layoutHook() { if(anchor) { smoothTarget=null;f.scroll.scrollTop=anchor.top; } },
+    });
+    f.scroll.scrollTo=({top,behavior})=>{if(behavior==='smooth')smoothTarget=top;else f.scroll.scrollTop=top;};
+    f.revealOptions({...defaultRevealOptions,enabled});
+    const initialClears=clears;
+    anchor={top:0};
+    f.revealIntent(explicit);f.locate(2,20,20);
+    assert.equal(anchorAtForward,null,'location must own scrolling before the pinned handler runs');
+    assert.equal(clears,initialClears+1,'one admitted location retires one competing resize owner');
+    f.doc.addChangement(['diff-v1',pages]);f.flush();f.flush();
+    assert.equal(smoothTarget,1385.4,'the following cursor patch must preserve pending smooth navigation');
+    assert.equal(f.scroll.scrollTop,0,'the adapter leaves the actual movement to the frontend');
+    assert.deepEqual(f.errors,[]);
+  });
+}
+
+test('invalid, foreign and retired source locations cannot revoke the current resize owner', () => {
+  const f=revealFixture();let clears=0;
+  f.doc.clearSvgResizeAnchor=()=>{clears++;};
+  const hook=f.doc.windowElem.handleTypstLocation;
+  const svg=f.doc.hookedElem.firstElementChild;
+  for(const args of [[svg,0,10,10],[svg,1,NaN,10],[svg,1,10,Infinity],[svg,99,10,10],[{},1,10,10]]) {
+    hook.call(f.doc.windowElem,...args);
+  }
+  f.doc.addChangement(['diff-v1',[{width:600,height:300},{width:600,height:300}]]);f.flush();f.flush();
+  hook.call(f.doc.windowElem,svg,1,10,10);
+  const current=f.doc.hookedElem.firstElementChild;
+  current.isConnected=false;hook.call(f.doc.windowElem,current,1,10,10);current.isConnected=true;
+  f.container.documents=[];hook.call(f.doc.windowElem,current,1,10,10);
+  assert.equal(clears,0);
+  assert.equal(f.calls.length,8,'location observation preserves the pinned handler contract');
+});
+
+test('pending navigation diagnostics restore exact own and inherited scroll methods after return or exception', () => {
+  for(const inherited of [false,true]) for(const throws of [false,true]) {
+    const expected=new Error('observed frontend failure'),result={observed:true};
+    let observedDoc=null,observedNative=null;
+    const f=revealFixture({navigationDiagnostics:true,pages:Array.from({length:3},()=>({width:200,height:240})),configure(doc){
+      const scroll=doc.hookedElem.parentElement;
+      const native=function(){observedNative=this;if(throws)throw expected;return result;};
+      const method=function(...args){observedDoc=this;return scroll.scrollTo({left:args[2],top:args[3],behavior:'smooth'});};
+      for(const [owner,fn]of[[doc,method],[scroll,native]]) {
+        if(inherited){delete owner.scrollTo;Object.setPrototypeOf(owner,{scrollTo:fn});}
+        else Object.defineProperty(owner,'scrollTo',{value:fn,configurable:true,writable:false,enumerable:false});
+      }
+      doc.windowElem.handleTypstLocation=function(){return doc.scrollTo(600,3,60,1385.4);};
+    }});
+    const beforeDoc=Object.getOwnPropertyDescriptor(f.doc,'scrollTo'),beforeNative=Object.getOwnPropertyDescriptor(f.scroll,'scrollTo');
+    const originalDoc=f.doc.scrollTo,originalNative=f.scroll.scrollTo;
+    f.revealIntent(true);
+    const invoke=()=>f.doc.windowElem.handleTypstLocation(f.doc.hookedElem.firstElementChild,3,20,20);
+    if(throws)assert.throws(invoke,error=>error===expected);else assert.equal(invoke(),result);
+    assert.equal(observedDoc,f.doc);assert.equal(observedNative,f.scroll);
+    assert.equal(f.doc.scrollTo,originalDoc);assert.equal(f.scroll.scrollTo,originalNative);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(f.doc,'scrollTo'),beforeDoc);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(f.scroll,'scrollTo'),beforeNative);
+    const trace=f.revealState().debug.navigation;
+    assert.equal(trace.received.admitted,true);
+    assert.deepEqual(trace.doc_scroll.arguments,[600,3,60,1385.4]);
+    assert.equal(trace.native_scroll.top,1385.4);assert.equal(trace.native_scroll.behavior,'smooth');
+  }
+});
+
+test('temporary navigation diagnostics cannot overwrite a replacement scroll owner', () => {
+  const nextDoc=function(){},nextNative=function(){};
+  const f=revealFixture({navigationDiagnostics:true,configure(doc){
+    doc.scrollTo=function(){Object.defineProperty(doc,'scrollTo',{value:nextDoc,configurable:true});
+      Object.defineProperty(doc.hookedElem.parentElement,'scrollTo',{value:nextNative,configurable:true});};
+    doc.windowElem.handleTypstLocation=()=>doc.scrollTo();
+  }});
+  f.revealIntent(true);f.locate();
+  assert.equal(f.doc.scrollTo,nextDoc);assert.equal(f.scroll.scrollTo,nextNative);
+});
+
+test('navigation diagnostics keep at most sixteen rescale receipts and idle queries do no work', () => {
+  const f=revealFixture({navigationDiagnostics:true,partial:false,pages:Array.from({length:3},()=>({width:200,height:240}))});
+  const layouts=f.layouts,reads=f.reads,frames=f.frames.size;
+  for(let i=0;i<100;i++){f.revealState();f.revealActive();f.flush();}
+  assert.equal(f.layouts,layouts);assert.equal(f.reads,reads);assert.equal(f.frames.size,frames);
+  assert.equal(f.revealState().debug.navigation,null);
+  f.revealIntent(true);f.locate(2,20,20);
+  for(let i=0;i<100;i++) {f.doc.hookedElem.style.height=`${i}px`;f.doc.r.rescale();}
+  const trace=f.revealState().debug.navigation;
+  assert.equal(trace.rescales,100);assert.equal(trace.rescale.length,16);
+  assert.equal(trace.rescale[0].sequence,1,'the first potentially causal resize receipt survives the cap');
+  assert.equal(trace.rescale[1].sequence,86);assert.equal(trace.rescale.at(-1).sequence,100,'latest receipts keep advancing');
+  const atRest={layouts:f.layouts,reads:f.reads,frames:f.frames.size,trace:JSON.stringify(trace)};
+  for(let i=0;i<100;i++){f.revealState();f.revealActive();}
+  assert.deepEqual({layouts:f.layouts,reads:f.reads,frames:f.frames.size,trace:JSON.stringify(f.revealState().debug.navigation)},atRest);
+  f.revealIntent(false);const retired=f.revealState().debug.navigation.rescales;
+  f.doc.hookedElem.style.height='retired';f.doc.r.rescale();
+  assert.equal(f.revealState().debug.navigation.rescales,retired,'automatic follow and retired cues do not instrument rendering');
+});
+
+test('foreign source locations cannot instrument current document scroll methods', () => {
+  const f=revealFixture({navigationDiagnostics:true});const method=f.scroll.scrollTo;
+  f.revealIntent(true);
+  f.doc.windowElem.handleTypstLocation({},1,20,20);
+  const trace=f.revealState().debug.navigation;
+  assert.equal(trace.received.admitted,false);assert.equal(trace.received.same_svg,false);
+  assert.equal(trace.doc_scroll,null);assert.equal(trace.native_scroll,null);
+  assert.equal(f.scroll.scrollTo,method);
+  f.container.documents=[];
+  f.doc.windowElem.handleTypstLocation(undefined,1,20,20);
+  const retired=f.revealState().debug.navigation.received;
+  assert.equal(retired.connected,false);assert.equal(retired.admitted,false);
+  assert.equal(retired.same_document,false);assert.equal(retired.same_window,false);assert.equal(retired.same_svg,false);
+});
+
+test('production navigation allocates no diagnostic trace and never overrides scroll methods', () => {
+  let forwarded=0,cleared=0;
+  const f=revealFixture({configure(doc){
+    const scroll=doc.hookedElem.parentElement;
+    const native=function(){assert.equal(scroll.scrollTo,native);forwarded++;return 42;};
+    const method=function(){assert.equal(doc.scrollTo,method);return scroll.scrollTo({top:500,behavior:'smooth'});};
+    doc.scrollTo=method;scroll.scrollTo=native;
+    doc.clearSvgResizeAnchor=()=>{cleared++;};
+    doc.windowElem.handleTypstLocation=()=>doc.scrollTo();
+  }});
+  const before=cleared;
+  f.revealIntent(true);
+  assert.equal(f.doc.windowElem.handleTypstLocation(f.doc.hookedElem.firstElementChild,1,20,20),42);
+  assert.equal(forwarded,1);assert.equal(cleared,before+1,'production still admits source navigation');
+  assert.equal(f.revealState().debug.navigation,null);
+  f.flush();assert.equal(f.revealState().pending,false);
+  for(let i=0;i<100;i++)f.revealState();
+  assert.equal(f.revealState().debug.navigation,null,'no navigation/rescale receipt allocation without compiler flag');
 });
 
 
@@ -2058,4 +2202,21 @@ for(const paintPhase of [1,2]) test(`redundant partial prefetch cannot strand na
   assert.equal(cache.inspect().active,false,'completion must retry after the redundant prefetch clears its busy flag');
   assert.equal(f.messages.filter(m=>m.op==='ready').at(-1)?.revision,51);
   assert.equal(f.frames.size,0,'completion cannot poll');
+});
+
+for (const partial of [false, true]) test(`${partial ? 'partial' : 'full'} reveal reports explicit arrival phases without advancing the animation`, () => {
+  const f = revealFixture({ partial });
+  assert.equal(f.revealState().phase, 'idle');
+  f.revealIntent(true);
+  assert.equal(f.revealState().phase, 'awaiting-location');
+  f.locate();
+  assert.equal(f.revealState().phase, 'awaiting-visibility');
+  f.flush();
+  assert.equal(f.revealState().phase, 'displaying');
+  const work = { ...f.snapshots }, frames = f.frames.size;
+  for (let query = 0; query < 100; query++) assert.equal(f.revealState().phase, 'displaying');
+  assert.deepEqual(f.snapshots, work);
+  assert.equal(f.frames.size, frames);
+  f.advance(900);
+  assert.equal(f.revealState().phase, 'idle');
 });

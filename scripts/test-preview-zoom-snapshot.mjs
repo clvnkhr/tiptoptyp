@@ -618,3 +618,30 @@ test('native pixel retirement preserves the vector owner and its pending sharp h
   f.paint();assert.equal(f.cache.inspect().active,false);assert.equal(f.cache.inspect().handoffs,1);
   f.tick();assert.equal(f.captures().length,2);f.admit();assert.equal(f.cache.inspect().cached,true);
 });
+
+test('capture and native phase observations retain a single owner through admission and handoff', () => {
+  const f = fixture();
+  assert.equal(f.cache.inspect().warming_phase, 'scheduled');
+  assert.equal(f.cache.inspect().native_phase, 'idle');
+  f.tick();
+  const capture = f.captures().at(-1);
+  assert.equal(f.cache.inspect().warming_phase, 'capturing');
+  f.cache.resolve(capture.token, { width: 1200, height: 900 });
+  assert.equal(f.cache.inspect().warming_phase, 'admitting');
+  f.cache.admitted(capture.token, true);
+  assert.equal(f.cache.inspect().warming_phase, 'idle');
+  assert.equal(f.cache.inspect().cache_phase, 'fresh');
+  f.cache.native({ revision: 1, scale: 1.2, token: capture.token });
+  assert.equal(f.cache.inspect().native_phase, 'rendering');
+  f.current.scale = 1.2;
+  f.cache.rendered();
+  assert.equal(f.cache.inspect().native_phase, 'handoff');
+  f.paint();
+  assert.equal(f.cache.inspect().native_phase, 'idle');
+  assert.equal(f.cache.inspect().cache_phase, 'refresh-needed');
+  assert.equal(f.cache.inspect().warming_phase, 'scheduled');
+  const count = f.captures().length, frames = f.frames.length;
+  for (let query = 0; query < 100; query++) f.cache.inspect();
+  assert.equal(f.captures().length, count);
+  assert.equal(f.frames.length, frames);
+});

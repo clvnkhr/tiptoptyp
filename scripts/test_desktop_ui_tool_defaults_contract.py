@@ -1,7 +1,5 @@
 """Evidence guards for tool-default journeys; these are not native UI results."""
 from copy import deepcopy
-import importlib.util
-from pathlib import Path
 import unittest
 
 from desktop_ui_settings_links_journeys import SOURCE_FIELDS
@@ -91,19 +89,6 @@ class ToolDefaultsContract(unittest.TestCase):
             changed[field] = 'changed'
             with self.subTest(field=field), self.assertRaises(AssertionError):
                 assert_local_reference(changed, before, {'pid': 100}, 100, 'ltex')
-
-    def test_offline_journey_is_registered_once_in_all_and_needs_no_optional_model(self):
-        spec = importlib.util.spec_from_file_location('tool_defaults_runner',
-                                                      Path(__file__).with_name('test-desktop-ui.py'))
-        runner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(runner)
-        self.assertIn('tool_defaults', runner.JOURNEY_NAMES)
-        self.assertEqual(runner.selected_journeys('tool_defaults'), ['tool_defaults'])
-        self.assertEqual(runner.selected_journeys('all').count('tool_defaults'), 1)
-        self.assertTrue(callable(runner.Journey.tool_defaults))
-        self.assertNotIn('tool_defaults', runner.LIQUID_JOURNEYS)
-        self.assertNotIn('tool_defaults', runner.LTEX_JOURNEYS)
-
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,6 +9,7 @@ from copy import deepcopy
 from contextlib import contextmanager
 
 from desktop_ui_tex_journeys import TexJourneys
+from desktop_ui_comment_controls_journeys import CommentControlsJourneys
 from desktop_ui_image_journeys import ImageJourneys
 from desktop_ui_newest_journeys import NewestJourneys
 from desktop_ui_partial_journeys import PartialPreviewJourneys
@@ -20,6 +21,8 @@ from desktop_ui_math_grid_journeys import MathGridJourneys
 from desktop_ui_effects_journeys import EffectsPacingJourneys
 from desktop_ui_version_journeys import VersionJourneys
 from desktop_ui_liquid_journeys import LiquidJourneys
+from desktop_ui_diagnostic_fix_journeys import DiagnosticFixJourneys
+from desktop_ui_workspace_switch_journeys import WorkspaceSwitchJourneys
 from desktop_ui_ltex_journeys import LtexJourneys
 from desktop_ui_settings_links_journeys import SettingsLinksJourneys
 from desktop_ui_tool_defaults_journeys import ToolDefaultsJourneys
@@ -32,12 +35,56 @@ from desktop_ui_asset_layout_journeys import AssetLayoutJourneys
 from desktop_ui_inactive_preview_journeys import InactivePreviewJourneys
 from desktop_ui_overleaf_journeys import OverleafJourneys
 from desktop_ui_explorer_journeys import ExplorerJourneys
+from desktop_ui_native_scroll import native_scroll_advance
 
 PARTICLE_STYLES = ("Explosion", "Shotgun", "Flamethrower", "Railgun", "Plasma")
+LINGERING_STYLES = ("Smoke", "Embers")
+LIVE_PARTICLE_STYLES = PARTICLE_STYLES + LINGERING_STYLES + ("Afterburner",)
 PARTICLE_ACTIONS = ("Typing", "Copy", "Cut", "Paste", "Comment", "Undo", "Redo",
                     "Delete", "Newline", "Indent")
 
 PREVIEW_SOURCE = '#set page(width: 200pt, height: 200pt, margin: 20pt)\n= First\nBlack text on white paper.\n#pagebreak()\n= Second\nMiddle page.\n#pagebreak()\n= Third\n#v(95pt)\nFinal needle.\n'
+
+
+def empty_workspace_ready(document):
+    """A workspace with no file has no hidden demo or active document tab."""
+    required = ('tabs', 'active_tab_id', 'preview_tab_id', 'path', 'source_bytes', 'source_fingerprint', 'dirty')
+    if not all(field in document for field in required):
+        raise AssertionError('Empty workspace inspection is unavailable')
+    return (type(document['tabs']) is int and document['tabs'] == 0
+            and document['active_tab_id'] is None and document['preview_tab_id'] is None
+            and document['path'] is None and type(document['source_bytes']) is int
+            and document['source_bytes'] == 0 and document['source_fingerprint'] == fingerprint('')
+            and document['dirty'] is False)
+
+
+def demo_file_state(document):
+    state = document.get('demo_file')
+    if (not isinstance(state, dict) or any(type(state.get(field)) is not bool for field in ('picking', 'busy'))
+            or state['picking'] and not state['busy']):
+        raise AssertionError('Demo file picker/worker inspection is unavailable')
+    return state
+
+
+def demo_owner_unchanged(document, before):
+    fields = ('tabs', 'active_tab_id', 'preview_tab_id', 'path', 'source_bytes',
+              'source_fingerprint', 'dirty', 'cursor', 'workspace_root_fingerprint')
+    if any(field not in item for item in (document, before) for field in fields):
+        raise AssertionError('Demo file source/workspace ownership inspection is unavailable')
+    return all(document[field] == before[field] for field in fields)
+
+
+def startup_fixture_ready(document, path):
+    """The explicitly opened fixture owns a real, visible Tinymist preview."""
+    return (document.get('path') == str(path) and document.get('tabs') == 1
+            and document.get('source_fingerprint') == fingerprint(PREVIEW_SOURCE)
+            and document.get('source_bytes') == len(PREVIEW_SOURCE.encode())
+            and document.get('active_tab_id') is not None
+            and document.get('preview_tab_id') == document['active_tab_id']
+            and document.get('preview_path') == str(path)
+            and document.get('preview_backend') in ('Tinymist', 'Tinymist partial')
+            and document.get('preview_native_ready') is True
+            and document.get('preview_surface_visible') is True and document.get('preview_pages') == 3)
 
 
 def document_window_title(document, windows):
@@ -80,17 +127,24 @@ def editor_effect_preferences(document):
     """Require the current complete per-action schema, with no legacy fallback."""
     settings = document.get("editor_effects")
     if not isinstance(settings, dict) or type(settings.get("enabled")) is not bool \
-            or settings.get("density") not in ("Low", "Medium", "High"):
+            or settings.get("density") not in ("Low", "Medium", "High") \
+            or any(type(settings.get(field)) is not bool for field in ("same_for_all", "cursor_afterburner")):
         raise AssertionError("editor effect settings are unavailable or invalid")
     actions = settings.get("actions")
     if not isinstance(actions, dict) or set(actions) != {action.lower() for action in PARTICLE_ACTIONS}:
         raise AssertionError("editor effect settings must identify every keyboard action")
     for action, effects in actions.items():
-        if not isinstance(effects, dict) or set(effects) != {"particles", "shake", "flash", "glow"} \
+        if not isinstance(effects, dict) or set(effects) != {"particles", "lingering", "shake", "flash", "glow"} \
                 or effects["particles"] is not None and effects["particles"] not in PARTICLE_STYLES \
+                or effects["lingering"] is not None and effects["lingering"] not in LINGERING_STYLES \
                 or any(type(effects.get(effect)) is not bool for effect in ("shake", "flash", "glow")):
             raise AssertionError("invalid editor effects for " + action)
     return settings
+
+
+def editor_effect_choice(document, action):
+    settings = editor_effect_preferences(document)
+    return settings["actions"]["typing" if settings["same_for_all"] else action.lower()]
 
 
 def typing_particle_state(document):
@@ -99,21 +153,23 @@ def typing_particle_state(document):
     settings = editor_effect_preferences(document)
     if not isinstance(state, dict):
         raise AssertionError("particle settings/inspection is unavailable")
-    for field in ("active_count", "burst_count", "emitted_count", "max_live", "pool_limit", "lifetime_ms"):
+    for field in ("active_count", "burst_count", "cursor_bursts", "emitted_count", "max_live", "pool_limit", "lifetime_ms", "max_lifetime_ms"):
         if type(state.get(field)) is not int or state[field] < 0:
             raise AssertionError("invalid particle counter: " + field)
     if not 0 < state["pool_limit"] <= 256 or not 0 < state["lifetime_ms"] <= 1000 \
+            or not state["lifetime_ms"] <= state["max_lifetime_ms"] <= 3000 \
             or state["active_count"] > state["max_live"] \
             or state["max_live"] > state["pool_limit"] \
             or state["max_live"] > state["emitted_count"] \
-            or state["burst_count"] > state["emitted_count"]:
+            or state["burst_count"] + state["cursor_bursts"] > state["emitted_count"]:
         raise AssertionError("particle work/lifetime is not bounded or counters are inconsistent")
     live_styles = state.get("live_styles")
     if not isinstance(live_styles, dict) or any(
-            style not in PARTICLE_STYLES or type(count) is not int or count <= 0
+            style not in LIVE_PARTICLE_STYLES or type(count) is not int or count <= 0
             for style, count in live_styles.items()) \
             or sum(live_styles.values()) != state["active_count"] \
-            or (state.get("last_style") not in PARTICLE_STYLES if state["burst_count"]
+            or "Afterburner" in live_styles and not state["cursor_bursts"] \
+            or (state.get("last_style") not in PARTICLE_STYLES + LINGERING_STYLES if state["burst_count"]
                 else state.get("last_style") is not None):
         raise AssertionError("particle styles do not identify their actual live bursts")
     action_bursts = state.get("action_bursts")
@@ -127,6 +183,7 @@ def typing_particle_state(document):
     if state["burst_count"]:
         if action_bursts.get(state["last_action"], 0) == 0:
             raise AssertionError("last particle action has no recorded burst")
+    if state["burst_count"] or state["cursor_bursts"]:
         origin, clip, age = state.get("origin"), state.get("clip"), state.get("last_emission_age_ms")
         if not isinstance(origin, list) or len(origin) != 2 \
                 or not isinstance(clip, list) or len(clip) != 4 \
@@ -137,8 +194,13 @@ def typing_particle_state(document):
                 or not clip[0] <= origin[0] <= clip[2] \
                 or not clip[1] <= origin[1] <= clip[3]:
             raise AssertionError("particle emission was not located inside its editor clip")
-    if state["active_count"] and (not settings["enabled"] or not state["burst_count"]
-                                  or state["last_emission_age_ms"] >= state["lifetime_ms"]):
+    longest_live = max(({"Smoke": 2800, "Embers": 1800, "Afterburner": 450}.get(style, state["lifetime_ms"])
+                        for style in live_styles), default=0)
+    if longest_live > state["max_lifetime_ms"]:
+        raise AssertionError("live particle lifetime exceeds its declared bound")
+    if state["active_count"] and (not settings["enabled"] or not state["emitted_count"]
+                                  or not (state["burst_count"] or state["cursor_bursts"])
+                                  or state["last_emission_age_ms"] >= longest_live):
         raise AssertionError("inactive/expired particles were reported as active")
     return state
 
@@ -167,16 +229,35 @@ def particle_action_rendered(document, before, action, expected):
     gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
     counts = dict(prior["action_bursts"])
     counts[action] = counts.get(action, 0) + 1
-    style = editor_effect_preferences(before)["actions"][action.lower()]["particles"]
+    choice = editor_effect_choice(before, action)
+    style = choice["particles"] or choice["lingering"]
+    expected_styles = {value for value in (choice["particles"], choice["lingering"]) if value is not None}
     return (state["active_count"] > 0 and state["burst_count"] == prior["burst_count"] + 1
             and state["last_action"] == action and state["action_bursts"] == counts
-            and state["last_style"] == style and state["live_styles"] == {style: state["active_count"]}
+            and state["last_style"] == style and set(state["live_styles"]) == expected_styles
+            and state["cursor_bursts"] == prior["cursor_bursts"]
             and gpu["ready"] and gpu["draws"] > prior_gpu["draws"]
             and gpu["uploads"] > prior_gpu["uploads"]
             and gpu["uploaded_instances"] > 0 and gpu["last_draw_instances"] > 0
             and document["source_fingerprint"] == fingerprint(expected)
             and document["source_bytes"] == len(expected.encode("utf-8"))
             and document["editor_keyboard_focused"])
+
+
+def cursor_afterburner_rendered(document, before, cursor, expected):
+    """Cursor-only motion must draw a trail without becoming an editing burst."""
+    state, prior = typing_particle_state(document), typing_particle_state(before)
+    gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
+    settings = editor_effect_preferences(document)
+    return (settings["enabled"] and settings["cursor_afterburner"]
+            and document["editor_keyboard_focused"] and document["cursor"] == cursor
+            and document["source_fingerprint"] == fingerprint(expected)
+            and document["source_bytes"] == len(expected.encode("utf-8"))
+            and state["cursor_bursts"] == prior["cursor_bursts"] + 1
+            and all(state[field] == prior[field] for field in ("burst_count", "action_bursts", "last_action", "last_style"))
+            and state["active_count"] > 0 and set(state["live_styles"]) == {"Afterburner"}
+            and gpu["ready"] and gpu["draws"] > prior_gpu["draws"]
+            and gpu["uploads"] > prior_gpu["uploads"] and gpu["last_draw_instances"] > 0)
 
 
 def editor_feedback_state(document):
@@ -228,8 +309,8 @@ def editor_feedback_action_rendered(document, before, action, effect, expected):
     particles, prior_particles = typing_particle_state(document), typing_particle_state(before)
     gpu, prior_gpu = typing_particle_gpu_state(document), typing_particle_gpu_state(before)
     settings = editor_effect_preferences(before)
-    chosen = settings["actions"][action.lower()]
-    expected_choice = {"particles": None, "shake": effect == "Shake", "flash": effect == "Flash",
+    chosen = editor_effect_choice(before, action)
+    expected_choice = {"particles": None, "lingering": None, "shake": effect == "Shake", "flash": effect == "Flash",
                        "glow": effect == "Glow"}
     counts = dict(prior["action_bursts"])
     counts[action] = counts.get(action, 0) + 1
@@ -258,7 +339,7 @@ def particle_document_returned_quiet(document, before, expected):
             and document["source_fingerprint"] == fingerprint(expected)
             and document["source_bytes"] == len(expected.encode("utf-8"))
             and all(state[field] == 0 for field in (
-                "active_count", "burst_count", "emitted_count", "max_live"))
+                "active_count", "burst_count", "cursor_bursts", "emitted_count", "max_live"))
             and state["last_style"] is None and state["last_action"] is None
             and state["live_styles"] == {} and state["action_bursts"] == {}
             and gpu["draws"] == prior_gpu["draws"])
@@ -508,7 +589,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, IndentationJourneys, ToolDefaultsJourneys, SettingsLinksJourneys, LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
+class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, IndentationJourneys, ToolDefaultsJourneys, SettingsLinksJourneys, LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, DiagnosticFixJourneys, WorkspaceSwitchJourneys, CommentControlsJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
     def set_math_conversion_formatting(self, enabled):
         if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
             return
@@ -875,16 +956,12 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
 
     def startup_preview(self):
         source = self.directory / "journey.typ"
-        self.wait("plain launch starts with an unbound startup buffer", lambda d: d["tabs"] == 1 and d["path"] is None and d["source_bytes"] > 0)
-        self.key(31, "cmd")  # Cmd+O
-        import time
-        time.sleep(0.8)
-        self.native("ax-press-description", "search")
-        self.native("text", source.name)
-        time.sleep(0.8)
-        self.native("ax-press-title", "Open")
-        self.wait("first opened source becomes active", lambda d: d["path"] == str(source), timeout=15)
-        self.wait("first opened source becomes the preview target", lambda d: d["preview_path"] == str(source) and d["preview_tab_id"] == d["active_tab_id"], timeout=30)
+        self.wait("plain launch starts with no document or demo tab", empty_workspace_ready)
+        # This native path helper waits for Open and Go-to-Folder readiness;
+        # the search field is optional in macOS's initial empty-workspace panel.
+        self.open_harper_fixture(source)
+        self.wait("the explicitly opened fixture owns its visible Tinymist preview", lambda d:
+                  startup_fixture_ready(d, source), timeout=45)
 
     def diagnostics(self):
         current_path = self.snapshot()["document"]["path"] or ""
@@ -1286,22 +1363,12 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
                 if time.monotonic() >= deadline:
                     raise AssertionError(f"{section} did not expose a scrollable list")
                 time.sleep(0.05)
-            before = scroll["offset"]
-            self.native("move", scroll["x"], scroll["y"])
-            self.native("wheel", scroll["x"], scroll["y"], -8)
-            deadline = time.monotonic() + 3
-            while True:
-                after = self.snapshot()["scrolls"][section]["offset"]
-                if after > before + 20:
-                    break
-                if time.monotonic() >= deadline:
-                    raise AssertionError(f"{section} did not scroll after wheel input: {before} -> {after}")
-                time.sleep(0.05)
+            before, after, attempts = native_scroll_advance(self, section, lines=-8)
             for _ in range(8):
                 after = self.snapshot()["scrolls"][section]["offset"]
                 if after <= before + 20:
                     raise AssertionError(f"{section} scroll reset after wheel input: {before} -> {after}")
-            self.record("explorer.scroll.stable", section=section, sticky=sticky, before=before, after=after)
+            self.record("explorer.scroll.stable", section=section, sticky=sticky, before=before, after=after, wheel_attempts=attempts)
 
         scroll_stays("Files")
         if self.explorer_scroll_checks_contents:
@@ -2181,7 +2248,7 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
             active = self.wait("real editor action renders one native GPU burst: " + editor_action,
                                lambda d: particle_action_rendered(d, before, editor_action, expected))
             self.record("typing_particles.active", editor_action=editor_action,
-                        style=active["document"]["editor_effects"]["actions"][editor_action.lower()]["particles"],
+                        style=editor_effect_choice(active["document"], editor_action)["particles"],
                         dark=active["document"]["dark"],
                         observation=active["document"]["typing_particles"])
             if capture:
@@ -2195,7 +2262,8 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
             observe()
         self.source_is(expected)
         expired = self.wait("editor particles expire without further input", lambda d:
-                            typing_particle_state(d)["active_count"] == 0, timeout=3)["document"]
+                            typing_particle_state(d)["active_count"] == 0,
+                            timeout=typing_particle_state(before)["max_lifetime_ms"] / 1000 + 1)["document"]
         bursts, draws = typing_particle_state(expired)["burst_count"], typing_particle_gpu_state(expired)["draws"]
         self.stable_state(lambda d: typing_particle_state(d)["active_count"] == 0
                           and typing_particle_state(d)["burst_count"] == bursts
@@ -2272,7 +2340,7 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
         self.source_is(expected)
         return expected
 
-    def editor_effect_choose(self, action, particles=None, shake=False, flash=False, glow=False):
+    def editor_effect_choose(self, action, particles=None, lingering=None, shake=False, flash=False, glow=False):
         before_document = self.snapshot()["document"]
         before = typing_particle_state(before_document)
         history = {field: before[field] for field in (
@@ -2281,20 +2349,23 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
         feedback_history = {field: deepcopy(feedback[field]) for field in (
             "burst_count", "action_bursts", "last_action", "last_effects")}
         preferences = deepcopy(editor_effect_preferences(before_document))
-        effects = {"particles": particles, "shake": shake, "flash": flash, "glow": glow}
+        effects = {"particles": particles, "lingering": lingering, "shake": shake, "flash": flash, "glow": glow}
         self.settings()
         self.setting_section("editor effects", "Editor effects")
-        prefix = "settings.editor.effects." + action.lower()
-        current = preferences["actions"][action.lower()]
-        if current["particles"] != particles:
-            self.click(prefix + ".particles")
-            self.wait_target(prefix + ".particles." + (particles or "Off"))
-            self.click(prefix + ".particles." + (particles or "Off"))
+        selected = "typing" if preferences["same_for_all"] else action.lower()
+        prefix = "settings.editor.effects." + selected
+        current = preferences["actions"][selected]
+        for control in ("particles", "lingering"):
+            if current[control] != effects[control]:
+                option = effects[control] or "Off"
+                self.click(prefix + "." + control)
+                self.wait_target(prefix + "." + control + "." + option)
+                self.click(prefix + "." + control + "." + option)
         for effect in ("shake", "flash", "glow"):
             if current[effect] != effects[effect]:
                 self.click(prefix + "." + effect)
-        preferences["actions"][action.lower()] = effects
-        self.wait("only the selected action's effects change: " + action, lambda d:
+        preferences["actions"][selected] = effects
+        self.wait("only the effective action's effects change: " + action, lambda d:
                   editor_effect_preferences(d) == preferences)
         self.stable_state(lambda d: all(typing_particle_state(d)[field] == value
                                        for field, value in history.items())
@@ -2352,6 +2423,85 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
                           and typing_particle_gpu_state(d)["draws"] == typing_particle_gpu_state(before)["draws"], frames=3)
         return expected
 
+    def editor_effect_toggle(self, field, value):
+        before = deepcopy(editor_effect_preferences(self.snapshot()["document"]))
+        if before[field] == value:
+            return
+        self.settings()
+        self.setting_section("editor effects", "Editor effects")
+        self.click("settings.editor.effects." + field)
+        before[field] = value
+        self.wait("effect toggle changes only " + field, lambda d: editor_effect_preferences(d) == before)
+        self.close_settings()
+
+    def editor_extended_particles(self, expected):
+        # Unified mode edits a shared row without overwriting stored action choices.
+        self.editor_effect_choose("Copy", particles="Railgun")
+        separate = deepcopy(editor_effect_preferences(self.snapshot()["document"]))
+        self.editor_effect_toggle("same_for_all", True)
+        self.editor_effect_choose("Copy", particles="Plasma")
+        self.click("editor.source")
+        self.key(125)
+        self.key(123, "cmd+shift")
+        tail = expected.rsplit("\n", 1)[-1]
+        self.wait("unified Copy selects its real source text", lambda d:
+                  sorted(d["cursor"]) == [len(expected) - len(tail), len(expected)])
+        self.editor_particle_action("Copy", expected, lambda: self.key(8), copy_text=tail)
+        self.editor_effect_toggle("same_for_all", False)
+        restored = editor_effect_preferences(self.snapshot()["document"])
+        if any(restored["actions"][action] != effects for action, effects in separate["actions"].items()
+               if action != "typing"):
+            raise AssertionError("unified effects overwrote stored per-action choices")
+        self.record("typing_particles.unified", preserved_actions=sorted(set(separate["actions"]) - {"typing"}))
+
+        for linger, primary in (("Smoke", "Flamethrower"), ("Embers", None)):
+            self.editor_effect_choose("Typing", particles=primary, lingering=linger)
+            self.click("editor.source")
+            self.key(125)
+            self.wait("lingering effect caret is at EOF", lambda d:
+                      d["editor_keyboard_focused"] and d["cursor"] == [len(expected), len(expected)])
+            before = self.snapshot()["document"]
+            expected += "s"
+            self.native("text", "s")
+            self.wait("chosen lingering effect renders with its primary selection", lambda d:
+                      particle_action_rendered(d, before, "Typing", expected))
+            long_lived = self.wait("lingering particles survive the primary effect", lambda d:
+                                  typing_particle_state(d)["last_emission_age_ms"] > typing_particle_state(d)["lifetime_ms"]
+                                  and set(typing_particle_state(d)["live_styles"]) == {linger}
+                                  and typing_particle_state(d)["active_count"] > 0, timeout=3)["document"]
+            self.record("typing_particles.lingering", style=linger, observation=long_lived["typing_particles"])
+            self.wait("lingering particles retire without additional input", lambda d:
+                      typing_particle_state(d)["active_count"] == 0, timeout=4)
+            self.source_is(expected)
+
+        self.editor_effect_choose("Typing")
+        self.editor_effect_toggle("cursor_afterburner", True)
+        self.click("editor.source")
+        self.key(125)
+        self.wait("afterburner navigation starts at EOF", lambda d: d["cursor"] == [len(expected), len(expected)])
+        self.wait("positioning trail has retired", lambda d: typing_particle_state(d)["active_count"] == 0, timeout=2)
+        before = self.snapshot()["document"]
+        self.key(123, "none")
+        active = self.wait("native arrow navigation renders only the cursor afterburner", lambda d:
+                           cursor_afterburner_rendered(d, before, [len(expected) - 1] * 2, expected))["document"]
+        self.record("typing_particles.afterburner", observation=active["typing_particles"])
+        self.wait("cursor afterburner retires without input", lambda d: typing_particle_state(d)["active_count"] == 0, timeout=2)
+        self.editor_effect_toggle("cursor_afterburner", False)
+        self.click("editor.source")
+        self.key(125)
+        self.wait("disabled afterburner navigation starts at EOF", lambda d: d["cursor"] == [len(expected), len(expected)])
+        before = self.snapshot()["document"]
+        self.key(123, "none")
+        self.wait("disabled trail still permits normal arrow navigation", lambda d: d["cursor"] == [len(expected) - 1] * 2)
+        self.stable_state(lambda d:
+                          d["source_fingerprint"] == fingerprint(expected)
+                          and all(typing_particle_state(d)[field] == typing_particle_state(before)[field]
+                                  for field in ("burst_count", "cursor_bursts", "emitted_count"))
+                          and typing_particle_state(d)["active_count"] == 0
+                          and typing_particle_gpu_state(d)["draws"] == typing_particle_gpu_state(before)["draws"], frames=3)
+        self.record("typing_particles.afterburner_disabled", cursor_bursts=typing_particle_state(before)["cursor_bursts"])
+        return expected
+
     def typing_particles(self):
         launch = self.snapshot()["document"]
         needs_source_preview = (launch["tabs"] == 1
@@ -2371,8 +2521,9 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
         preferences = deepcopy(editor_effect_preferences(document))
         state = typing_particle_state(document)
         typing_particle_gpu_state(document)
-        if preferences != {"enabled": False, "density": "Medium", "actions": {
-                action.lower(): {"particles": "Explosion", "shake": False, "flash": False, "glow": False}
+        if preferences != {"enabled": False, "density": "Medium", "same_for_all": False,
+                           "cursor_afterburner": False, "actions": {
+                action.lower(): {"particles": "Explosion", "lingering": None, "shake": False, "flash": False, "glow": False}
                 for action in PARTICLE_ACTIONS}} or state["active_count"] or state["burst_count"]:
             raise AssertionError("editor effects must default off at medium density with Explosion for every action")
         expected = initial
@@ -2405,6 +2556,7 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
                 self.typing_particle_burst(text, expected, capture=self.capture_review)
             expected = self.editor_particle_commands(expected)
             expected = self.editor_feedback_actions(expected)
+            expected = self.editor_extended_particles(expected)
             # Keep every feedback kind configured for disabled/foreign-focus negatives.
             self.editor_effect_choose("Typing", particles="Plasma", shake=True, flash=True, glow=True)
             quiet_document = self.snapshot()["document"]
@@ -2471,6 +2623,10 @@ class EditorJourneys(ExplorerJourneys, OverleafJourneys, ActivityJourneys, Inden
         finally:
             self.settings()
             self.setting_section("editor effects", "Editor effects")
+            current = editor_effect_preferences(self.snapshot()["document"])
+            for field in ("same_for_all", "cursor_afterburner"):
+                if current[field]:
+                    self.click("settings.editor.effects." + field)
             current = editor_effect_preferences(self.snapshot()["document"])
             for action, effects in preferences["actions"].items():
                 if current["actions"][action] != effects:

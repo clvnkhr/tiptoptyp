@@ -15,6 +15,7 @@ function harness(options = {}) {
   const sources = new Map([[MAIN, 'Main source.'], [OTHER, 'Other source.'], [ASSET, new Uint8Array([0, 255, 64])]]);
   const values = new Map();
   const storageWrites = new Map();
+  const mutations = []; let nextEntity = 1;
   const socket = {
     on(event, handler) { if (!socketEvents.has(event)) socketEvents.set(event, new Set()); socketEvents.get(event).add(handler); },
     removeListener(event, handler) { socketEvents.get(event)?.delete(handler); },
@@ -24,7 +25,14 @@ function harness(options = {}) {
   };
   function server(event, ...args) { for (const handler of socketEvents.get(event) || []) handler(...args); }
   function trigger(event, detail) { for (const handler of events.get(event) || []) handler({ detail }); }
-  function set(key, value) { values.set(key, value); for (const handler of watches.get(key) || []) handler(value); }
+  const queuedWatches = new Set();
+  function notify(key) {
+    if (!options.watchMode) { for (const handler of watches.get(key) || []) handler(values.get(key)); return; }
+    if (options.watchMode === 'coalesced' && queuedWatches.has(key)) return;
+    queuedWatches.add(key);
+    Promise.resolve().then(() => { queuedWatches.delete(key); for (const handler of watches.get(key) || []) handler(values.get(key)); });
+  }
+  function set(key, value) { values.set(key, value); notify(key); }
   const view = {
     state: { doc: { toString: () => 'Main source.' } },
     setState(state) { this.state = state; },
@@ -37,7 +45,9 @@ function harness(options = {}) {
       socket.emit('applyOtUpdate', values.get('editor.open_doc_id'), {});
     },
   };
-  values.set('editor.view', view); values.set('editor.open_doc_id', MAIN);
+  if (options.freezeView) Object.defineProperty(view, 'setState', { value: view.setState, writable: false, configurable: false });
+  if (!options.noView) values.set('editor.view', view);
+  values.set('editor.open_doc_id', MAIN);
   const window = {
     tiptoptypOverleafEpoch: 7,
     ipc: { postMessage(value) { messages.push(JSON.parse(value)); } },
@@ -45,14 +55,21 @@ function harness(options = {}) {
     location: { origin: 'https://www.overleaf.com', pathname: options.pathname || '/project/' + PID, href: 'https://www.overleaf.com/project/' + PID, reload() { window.reloaded = true; }, assign(value) { window.navigated = value; } },
     overleaf: { unstable: { store: {
       get(key) { return values.get(key); },
-      watch(key, fn) { if (!watches.has(key)) watches.set(key, new Set()); watches.get(key).add(fn); return () => watches.get(key).delete(fn); },
+      watch(key, fn) {
+        if (options.watchThrows === key) throw new Error('watch registration failed');
+        if (!watches.has(key)) watches.set(key, new Set());
+        watches.get(key).add(fn);
+        if (options.watchMode) Promise.resolve().then(() => { if (watches.get(key)?.has(fn)) fn(values.get(key)); });
+        if (options.unwatch === 'missing') return undefined;
+        return () => { if (options.unwatch === 'throws') throw new Error('unsubscribe failed'); watches.get(key).delete(fn); };
+      },
     } } },
     addEventListener(event, fn) { if (!events.has(event)) events.set(event, new Set()); events.get(event).add(fn); },
     removeEventListener(event, fn) { events.get(event)?.delete(fn); },
   };
   window.top = window;
   const context = vm.createContext({
-    window, document: { querySelector(selector) { if (selector === 'meta[name="ol-user_id"]') return options.selfUserId ? { content: options.selfUserId } : null; const match = selector.match(/data-file-id="([a-f0-9]+)"/); const node = nodes.get(match?.[1]); return node ? { closest() { return node; } } : null; } },
+    window, document: { querySelector(selector) { if (selector === 'meta[name="ol-csrfToken"]') return options.noCsrf ? null : { content: 'test-csrf-token' }; if (selector === 'meta[name="ol-user_id"]') return options.selfUserId ? { content: options.selfUserId } : null; const match = selector.match(/data-file-id="([a-f0-9]+)"/); const node = nodes.get(match?.[1]); return node ? { closest() { return node; } } : null; } },
     setTimeout(fn, delay) { const timer = ++nextTimer; timers.set(timer, { fn, delay }); return timer; },
     clearTimeout(timer) { timers.delete(timer); },
     URL, URLSearchParams, TextDecoder, TextEncoder, Uint8Array, AbortController,
@@ -62,22 +79,35 @@ function harness(options = {}) {
       inflight++; maxInflight = Math.max(maxInflight, inflight);
       try {
         if (options.fetch) return await options.fetch(url, init, sources);
+        if (init.method && init.method !== 'GET') {
+          mutations.push({ url, init });
+          if (options.mutate) return await options.mutate(url, init, sources);
+          const data = init.body ? JSON.parse(init.body) : null;
+          if (/\/(doc|folder)$/.test(url)) {
+            const entity = (++nextEntity).toString(16).padStart(24, '0');
+            const result = { _id: entity, name: data.name };
+            if (url.endsWith('/doc')) sources.set(entity, '');
+            const bytes = new TextEncoder().encode(JSON.stringify(result)); let read = false;
+            return { ok: true, status: 200, headers: { get(name) { return name.toLowerCase() === 'content-type' ? 'application/json' : String(bytes.length); } }, body: { getReader() { return { async read() { if (read) return { done: true }; read = true; return { done: false, value: bytes }; }, async cancel() {} }; } } };
+          }
+          return { ok: true, status: 204, headers: { get() { return null; } } };
+        }
         const entity = url.match(/\/(?:doc|file)\/([a-f0-9]{24})/)[1];
         const value = sources.get(entity);
         const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
         let used = false;
-        return { ok: value !== undefined, headers: { get() { return String(bytes?.byteLength || 0); } }, body: { getReader() { return { async read() { if (used) return { done: true }; used = true; return { done: false, value: bytes }; }, async cancel() {} }; } } };
+        return { ok: value !== undefined, headers: { get(name) { return name.toLowerCase() === 'content-type' ? 'text/plain; charset=utf-8' : String(bytes?.byteLength || 0); } }, body: { getReader() { return { async read() { if (used) return { done: true }; used = true; return { done: false, value: bytes }; }, async cancel() {} }; } } };
       } finally { inflight--; }
     },
   });
   vm.runInContext(bridge, context, { filename: 'overleaf_bridge.js' });
   window.io = { connect() { return socket; } };
-  window.io.connect();
+  if (!options.noSocket) window.io.connect();
   const tree = { _id: PID, name: 'Paper', rootDoc_id: MAIN, rootFolder: [{ _id: ROOT, name: '', docs: [{ _id: MAIN, name: 'main.tex' }], fileRefs: [{ _id: ASSET, name: 'figure.png' }], folders: [{ _id: FOLDER, name: 'sections', docs: [{ _id: OTHER, name: 'intro.tex' }], fileRefs: [], folders: [] }] }] };
   function project(permissionsLevel = 'owner', value = tree) { server('joinProjectResponse', { project: value, permissionsLevel, protocolVersion: 2, publicId: socket.publicId }); }
   function command(value) { window.tiptoptypOverleaf.command({ epoch: 7, ...value }); }
   function flush(delay = 0) {
-    for (let count = 0; count < 100; count++) {
+    for (let count = 0; count < 200; count++) {
       const next = [...timers].find(([, timer]) => timer.delay <= delay);
       if (!next) return;
       timers.delete(next[0]); next[1].fn();
@@ -85,7 +115,7 @@ function harness(options = {}) {
     throw new Error('Timer loop did not settle');
   }
   async function settle() { for (let i = 0; i < 25; i++) await Promise.resolve(); flush(); }
-  return { window, messages, events, timers, socketEvents, watches, storageWrites, emitted, socket, server, trigger, set, view, project, command, flush, settle, sources, requests, dispatches, nodes, tree, maxInflight: () => maxInflight };
+  return { window, messages, events, timers, socketEvents, watches, storageWrites, emitted, socket, server, trigger, set, view, project, command, flush, settle, sources, requests, mutations, dispatches, nodes, tree, maxInflight: () => maxInflight };
 }
 const ofType = (h, event) => h.messages.filter(message => message.event === event);
 
@@ -115,8 +145,11 @@ test('save requires official doc:saved and acknowledges transformed canonical so
   assert.equal(ofType(h, 'document').length, 0, 'optimistic browser state is never a server baseline');
   h.trigger('doc:saved', { id: MAIN });
   assert.equal(ofType(h, 'ack').length, 0, 'a delayed saved notification cannot replace the server ACK');
+  h.sources.set(MAIN, 'New main. Collaborator.');
   h.server('otUpdateApplied', { doc: MAIN, v: 12 });
   h.trigger('doc:saved', { id: MAIN });
+  assert.equal(ofType(h, 'ack').length, 0, 'saved notification waits for server text');
+  await h.settle();
   assert.deepEqual(ofType(h, 'ack'), [{ event: 'ack', epoch: 7, id: MAIN, request: 2, source: 'New main. Collaborator.' }]);
 });
 test('a second native edit cannot replace a pending write', async () => {
@@ -197,7 +230,7 @@ test('an in-flight old download cannot overwrite a newer collaborator revision',
     if (entity === OTHER && held) { held = false; await new Promise(resolve => { release = resolve; }); }
     const bytes = typeof snapshot === 'string' ? new TextEncoder().encode(snapshot) : snapshot;
     let used = false;
-    return { ok: true, headers: { get() { return String(bytes.byteLength); } }, body: { getReader() { return { async read() { if (used) return { done: true }; used = true; return { done: false, value: bytes }; }, async cancel() {} }; } } };
+    return { ok: true, headers: { get(name) { return name.toLowerCase() === 'content-type' ? 'text/plain; charset=utf-8' : String(bytes.byteLength); } }, body: { getReader() { return { async read() { if (used) return { done: true }; used = true; return { done: false, value: bytes }; }, async cancel() {} }; } } };
   } });
   h.project(); await h.settle();
   assert.equal(typeof release, 'function');
@@ -233,8 +266,11 @@ test('parked document save activates the official editor before checking its bas
   assert.equal(h.dispatches.length, 0, 'old editor state must not accept the parked edit');
   h.view.setState({ doc: { toString: () => 'Other source.' } }); h.flush();
   assert.equal(h.dispatches.length, 1); assert.equal(h.view.state.doc.toString(), 'Edited other.');
+  h.sources.set(OTHER, 'Edited other.');
   h.server('otUpdateApplied', { doc: OTHER, v: 1 }); h.trigger('doc:saved', { id: OTHER });
+  await h.settle();
   assert.equal(ofType(h, 'ack').at(-1).request, 11);
+  assert.equal(ofType(h, 'ack').at(-1).source, 'Edited other.');
 });
 test('remote update during parked document activation rejects the stale native base', async () => {
   const h = harness(); h.project(); await h.settle();
@@ -257,7 +293,10 @@ test('file clicks while saving keep only the latest requested file', async () =>
   h.command({ command: 'open', id: OTHER, path: 'sections/intro.tex' });
   h.command({ command: 'open', id: MAIN, path: 'main.tex' });
   assert.equal(otherClicks, 0);
-  h.server('otUpdateApplied', { doc: MAIN, v: 2 }); h.trigger('doc:saved', { id: MAIN }); h.flush();
+  h.sources.set(MAIN, 'Saved main.');
+  h.server('otUpdateApplied', { doc: MAIN, v: 2 }); h.trigger('doc:saved', { id: MAIN });
+  await h.settle();
+  assert.equal(ofType(h, 'ack').at(-1).request, 13);
   assert.equal(otherClicks, 0); assert.equal(h.window.navigated, undefined);
 });
 
@@ -313,7 +352,9 @@ test('older doc-room servers give one explicit limitation warning without going 
   const warnings = ofType(h, 'status').filter(value => /refresh to sync/.test(value.message || ''));
   assert.equal(warnings.length, 1); assert.equal(warnings[0].state, 'connected'); assert.equal(callbackCount, 2);
   h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Safe active-file save.', request: 14 });
+  h.sources.set(MAIN, 'Safe active-file save.');
   h.server('otUpdateApplied', { doc: MAIN, v: 3 }); h.trigger('doc:saved', { id: MAIN });
+  await h.settle();
   assert.equal(ofType(h, 'ack').at(-1).request, 14, 'the active file remains editable and server-acknowledged');
 });
 test('a rejected document join does not claim a server broadcast capability', async () => {
@@ -617,4 +658,725 @@ test('deferred native downloads reject stale epochs, stale paths, folders and un
   assert.equal(ofType(h, 'error').length, 3);
   assert.equal(h.dispatches.length, 0);
   assert.equal(h.window.navigated, undefined);
+});
+
+test('a delayed saved event cannot acknowledge hosted text that has not reached the server', async () => {
+  const h = harness(); h.project(); await h.settle(); h.messages.length = 0;
+  h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Native committed text.', request: 41 });
+  h.sources.set(MAIN, 'Native committed text.');
+  h.server('otUpdateApplied', { doc: MAIN, v: 12 });
+  h.view.state = { doc: { toString: () => 'Native committed text. UNFLUSHED HOSTED INPUT' } };
+  h.trigger('doc:changed', { id: MAIN });
+  h.trigger('doc:saved', { id: MAIN });
+  await h.settle();
+  assert.deepEqual(ofType(h, 'ack'), [{ event: 'ack', epoch: 7, id: MAIN, request: 41, source: 'Native committed text.' }]);
+  assert.equal(h.view.state.doc.toString(), 'Native committed text. UNFLUSHED HOSTED INPUT', 'confirmation must not replace the hosted draft');
+});
+
+test('an unchanged explicit save also confirms the authoritative server snapshot', async () => {
+  const h = harness(); h.project(); await h.settle(); h.messages.length = 0;
+  h.sources.set(MAIN, 'Newer server version.');
+  h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Main source.', request: 42 });
+  assert.equal(ofType(h, 'ack').length, 0, 'a cached browser view cannot synchronously certify a save');
+  await h.settle();
+  assert.deepEqual(ofType(h, 'ack'), [{ event: 'ack', epoch: 7, id: MAIN, request: 42, source: 'Newer server version.' }]);
+  assert.equal(h.dispatches.length, 0);
+});
+
+test('save confirmation rejects an older HTTP revision and rereads once after a later OT save', async () => {
+  let hold = false, release;
+  const h = harness({ async fetch(url, _init, sources) {
+    const entity = url.match(/\/(?:doc|file)\/([a-f0-9]{24})/)[1];
+    const source = sources.get(entity);
+    if (hold && entity === MAIN) { hold = false; await new Promise(resolve => { release = resolve; }); }
+    return new Response(source);
+  } });
+  h.project(); await h.settle(); h.messages.length = 0;
+  h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Native change.', request: 43 });
+  h.sources.set(MAIN, 'Native change.'); hold = true;
+  h.server('otUpdateApplied', { doc: MAIN, v: 1 }); h.trigger('doc:saved', { id: MAIN });
+  await h.settle(); assert.equal(typeof release, 'function');
+  const end = h.view.state.doc.toString().length;
+  h.view.dispatch({ changes: { from: end, to: end, insert: ' Later change.' } });
+  h.sources.set(MAIN, 'Native change. Later change.');
+  h.server('otUpdateApplied', { doc: MAIN, v: 2 }); h.trigger('doc:saved', { id: MAIN });
+  release(); await h.settle();
+  assert.deepEqual(ofType(h, 'ack'), [{ event: 'ack', epoch: 7, id: MAIN, request: 43, source: 'Native change. Later change.' }]);
+  assert.ok(ofType(h, 'document').every(value => value.source === 'Native change. Later change.'));
+  const requests = h.requests.length;
+  await h.settle(); assert.equal(h.requests.length, requests, 'confirmation has no idle retry loop');
+});
+
+test('failed save confirmation retains the request and never certifies optimistic text', async () => {
+  let fail = false;
+  const h = harness({ async fetch(url, _init, sources) {
+    const entity = url.match(/\/(?:doc|file)\/([a-f0-9]{24})/)[1];
+    return fail && entity === MAIN ? new Response('', { status: 503 }) : new Response(sources.get(entity));
+  } });
+  h.project(); await h.settle(); h.messages.length = 0;
+  h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Retained draft.', request: 44 });
+  h.sources.set(MAIN, 'Retained draft.'); fail = true;
+  h.server('otUpdateApplied', { doc: MAIN, v: 1 }); h.trigger('doc:saved', { id: MAIN });
+  await h.settle();
+  assert.equal(ofType(h, 'ack').length, 0);
+  assert.ok(ofType(h, 'error').some(value => /download/.test(value.message)));
+  const requests = h.requests.length;
+  await h.settle(); assert.equal(h.requests.length, requests, 'failed confirmation does not spin');
+  h.command({ command: 'edit', id: MAIN, base: 'Retained draft.', source: 'Another draft.', request: 45 });
+  await h.settle();
+  assert.equal(h.dispatches.length, 1, 'the uncertain request cannot be replaced');
+  assert.equal(ofType(h, 'ack').length, 0);
+  assert.equal(h.requests.length, requests + 1, 'an explicit rejected edit may request one fresh server read');
+  await h.settle(); assert.equal(h.requests.length, requests + 1, 'there is no idle retry');
+});
+
+
+test('project hydration waits for verified editor capabilities, then starts once a delayed view exists', async () => {
+  const h = harness({ noView: true }); h.project(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(!ofType(h, 'status').some(value => value.state === 'connected'));
+  h.set('editor.view', h.view); await h.settle();
+  assert.equal(ofType(h, 'project').length, 1);
+  assert.equal(ofType(h, 'document').length, 2);
+  assert.equal(ofType(h, 'file').length, 1);
+  assert.equal([...h.timers.values()].filter(timer => timer.delay === 250).length, 0);
+});
+
+test('a missing store disposer fails compatibility before native readiness and cleanup remains safe', async () => {
+  const h = harness({ unwatch: 'missing' }); h.project(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(ofType(h, 'status').some(value => value.state === 'error' && /watch|subscription/i.test(value.message)));
+  assert.doesNotThrow(() => h.command({ command: 'disconnect' }));
+  const messages = h.messages.length;
+  h.project(); h.set('editor.open_doc_id', OTHER); await h.settle();
+  assert.equal(h.messages.length, messages, 'invalid unsubscribers cannot revive a disconnected bridge');
+  assert.equal([...h.socketEvents.values()].reduce((sum, handlers) => sum + handlers.size, 0), 0);
+});
+
+test('throwing disposers cannot interrupt idempotent teardown or keep callbacks live', async () => {
+  const h = harness({ unwatch: 'throws' }); h.project(); await h.settle();
+  const stale = [...h.socketEvents.get('joinProjectResponse')];
+  h.command({ command: 'disconnect' }); h.command({ command: 'disconnect' });
+  const messages = h.messages.length;
+  for (const handler of stale) handler({ project: h.tree, permissionsLevel: 'owner' });
+  h.set('editor.view', h.view); h.set('editor.open_doc_id', OTHER); await h.settle();
+  assert.equal(h.messages.length, messages);
+  assert.equal(h.timers.size, 0);
+  assert.equal([...h.socketEvents.values()].reduce((sum, handlers) => sum + handlers.size, 0), 0);
+  assert.equal([...h.events.values()].reduce((sum, handlers) => sum + handlers.size, 0), 0);
+});
+
+test('partially installed store subscriptions fail closed without breaking hosted bootstrap', async () => {
+  let h;
+  assert.doesNotThrow(() => { h = harness({ watchThrows: 'editor.open_doc_id' }); });
+  h.project(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(ofType(h, 'status').some(value => value.state === 'error' && /watch|subscription/i.test(value.message)));
+  assert.equal([...h.watches.values()].reduce((sum, handlers) => sum + handlers.size, 0), 0);
+});
+
+test('noninterceptable editor methods fail compatibility without throwing through the hosted frontend', async () => {
+  let h;
+  assert.doesNotThrow(() => { h = harness({ freezeView: true }); });
+  h.project(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(ofType(h, 'status').some(value => value.state === 'error' && /setState|editor/i.test(value.message)));
+  assert.doesNotThrow(() => h.view.setState({ doc: { toString: () => 'Hosted editor still works.' } }));
+  assert.equal(h.view.state.doc.toString(), 'Hosted editor still works.');
+});
+
+test('class Socket.IO Managers preserve construction, subclassing, prototype and static semantics', () => {
+  const h = harness();
+  const handlers = new Map();
+  const fresh = { on(event, handler) { handlers.set(event, handler); }, removeListener() {}, emit() {}, disconnect() {} };
+  class Manager {
+    static api = 'supported';
+    constructor(host) { this.host = host; }
+    socket() { return fresh; }
+  }
+  h.window.io = {};
+  h.window.io.Manager = Manager;
+  const wrapped = h.window.io.Manager;
+  const instance = new wrapped('overleaf.example');
+  assert.ok(instance instanceof Manager);
+  assert.ok(instance instanceof wrapped);
+  assert.equal(instance.host, 'overleaf.example');
+  assert.equal(wrapped.api, 'supported');
+  class Derived extends wrapped {}
+  const derived = new Derived('derived.example');
+  assert.ok(derived instanceof Derived);
+  assert.ok(derived instanceof Manager);
+  assert.equal(derived.socket(), fresh);
+  assert.equal(typeof handlers.get('joinProjectResponse'), 'function');
+});
+
+test('replaced sockets leave retained callbacks inert and old emitters cannot dirty the new session', async () => {
+  const h = harness(); h.project(); await h.settle();
+  const staleHandlers = [...h.socketEvents.get('joinProjectResponse')];
+  const staleEmit = h.socket.emit;
+  const callbacks = new Map();
+  const fresh = { publicId: 'new-session', on(event, handler) { callbacks.set(event, handler); }, removeListener() {}, emit() {}, disconnect() {} };
+  h.window.io = { connect() { return fresh; } }; h.window.io.connect();
+  callbacks.get('joinProjectResponse')({ project: h.tree, permissionsLevel: 'owner' });
+  await h.settle(); h.messages.length = 0;
+  const wrong = structuredClone(h.tree); wrong.name = 'Obsolete socket';
+  for (const handler of staleHandlers) handler({ project: wrong, permissionsLevel: 'owner' });
+  staleEmit.call(h.socket, 'applyOtUpdate', MAIN, {});
+  await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Main source.', request: 71 });
+  await h.settle();
+  assert.equal(ofType(h, 'conflict').length, 0);
+  assert.equal(ofType(h, 'ack').at(-1)?.request, 71);
+});
+
+for (const watchMode of ['async', 'coalesced']) {
+  for (const order of [
+    ['id', 'state', 'opened'], ['id', 'opened', 'state'],
+    ['state', 'id', 'opened'], ['state', 'opened', 'id'],
+    ['opened', 'id', 'state'], ['opened', 'state', 'id'],
+  ]) {
+    test(`${watchMode} store watches finish document activation for ${order.join(' / ')}`, async () => {
+      const h = harness({ watchMode }); h.project(); await h.settle(); h.messages.length = 0;
+      h.nodes.set(FOLDER, { getAttribute() { return 'true'; }, click() {} });
+      h.nodes.set(OTHER, { click() {
+        for (const action of order) {
+          if (action === 'id') h.set('editor.open_doc_id', OTHER);
+          if (action === 'state') h.view.setState({ doc: { toString: () => 'Other source.' } });
+          if (action === 'opened') h.trigger('doc:after-opened', { docId: OTHER });
+        }
+      } });
+      h.command({ command: 'open', id: OTHER, path: 'sections/intro.tex' });
+      h.flush(); await h.settle();
+      assert.ok(ofType(h, 'document').some(value => value.id === OTHER && value.source === 'Other source.'));
+      assert.equal([...h.timers.values()].filter(timer => timer.delay === 15000).length, 0);
+      assert.equal(ofType(h, 'error').length, 0);
+    });
+  }
+}
+
+
+test('a replacement view carrying the previous document state cannot finish a parked edit', async () => {
+  const h = harness({ watchMode: 'coalesced' }); h.project(); await h.settle(); h.messages.length = 0;
+  const nextView = { state: h.view.state, dispatch: h.view.dispatch, setState(state) { this.state = state; } };
+  h.nodes.set(FOLDER, { getAttribute() { return 'true'; }, click() {} });
+  h.nodes.set(OTHER, { click() {
+    h.set('editor.open_doc_id', OTHER);
+    h.set('editor.view', nextView);
+    h.trigger('doc:after-opened', { docId: OTHER });
+  } });
+  h.command({ command: 'edit', id: OTHER, base: 'Other source.', source: 'Native parked edit.', request: 72 });
+  h.flush(); await h.settle();
+  assert.equal(h.dispatches.length, 0);
+  assert.equal(ofType(h, 'conflict').length, 0, 'the old state is not the target document and cannot veto its edit');
+  assert.equal([...h.timers.values()].filter(timer => timer.delay === 15000).length, 1);
+  nextView.setState({ doc: { toString: () => 'Other source.' } });
+  await h.settle();
+  assert.equal(h.dispatches.length, 1);
+  assert.equal(nextView.state.doc.toString(), 'Native parked edit.');
+});
+
+function permutations(values) {
+  return values.length ? values.flatMap((value, index) =>
+    permutations(values.filter((_, other) => other !== index)).map(tail => [value, ...tail])) : [[]];
+}
+for (const watchMode of ['async', 'coalesced']) {
+  for (const order of permutations(['id', 'view', 'state', 'opened'])) {
+    test(`${watchMode} replacement view activation settles for ${order.join(' / ')}`, async () => {
+      const h = harness({ watchMode }); h.project(); await h.settle(); h.messages.length = 0;
+      const nextView = { state: h.view.state, dispatch: h.view.dispatch, setState(state) { this.state = state; } };
+      h.nodes.set(FOLDER, { getAttribute() { return 'true'; }, click() {} });
+      h.nodes.set(OTHER, { click() {
+        for (const action of order) {
+          if (action === 'id') h.set('editor.open_doc_id', OTHER);
+          if (action === 'view') h.set('editor.view', nextView);
+          if (action === 'state') nextView.setState({ doc: { toString: () => 'Other source.' } });
+          if (action === 'opened') h.trigger('doc:after-opened', { docId: OTHER });
+        }
+      } });
+      h.command({ command: 'open', id: OTHER, path: 'sections/intro.tex' });
+      h.flush(); await h.settle();
+      assert.ok(ofType(h, 'document').some(value => value.id === OTHER && value.source === 'Other source.'));
+      assert.equal([...h.timers.values()].filter(timer => timer.delay === 15000).length, 0);
+      assert.equal(ofType(h, 'error').length, 0);
+      assert.equal(ofType(h, 'conflict').length, 0);
+    });
+  }
+}
+
+test('disconnect cancels deferred opened-event callbacks before they can observe another view', async () => {
+  const h = harness(); h.project(); await h.settle();
+  h.nodes.set(FOLDER, { getAttribute() { return 'true'; }, click() {} });
+  h.nodes.set(OTHER, { click() {} });
+  h.command({ command: 'open', id: OTHER, path: 'sections/intro.tex' });
+  h.trigger('doc:after-opened', { docId: OTHER });
+  h.command({ command: 'disconnect' });
+  assert.equal(h.timers.size, 0);
+  const messages = h.messages.length;
+  await h.settle();
+  assert.equal(h.messages.length, messages);
+});
+
+test('a synchronous project callback cannot publish readiness before socket instrumentation is verified', async () => {
+  const h = harness(); h.messages.length = 0;
+  let originalEmits = 0;
+  const fresh = { on(event, handler) {
+    if (event === 'joinProjectResponse') handler({ project: h.tree, permissionsLevel: 'owner' });
+  }, removeListener() {}, disconnect() {} };
+  Object.defineProperty(fresh, 'emit', { value() { originalEmits++; }, writable: false, configurable: false });
+  h.window.io = { connect() { return fresh; } };
+  assert.equal(h.window.io.connect(), fresh);
+  await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(ofType(h, 'status').some(value => value.state === 'error' && /socket/i.test(value.message)));
+  fresh.emit('frontend:still-works');
+  assert.equal(originalEmits, 1);
+});
+
+
+test('the startup watchdog also bounds a missing collaboration bootstrap after the store is ready', () => {
+  const h = harness({ noSocket: true });
+  h.flush(250);
+  assert.ok(ofType(h, 'status').some(value => value.state === 'error' && /not ready/i.test(value.message)));
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.timers.size, 0);
+});
+
+test('tree events cannot publish a native project before editor capability readiness', async () => {
+  const h = harness({ noView: true }); h.project(); await h.settle();
+  h.server('reciveEntityRename', FOLDER, 'renamed');
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  h.set('editor.view', h.view); await h.settle();
+  assert.equal(ofType(h, 'project').length, 1);
+  assert.ok(ofType(h, 'project')[0].entries.some(value => value.path === 'renamed/intro.tex'));
+  assert.equal(ofType(h, 'document').length, 2);
+});
+
+test('a selection-only transaction on the previous document cannot certify an opened document', async () => {
+  const h = harness({ watchMode: 'coalesced' }); h.project(); await h.settle(); h.messages.length = 0;
+  h.nodes.set(FOLDER, { getAttribute() { return 'true'; }, click() {} });
+  h.nodes.set(OTHER, { click() {
+    h.set('editor.open_doc_id', OTHER);
+    h.view.state = { ...h.view.state, selection: { main: { anchor: 1, head: 1 } } };
+    h.trigger('doc:after-opened', { docId: OTHER });
+  } });
+  h.command({ command: 'edit', id: OTHER, base: 'Other source.', source: 'Native parked edit.', request: 73 });
+  h.flush(); await h.settle();
+  assert.equal(h.dispatches.length, 0);
+  assert.equal(ofType(h, 'conflict').length, 0);
+  assert.equal([...h.timers.values()].filter(timer => timer.delay === 15000).length, 1);
+  h.view.setState({ doc: { toString: () => 'Other source.' } });
+  await h.settle();
+  assert.equal(h.dispatches.length, 1);
+  assert.equal(h.view.state.doc.toString(), 'Native parked edit.');
+});
+
+test('an observed full setState certifies identical empty documents even before the ID notification', async () => {
+  const h = harness({ watchMode: 'coalesced' });
+  const emptyText = { toString: () => '' };
+  h.view.state = { doc: emptyText };
+  h.sources.set(MAIN, ''); h.sources.set(OTHER, '');
+  h.project(); await h.settle(); h.messages.length = 0;
+  h.nodes.set(FOLDER, { getAttribute() { return 'true'; }, click() {} });
+  h.nodes.set(OTHER, { click() {
+    h.view.setState({ doc: emptyText });
+    h.trigger('doc:after-opened', { docId: OTHER });
+    h.set('editor.open_doc_id', OTHER);
+  } });
+  h.command({ command: 'edit', id: OTHER, base: '', source: 'A formerly empty file.', request: 74 });
+  h.flush(); await h.settle();
+  assert.equal(h.dispatches.length, 1);
+  assert.equal(ofType(h, 'conflict').length, 0);
+  assert.equal(h.view.state.doc.toString(), 'A formerly empty file.');
+});
+
+test('a normal save performs exactly one authoritative confirmation download with no idle requests', async () => {
+  const h = harness(); h.project(); await h.settle();
+  const before = h.requests.length;
+  h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Confirmed source.', request: 75 });
+  h.sources.set(MAIN, 'Confirmed source.');
+  h.server('otUpdateApplied', { doc: MAIN, v: 1 }); h.trigger('doc:saved', { id: MAIN });
+  await h.settle();
+  const requests = h.requests.slice(before);
+  assert.equal(requests.length, 1);
+  assert.ok(requests[0].url.endsWith('/doc/' + MAIN + '/download'));
+  assert.equal(ofType(h, 'ack').at(-1)?.request, 75);
+  await h.settle(); h.flush(100); await h.settle();
+  assert.equal(h.requests.length, before + 1);
+});
+
+for (const type of ['text/html; charset=utf-8', 'application/json']) {
+  test('successful ' + type + ' response cannot become authoritative source or a save ACK', async () => {
+    let wrong = false;
+    const h = harness({ async fetch(url, _init, sources) {
+      const entity = url.match(/\/(?:doc|file)\/([a-f0-9]{24})/)[1];
+      return wrong && entity === MAIN
+        ? new Response('<html>Sign in or reload the project</html>', { headers: { 'Content-Type': type } })
+        : new Response(sources.get(entity));
+    } });
+    h.project(); await h.settle(); h.messages.length = 0;
+    wrong = true;
+    h.command({ command: 'edit', id: MAIN, base: 'Main source.', source: 'Main source.', request: 46 });
+    await h.settle();
+    assert.equal(ofType(h, 'ack').length, 0);
+    assert.equal(ofType(h, 'document').length, 0);
+    assert.ok(ofType(h, 'error').some(value => /plain text/.test(value.message)));
+  });
+}
+
+test('an asset-only project hydrates and downloads without ever creating a source editor', async () => {
+  const h = harness({ noView: true });
+  h.set('editor.open_doc_id', null);
+  h.tree.rootDoc_id = null; h.tree.rootFolder[0].docs = []; h.tree.rootFolder[0].folders = [];
+  h.project(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 1);
+  assert.equal(ofType(h, 'document').length, 0);
+  assert.equal(ofType(h, 'file').length, 1);
+  assert.equal(ofType(h, 'file')[0].base64, 'AP9A');
+  assert.equal(h.dispatches.length, 0);
+  const before = h.requests.length;
+  h.command({ command: 'open', id: ASSET, path: 'figure.png' }); await h.settle();
+  h.command({ command: 'download', id: ASSET, path: 'figure.png' }); await h.settle();
+  assert.equal(h.requests.length, before + 2);
+  assert.equal(ofType(h, 'file').length, 3);
+  assert.equal(ofType(h, 'error').length, 0);
+  assert.equal(h.timers.size, 0, 'asset-only projects do not retain the editor watchdog');
+});
+
+for (const rootDoc of [MAIN, null]) {
+  test(`a project starting on an asset bootstraps its ${rootDoc ? 'root' : 'first'} source document once`, async () => {
+    const h = harness({ noView: true, watchMode: 'coalesced' });
+    h.set('editor.open_doc_id', null); h.tree.rootDoc_id = rootDoc;
+    let clicks = 0;
+    h.nodes.set(MAIN, { click() {
+      clicks++;
+      h.set('editor.view', h.view);
+      h.view.setState({ doc: { toString: () => 'Main source.' } });
+      h.set('editor.open_doc_id', MAIN);
+      h.trigger('doc:after-opened', { docId: MAIN });
+    } });
+    h.project(); await h.settle(); await h.settle();
+    assert.equal(clicks, 1);
+    assert.equal(ofType(h, 'project').length, 1);
+    assert.equal(ofType(h, 'document').length, 2);
+    assert.equal(ofType(h, 'file').length, 1);
+    assert.equal(h.dispatches.length, 0);
+    assert.equal(ofType(h, 'error').length, 0);
+    const requests = h.requests.length;
+    await h.settle(); h.flush(250); await h.settle();
+    assert.equal(clicks, 1);
+    assert.equal(h.requests.length, requests);
+    assert.equal(h.timers.size, 0);
+  });
+}
+
+test('bootstrap readiness waits for the real opened event after installing the source view', async () => {
+  const h = harness({ noView: true, watchMode: 'async' });
+  h.set('editor.open_doc_id', null);
+  h.nodes.set(MAIN, { click() {
+    h.set('editor.view', h.view);
+    h.set('editor.open_doc_id', MAIN);
+    h.view.setState({ doc: { toString: () => 'Main source.' } });
+  } });
+  h.project(); await h.settle(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(!ofType(h, 'status').some(value => value.state === 'connected'));
+  h.trigger('doc:after-opened', { docId: MAIN }); await h.settle(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 1);
+  assert.equal(ofType(h, 'document').length, 2);
+});
+
+test('a source view mounting naturally next tick avoids any bootstrap click or navigation', async () => {
+  const h = harness({ noView: true }); h.set('editor.open_doc_id', null);
+  let clicks = 0;
+  h.nodes.set(MAIN, { click() { clicks++; } });
+  h.project();
+  // React/store microtasks run before the deferred automatic Open.
+  h.set('editor.view', h.view); h.set('editor.open_doc_id', MAIN);
+  await h.settle();
+  assert.equal(ofType(h, 'project').length, 1);
+  assert.equal(clicks, 0);
+  assert.equal(h.window.navigated, undefined);
+  assert.equal(h.timers.size, 0);
+});
+
+test('a lazy editor with an unmounted file tree finishes loading without bootstrap navigation', async () => {
+  const h = harness({ noView: true, watchMode: 'coalesced' });
+  h.set('editor.open_doc_id', null);
+  h.project(); await h.settle();
+  // The project socket/store can be ready before asynchronously loaded editor
+  // chunks. Review hides the file tree, and Overleaf consumes ?doc immediately;
+  // reloading here cancels those chunks and starts the same bootstrap again.
+  for (let turn = 0; turn < 4; turn++) { h.flush(250); await h.settle(); }
+  assert.equal(h.window.navigated, undefined, 'startup must not cancel lazy editor asset loads');
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  h.set('editor.view', h.view); h.set('editor.open_doc_id', MAIN);
+  h.trigger('doc:after-opened', { docId: MAIN });
+  await h.settle(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 1);
+  assert.equal(ofType(h, 'document').length, 2);
+  assert.equal(ofType(h, 'error').length, 0);
+  assert.equal(h.window.navigated, undefined);
+  assert.equal(h.timers.size, 0, 'successful mounting retires the startup watchdog');
+});
+
+test('a failed bootstrap is bounded and never retries a file click in idle frames', async () => {
+  const h = harness({ noView: true }); h.set('editor.open_doc_id', null);
+  let clicks = 0; h.nodes.set(MAIN, { click() { clicks++; } });
+  h.project(); await h.settle();
+  assert.equal(clicks, 1);
+  for (let turn = 0; turn < 3; turn++) { h.flush(30000); await h.settle(); }
+  assert.equal(clicks, 1);
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(ofType(h, 'status').some(value => value.state === 'error' && /not ready/i.test(value.message)));
+  assert.equal(h.timers.size, 0);
+});
+
+test('bootstrap does not reload an existing official document deep link again', async () => {
+  const h = harness({ noView: true }); h.set('editor.open_doc_id', null);
+  h.window.location.href += '?doc=' + MAIN;
+  h.project(); await h.settle();
+  assert.equal(h.window.navigated, undefined);
+  h.flush(30000); await h.settle();
+  assert.equal(h.window.navigated, undefined);
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.timers.size, 0);
+});
+
+test('initial bootstrap can receive ID and opened before any source view exists', async () => {
+  const h = harness({ noView: true, watchMode: 'coalesced' });
+  h.set('editor.open_doc_id', null);
+  h.nodes.set(MAIN, { click() {
+    h.set('editor.open_doc_id', MAIN);
+    h.trigger('doc:after-opened', { docId: MAIN });
+  } });
+  h.project(); await h.settle(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 0);
+  assert.equal(h.requests.length, 0);
+  assert.ok(!ofType(h, 'status').some(value => value.state === 'error'), 'an absent lazy view is not an unsupported interface');
+  h.set('editor.view', h.view);
+  h.view.setState({ doc: { toString: () => 'Main source.' } });
+  await h.settle(); await h.settle();
+  assert.equal(ofType(h, 'project').length, 1);
+  assert.equal(ofType(h, 'document').length, 2);
+  assert.equal(ofType(h, 'error').length, 0);
+  assert.equal(h.timers.size, 0);
+});
+
+
+// HTTP routes and schemas mirror Overleaf's EditorRouter/sync-mutation at
+// e039ad26c5bf5422eb57b89fc7e57c75055e631d. Never use upload (it overwrites names).
+const fileCommand = (h, request, action, extra = {}) => h.command({ command: 'fileaction', request, action, ...extra });
+test('file actions expose write capability separately from reviewer text access', async () => {
+  for (const permission of ['owner', 'readAndWrite', 'review', 'readOnly']) {
+    const h = harness(); h.project(permission); await h.settle();
+    assert.equal(ofType(h, 'fileaccess').at(-1).writable, ['owner', 'readAndWrite'].includes(permission));
+    fileCommand(h, 1, 'createfile', { parent: '', name: 'new.tex' }); await h.settle();
+    assert.equal(h.mutations.length, ['owner', 'readAndWrite'].includes(permission) ? 1 : 0);
+    if (permission === 'review' || permission === 'readOnly') assert.match(ofType(h, 'fileaction').at(-1).error, /does not allow/);
+  }
+});
+test('file actions create nested documents and folders through authenticated JSON routes', async () => {
+  const h = harness(); h.project(); await h.settle();
+  fileCommand(h, 1, 'createfile', { parent: 'sections', name: 'new.tex' }); await h.settle();
+  const created = ofType(h, 'fileaction').at(-1);
+  assert.equal(created.request, 1); assert.equal(created.path, 'sections/new.tex'); assert.equal(created.error, undefined);
+  assert.deepEqual(JSON.parse(h.mutations[0].init.body), { parent_folder_id: FOLDER, name: 'new.tex' });
+  assert.equal(h.mutations[0].url, '/project/' + PID + '/doc');
+  assert.equal(h.mutations[0].init.headers['X-Csrf-Token'], 'test-csrf-token');
+  assert.equal(h.mutations[0].init.credentials, 'same-origin'); assert.equal(h.mutations[0].init.redirect, 'error');
+  h.server('reciveNewDoc', FOLDER, { _id: created.id, name: 'new.tex' }); await h.settle();
+  assert.equal(ofType(h, 'status').some(m => m.state === 'error'), false, 'HTTP/socket create receipts are idempotent');
+  fileCommand(h, 2, 'createfolder', { parent: '', name: 'appendix' }); await h.settle();
+  assert.equal(h.mutations[1].url, '/project/' + PID + '/folder');
+  assert.deepEqual(JSON.parse(h.mutations[1].init.body), { parent_folder_id: ROOT, name: 'appendix' });
+  assert.ok(ofType(h, 'project').at(-1).entries.some(e => e.path === 'appendix' && e.kind === 'folder'));
+});
+test('file actions rename move and delete server IDs without local optimistic changes', async () => {
+  let release;
+  const h = harness({ mutate: () => new Promise(resolve => { release = () => resolve({ ok: true, status: 204, headers: { get() { return null; } } }); }) });
+  h.project(); await h.settle();
+  fileCommand(h, 1, 'rename', { id: OTHER, path: 'sections/intro.tex', name: 'changed.tex' }); await h.settle();
+  assert.ok(ofType(h, 'project').at(-1).entries.some(e => e.path === 'sections/intro.tex'));
+  assert.equal(ofType(h, 'fileaction').length, 0, 'no success before server receipt');
+  release(); await h.settle();
+  assert.equal(ofType(h, 'fileaction').at(-1).path, 'sections/changed.tex');
+  assert.equal(h.mutations[0].url, '/project/' + PID + '/doc/' + OTHER + '/rename');
+  fileCommand(h, 2, 'move', { id: OTHER, path: 'sections/changed.tex', parent: '' }); await h.settle(); release(); await h.settle();
+  assert.equal(ofType(h, 'fileaction').at(-1).path, 'changed.tex');
+  assert.deepEqual(JSON.parse(h.mutations[1].init.body), { folder_id: ROOT });
+  fileCommand(h, 3, 'delete', { id: FOLDER, path: 'sections' }); await h.settle(); release(); await h.settle();
+  assert.equal(h.mutations[2].init.method, 'DELETE');
+  assert.ok(!ofType(h, 'project').at(-1).entries.some(e => e.id === FOLDER));
+});
+test('file actions reject stale paths unsafe names collisions missing CSRF and cyclic moves', async () => {
+  for (const command of [
+    { action: 'rename', id: MAIN, path: 'stale.tex', name: 'new.tex' },
+    { action: 'createfile', parent: '', name: '../escape.tex' },
+    { action: 'createfile', parent: '', name: '.tiptoptyp' },
+    { action: 'createfile', parent: '', name: 'Main.TeX' },
+    { action: 'createfile', parent: '', name: ' bad.tex' },
+    { action: 'createfile', parent: '', name: 'constructor' },
+    { action: 'createfile', parent: 'missing', name: 'new.tex' },
+    { action: 'move', id: FOLDER, path: 'sections', parent: 'sections' },
+    { action: 'duplicate', id: ASSET, path: 'figure.png', name: 'copy.png' },
+  ]) {
+    const h = harness(); h.project(); await h.settle();
+    fileCommand(h, 1, command.action, command); await h.settle();
+    assert.equal(h.mutations.length, 0, JSON.stringify(command)); assert.ok(ofType(h, 'fileaction').at(-1).error);
+  }
+  const h = harness({ noCsrf: true }); h.project(); await h.settle();
+  fileCommand(h, 1, 'createfile', { parent: '', name: 'new.tex' }); await h.settle();
+  assert.equal(h.mutations.length, 0); assert.match(ofType(h, 'fileaction').at(-1).error, /security token/);
+});
+test('file actions reject HTML sign-in responses and serialize mutation requests', async () => {
+  let release;
+  const h = harness({ mutate: () => new Promise(resolve => { release = () => resolve({ ok: true, status: 200, headers: { get() { return 'text/html'; } } }); }) });
+  h.project(); await h.settle();
+  fileCommand(h, 1, 'rename', { id: MAIN, path: 'main.tex', name: 'new.tex' }); await h.settle();
+  fileCommand(h, 2, 'delete', { id: MAIN, path: 'main.tex' }); await h.settle();
+  assert.equal(h.mutations.length, 1); assert.equal(ofType(h, 'fileaction').at(-1).request, 2);
+  release(); await h.settle();
+  assert.match(ofType(h, 'fileaction').at(-1).error, /unexpected/);
+  assert.ok(ofType(h, 'project').at(-1).entries.some(e => e.path === 'main.tex'));
+});
+test('file actions duplicate a document by new ID and confirmed OT never the overwrite upload route', async () => {
+  const h = harness(); h.project(); await h.settle();
+  fileCommand(h, 1, 'duplicate', { id: MAIN, path: 'main.tex', name: 'main copy.tex' });
+  await h.settle();
+  const entry = ofType(h, 'project').at(-1).entries.find(e => e.path === 'main copy.tex');
+  assert.ok(entry); assert.notEqual(entry.id, MAIN);
+  assert.equal(ofType(h, 'fileaction').length, 0, 'creating an empty doc is not successful duplication');
+  h.nodes.set(entry.id, { click() { h.set('editor.open_doc_id', entry.id); h.view.setState({ doc: { toString: () => '' } }); h.trigger('doc:after-opened', { docId: entry.id }); } });
+  h.flush(50); await h.settle();
+  assert.equal(h.dispatches.length, 1); assert.equal(h.view.state.doc.toString(), 'Main source.');
+  assert.equal(ofType(h, 'fileaction').length, 0, 'dispatch is not server confirmation');
+  h.sources.set(entry.id, 'Main source.'); h.server('otUpdateApplied', { doc: entry.id, v: 1 }); h.trigger('doc:saved', { id: entry.id }); await h.settle();
+  assert.equal(ofType(h, 'fileaction').at(-1).path, 'main copy.tex');
+  assert.equal(ofType(h, 'ack').length, 0, 'internal copy must not impersonate a native SaveRequest');
+  assert.ok(!h.requests.some(r => /upload/i.test(r.url))); assert.equal(h.mutations.length, 1);
+  assert.equal(h.sources.get(MAIN), 'Main source.');
+});
+test('file actions ignore stopped and timed-out HTTP completions without retrying mutations', async () => {
+  for (const stop of [false, true]) {
+    let release;
+    const h = harness({ mutate: () => new Promise(resolve => { release = () => resolve({ ok: true, status: 204, headers: { get() { return null; } } }); }) });
+    h.project(); await h.settle();
+    fileCommand(h, 1, 'delete', { id: MAIN, path: 'main.tex' }); await h.settle();
+    if (stop) h.command({ command: 'disconnect' }); else h.flush(45000);
+    const count = h.messages.length;
+    release(); await h.settle();
+    assert.equal(h.messages.length, count); assert.equal(h.mutations.length, 1);
+    if (!stop) assert.match(ofType(h, 'fileaction').at(-1).error, /not confirmed/);
+  }
+});
+test('file actions cannot apply a JSON create receipt from a disconnected socket generation', async () => {
+  let release;
+  const h = harness({ mutate: async () => ({ ok: true, status: 200, headers: { get(name) { return name.toLowerCase() === 'content-type' ? 'application/json' : '0'; } }, body: { getReader() { let done = false; return { async read() { if (done) return { done: true }; done = true; return new Promise(resolve => { release = () => resolve({ done: false, value: new TextEncoder().encode(JSON.stringify({ _id: id('1'), name: 'new.tex' })) }); }); }, async cancel() {} }; } } }) });
+  h.project(); await h.settle();
+  fileCommand(h, 1, 'createfile', { parent: '', name: 'new.tex' }); await h.settle();
+  h.server('disconnect');
+  const count = h.messages.length;
+  release(); await h.settle();
+  assert.equal(h.messages.length, count); assert.equal(h.mutations.length, 1);
+  assert.match(ofType(h, 'fileaction').at(-1).error, /connection changed/);
+  assert.ok(!ofType(h, 'project').at(-1).entries.some(e => e.path === 'new.tex'));
+});
+test('file actions reject official boundary lengths and control characters before sending requests', async () => {
+  for (const name of ['a'.repeat(150), 'new\nfile.tex', 'new\tfile.tex']) {
+    const h = harness(); h.project(); await h.settle();
+    fileCommand(h, 1, 'createfile', { parent: '', name }); await h.settle();
+    assert.equal(h.mutations.length, 0); assert.match(ofType(h, 'fileaction').at(-1).error, /file name/);
+  }
+});
+
+function deepFileTree(depth, folderName = index => 'level' + index, withDocument = true) {
+  const root = { _id: ROOT, name: '', docs: [], fileRefs: [], folders: [] };
+  let folder = root; const paths = [];
+  for (let index = 1; index <= depth; index++) {
+    const child = { _id: (index + 100).toString(16).padStart(24, '0'), name: folderName(index), docs: [], fileRefs: [], folders: [] };
+    paths.push(child.name); folder.folders.push(child); folder = child;
+  }
+  if (withDocument) folder.docs.push({ _id: MAIN, name: 'main.tex' });
+  return { tree: { _id: PID, name: 'Deep paper', rootDoc_id: withDocument ? MAIN : null, rootFolder: [root] }, path: paths.join('/'), deepest: folder._id };
+}
+test('file actions bound resulting UTF-8 path lengths and initial tree depth before writing', async () => {
+  for (const [depth, name, action, allowed] of [[64, 'new.tex', 'createfile', true], [64, 'nested', 'createfolder', false], [63, 'nested', 'createfolder', true]]) {
+    const fixture = deepFileTree(depth);
+    const h = harness(); h.project('owner', fixture.tree); await h.settle();
+    fileCommand(h, 1, action, { parent: fixture.path, name }); await h.settle();
+    assert.equal(h.mutations.length, allowed ? 1 : 0, `${action} at ${depth}`);
+    if (!allowed) assert.match(ofType(h, 'fileaction').at(-1).error, /too long or too deeply/);
+  }
+  // 30×(44 multibyte characters + '/') fits; adding 148 ASCII chars does not.
+  const fixture = deepFileTree(30, () => '章'.repeat(44));
+  const h = harness(); h.project('owner', fixture.tree); await h.settle();
+  fileCommand(h, 1, 'createfile', { parent: fixture.path, name: 'a'.repeat(148) }); await h.settle();
+  assert.equal(h.mutations.length, 0); assert.match(ofType(h, 'fileaction').at(-1).error, /too long or too deeply/);
+});
+test('file actions preflight every descendant when moving or renaming a folder', async () => {
+  const nested = deepFileTree(64);
+  const extraId = id('3');
+  nested.tree.rootFolder[0].folders.push({ _id: extraId, name: 'container', docs: [], fileRefs: [], folders: [] });
+  const h = harness(); h.project('owner', nested.tree); await h.settle();
+  const first = nested.tree.rootFolder[0].folders[0];
+  fileCommand(h, 1, 'move', { id: first._id, path: first.name, parent: 'container' }); await h.settle();
+  assert.equal(h.mutations.length, 0, 'moving a shallow folder must check its deepest descendant');
+  assert.match(ofType(h, 'fileaction').at(-1).error, /too long or too deeply/);
+  const long = deepFileTree(30, index => index === 1 ? 'x' : '章'.repeat(45));
+  const renamed = harness(); renamed.project('owner', long.tree); await renamed.settle();
+  const parent = long.tree.rootFolder[0].folders[0];
+  fileCommand(renamed, 1, 'rename', { id: parent._id, path: parent.name, name: 'a'.repeat(148) }); await renamed.settle();
+  assert.equal(renamed.mutations.length, 0, 'a valid new folder name must not overflow a descendant path');
+  assert.match(ofType(renamed, 'fileaction').at(-1).error, /too long or too deeply/);
+});
+function fileJSONResponse(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value)); let read = false;
+  return { ok: true, status: 200, headers: { get(name) { return name.toLowerCase() === 'content-type' ? 'application/json' : String(bytes.length); } }, body: { getReader() { return { async read() { if (read) return { done: true }; read = true; return { done: false, value: bytes }; }, async cancel() {} }; } } };
+}
+test('file actions reject explicit negative JSON envelopes without certifying changes', async () => {
+  for (const value of [{ success: false }, { error: 'failed' }, { error: null, success: true }]) {
+    for (const action of ['rename', 'move', 'delete']) {
+      const h = harness({ mutate: () => fileJSONResponse(value) }); h.project(); await h.settle();
+      fileCommand(h, 1, action, { id: MAIN, path: 'main.tex', name: 'renamed.tex', parent: 'sections' }); await h.settle();
+      assert.match(ofType(h, 'fileaction').at(-1).error, /rejected/);
+      assert.ok(ofType(h, 'project').at(-1).entries.some(e => e.id === MAIN && e.path === 'main.tex'));
+      assert.equal(ofType(h, 'fileaccess').at(-1).writable, true, 'definite rejection does not pretend permission was lost');
+    }
+  }
+});
+test('file actions require fresh server hydration before retrying an unknown mutation outcome', async () => {
+  let release;
+  const h = harness({ mutate: () => new Promise(resolve => { release = () => resolve({ ok: true, status: 204, headers: { get() { return null; } } }); }) });
+  h.project(); await h.settle();
+  fileCommand(h, 1, 'delete', { id: MAIN, path: 'main.tex' }); await h.settle(); h.flush(45000);
+  assert.equal(ofType(h, 'fileaccess').at(-1).writable, false);
+  fileCommand(h, 2, 'delete', { id: MAIN, path: 'main.tex' }); await h.settle();
+  assert.equal(h.mutations.length, 1); assert.match(ofType(h, 'fileaction').at(-1).error, /Reconnect/);
+  release(); await h.settle(); assert.equal(h.mutations.length, 1);
+  h.project(); await h.settle();
+  assert.equal(ofType(h, 'fileaccess').at(-1).writable, true, 'fresh Project restores capability');
+  fileCommand(h, 3, 'delete', { id: MAIN, path: 'main.tex' }); await h.settle();
+  assert.equal(h.mutations.length, 2);
+});
+test('file action partial-copy errors remain bounded even for long supported paths', async () => {
+  const fixture = deepFileTree(30, () => '章'.repeat(44));
+  const h = harness(); h.project('owner', fixture.tree); await h.settle();
+  fileCommand(h, 1, 'duplicate', { id: MAIN, path: fixture.path + '/main.tex', name: 'copy.tex' }); await h.settle();
+  assert.equal(h.mutations.length, 1);
+  h.flush(15000); await h.settle();
+  const receipt = ofType(h, 'fileaction').at(-1);
+  assert.match(receipt.error, /copy.tex may be incomplete/);
+  assert.ok(Buffer.byteLength(receipt.error, 'utf8') < 4096);
+  assert.ok(!receipt.error.includes(fixture.path), 'do not expand a long full path into the error envelope');
 });

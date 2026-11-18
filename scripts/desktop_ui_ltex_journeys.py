@@ -6,6 +6,13 @@ import shutil
 LTEX_JOURNEYS = ('ltex',)
 
 
+def ltex_enabled(document):
+    state = document.get('ltex')
+    if not isinstance(state, dict) or type(state.get('enabled')) is not bool:
+        raise AssertionError('Effective LTeX activation inspection is unavailable')
+    return state['enabled']
+
+
 def ltex_program(value=None):
     """An explicit override is optional; default checks use the app's bundle."""
     if value is None:
@@ -54,6 +61,34 @@ def assert_ltex_source_unchanged(path, source):
         raise AssertionError('Checking grammar wrote unsaved source to disk')
 
 
+def ltex_mathematical_results(document, path, source, mode):
+    if not ltex_results(document, path, source, mode):
+        return False
+    state = document['ltex']
+    sentence = 'This are a test. We has two result.'
+    byte = source.rindex(sentence)
+    line = source[:byte].count('\n') + 1
+    column = byte - source.rfind('\n', 0, byte)
+    columns = {column + sentence.index(word) for word in ('This', 'are', 'has')}
+    return (all(rule in {'THIS_NNS', 'PLURAL_VERB_AFTER_THIS', 'BASE_FORM'}
+                for rule in state['rules'])
+            and len(state['locations']) == state['count']
+            and all(location[0] == line and location[1] in columns
+                    for location in state['locations']))
+
+
+def ltex_settings_expanded(windows, title, original_size):
+    for candidate in windows:
+        if not isinstance(candidate, dict) or candidate.get('AXTitle') != title:
+            continue
+        size = candidate.get('size')
+        if (isinstance(size, list) and len(size) == 2
+                and all(type(value) in (int, float) and value > 0 for value in size)
+                and size != original_size):
+            return True
+    return False
+
+
 def ltex_repair_completed(document):
     state = document.get('resource_repair')
     if not isinstance(state, dict) or type(state.get('busy')) is not bool:
@@ -88,6 +123,15 @@ def assert_ltex_repair_preserved(document, before, preferences_before, preferenc
 
 
 class LtexJourneys:
+    def set_ltex_enabled(self, enabled):
+        """Use the visible checkbox only when it differs from the target."""
+        if type(enabled) is not bool:
+            raise AssertionError('LTeX activation target must be a boolean')
+        if ltex_enabled(self.snapshot()['document']) != enabled:
+            self.click('settings.ltex.enabled')
+        self.wait('LTeX activation matches the selected target', lambda d:
+                  ltex_enabled(d) is enabled)
+
     def capture_ltex_settings(self, phase):
         directory = self.directory / '.tiptoptyp/screenshots'
         previous = set(directory.rglob('*.png'))
@@ -104,6 +148,7 @@ class LtexJourneys:
                         retained=str(retained), evidence=str(self.evidence / original.name))
 
     def ltex(self):
+        initial_enabled = ltex_enabled(self.snapshot()['document'])
         executable = ltex_program(self.ltex_executable)
         mode = 'Bundled' if executable is None else 'Custom'
         self.tex_settings([
@@ -115,11 +160,10 @@ class LtexJourneys:
             # The custom launcher controls include the full configuration
             # editor. Expand the real window before editing those controls.
             window = next(window for window in self.native('windows')['windows']
-                          if 'Settings' in window['AXTitle'] and window.get('AXFocused'))
+                          if 'Settings' in window.get('AXTitle', '') and window.get('AXFocused'))
             self.native('zoom-focused')
             self.native_wait('Settings expands for the custom LTeX launcher controls', lambda windows:
-                             any(candidate['AXTitle'] == window['AXTitle'] and candidate.get('size') != window['size']
-                                 for candidate in windows))
+                             ltex_settings_expanded(windows, window['AXTitle'], window['size']))
         self.setting_section('LTeX', 'LTeX+ spelling and grammar')
         self.click('settings.ltex.setup')
         self.wait_target('settings.ltex.mode.bundled')
@@ -161,7 +205,7 @@ class LtexJourneys:
         self.record('ltex.resource_controls', mode=mode, redownload_available=True,
                     external_launcher=executable is not None,
                     network_action_performed=executable is None)
-        self.click('settings.ltex.enabled')
+        self.set_ltex_enabled(True)
         self.close_settings()
         for suffix, source, corrected in (
             ('tex', '\\documentclass{article}\n\\begin{document}\nThis are a simple result.\n\\end{document}\n',
@@ -185,9 +229,38 @@ class LtexJourneys:
             assert_ltex_source_unchanged(path, source)
             self.record('ltex.mapped_stale_and_refresh', language=suffix, mode=mode,
                         rules=before['rules'], locations=before['locations'])
+        source = (Path(__file__).resolve().parents[1] /
+                  'tests/fixtures/ltex/typst-mathematical-prose.typ').read_text(encoding='utf-8')
+        path = self.directory / 'ltex-mathematical-prose.typ'
+        path.write_text(source, encoding='utf-8')
+        self.open_harper_fixture(path)
+        checked = self.wait('Mathematical Typst reports genuine grammar mistakes without syntax or spelling noise',
+                            lambda d: ltex_mathematical_results(d, path, source, mode),
+                            timeout=90)['document']['ltex']
+        corrected = source.replace('This are a test. We has two result.',
+                                   'This is a test. We have two results.')
+        self.key(0)
+        self.paste_source(corrected)
+        self.wait('Correct mathematical prose receives no LTeX findings', lambda d:
+                  d['ltex']['current'] and d['ltex']['count'] == 0, timeout=60)
+        self.stable_state(lambda d: d['ltex']['current'] and d['ltex']['count'] == 0)
+        assert_ltex_source_unchanged(path, source)
+        self.record('ltex.mathematical_prose', rules=checked['rules'],
+                    locations=checked['locations'], syntax_math_names_quiet=True,
+                    genuine_grammar_preserved=True, corrected_clean=True,
+                    original_source_unchanged=True)
         self.settings()
         self.setting_section('LTeX', 'LTeX+ spelling and grammar')
-        self.click('settings.ltex.enabled')
+        self.set_ltex_enabled(False)
         self.close_settings()
         self.wait('Disabling LTeX retires its diagnostics', lambda d:
                   not d['ltex']['enabled'] and d['ltex']['count'] == 0)
+        if initial_enabled:
+            self.settings()
+            self.setting_section('LTeX', 'LTeX+ spelling and grammar')
+            self.set_ltex_enabled(True)
+            self.close_settings()
+        self.wait('LTeX restores its original activation after the disable check', lambda d:
+                  ltex_enabled(d) is initial_enabled)
+        self.record('ltex.activation_restored', enabled=initial_enabled,
+                    disable_retires_diagnostics=True)

@@ -258,7 +258,7 @@ def finish(results_path:Path,sidecar_path:Path,output:Path):
             if details['single_paragraph']:row['latency_ms']=statistics.median(details['timings'][timing])
             rows.append(row)
         document['models'].append(dict(name=name,label=label,results=rows,metadata=dict(
-            harper_version='2.11.0',proposal_policy='Illustration only: first suggestion of each shown lint, sorted by priority then position, no overlap. The app currently exposes diagnostics; this is not an automatic app correction policy.',
+            harper_version='2.13.0',proposal_policy='Illustration only: first suggestion of each shown lint, sorted by priority then position, no overlap. The app currently exposes diagnostics; this is not an automatic app correction policy.',
             timing_contract=sidecar['timing_contract'],latency_scope='Only single-admitted-paragraph source documents contribute a timing. Curated uses full production cold-cache check including parsing/filtering; spelling-only excludes Document construction/parsing, so its timing is an isolated linter lower bound, not end-to-end.'
         )))
     for model in document['models']:
