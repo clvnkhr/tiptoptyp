@@ -1,5 +1,6 @@
 """Native TeX refactoring uses real menus and a review before source changes."""
 import math
+import sys
 import time
 
 TEX_REFACTOR_JOURNEYS = ('tex_refactor',)
@@ -186,8 +187,12 @@ class TexRefactorJourneys:
         self.open_harper_fixture(path)
         self.source_is(REFACTOR_SOURCE)
         self.key(125, 'cmd')
-        self.native('text', REFACTOR_SENTINEL)
-        self.source_is(REFACTOR_WORKING)
+        self.wait('Sentinel insertion owns the collapsed document-end caret', lambda d:
+                  d['cursor'] == [len(REFACTOR_SOURCE), len(REFACTOR_SOURCE)]
+                  and d['editor_keyboard_focused'])
+        # Insert only the marker as one acknowledged paste transaction; the
+        # already loaded file remains the independent history/disk baseline.
+        self.paste_source(REFACTOR_SENTINEL, check=lambda: self.source_is(REFACTOR_WORKING))
         owner = self.snapshot()['document']
 
         def current(document, source=REFACTOR_WORKING):
@@ -274,10 +279,25 @@ class TexRefactorJourneys:
                         modal_undo_and_close_owned=True, one_step_undo_redo=True,
                         source_owner_preserved=True, disk_unchanged=True)
         finally:
-            if refactor_state(self.snapshot()['document'])['visible']:
-                self.click('tex_refactor.cancel')
-                self.wait('Refactor cleanup closes only its review', lambda d:
-                          refactor_state(d)['phase'] == 'closed')
-            self.close_scratch(before['tabs'])
-            if auto_save:
-                self.tex_settings([('"auto_save": false', '"auto_save": true')])
+            original_failure = sys.exc_info()[1]
+            try:
+                if refactor_state(self.snapshot()['document'])['visible']:
+                    # Cleanup remains possible when the original failure is
+                    # an unreachable button. The journey above still requires
+                    # its actual Cancel click to work before it can pass.
+                    self.key(53, 'none')
+                    try:
+                        self.wait('Escape cleanup closes only the refactor review', lambda d:
+                                  refactor_state(d)['phase'] == 'closed')
+                    except AssertionError:
+                        self.key(13)
+                        self.wait('Close shortcut cleans up only the refactor review', lambda d:
+                                  refactor_state(d)['phase'] == 'closed')
+                self.close_scratch(before['tabs'])
+                if auto_save:
+                    self.tex_settings([('"auto_save": false', '"auto_save": true')])
+            except Exception as cleanup_error:
+                if original_failure is None:
+                    raise
+                self.record('tex_refactor.cleanup.failed', error=str(cleanup_error),
+                            original_error=str(original_failure))

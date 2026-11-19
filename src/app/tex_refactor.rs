@@ -363,26 +363,14 @@ impl EditorApp {
                 }
                 ui.painter()
                     .rect_filled(ui.max_rect(), 0.0, Color32::from_black_alpha(64));
-                egui::Area::new(viewport_scoped_id(ui.ctx(), "tex-refactor-card"))
-                    .order(egui::Order::Foreground)
-                    .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                    .show(ui.ctx(), |ui| {
-                        theme::dialog_card_frame(&style).show(ui, |ui| {
-                            ui.set_width((owner.width() - 48.0).clamp(1.0, 960.0));
-                            egui::ScrollArea::vertical()
-                                .max_height((owner.height() - 80.0).max(1.0))
-                                .show(ui, |ui| {
-                                    if let Some(clicked) = review_ui(
-                                        ui,
-                                        &mut self.tex_refactor,
-                                        &self.settings,
-                                        owner.height(),
-                                    ) {
-                                        action = Some(merge_action(action, clicked));
-                                    }
-                                });
-                        });
-                    });
+                if let Some(clicked) = review_card(
+                    ui.ctx(),
+                    &mut self.tex_refactor,
+                    &self.settings,
+                    ui.max_rect(),
+                ) {
+                    action = Some(merge_action(action, clicked));
+                }
             },
         );
         match action {
@@ -433,6 +421,46 @@ fn merge_action(current: Option<Action>, incoming: Action) -> Action {
     }
 }
 
+fn review_card(
+    context: &egui::Context,
+    state: &mut State,
+    settings: &AppSettings,
+    bounds: Rect,
+) -> Option<Action> {
+    let style = context.style_of(context.theme());
+    let mut action = None;
+    egui::Area::new(viewport_scoped_id(context, "tex-refactor-card"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(context, |ui| {
+            theme::dialog_card_frame(&style).show(ui, |ui| {
+                ui.set_width((bounds.width() - 48.0).clamp(1.0, 960.0));
+                // Area can retain its initial/naming size. Reset the content
+                // limit from this child's actual viewport before scrolling so
+                // the diff and footer can grow without stale clip feedback.
+                let maximum = (bounds.height() - 48.0).max(1.0);
+                ui.set_max_height(maximum);
+                egui::ScrollArea::vertical()
+                    .id_salt("tex-refactor-card-scroll")
+                    .max_height(maximum)
+                    .show(ui, |ui| {
+                        action = review_ui(ui, state, settings, bounds.height());
+                    });
+            });
+        });
+    action
+}
+
+#[cfg(test)]
+fn record_review_hit(name: &'static str, response: &egui::Response) {
+    response.ctx.data_mut(|data| {
+        data.insert_temp(
+            egui::Id::new(("tex-refactor-hit", name)),
+            response.interact_rect,
+        );
+    });
+}
+
 fn review_ui(
     ui: &mut egui::Ui,
     state: &mut State,
@@ -449,6 +477,8 @@ fn review_ui(
                 let name = ui
                     .add(egui::TextEdit::singleline(&mut draft.name).hint_text("\\mycommand"))
                     .labelled_by(label.id);
+                #[cfg(test)]
+                record_review_hit("name", &name);
                 if draft.focus_name {
                     name.request_focus();
                     draft.focus_name = false;
@@ -480,12 +510,13 @@ fn review_ui(
                         Path::new("refactoring.tex"),
                         settings,
                     );
+                    #[cfg(any(test, all(feature = "desktop-ui-tests", target_os = "macos")))]
+                    let response = ui.interact(viewport, id.with("observed"), Sense::hover());
+                    #[cfg(test)]
+                    record_review_hit("diff", &response);
                     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe(
-                        "tex_refactor.diff",
-                        &ui.interact(viewport, id.with("observed"), Sense::hover()),
-                    );
-                    #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+                    crate::desktop_test::observe("tex_refactor.diff", &response);
+                    #[cfg(not(any(test, all(feature = "desktop-ui-tests", target_os = "macos"))))]
                     let _ = viewport;
                 },
             );
@@ -517,6 +548,8 @@ fn review_ui(
             },
             &accept,
         );
+        #[cfg(test)]
+        record_review_hit(if naming { "preview" } else { "accept" }, &accept);
         if accept.clicked() {
             action = Some(if naming {
                 Action::Preview
@@ -527,6 +560,8 @@ fn review_ui(
         let cancel = ui.button("Cancel");
         #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
         crate::desktop_test::observe("tex_refactor.cancel", &cancel);
+        #[cfg(test)]
+        record_review_hit("cancel", &cancel);
         if cancel.clicked() {
             action = Some(Action::Cancel);
         }
@@ -1071,5 +1106,122 @@ mod tests {
         }
         assert_eq!(app.document().key(), key);
         assert_eq!(app.document().source(), SOURCE);
+    }
+
+    #[test]
+    fn production_card_keeps_review_footer_visible_after_initial_and_naming_layouts() {
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for size in [
+            Vec2::new(1512.0, 829.0),
+            Vec2::new(800.0, 500.0),
+            Vec2::new(640.0, 360.0),
+        ] {
+            for style in crate::settings::GitDiffStyle::ALL {
+                for grows_from_naming in [false, true] {
+                    let root = tempfile::tempdir().unwrap();
+                    let context = egui::Context::default();
+                    let (mut app, mut target) = fixture(&context, root.path());
+                    app.settings.git_diff_style = style;
+                    if grows_from_naming {
+                        let source = SOURCE
+                            .replace("\\end{document}", "$a^{x_i+\\alpha}+z$\r\n\\end{document}");
+                        let path = root.path().join("main.tex");
+                        fs::write(&path, &source).unwrap();
+                        app.document_mut().replace_loaded_unprojected(
+                            source.clone(),
+                            path,
+                            DocumentKind::Tex,
+                            Some(fingerprint(source.as_bytes())),
+                        );
+                        let byte = source.find("x_i+\\alpha").unwrap();
+                        let start = source[..byte].chars().count();
+                        target = Target::capture(
+                            &app,
+                            preview_jump::SourceLocation {
+                                key: app.document().key(),
+                                char_index: start,
+                            },
+                            None,
+                        )
+                        .unwrap();
+                        target.selection_characters = start..start + "x_i+\\alpha".chars().count();
+                        app.begin_tex_refactor(target, Operation::Extract, &context);
+                    } else {
+                        app.begin_tex_refactor(target, Operation::Inline, &context);
+                    }
+                    let source = app.document().source().to_owned();
+                    let mut harness = Harness::builder().with_size(size).build_ui_state(
+                        |ui, state: &mut (EditorApp, bool)| {
+                            let (app, fonts_ready) = state;
+                            if !*fonts_ready {
+                                theme::configure_editor_fonts(
+                                    ui.ctx(),
+                                    Default::default(),
+                                    Default::default(),
+                                    false,
+                                    400,
+                                    400,
+                                    None,
+                                );
+                                *fonts_ready = true;
+                                return;
+                            }
+                            if let Some(action) = review_card(
+                                ui.ctx(),
+                                &mut app.tex_refactor,
+                                &app.settings,
+                                ui.max_rect(),
+                            ) {
+                                match action {
+                                    Action::Preview => app.preview_tex_extraction(),
+                                    Action::Accept => {
+                                        app.accept_tex_refactor().unwrap();
+                                    }
+                                    Action::Cancel => app.close_tex_refactor(ui.ctx()),
+                                }
+                            }
+                        },
+                        (app, false),
+                    );
+                    harness.run_steps(3);
+                    if grows_from_naming {
+                        let State::Naming(draft) = &mut harness.state_mut().0.tex_refactor else {
+                            panic!()
+                        };
+                        draft.name = "energy".into();
+                        harness.get_by_label("Preview").click();
+                        harness.run_steps(3);
+                    }
+                    assert_eq!(harness.state().0.tex_refactor.phase(), "reviewing");
+                    let bounds = Rect::from_min_size(Pos2::ZERO, size);
+                    let hit = |name| {
+                        harness
+                            .ctx
+                            .data(|data| {
+                                data.get_temp::<Rect>(egui::Id::new(("tex-refactor-hit", name)))
+                            })
+                            .unwrap()
+                    };
+                    let diff = hit("diff");
+                    for name in ["diff", "accept", "cancel"] {
+                        let rect = hit(name);
+                        assert!(
+                            rect.is_finite() && rect.is_positive(),
+                            "{size:?} {style:?} naming={grows_from_naming}: {name} clipped to {rect:?}"
+                        );
+                        assert!(
+                            bounds.contains_rect(rect),
+                            "{name} must stay in the actual child viewport"
+                        );
+                    }
+                    assert!(hit("accept").top() >= diff.bottom());
+                    assert!(hit("cancel").top() >= diff.bottom());
+                    harness.get_by_label("Cancel").click();
+                    harness.run_steps(2);
+                    assert_eq!(harness.state().0.tex_refactor.phase(), "closed");
+                    assert_eq!(harness.state().0.document().source(), &source);
+                }
+            }
+        }
     }
 }
