@@ -7391,7 +7391,7 @@ impl EditorApp {
                     == crate::preview::PreviewBackend::Pdfium)
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows", test))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn fail_local_webview(&mut self, message: String) {
         self.discard_webview();
         self.preview.webview_state = ServiceState::Failed(message);
