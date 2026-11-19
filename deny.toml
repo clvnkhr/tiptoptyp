@@ -7,6 +7,9 @@ version = 2
 ignore = [
     "RUSTSEC-2025-0141", # bincode is pulled by the native GUI stack
     "RUSTSEC-2024-0370", # proc-macro-error is pulled by a transitive macro
+    # https://raw.githubusercontent.com/ajrcarey/pdfium-render/master/Cargo.toml
+    # Upstream 0.9.6 still requires chrono; remove when it adopts a maintained replacement.
+    { id = "RUSTSEC-2026-0543", reason = "pdfium-render 0.9.5 unconditionally uses chrono for PDF annotation timestamps. This is an unmaintained advisory with no patched version, not a reported vulnerability." },
 ]
 
 [licenses]
