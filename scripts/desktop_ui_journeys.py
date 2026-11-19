@@ -518,8 +518,8 @@ def assert_explorer_frame(state, independent, preview_edge):
     return frame
 
 
-def assert_git_overview(document, changed_lines=(5, 85, 165), line_count=181):
-    """Validate the observed painted strip against the whole fixture, not its scroll position."""
+def assert_git_overview(document, expected_count=3):
+    """Validate marks against rendered changes and actual scrollbar-thumb travel."""
     observation = document.get("git_overview")
     if not isinstance(observation, dict):
         raise AssertionError("missing freshly painted Git overview")
@@ -549,7 +549,7 @@ def assert_git_overview(document, changed_lines=(5, 85, 165), line_count=181):
             or not 0 <= viewport[2] - track[2] <= 2):
         raise AssertionError("Git overview is not a thin strip inside the code pane's right edge")
     ticks = observation.get("ticks")
-    if not isinstance(ticks, list) or len(ticks) != len(changed_lines):
+    if not isinstance(ticks, list) or len(ticks) != expected_count:
         raise AssertionError("Git overview must include every change, including offscreen hunks")
     marks = []
     for tick in ticks:
@@ -561,13 +561,49 @@ def assert_git_overview(document, changed_lines=(5, 85, 165), line_count=181):
         marks.append(rect)
     marks.sort(key=lambda rect: rect[1])
     height = track[3] - track[1]
-    # Allow one logical line for the final empty row and pixel rounding. A
-    # viewport-relative or clipped list of gutter marks cannot satisfy this.
-    tolerance = max(2, height / line_count)
-    for rect, line in zip(marks, changed_lines):
-        if abs(rect[1] - (track[1] + height * line / line_count)) > tolerance:
-            raise AssertionError("Git overview tick does not represent its global document position")
-    return {"viewport": viewport, "track": track, "ticks": tuple(marks)}
+    def number(value, name):
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value)):
+            raise AssertionError("invalid Git overview " + name)
+        return value
+    content_height = number(observation.get("content_height"), "content height")
+    offset = number(observation.get("offset"), "scroll offset")
+    minimum = number(observation.get("minimum_thumb_height"), "minimum thumb height")
+    thumb = observation.get("thumb")
+    if not isinstance(thumb, (list, tuple)) or len(thumb) != 2:
+        raise AssertionError("missing Git overview scrollbar thumb")
+    thumb = tuple(number(edge, "thumb edge") for edge in thumb)
+    if content_height <= height or minimum < 0 or not 0 <= offset <= content_height - height + 0.5:
+        raise AssertionError("Git overview does not own the scrollable source geometry")
+    thumb_height = min(height, max(minimum, height * height / content_height))
+    travel = height - thumb_height
+    max_offset = content_height - height
+    expected_top = track[1] + travel * offset / max_offset
+    if (abs(thumb[0] - expected_top) > 0.5 or abs(thumb[1] - thumb[0] - thumb_height) > 0.5
+            or thumb[0] < track[1] - 0.5 or thumb[1] > track[3] + 0.5):
+        raise AssertionError("Git overview does not match actual scrollbar thumb geometry")
+    changes = observation.get("rendered_changes")
+    if not isinstance(changes, list) or len(changes) != expected_count:
+        raise AssertionError("Git overview is missing its rendered change ranges")
+    ranges = []
+    for change in changes:
+        if not isinstance(change, dict) or change.get("kind") != "Modified":
+            raise AssertionError("Git overview has the wrong rendered change kind")
+        extent = change.get("content")
+        if not isinstance(extent, (list, tuple)) or len(extent) != 2:
+            raise AssertionError("invalid Git overview rendered change")
+        start, end = (number(edge, "rendered change edge") for edge in extent)
+        if not 0 <= start < end <= content_height + 1:
+            raise AssertionError("Git overview rendered change escapes its source")
+        ranges.append((start, end))
+    ranges.sort()
+    for rect, (start, end) in zip(marks, ranges):
+        for head in (rect[1], (rect[1] + rect[3]) / 2, rect[3] - 0.001):
+            at = (head - track[1]) / travel * max_offset
+            if at > end + 0.5 or at + height < start - 0.5:
+                raise AssertionError("scrollbar top touches Git color while its rendered hunk is offscreen")
+    return {"viewport": viewport, "track": track, "ticks": tuple(marks),
+            "thumb": thumb, "content_height": content_height}
 
 
 def finish_clipboard_adapter(process):
@@ -1463,8 +1499,17 @@ class EditorJourneys(AutofixJourneys, ExplorerJourneys, OverleafJourneys, Activi
         self.close_scratch(count)
 
     def git_hunks(self):
-        with self.exact_math_conversion():
-            self._git_hunks()
+        wrap = self.snapshot()["document"]["line_wrap"]
+        try:
+            if not wrap:
+                self.key(6, "cmd+alt")
+                self.wait("Git overview uses wrapped source", lambda d: d["line_wrap"])
+            with self.exact_math_conversion():
+                self._git_hunks()
+        finally:
+            if self.snapshot()["document"]["line_wrap"] != wrap:
+                self.key(6, "cmd+alt")
+                self.wait("Git overview restores wrapping", lambda d: d["line_wrap"] == wrap)
 
     def _git_hunks(self):
         source = self.directory / "hunks.typ"
@@ -1496,6 +1541,57 @@ class EditorJourneys(AutofixJourneys, ExplorerJourneys, OverleafJourneys, Activi
         last_hunk = initial["targets"].get("git.hunk.2")
         if last_hunk and last_hunk["frame"] == initial["document"]["frame"]:
             raise AssertionError("last fixture hunk must be offscreen when its overview tick is checked")
+        # The long first logical line wraps across multiple viewports. A
+        # line-count percentage can look globally stable while pointing at
+        # completely different rendered source. Use the actual native thumb.
+        first_hunk = initial["targets"].get("git.hunk.0")
+        if first_hunk and first_hunk["frame"] == initial["document"]["frame"]:
+            raise AssertionError("wrapped overview fixture did not hide its first hunk")
+        height = overview["track"][3] - overview["track"][1]
+        thumb_height = overview["thumb"][1] - overview["thumb"][0]
+        travel = height - thumb_height
+        max_offset = scroll["content_height"] - scroll["viewport_height"]
+        tick_y = overview["ticks"][0][1]
+        expected_offset = (tick_y - overview["track"][1]) / travel * max_offset
+        screen_dx = scroll["x"] - (overview["viewport"][0] + overview["viewport"][2]) / 2
+        screen_dy = scroll["y"] - (overview["viewport"][1] + overview["viewport"][3]) / 2
+        scrollbar_x = overview["viewport"][2] - 8 + screen_dx
+        self.native("move", scrollbar_x, overview["track"][1] + thumb_height / 2 + screen_dy)
+        self.native("drag", scrollbar_x, overview["track"][1] + thumb_height / 2 + screen_dy,
+                    scrollbar_x, tick_y + thumb_height / 2 + screen_dy)
+        touched = self.wait("native scrollbar top touches the first Git overview tick", lambda d:
+                            isinstance(d.get("git_overview"), dict)
+                            and abs(d["git_overview"]["viewport"][1] - overview["viewport"][1]) < 1)
+        import time
+        deadline = time.monotonic() + 4
+        while True:
+            touched = self.snapshot()
+            touched_scroll = touched["scrolls"].get("editor")
+            if (touched_scroll and touched_scroll["frame"] == touched["document"]["frame"]
+                    and abs(touched_scroll["offset"] - expected_offset) < 3):
+                break
+            if time.monotonic() >= deadline:
+                raise AssertionError("native scrollbar drag did not align its top with the Git marker")
+            time.sleep(0.05)
+        # ScrollArea consumes a drag after painting its content closure. Check
+        # consecutive fresh settled frames, rather than that transient frame.
+        for _ in range(3):
+            touched = self.snapshot()
+            touched_scroll = touched["scrolls"].get("editor")
+            if not touched_scroll or abs(touched_scroll["offset"] - expected_offset) >= 3:
+                raise AssertionError("Git scrollbar alignment did not remain settled")
+        visible = touched["targets"].get("git.hunk.0")
+        if not visible or visible["frame"] != touched["document"]["frame"]:
+            raise AssertionError("scrollbar top touches Git color while its rendered hunk is offscreen")
+        self.record("git.overview.thumb-alignment", marker_y=tick_y,
+                    offset=touched_scroll["offset"], expected_offset=expected_offset,
+                    rendered_hunk_visible=True)
+        if getattr(self, "capture_review", False): self.capture_viewport("main")
+        self.click("editor.source")
+        self.key(126, "cmd")
+        initial = self.wait("overview returns to the document start", lambda d:
+                            d["cursor"] == [0, 0] and d.get("git_overview", {}).get("offset", 1) < 1)
+        scroll = initial["scrolls"]["editor"]
         self.native("move", scroll["x"], scroll["y"])
         self.native("wheel", scroll["x"], scroll["y"], -8)
         import time

@@ -533,6 +533,7 @@ impl EditorApp {
         let mut folds_changed = false;
         let mut preview_jump_char = None;
         let mut git_chunk_clicked = None;
+        let mut git_overview_markers = Vec::new();
         let mut clicked_web_link = None;
         let tooltip_request = self.tooltip_request;
         let mut hovered_semantic_token = None;
@@ -993,6 +994,16 @@ impl EditorApp {
                         Some(first.union(last).translate(output.galley_pos.to_vec2()))
                     })
                     .collect::<Vec<_>>();
+                let content_top = ui.max_rect().top();
+                git_overview_markers = crate::git::editor::overview::markers(
+                    &self.git_editor.hunks,
+                    logical_rows.len(),
+                    |line| {
+                        logical_rows.get(line).map(|rect| {
+                            egui::Rangef::new(rect.top() - content_top, rect.bottom() - content_top)
+                        })
+                    },
+                );
                 let marker_action = crate::git::editor::view::show_markers(
                     ui,
                     &self.git_editor.hunks,
@@ -1529,8 +1540,12 @@ impl EditorApp {
             crate::git::editor::overview::paint(
                 ui,
                 scroll_output.inner_rect,
-                line_count,
-                &self.git_editor.hunks,
+                crate::git::editor::overview::Geometry {
+                    content_height: scroll_output.content_size.y,
+                    offset: scroll_output.state.offset.y,
+                    content_origin: 0.0,
+                },
+                &git_overview_markers,
             );
         }
         self.show_find_overlay(ui, scroll_output.inner_rect);

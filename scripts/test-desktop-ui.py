@@ -1208,7 +1208,9 @@ def main():
                 fixture.write_text("\n".join(f"= Section {index:03}" for index in range(80)) + "\n")
             if args.journey in ("all", "git_hunks"):
                 subprocess.run(["git", "init", "-q", str(directory)], check=True)
-                original = "".join(f"Line {index:03} original text.\n" for index in range(180))
+                original = "".join(f"Line {index:03} original text."
+                                   + (" wrapped overview alignment" * 240 if index == 0 else "")
+                                   + "\n" for index in range(180))
                 hunk_fixture = directory / "hunks.typ"
                 hunk_fixture.write_text(original)
                 subprocess.run(["git", "-C", str(directory), "add", "hunks.typ"], check=True)

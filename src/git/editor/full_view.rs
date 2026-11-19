@@ -30,7 +30,8 @@ pub(crate) struct Output {
     pub(crate) edit: egui::text_edit::TextEditOutput,
     pub(crate) action: Option<Action>,
     pub(crate) viewport: Rect,
-    pub(crate) line_count: usize,
+    pub(crate) overview: Arc<[super::overview::Marker]>,
+    pub(crate) overview_geometry: super::overview::Geometry,
 }
 #[derive(Clone)]
 struct Layout {
@@ -41,6 +42,7 @@ struct Layout {
     height: f32,
     old_rows: Vec<Range<usize>>,
     new_rows: Vec<Range<usize>>,
+    overview: Arc<[super::overview::Marker]>,
 }
 #[derive(Clone)]
 struct LayoutCache {
@@ -206,12 +208,45 @@ fn align(mut old: Galley, mut new: Galley, pairs: &[Pair]) -> Layout {
     Layout {
         old: Arc::new(old),
         new: Arc::new(new),
+        overview: aligned_overview(pairs, &tops, &heights).into(),
         tops,
         heights,
         height: y,
         old_rows,
         new_rows,
     }
+}
+
+/// Adjacent changed pairs are the same change block used by make_hunks. Use
+/// both columns' aligned height, including old-only deletion rows and the
+/// virtual gaps they create in the editable column. Retain this with Layout.
+fn aligned_overview(pairs: &[Pair], tops: &[f32], heights: &[f32]) -> Vec<super::overview::Marker> {
+    let mut marks = Vec::new();
+    let mut at = 0;
+    while at < pairs.len() {
+        if !pairs[at].changed {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        let mut old = false;
+        let mut new = false;
+        while at < pairs.len() && pairs[at].changed {
+            old |= pairs[at].old.is_some();
+            new |= pairs[at].new.is_some();
+            at += 1;
+        }
+        let kind = match (old, new) {
+            (true, false) => super::ChangeKind::Deleted,
+            (false, true) => super::ChangeKind::Added,
+            _ => super::ChangeKind::Modified,
+        };
+        marks.push(super::overview::Marker::new(
+            kind,
+            Rangef::new(tops[start], tops[at - 1] + heights[at - 1]),
+        ));
+    }
+    marks
 }
 // Pair tops are sorted by align(). Include the row crossing the top edge,
 // without scanning the preceding document or constructing offscreen shapes.
@@ -753,9 +788,14 @@ pub(crate) fn show(
                     .translate(origin.to_vec2());
                 ui.scroll_to_rect(rect, Some(Align::Center));
             }
-            (output, current_layout.new_rows.len())
+            let overview_origin = origin.y - ui.max_rect().top();
+            (
+                output,
+                Arc::clone(&current_layout.overview),
+                overview_origin,
+            )
         });
-    let (edit, line_count) = scroll.inner;
+    let (edit, overview, content_origin) = scroll.inner;
     if edit.response.changed() {
         ui.ctx().request_repaint();
     }
@@ -770,7 +810,12 @@ pub(crate) fn show(
         edit,
         action,
         viewport: scroll.inner_rect,
-        line_count,
+        overview,
+        overview_geometry: super::overview::Geometry {
+            content_height: scroll.content_size.y,
+            offset: scroll.state.offset.y,
+            content_origin,
+        },
     }
 }
 
@@ -788,6 +833,52 @@ mod tests {
             400,
             None,
         );
+    }
+
+    #[test]
+    fn overview_includes_old_only_rows_and_maximum_aligned_wrap_heights() {
+        let pairs = [
+            Pair {
+                old: Some(0),
+                new: Some(0),
+                changed: false,
+            },
+            Pair {
+                old: Some(1),
+                new: None,
+                changed: true,
+            },
+            Pair {
+                old: Some(2),
+                new: None,
+                changed: true,
+            },
+            Pair {
+                old: Some(3),
+                new: Some(1),
+                changed: false,
+            },
+            Pair {
+                old: Some(4),
+                new: Some(2),
+                changed: true,
+            },
+            Pair {
+                old: None,
+                new: Some(3),
+                changed: true,
+            },
+        ];
+        let marks = aligned_overview(
+            &pairs,
+            &[0.0, 500.0, 530.0, 560.0, 580.0, 1380.0],
+            &[500.0, 30.0, 30.0, 20.0, 800.0, 20.0],
+        );
+        assert_eq!(marks.len(), 2);
+        assert_eq!(marks[0].kind, super::super::ChangeKind::Deleted);
+        assert_eq!(marks[0].content, Rangef::new(500.0, 560.0));
+        assert_eq!(marks[1].kind, super::super::ChangeKind::Modified);
+        assert_eq!(marks[1].content, Rangef::new(580.0, 1400.0));
     }
 
     #[test]

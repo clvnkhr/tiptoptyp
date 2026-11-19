@@ -315,12 +315,12 @@ impl EditorApp {
             }
             None => {}
         }
-        if let Some(diff) = self.document_diff.as_ref() {
+        if self.document_diff.is_some() {
             crate::git::editor::overview::paint(
                 ui,
                 output.viewport,
-                output.line_count,
-                &diff.hunks,
+                output.overview_geometry,
+                &output.overview,
             );
         }
         self.show_find_overlay(ui, editor_bounds);

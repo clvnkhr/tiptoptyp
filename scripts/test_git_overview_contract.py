@@ -10,9 +10,12 @@ class GitOverviewContract(unittest.TestCase):
     def document(self):
         return {"editor_panel_width": 400, "editor_panel_rect": [30, 20, 430, 670], "git_overview": {
             "viewport": [30, 50, 430, 650], "track": [425, 50, 429, 650],
-            "ticks": [{"kind": "Modified", "rect": [425, 50 + 600 * line / 181, 429,
-                                                     52 + 600 * line / 181]}
-                      for line in (5, 85, 165)]}}
+            "content_height": 9000, "offset": 0, "minimum_thumb_height": 12,
+            "thumb": [50, 90],
+            "rendered_changes": [{"kind": "Modified", "content": extent}
+                                 for extent in ([5300, 5320], [7000, 7020], [8800, 8820])],
+            "ticks": [{"kind": "Modified", "rect": [425, y, 429, y + 2]}
+                      for y in (402.6333, 515.9667, 608)]}}
 
     def test_accepts_all_global_marks_including_the_offscreen_last_hunk(self):
         value = assert_git_overview(self.document())
@@ -30,8 +33,31 @@ class GitOverviewContract(unittest.TestCase):
                 assert_git_overview(document)
         document = self.document()
         document["git_overview"]["ticks"][-1]["rect"] = [425, 90, 429, 92]
-        with self.assertRaisesRegex(AssertionError, "global document position"):
+        with self.assertRaisesRegex(AssertionError, "rendered hunk is offscreen"):
             assert_git_overview(document)
+
+    def test_rejects_old_logical_line_percentages_when_rendered_rows_wrap(self):
+        document = self.document()
+        document["git_overview"]["ticks"] = [
+            {"kind": "Modified", "rect": [425, 50 + 600 * line / 181, 429,
+                                           52 + 600 * line / 181]}
+            for line in (5, 85, 165)]
+        with self.assertRaisesRegex(AssertionError, "rendered hunk is offscreen"):
+            assert_git_overview(document)
+
+    def test_rejects_wrong_thumb_geometry_or_missing_rendered_ranges(self):
+        mutations = [
+            lambda d: d["git_overview"].update(thumb=[50, 100]),
+            lambda d: d["git_overview"].update(offset=100),
+            lambda d: d["git_overview"].update(content_height=float("nan")),
+            lambda d: d["git_overview"].update(rendered_changes=[]),
+            lambda d: d["git_overview"]["rendered_changes"][0].update(content=[4, 3]),
+        ]
+        for mutate in mutations:
+            document = self.document()
+            mutate(document)
+            with self.subTest(document=document), self.assertRaises(AssertionError):
+                assert_git_overview(document)
 
     def test_rejects_a_shifted_viewport_even_when_its_width_matches_the_pane(self):
         document = self.document()
