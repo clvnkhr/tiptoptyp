@@ -28,6 +28,7 @@ from desktop_ui_journeys import (EditorJourneys, PREVIEW_SOURCE, fingerprint, em
 from desktop_ui_tex_journeys import TEX_JOURNEYS, TEX_SOURCE
 from desktop_ui_tex_magic_journeys import TexMagicJourneys, TEX_MAGIC_JOURNEYS
 from desktop_ui_autofix_journeys import AUTOFIX_JOURNEYS
+from desktop_ui_tex_refactor_journeys import TEX_REFACTOR_JOURNEYS
 from tex_magic_fixture import prepare_tex_magic_fixture, tex_magic_environment
 from desktop_ui_comment_controls_journeys import COMMENT_CONTROLS_JOURNEYS
 from desktop_ui_image_journeys import IMAGE_JOURNEYS
@@ -60,7 +61,7 @@ from desktop_ui_inactive_preview_journeys import INACTIVE_PREVIEW_JOURNEYS
 ROOT = Path(__file__).resolve().parent.parent
 
 JOURNEY_NAMES = (
-    "all", *AUTOFIX_JOURNEYS, *EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *OVERLEAF_SESSION_JOURNEYS, *GIT_SETUP_JOURNEYS, *GITHUB_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *TEX_MAGIC_JOURNEYS, *IMAGE_JOURNEYS,
+    "all", *AUTOFIX_JOURNEYS, *TEX_REFACTOR_JOURNEYS, *EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *OVERLEAF_SESSION_JOURNEYS, *GIT_SETUP_JOURNEYS, *GITHUB_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *TOOL_DEFAULTS_JOURNEYS, *SETTINGS_LINK_JOURNEYS, *LTEX_JOURNEYS, *LIQUID_JOURNEYS, *LATEXDIFF_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *ASSET_LAYOUT_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, "file_versions", "command_palette", "preview_jump", "tex", *TEX_JOURNEYS, *TEX_MAGIC_JOURNEYS, *IMAGE_JOURNEYS,
     *NEWEST_JOURNEYS, "drawing", "snippets", "ime", "panels", "terminal_find",
     "terminal_load", "terminal_theme", "find", "rectangle", "empty", "workspace_switch", "focus", "preview",
     "pdf_output", "editing", "search", "tabs", "tab_drag", "dialogs", "startup_preview",
@@ -75,7 +76,7 @@ JOURNEY_NAMES = (
 def selected_journeys(name, start_at=None):
     # Optional local ML must never become a hidden prerequisite of "all".
     if name == 'all':
-        journeys = [*EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *AUTOFIX_JOURNEYS, *TEX_JOURNEYS]
+        journeys = [*EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *AUTOFIX_JOURNEYS, *TEX_REFACTOR_JOURNEYS, *TEX_JOURNEYS]
     else:
         journeys = list(TEX_JOURNEYS) if name == 'tex' else [name]
     if start_at is not None:
@@ -1179,7 +1180,7 @@ def main():
                 "CFBundleExecutable": "tiptoptyp", "CFBundleIdentifier": "dev.tiptoptyp.journey." + directory.name,
                 "CFBundleName": "tiptoptyp UI Journey", "CFBundlePackageType": "APPL", "NSHighResolutionCapable": True,
             }))
-            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in (*TEX_JOURNEYS, *AUTOFIX_JOURNEYS, *LTEX_JOURNEYS) else "journey.typ" if args.journey in ("all", *OVERLEAF_JOURNEYS, *LIQUID_JOURNEYS, *DIAGNOSTIC_FIX_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
+            fixture = directory / ("journey.tex" if args.journey == "tex" or args.journey in (*TEX_JOURNEYS, *AUTOFIX_JOURNEYS, *TEX_REFACTOR_JOURNEYS, *LTEX_JOURNEYS) else "journey.typ" if args.journey in ("all", *OVERLEAF_JOURNEYS, *LIQUID_JOURNEYS, *DIAGNOSTIC_FIX_JOURNEYS, *TEXDOC_JOURNEYS, *CITATION_JOURNEYS, *INACTIVE_PREVIEW_JOURNEYS, *IMAGE_JOURNEYS, *NEWEST_JOURNEYS, "partial_preview", "partial_zoom_stress", "partial_cache_edges", "partial_dividers", "preview", "pdf_output", "preview_keyboard", "pdfium_resize", "controls", "file_versions", "tabs", "tab_drag", "dialogs", "startup_preview", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "background", "background_fades") else "journey.txt")
             fixture.write_text(
                 TEX_SOURCE
                 if fixture.suffix == ".tex"
