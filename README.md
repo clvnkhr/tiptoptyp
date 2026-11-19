@@ -328,9 +328,16 @@ whole-buffer layout; large-document performance remains active work.
 
 `cargo clean` removes build artifacts, not documents, preferences or installed
 apps. The task runner has its own target directory; clean it separately with
-`cargo clean --manifest-path xtask/Cargo.toml` when needed. On macOS, ordinary
-`cargo run` also prunes old incremental sessions after the process exits;
-`TIPTOPTYP_KEEP_CARGO_CACHE=1` disables that cleanup.
+`cargo clean --manifest-path xtask/Cargo.toml` when needed. Ordinary builds,
+runs and tests keep incremental caches intact.
+
+For selective, explicit cleanup, first inspect
+`python3 scripts/prune_cargo_incremental.py --dry-run target xtask/target`, then
+omit `--dry-run` to remove older finalized sessions. The utility retains the
+newest session per crate and skips working, recent, locked or unrecognized
+sessions. It preserves caches when matching Rust file locks are unavailable.
+Directory handles keep cleanup anchored to the admitted cache if paths change;
+platforms without safe descriptor-relative traversal preserve every session.
 
 ## Further reading
 
