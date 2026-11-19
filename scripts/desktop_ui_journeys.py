@@ -367,6 +367,46 @@ def editor_particle_popup_target(state):
     return name
 
 
+def git_diff_selection_popup_point(before, selected):
+    """Reuse a visible caret only across a proven unchanged selection layout."""
+    original, document = before["document"], selected["document"]
+    if (not original.get("git_diff_open") or not document.get("git_diff_open")
+            or original["cursor"][0] != original["cursor"][1]
+            or document["cursor"][0] == document["cursor"][1]
+            or min(document["cursor"]) != original["cursor"][0]
+            or not document["editor_keyboard_focused"]):
+        raise AssertionError("Git context click needs the selected range's original visible caret")
+    editor_particle_popup_target(before)
+    for field in ("active_tab_id", "path", "revision", "source_fingerprint"):
+        if field not in original or field not in document or original[field] != document[field]:
+            raise AssertionError("Git context selection changed its source owner")
+    caret = before["targets"]["editor.caret"]
+    prior = before["targets"]["editor.source"]
+    source = selected["targets"].get("editor.source")
+    if (not source or not source.get("enabled") or not source.get("focused")
+            or source.get("frame") != document["frame"] or source.get("age_ms", 501) > 500
+            or source.get("selection") != document["cursor"]
+            or source.get("viewport") != caret["viewport"]):
+        raise AssertionError("Git context click needs a fresh source selection in the same viewport")
+    for field in ("x", "y", "width", "height"):
+        value = source.get(field)
+        if (type(value) not in (int, float) or not math.isfinite(value)
+                or abs(value - prior[field]) > 0.5):
+            raise AssertionError("Git context selection moved its source pane")
+    for field in ("offset", "content_height"):
+        value = document.get("git_overview", {}).get(field)
+        prior_value = original.get("git_overview", {}).get(field)
+        if (type(value) not in (int, float) or type(prior_value) not in (int, float)
+                or not math.isfinite(value) or not math.isfinite(prior_value)
+                or abs(value - prior_value) > 0.5):
+            raise AssertionError("Git context selection moved its rendered source")
+    point = (caret["x"] + 1, caret["y"])
+    if (not source["x"] - source["width"] / 2 <= point[0] <= source["x"] + source["width"] / 2
+            or not source["y"] - source["height"] / 2 <= point[1] <= source["y"] + source["height"] / 2):
+        raise AssertionError("Git context selection point is outside the visible source pane")
+    return point
+
+
 def settings_category_target_visible(state, category):
     target = state["targets"].get("settings.category." + category)
     search = state["targets"].get("settings.search")
@@ -1523,6 +1563,51 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
                 self.key(6, "cmd+alt")
                 self.wait("Git overview restores wrapping", lambda d: d["line_wrap"] == wrap)
 
+    def settled_git_diff_caret(self):
+        """A newly opened wrapped diff may publish its caret before scrolling."""
+        import time
+        deadline = time.monotonic() + 6
+        previous = None
+        stable = 0
+        while time.monotonic() < deadline:
+            state = self.snapshot()
+            document = state["document"]
+            try:
+                if not document["git_diff_open"] or document["cursor"][0] != document["cursor"][1]:
+                    raise AssertionError("Git source caret is not collapsed")
+                editor_particle_popup_target(state)
+                caret, source = state["targets"]["editor.caret"], state["targets"]["editor.source"]
+                signature = tuple(caret[field] for field in ("x", "y")) + tuple(source[field] for field in ("x", "y", "width", "height"))
+                if (previous and previous[0] != document["frame"]
+                        and all(abs(a - b) <= 0.25 for a, b in zip(previous[1], signature))):
+                    stable += 1
+                else:
+                    stable = 0
+                if stable >= 2:
+                    return state
+                previous = (document["frame"], signature)
+            except AssertionError:
+                previous, stable = None, 0
+            time.sleep(0.05)
+        raise AssertionError("Git source caret did not settle inside its visible editor")
+
+    def right_click_git_diff_selection(self, before, expected):
+        import time
+        state = self.snapshot()
+        if sorted(state["document"]["cursor"]) != list(expected):
+            raise AssertionError("Git context click lost the requested source selection")
+        selection = state["document"]["cursor"]
+        point = git_diff_selection_popup_point(before, state)
+        self.native("move", *point)
+        time.sleep(0.2)
+        state = self.snapshot()
+        if state["document"]["cursor"] != selection:
+            raise AssertionError("Git context hover changed the source selection")
+        point = git_diff_selection_popup_point(before, state)
+        self.record("git.context.selection-point", before_frame=before["document"]["frame"],
+                    selected_frame=state["document"]["frame"], x=point[0], y=point[1])
+        self.native("right-click", *point)
+
     def _git_hunks(self):
         source = self.directory / "hunks.typ"
         if self.snapshot()["document"]["path"] != str(source):
@@ -1702,13 +1787,12 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
         # text for Copy and offer the direct Typst math conversion as well.
         import subprocess
         import time
-        self.wait_target("editor.caret")
-        caret = self.snapshot()["targets"]["editor.caret"]
+        before_selection = self.settled_git_diff_caret()
         start = sum(map(len, lines[:5]))
         end = start + len(lines[5].rstrip("\n"))
         self.key(124, "cmd+shift")
         self.wait("docked editor selects the changed line", lambda d: sorted(d["cursor"]) == [start, end])
-        self.right_click_at(caret["x"], caret["y"])
+        self.right_click_git_diff_selection(before_selection, (start, end))
         self.wait_target("menu.Copy")
         self.wait("docked context menu preserves selected text", lambda d: d["git_diff_open"]
                   and sorted(d["cursor"]) == [start, end])
@@ -1719,11 +1803,10 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
         self.paste_source("$x$ ", check=lambda: self.source_is(prefixed))
         self.key(126, "cmd")
         self.key(124, "none")
-        self.wait_target("editor.caret")
-        caret = self.snapshot()["targets"]["editor.caret"]
+        before_selection = self.settled_git_diff_caret()
         self.key(124, "shift")
         self.wait("docked editor selects the formula", lambda d: sorted(d["cursor"]) == [1, 2])
-        self.right_click_at(caret["x"], caret["y"])
+        self.right_click_git_diff_selection(before_selection, (1, 2))
         self.wait_target("menu.Convert to display math")
         self.click("menu.Convert to display math")
         self.source_is("$\nx\n$ " + original)

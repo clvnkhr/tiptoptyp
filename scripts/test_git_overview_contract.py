@@ -3,7 +3,8 @@ import sys
 import unittest
 
 sys.dont_write_bytecode = True
-from desktop_ui_journeys import assert_git_overview
+from desktop_ui_journeys import (EditorJourneys, assert_git_overview,
+                                 git_diff_selection_popup_point)
 
 
 class GitOverviewContract(unittest.TestCase):
@@ -103,6 +104,97 @@ class GitOverviewContract(unittest.TestCase):
         document["git_overview"]["viewport"] = [30, 50, 430, 50]
         with self.assertRaises(AssertionError):
             assert_git_overview(document)
+
+
+class GitSelectionPopupContract(unittest.TestCase):
+    def state(self, frame=10, selection=(100, 100)):
+        return {"document": {
+            "frame": frame, "cursor": list(selection), "git_diff_open": True,
+            "editor_keyboard_focused": True, "active_tab_id": 4,
+            "path": "/fixture/hunks.typ", "revision": "7", "source_fingerprint": "same",
+            "git_overview": {"offset": 5994.5, "content_height": 18939},
+        }, "targets": {
+            "editor.source": {"x": 725, "y": 500, "width": 240, "height": 800,
+                              "frame": frame, "selection": list(selection), "viewport": "root",
+                              "age_ms": 0, "enabled": True, "focused": True},
+            "editor.caret": {"x": 606, "y": 545, "frame": frame,
+                             "viewport": "root", "age_ms": 0, "enabled": True},
+        }}
+
+    def test_uses_an_unchanged_visible_source_anchor_with_current_selection_receipt(self):
+        before = self.state()
+        selected = self.state(11, (122, 100))
+        # A selected diff deliberately has no current collapsed-caret target.
+        selected["targets"].pop("editor.caret")
+        self.assertEqual(git_diff_selection_popup_point(before, selected), (607, 545))
+
+    def test_rejects_the_observed_offscreen_caret_failure_and_stale_anchors(self):
+        for mutate in (
+            lambda s: s["targets"]["editor.caret"].update(y=3772.75),
+            lambda s: s["targets"]["editor.caret"].update(frame=9),
+            lambda s: s["targets"]["editor.source"].update(frame=9),
+        ):
+            before = self.state()
+            mutate(before)
+            with self.subTest(before=before), self.assertRaises(AssertionError):
+                git_diff_selection_popup_point(before, self.state(11, (122, 100)))
+
+    def test_refuses_changed_owner_selection_viewport_scroll_or_layout(self):
+        mutations = (
+            lambda s: s["document"].update(active_tab_id=5),
+            lambda s: s["document"].update(revision="8"),
+            lambda s: s["document"].update(source_fingerprint="edited"),
+            lambda s: s["document"].update(cursor=[122, 101]),
+            lambda s: s["targets"]["editor.source"].update(frame=10),
+            lambda s: s["targets"]["editor.source"].update(selection=[100, 100]),
+            lambda s: s["targets"]["editor.source"].update(viewport="other"),
+            lambda s: s["targets"]["editor.source"].update(y=501),
+            lambda s: s["targets"]["editor.source"].update(x=float("nan")),
+            lambda s: s["document"]["git_overview"].update(offset=5996),
+            lambda s: s["document"]["git_overview"].update(content_height=18941),
+        )
+        for mutate in mutations:
+            selected = self.state(11, (122, 100))
+            mutate(selected)
+            with self.subTest(selected=selected), self.assertRaises(AssertionError):
+                git_diff_selection_popup_point(self.state(), selected)
+
+    def test_settling_requires_three_fresh_visible_stable_caret_frames(self):
+        from unittest.mock import patch
+        journey = EditorJourneys()
+        offscreen = self.state()
+        offscreen["targets"]["editor.caret"]["y"] = 3772.75
+        stale = self.state(11)
+        stale["targets"]["editor.caret"]["frame"] = 10
+        frames = iter((offscreen, stale, self.state(12), self.state(13), self.state(14)))
+        journey.snapshot = lambda: next(frames)
+        with patch("time.sleep"):
+            settled = journey.settled_git_diff_caret()
+        self.assertEqual(settled["document"]["frame"], 14)
+
+    def test_context_gesture_revalidates_selection_after_moving_the_pointer(self):
+        from unittest.mock import patch
+        journey = EditorJourneys()
+        frames = iter((self.state(11, (122, 100)), self.state(12, (122, 100))))
+        journey.snapshot = lambda: next(frames)
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        journey.record = lambda *args, **kwargs: None
+        with patch("time.sleep"):
+            journey.right_click_git_diff_selection(self.state(), (100, 122))
+        self.assertEqual(actions, [("move", 607, 545), ("right-click", 607, 545)])
+
+    def test_hover_motion_cannot_click_after_a_selection_change(self):
+        from unittest.mock import patch
+        journey = EditorJourneys()
+        frames = iter((self.state(11, (122, 100)), self.state(12, (121, 100))))
+        journey.snapshot = lambda: next(frames)
+        actions = []
+        journey.native = lambda *args: actions.append(args)
+        journey.record = lambda *args, **kwargs: None
+        with patch("time.sleep"), self.assertRaisesRegex(AssertionError, "hover changed"):
+            journey.right_click_git_diff_selection(self.state(), (100, 122))
+        self.assertEqual(actions, [("move", 607, 545)])
 
 
 if __name__ == "__main__":
