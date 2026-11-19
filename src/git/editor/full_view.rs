@@ -16,6 +16,8 @@ mod comparison;
 
 // Keep a small overscan for the editor's bounded paint-only screen shake.
 const PAINT_GUARD: f32 = 4.0;
+const SIDE_BY_SIDE_SCROLL_SALT: &str = "version-comparison-scroll";
+const UNIFIED_SCROLL_SALT: &str = "unified-comparison-scroll";
 
 pub(crate) enum Action {
     Close,
@@ -383,7 +385,7 @@ pub(crate) fn show_comparison(
     let extension = path.extension().and_then(|x| x.to_str()).unwrap_or("txt");
     let available = ui.available_size();
     ScrollArea::both()
-        .id_salt(id.with("version-comparison-scroll"))
+        .id_salt(id.with(SIDE_BY_SIDE_SCROLL_SALT))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -456,6 +458,9 @@ pub(crate) fn show_comparison(
 }
 
 /// Read-only full-source comparison in the user's configured Git presentation.
+///
+/// Call `reset_comparison_scroll` in this same UI scope when presenting a new
+/// proposal, while retaining these stable IDs for bounded layout caches.
 pub(crate) fn show_styled_comparison(
     ui: &mut Ui,
     diff: &DocumentDiff,
@@ -466,6 +471,16 @@ pub(crate) fn show_styled_comparison(
     match settings.git_diff_style {
         crate::settings::GitDiffStyle::SideBySide => show_comparison(ui, diff, id, path, settings),
         crate::settings::GitDiffStyle::Unified => comparison::show(ui, diff, id, path, settings),
+    }
+}
+
+/// A new proposal must not inherit the previous proposal's scroll position,
+/// kinetic velocity or animated target. Reset both styles with the exact IDs
+/// their ScrollAreas derive, without creating new persistent cache identities.
+pub(crate) fn reset_comparison_scroll(ui: &Ui, id: Id) {
+    for salt in [SIDE_BY_SIDE_SCROLL_SALT, UNIFIED_SCROLL_SALT] {
+        let scroll = ui.make_persistent_id(egui::IdSalt::new(id.with(salt)));
+        egui::scroll_area::State::default().store(ui.ctx(), scroll);
     }
 }
 
@@ -1600,5 +1615,95 @@ mod tests {
             diff.builds, 1,
             "a font-atlas reset does not change document alignment"
         );
+    }
+
+    #[test]
+    fn comparison_reset_reuses_style_ids_and_cached_layout_without_forcing_idle_scroll() {
+        use crate::settings::GitDiffStyle;
+        for style in GitDiffStyle::ALL {
+            let before = "old value\n".repeat(180);
+            let after = "new value\n".repeat(180);
+            let id = Id::new("repeat-comparison");
+            let mut harness = Harness::builder()
+                .with_size(vec2(900.0, 300.0))
+                .build_ui_state(
+                    move |ui, state: &mut (DocumentDiff, bool, bool, Option<[Id; 2]>)| {
+                        if !state.1 {
+                            fonts(ui.ctx());
+                            state.1 = true;
+                            return;
+                        }
+                        state.3 =
+                            Some([SIDE_BY_SIDE_SCROLL_SALT, UNIFIED_SCROLL_SALT].map(|salt| {
+                                ui.make_persistent_id(egui::IdSalt::new(id.with(salt)))
+                            }));
+                        if state.2 {
+                            reset_comparison_scroll(ui, id);
+                            state.2 = false;
+                        }
+                        show_styled_comparison(
+                            ui,
+                            &state.0,
+                            id,
+                            std::path::Path::new("refactor.tex"),
+                            &AppSettings {
+                                git_diff_style: style,
+                                ..Default::default()
+                            },
+                        );
+                    },
+                    (DocumentDiff::new(before, &after), false, false, None),
+                );
+            harness.run();
+            let scroll_ids = harness.state().3.unwrap();
+            let active = scroll_ids[usize::from(style == GitDiffStyle::Unified)];
+            assert!(egui::scroll_area::State::load(&harness.ctx, active).is_some());
+            let cache_count = harness.ctx.data(|data| data.count::<Arc<LayoutCache>>());
+            for scroll in scroll_ids {
+                let mut state = egui::scroll_area::State::default();
+                state.offset = vec2(0.0, 1700.0);
+                state.store(&harness.ctx, scroll);
+            }
+            harness.run_steps(1);
+            assert!(
+                egui::scroll_area::State::load(&harness.ctx, active)
+                    .unwrap()
+                    .offset
+                    .y
+                    > 1000.0
+            );
+            harness.state_mut().2 = true;
+            harness.run_steps(3);
+            assert_eq!(harness.state().3.unwrap(), scroll_ids);
+            for scroll in scroll_ids {
+                let state = egui::scroll_area::State::load(&harness.ctx, scroll).unwrap();
+                assert_eq!(state.offset, Vec2::ZERO);
+                assert_eq!(state.velocity(), Vec2::ZERO);
+            }
+            assert_eq!(
+                harness.ctx.data(|data| data.count::<Arc<LayoutCache>>()),
+                cache_count
+            );
+            let layout = harness.ctx.data(|data| {
+                data.get_temp::<Arc<LayoutCache>>(id.with("full-diff-layout"))
+                    .unwrap()
+            });
+            let mut state = egui::scroll_area::State::load(&harness.ctx, active).unwrap();
+            state.offset.y = 700.0;
+            state.store(&harness.ctx, active);
+            harness.run_steps(1);
+            assert!(
+                egui::scroll_area::State::load(&harness.ctx, active)
+                    .unwrap()
+                    .offset
+                    .y
+                    > 600.0
+            );
+            let cached = harness.ctx.data(|data| {
+                data.get_temp::<Arc<LayoutCache>>(id.with("full-diff-layout"))
+                    .unwrap()
+            });
+            assert!(Arc::ptr_eq(&layout.layout, &cached.layout));
+        }
     }
 }

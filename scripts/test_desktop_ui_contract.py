@@ -15,11 +15,17 @@ spec.loader.exec_module(runner)
 
 
 class ExplicitJourneyRangeContract(unittest.TestCase):
+    def test_tex_refactor_has_one_real_registered_journey(self):
+        self.assertEqual(runner.JOURNEY_NAMES.count('tex_refactor'), 1)
+        self.assertEqual(runner.selected_journeys('all').count('tex_refactor'), 1)
+        self.assertEqual(runner.selected_journeys('tex_refactor'), ['tex_refactor'])
+        self.assertTrue(callable(getattr(runner.Journey, 'tex_refactor', None)))
+
     def test_post_table_range_preserves_the_exact_remaining_order_and_tex_coverage(self):
         full = runner.selected_journeys('all')
         remaining = runner.selected_journeys('all', 'arxiv_tables')
         self.assertEqual(remaining, full[full.index('tables') + 1:])
-        self.assertEqual(len(remaining), 52)
+        self.assertEqual(len(remaining), 53)
         self.assertNotIn('tables', remaining)
         self.assertEqual(remaining[-len(runner.TEX_JOURNEYS):], list(runner.TEX_JOURNEYS))
         self.assertEqual(runner.selected_journeys('all'), full)

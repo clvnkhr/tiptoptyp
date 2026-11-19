@@ -75,6 +75,7 @@ pub(super) fn editor_menu_row_specs(
     has_table: bool,
     math: Option<&crate::math_conversion::Target>,
     can_format: bool,
+    has_refactor: bool,
     shortcuts: &ShortcutBindings,
     format: &dyn Fn(egui::KeyboardShortcut) -> String,
 ) -> Vec<EditorMenuRow> {
@@ -106,6 +107,14 @@ pub(super) fn editor_menu_row_specs(
             label: "Edit Table…",
             right: String::new(),
         });
+    }
+    if has_refactor {
+        for label in super::tex_refactor::MENU_LABELS {
+            rows.push(EditorMenuRow {
+                label,
+                right: String::new(),
+            });
+        }
     }
     for (label, action) in [
         ("Undo", ShortcutAction::Undo),

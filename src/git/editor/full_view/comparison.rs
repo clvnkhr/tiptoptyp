@@ -210,7 +210,7 @@ pub(super) fn show(
         .unwrap_or("txt");
     let available = ui.available_size();
     ScrollArea::both()
-        .id_salt(id.with("unified-comparison-scroll"))
+        .id_salt(id.with(UNIFIED_SCROLL_SALT))
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(available.x);

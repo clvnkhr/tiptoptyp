@@ -17,6 +17,7 @@ mod settings_writing;
 mod templates;
 mod tex;
 mod tex_magic;
+mod tex_refactor;
 mod writing;
 use icons::{UiIcon, icon_button, paint_ui_icon, square_icon_button, static_icon};
 #[cfg(test)]
@@ -841,6 +842,7 @@ enum EditorMenuAction {
     ConvertMath(crate::math_conversion::Target, String),
     Liquid(liquid::BoundSelection),
     SuggestFix(Box<diagnostic_fix::BoundDiagnostic>),
+    Refactor(tex_refactor::Target, tex_refactor::Operation),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -944,8 +946,9 @@ enum AppPopup {
         source: Option<preview_jump::SourceLocation>,
         link: Option<String>,
         table: Option<BoundTableTarget>,
-        math: Option<crate::math_conversion::Target>,
+        math: Option<Box<crate::math_conversion::Target>>,
         liquid_selection: Option<liquid::BoundSelection>,
+        refactor: Option<Box<tex_refactor::Target>>,
     },
     FontSelector {
         anchor: Pos2,
@@ -1574,6 +1577,7 @@ pub struct EditorApp {
     ltex: ltex::LtexState,
     liquid: liquid::State,
     diagnostic_fix: diagnostic_fix::State,
+    tex_refactor: tex_refactor::State,
     autofix: autofix::State,
     template_picker: Option<usize>,
     encoding_import: Option<encoding_import::EncodingImport>,
@@ -1905,6 +1909,7 @@ impl EditorApp {
             ltex: Default::default(),
             liquid: Default::default(),
             diagnostic_fix: Default::default(),
+            tex_refactor: Default::default(),
             autofix: Default::default(),
             template_picker: None,
             encoding_import: None,
@@ -2305,6 +2310,7 @@ impl EditorApp {
         }
         self.overleaf = overleaf::State::default();
         self.diagnostic_fix = diagnostic_fix::State::default();
+        self.tex_refactor = tex_refactor::State::default();
         self.autofix = autofix::State::default();
         self.workspace_switch = workspace_switch::State::default();
         self.terminal = TerminalTabs::default();
@@ -3300,7 +3306,11 @@ impl EditorApp {
 
     fn handle_shortcuts(&mut self, context: &egui::Context, frame: Option<&eframe::Frame>) {
         let shortcut_viewport = focused_input_viewport(context);
-        if self.tool_dialog_open() || self.liquid.visible() || self.diagnostic_fix.visible() {
+        if self.tool_dialog_open()
+            || self.liquid.visible()
+            || self.diagnostic_fix.visible()
+            || self.tex_refactor.visible()
+        {
             handle_window_management_shortcuts(
                 context,
                 shortcut_viewport,
@@ -3819,6 +3829,12 @@ impl EditorApp {
             }
             return;
         }
+        if self.tex_refactor.visible() {
+            if command == AppCommand::CloseTab {
+                self.close_tex_refactor(context);
+            }
+            return;
+        }
         if self.diagnostic_fix.visible() {
             if command == AppCommand::CloseTab {
                 self.close_diagnostic_fix(context);
@@ -4317,7 +4333,8 @@ impl EditorApp {
                 || self.overleaf.review.is_some()
                 || self.overleaf_file_dialog_open()
                 || self.liquid.visible()
-                || self.diagnostic_fix.visible(),
+                || self.diagnostic_fix.visible()
+                || self.tex_refactor.visible(),
             self.pending_tool_picker.is_some(),
         )
     }
@@ -4352,7 +4369,20 @@ impl EditorApp {
         context.request_repaint_of(child);
     }
 
-    fn open_app_popup(&mut self, popup: AppPopup) {
+    fn open_app_popup(&mut self, mut popup: AppPopup) {
+        if let AppPopup::Editor {
+            source,
+            liquid_selection,
+            refactor,
+            ..
+        } = &mut popup
+        {
+            *refactor = source
+                .and_then(|location| {
+                    tex_refactor::Target::capture(self, location, liquid_selection.as_ref())
+                })
+                .map(Box::new);
+        }
         if let AppPopup::GitChunk { chunk, .. } = &popup
             && let Err(error) = self.prepare_document_diff(chunk)
         {
@@ -8385,6 +8415,9 @@ impl EditorApp {
             AppPopupAction::Editor(EditorMenuAction::SuggestFix(target)) => {
                 self.begin_diagnostic_fix(*target, context);
             }
+            AppPopupAction::Editor(EditorMenuAction::Refactor(target, operation)) => {
+                self.begin_tex_refactor(target, operation, context);
+            }
             AppPopupAction::Editor(EditorMenuAction::Liquid(target)) => {
                 self.begin_liquid_check(target, context);
             }
@@ -10311,6 +10344,7 @@ impl EditorApp {
         self.prepare_diagnostic_visibility(Some(&context));
         self.update_liquid();
         self.update_diagnostic_fix();
+        self.update_tex_refactor();
         self.update_autofix(&context);
         crate::resource_repair::poll();
         self.handle_dropped_file(&context);
@@ -10333,6 +10367,7 @@ impl EditorApp {
         self.poll_biber_cache(&context);
         self.show_liquid_review(&context);
         self.show_diagnostic_fix(&context);
+        self.show_tex_refactor(&context);
         self.show_app_modal_window(&context);
         self.show_asset_hover_window(&context);
         self.show_diagnostic_tooltip_window(&context);
@@ -12145,7 +12180,7 @@ fn source_editor_id(context: &egui::Context) -> egui::Id {
     viewport_scoped_id(context, "tiptoptyp-source-editor")
 }
 
-fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 26] {
+fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 27] {
     use crate::child_view::child_viewport_id;
     [
         child_viewport_id(current, find_bar::VIEWPORT_SALT),
@@ -12164,6 +12199,7 @@ fn owned_input_viewports(current: egui::ViewportId) -> [egui::ViewportId; 26] {
         child_viewport_id(current, overleaf::SALT),
         child_viewport_id(current, liquid::SALT),
         child_viewport_id(current, diagnostic_fix::SALT),
+        child_viewport_id(current, tex_refactor::SALT),
         child_viewport_id(current, "tiptoptyp-rename-overlay"),
         child_viewport_id(current, "tiptoptyp-overleaf-file-overlay"),
         child_viewport_id(current, "tiptoptyp-workspace-chooser"),
@@ -13132,6 +13168,7 @@ struct EditorContextMenuOptions<'a> {
     math: Option<&'a crate::math_conversion::Target>,
     liquid_selection: Option<&'a liquid::BoundSelection>,
     diagnostic_fix: Option<&'a diagnostic_fix::BoundDiagnostic>,
+    refactor: Option<&'a tex_refactor::Target>,
 }
 
 /// Hover-opened side menu for math conversion choices. The popup reserves a
@@ -13220,6 +13257,7 @@ fn show_editor_context_menu_ui(
         options.table.is_some(),
         options.math,
         options.can_format,
+        options.refactor.is_some(),
         shortcuts,
         &|chord| ui.ctx().format_shortcut(&chord),
     );
@@ -13275,6 +13313,18 @@ fn editor_menu_rows(
             (*choice).into(),
         ));
         ui.close();
+    }
+    if let Some(target) = options.refactor {
+        for (index, operation) in tex_refactor::Operation::ALL.into_iter().enumerate() {
+            let enabled = operation != tex_refactor::Operation::Extract || target.has_selection();
+            let response = menu_item_enabled(ui, enabled, tex_refactor::MENU_LABELS[index], None);
+            #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+            crate::desktop_test::observe(operation.target(), &response);
+            if response.clicked() {
+                *action = Some(EditorMenuAction::Refactor(target.clone(), operation));
+                ui.close();
+            }
+        }
     }
     if let Some(table) = options.table {
         if menu_item(ui, "Edit Table…", None).clicked() {

@@ -1352,6 +1352,7 @@ fn context_menu_sizes_include_every_action_and_separator() {
                                     table: None,
                                     math: None,
                                     liquid_selection: None,
+                                    refactor: None,
                                 },
                                 &ShortcutBindings::current_defaults(),
                                 &mut None,
@@ -3503,9 +3504,15 @@ fn sized_editor_menu(
     can_format: bool,
 ) -> Vec2 {
     let bindings = ShortcutBindings::current_defaults();
-    let rows = editor_menu_row_specs(has_link, has_table, math, can_format, &bindings, &|chord| {
-        ui.ctx().format_shortcut(&chord)
-    });
+    let rows = editor_menu_row_specs(
+        has_link,
+        has_table,
+        math,
+        can_format,
+        false,
+        &bindings,
+        &|chord| ui.ctx().format_shortcut(&chord),
+    );
     let separators = editor_menu_separators(has_link, has_table, can_format);
     let has_flyout = math.is_some_and(|target| target.single_alternative().is_none());
     let choices = math
@@ -3537,6 +3544,7 @@ fn editor_context_menu_exposes_the_link_under_the_pointer() {
                         table: None,
                         math: None,
                         liquid_selection: None,
+                        refactor: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3586,9 +3594,10 @@ fn menu_columns_fit_their_longest_labels_with_room_for_larger_fonts() {
             let bindings = ShortcutBindings::current_defaults();
             let tex = crate::math_conversion::Target::at("\\[x\\]", 2, DocumentKind::Tex)
                 .expect("display TeX math");
-            let rows = editor_menu_row_specs(true, true, Some(&tex), true, &bindings, &|chord| {
-                ui.ctx().format_shortcut(&chord)
-            });
+            let rows =
+                editor_menu_row_specs(true, true, Some(&tex), true, false, &bindings, &|chord| {
+                    ui.ctx().format_shortcut(&chord)
+                });
             let geometry =
                 editor_menu_geometry(ui.ctx(), ui.style(), &rows, &["Inline math \\(...\\)"], 4);
             let widths = super::popup_layout::editor_menu_widths(
@@ -3690,6 +3699,7 @@ fn tex_math_flyout_offers_the_opposite_form_and_dispatches_its_exact_choice() {
                             table: None,
                             math: Some(&target),
                             liquid_selection: None,
+                            refactor: None,
                             diagnostic_fix: None,
                         },
                         &ShortcutBindings::current_defaults(),
@@ -3767,6 +3777,7 @@ fn typst_math_menu_offers_the_other_form_directly_without_a_flyout() {
                         table: None,
                         math: Some(&target),
                         liquid_selection: None,
+                        refactor: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3812,6 +3823,7 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
                         table: None,
                         math: Some(&target),
                         liquid_selection: None,
+                        refactor: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -3870,6 +3882,7 @@ fn reopened_conversion_menu_does_not_inherit_the_previous_flyout() {
                             table: None,
                             math: Some(&target),
                             liquid_selection: None,
+                            refactor: None,
                         },
                         &ShortcutBindings::current_defaults(),
                         &mut None,
@@ -3904,10 +3917,15 @@ fn rendered_menu_geometry_matches_sized_geometry_exactly() {
         .build_ui_state(
             move |ui, action| {
                 let bindings = ShortcutBindings::current_defaults();
-                let rows =
-                    editor_menu_row_specs(false, false, Some(&target), true, &bindings, &|chord| {
-                        ui.ctx().format_shortcut(&chord)
-                    });
+                let rows = editor_menu_row_specs(
+                    false,
+                    false,
+                    Some(&target),
+                    true,
+                    false,
+                    &bindings,
+                    &|chord| ui.ctx().format_shortcut(&chord),
+                );
                 let separators = editor_menu_separators(false, false, true);
                 let geometry =
                     editor_menu_geometry(ui.ctx(), ui.style(), &rows, target.choices(), separators);
@@ -3940,6 +3958,7 @@ fn rendered_menu_geometry_matches_sized_geometry_exactly() {
                         table: None,
                         math: Some(&target),
                         liquid_selection: None,
+                        refactor: None,
                     },
                     &bindings,
                     action,
@@ -4088,6 +4107,7 @@ fn editor_context_menu_offers_the_static_table_under_the_pointer() {
                         table: Some(&table),
                         math: None,
                         liquid_selection: None,
+                        refactor: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -11019,6 +11039,7 @@ fn math_context_conversion_choices_follow_document_language() {
                         table: None,
                         math: Some(&target),
                         liquid_selection: None,
+                        refactor: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,
@@ -11055,6 +11076,7 @@ fn math_context_conversion_choices_follow_document_language() {
                         table: None,
                         math: Some(&target),
                         liquid_selection: None,
+                        refactor: None,
                     },
                     &ShortcutBindings::current_defaults(),
                     action,

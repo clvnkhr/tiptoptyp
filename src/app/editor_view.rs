@@ -1988,8 +1988,9 @@ pub(super) fn editor_context_popup(
             }),
         math: character
             .and_then(|character| crate::math_conversion::Target::at(source, character, kind))
-            .map(|target| target.bind_document(key)),
+            .map(|target| Box::new(target.bind_document(key))),
         liquid_selection: None,
+        refactor: None,
     }
 }
 

@@ -946,7 +946,11 @@ fn ambiguous_problem_opens_choices_and_read_only_disables_source_fixes() {
 
 #[test]
 fn problem_action_ownership_is_cached_across_painting_and_filtering() {
-    let mut harness = workspace_harness(app_with_problems());
+    let mut app = app_with_problems();
+    // This checks idle/filter reuse. An unowned external file would start a
+    // reader whose publication legitimately invalidates the action cache.
+    app.preview.editor_diagnostics[1].source = DiagnosticSource::Global;
+    let mut harness = workspace_harness(app);
     let rebuilds = harness.state().problems.actions.rebuilds;
     assert_eq!(rebuilds, 1);
     harness.run_steps(20);

@@ -74,6 +74,7 @@ impl EditorApp {
             || self.tool_dialog_open()
             || self.liquid.visible()
             || self.diagnostic_fix.visible()
+            || self.tex_refactor.visible()
             || self.version_history.is_some()
             || self.overleaf.review.is_some()
     }

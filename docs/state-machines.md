@@ -396,3 +396,33 @@ Desktop inspection exposes `auto_pair_phase` as idle/borrowing without token or
 document contents. Idle checks inspect only the phase; active checks compare
 the closing token, and input receipts are bounded by the current event batch.
 This lifecycle adds no worker, timer, repaint loop or idle source scan.
+
+### TeX refactoring review
+
+`src/app/tex_refactor.rs` owns the local transformation lifecycle as
+`Closed | Naming(Draft) | Reviewing(Review) | Rejected { target, message } | Stale`.
+Each live draft/review owns its stable tab, exact `DocumentKey`, immutable source
+snapshot and original scalar cursor/selection. Byte positions are validated only
+on an explicit transform request, so opening a menu does not rescan the source.
+The engine in `src/tex/refactor.rs` builds a validated token-aware plan only on an explicit
+command or Preview action; it does no idle analysis or background polling.
+
+Inline-one and inline-all requests enter Reviewing or Rejected. Extraction starts
+in Naming; a rejected name/selection retains its draft for correction. Preview
+is admitted only in Naming and Accept only in Reviewing, so repeated or late UI
+actions cannot retire another phase. Accept rechecks the exact owner, writable
+source and full plan snapshot before one document edit/Undo transaction. Cancel
+retires every payload and closes the owned native review viewport. Source edits,
+owner departure and a failed ownership check enter Stale, which never revives
+when old text is restored. Window teardown retires the review outright. Cancel
+is absorbing within one native input batch, including a concurrent Accept.
+
+The complete Plan and Target stay intact while the displayed comparison trims
+only unchanged outer lines around the first/last change. Review presentation
+transitions from AwaitingFirstPaint to Presented; its first paint resets both
+comparison scroll styles using the same bounded cache identities. Subsequent
+user scrolling is preserved until the next review.
+
+The `tex_refactor` desktop observation reports `phase`, `visible`, `current` and
+only comparison fingerprints/counts; source text is never logged. The review
+viewport is `tiptoptyp-tex-refactor`, its framebuffer target is `tex-refactor`.

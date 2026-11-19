@@ -1100,6 +1100,7 @@ mod tests {
                             table: None,
                             math: None,
                             liquid_selection: None,
+                            refactor: None,
                             diagnostic_fix: state.0.as_ref(),
                         },
                         &AppSettings::default().effective_shortcuts(),

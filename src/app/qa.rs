@@ -834,7 +834,7 @@ impl QaSession {
                     .expect("QA math fixture replacement");
                 app.prepare_editor_source_data();
                 let math = crate::math_conversion::Target::at(app.document().source(), 2, kind)
-                    .map(|target| target.bind_document(app.document().key()));
+                    .map(|target| Box::new(target.bind_document(app.document().key())));
                 app.app_popup = Some(AppPopup::Editor {
                     source: Some(preview_jump::SourceLocation {
                         key: app.document().key(),
@@ -842,6 +842,7 @@ impl QaSession {
                     }),
                     math,
                     liquid_selection: None,
+                    refactor: None,
                     anchor: Pos2::new(430.0, 250.0),
                     link: None,
                     table: None,

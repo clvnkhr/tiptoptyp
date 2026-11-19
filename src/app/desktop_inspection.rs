@@ -439,6 +439,7 @@ impl EditorApp {
             });
         interaction["liquid"] = self.liquid_inspection();
         interaction["diagnostic_fix"] = self.diagnostic_fix_inspection();
+        interaction["tex_refactor"] = self.tex_refactor_inspection();
         let marker_pair = |markers: &crate::comment_controls::Markers| {
             serde_json::json!({
                 "off_fingerprint": crate::desktop_test::fingerprint(&markers.off),
@@ -528,6 +529,7 @@ impl EditorApp {
         interaction["autofix"] = self.autofix.inspect();
         interaction["autofix_rules"] = serde_json::to_value(&self.settings.autofix).unwrap();
         interaction["autofix_on_manual_save"] =
+            serde_json::json!(self.settings.autofix_on_manual_save);
         interaction["autofix_on_autosave"] = serde_json::json!(self.settings.autofix_on_autosave);
         interaction["format_after_math_conversion"] =
             serde_json::json!(self.settings.format_after_math_conversion);

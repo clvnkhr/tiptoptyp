@@ -90,6 +90,7 @@ on:
           "background",
           "background_fades",
           "tex_autofix",
+          "tex_refactor",
           "tex_math_conversion",
           "context_menu"
         ]

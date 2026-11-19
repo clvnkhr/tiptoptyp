@@ -6,6 +6,7 @@ pub(crate) mod documentation;
 mod formatter;
 pub(crate) mod imports;
 pub(crate) mod magic;
+pub(crate) mod refactor;
 mod session;
 pub(crate) mod settings;
 pub(crate) mod tools;

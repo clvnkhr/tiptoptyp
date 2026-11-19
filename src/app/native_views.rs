@@ -1096,6 +1096,7 @@ impl EditorApp {
             || self.tool_dialog_open()
             || self.liquid.visible()
             || self.diagnostic_fix.visible()
+            || self.tex_refactor.visible()
             || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some();
         if blocked_by_overlay {
@@ -1360,6 +1361,7 @@ impl EditorApp {
             || self.overleaf_file_dialog_open()
             || self.liquid.visible()
             || self.diagnostic_fix.visible()
+            || self.tex_refactor.visible()
             || matches!(self.app_popup, Some(ref popup) if !matches!(popup, AppPopup::GitChunk { .. }))
             || self.document_workflow.modal().is_some()
         {
@@ -1386,6 +1388,7 @@ impl EditorApp {
     pub(super) fn show_app_popup_window(&mut self, context: &egui::Context) {
         if self.liquid.visible()
             || self.diagnostic_fix.visible()
+            || self.tex_refactor.visible()
             || app_popup_blocked_by_root_overlay(
                 self.document_workflow.modal().is_some(),
                 self.typst_overrides_visible,
@@ -1461,6 +1464,7 @@ impl EditorApp {
                 link,
                 table,
                 math,
+                refactor,
                 ..
             } => {
                 let can_format = self.document().kind().typesetting_language().is_some();
@@ -1472,8 +1476,9 @@ impl EditorApp {
                 let rows = editor_menu_row_specs(
                     link.is_some(),
                     table.is_some(),
-                    math.as_ref(),
+                    math.as_deref(),
                     can_format,
+                    refactor.is_some(),
                     &shortcuts,
                     &|chord| context.format_shortcut(&chord),
                 );
@@ -1729,6 +1734,7 @@ impl EditorApp {
                                     table,
                                     math,
                                     liquid_selection,
+                                    refactor,
                                     ..
                                 } => {
                                     let mut editor_action = None;
@@ -1745,11 +1751,12 @@ impl EditorApp {
                                                 }),
                                             link: link.as_deref(),
                                             table: table.as_ref(),
-                                            math: math.as_ref(),
+                                            math: math.as_deref(),
                                             liquid_selection: liquid_selection
                                                 .as_ref()
                                                 .filter(|_| !self.liquid.busy()),
                                             diagnostic_fix: diagnostic_fix.as_deref(),
+                                            refactor: refactor.as_deref(),
                                         },
                                         &shortcuts,
                                         &mut editor_action,

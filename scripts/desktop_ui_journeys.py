@@ -37,6 +37,7 @@ from desktop_ui_overleaf_journeys import OverleafJourneys
 from desktop_ui_explorer_journeys import ExplorerJourneys
 from desktop_ui_native_scroll import native_scroll_advance
 from desktop_ui_autofix_journeys import AutofixJourneys
+from desktop_ui_tex_refactor_journeys import TexRefactorJourneys
 
 PARTICLE_STYLES = ("Explosion", "Shotgun", "Flamethrower", "Railgun", "Plasma")
 LINGERING_STYLES = ("Smoke", "Embers")
@@ -629,7 +630,7 @@ def finish_clipboard_adapter(process):
         raise RuntimeError(error or "clipboard adapter failed")
 
 
-class EditorJourneys(AutofixJourneys, ExplorerJourneys, OverleafJourneys, ActivityJourneys, IndentationJourneys, ToolDefaultsJourneys, SettingsLinksJourneys, LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, DiagnosticFixJourneys, WorkspaceSwitchJourneys, CommentControlsJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
+class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, OverleafJourneys, ActivityJourneys, IndentationJourneys, ToolDefaultsJourneys, SettingsLinksJourneys, LtexJourneys, InactivePreviewJourneys, AssetLayoutJourneys, CitationJourneys, TexdocJourneys, LatexdiffJourneys, LiquidJourneys, DiagnosticFixJourneys, WorkspaceSwitchJourneys, CommentControlsJourneys, VersionJourneys, TexJourneys, ImageJourneys, NewestJourneys, PartialPreviewJourneys, SnippetJourneys, ImeJourneys, PaletteJourneys, PreviewJumpJourneys, MathGridJourneys, EffectsPacingJourneys):
     def set_math_conversion_formatting(self, enabled):
         if self.snapshot()["document"]["format_after_math_conversion"] is enabled:
             return

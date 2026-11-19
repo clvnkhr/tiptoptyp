@@ -43,6 +43,10 @@ impl BoundSelection {
             cursor: [cursor.primary.index.0, cursor.secondary.index.0],
         })
     }
+    pub(super) fn selection_cursor(&self, key: DocumentKey) -> Option<CCursorRange> {
+        self.current(key)
+            .then(|| CCursorRange::two(CCursor::new(self.cursor[0]), CCursor::new(self.cursor[1])))
+    }
     fn current(&self, key: DocumentKey) -> bool {
         self.snapshot.key() == key
     }
