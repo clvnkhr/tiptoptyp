@@ -1048,3 +1048,172 @@ fn generated_suggestions_reject_foreign_and_identifiably_stale_problems() {
         assert!(!harness.state().diagnostic_fix.busy());
     }
 }
+
+const REFERENCE_AUTOFIX_LABEL: &str = "Autofix all: Non-breaking spaces before references";
+
+fn tex_reference_autofix_problem() -> EditorApp {
+    let mut app = app_with_problems();
+    app.document_mut().replace_loaded_unprojected(
+        "Wait... See  \\ref{x} and\n  \\eqref{y}.".into(),
+        std::env::temp_dir().join("problems-autofix.tex"),
+        DocumentKind::Tex,
+        None,
+    );
+    app.document_mut().set_history_reset(false);
+    app.settings.auto_save = false;
+    app.preview.diagnostics = vec![Diagnostic {
+        details: vec!["Code: missing-nonbreaking-space".into()],
+        ..diagnostic(
+            "Badness",
+            DiagnosticSeverity::Warning,
+            "Use a non-breaking space before \\ref.",
+            1,
+        )
+    }];
+    app.preview.editor_diagnostics.clear();
+    app.mark_diagnostics_changed();
+    app
+}
+
+fn open_reference_autofix_menu(harness: &mut Harness<'_, EditorApp>) {
+    harness
+        .get_by_label("Use a non-breaking space before \\ref.")
+        .click_secondary();
+    harness.run_steps(4);
+}
+
+#[test]
+fn tex_problem_autofix_menu_applies_all_occurrences_of_only_its_rule_in_one_undo_step() {
+    let app = tex_reference_autofix_problem();
+    let original = app.document().source().to_owned();
+    let mut harness = harness_with_size(app, Vec2::new(900.0, 600.0));
+    open_reference_autofix_menu(&mut harness);
+    assert!(
+        !harness
+            .get_by_label(REFERENCE_AUTOFIX_LABEL)
+            .accesskit_node()
+            .is_disabled()
+    );
+    harness.get_by_label("Suggest fix");
+    assert!(!harness.state().autofix.busy());
+    assert!(!harness.state().diagnostic_fix.busy());
+    harness.get_by_label(REFERENCE_AUTOFIX_LABEL).click();
+    harness.run_steps(2);
+    assert!(harness.state().autofix.busy());
+    assert!(!harness.state().diagnostic_fix.busy());
+    assert_eq!(harness.state().document().source(), original.as_str());
+    assert!(harness.query_by_label(REFERENCE_AUTOFIX_LABEL).is_none());
+    harness
+        .state_mut()
+        .autofix
+        .wait_until_ready_for_test()
+        .unwrap();
+    let context = harness.ctx.clone();
+    harness.state_mut().update_autofix(&context);
+    assert_eq!(
+        harness.state().document().source(),
+        "Wait... See~\\ref{x} and~\\eqref{y}."
+    );
+    harness
+        .state_mut()
+        .document_mut()
+        .history_step(false, CCursorRange::default())
+        .unwrap();
+    assert_eq!(harness.state().document().source(), original.as_str());
+    assert!(
+        harness
+            .state_mut()
+            .document_mut()
+            .history_step(false, CCursorRange::default())
+            .is_none()
+    );
+}
+
+#[test]
+fn tex_problem_autofix_menu_rejects_disabled_foreign_stale_locked_and_busy_actions() {
+    for case in 0..5 {
+        let mut app = tex_reference_autofix_problem();
+        match case {
+            0 => crate::tex::autofix::Rule::ReferenceTies
+                .set_enabled(&mut app.settings.autofix, false),
+            1 => {
+                app.preview.diagnostics[0].source =
+                    DiagnosticSource::File("/unrelated/other.tex".into())
+            }
+            2 => {
+                let key = app.document().key();
+                let mut correction =
+                    DiagnosticCorrection::new(0..0, String::new(), None, None, Vec::new());
+                correction.document = Some(DocumentKey::new(
+                    key.owner,
+                    key.epoch,
+                    key.revision.wrapping_sub(1),
+                ));
+                app.preview.diagnostics[0].correction = Some(correction);
+            }
+            3 => app.begin_new_table(&egui::Context::default()),
+            4 => app.begin_autofix_rule(
+                crate::tex::autofix::Rule::ReferenceTies,
+                &egui::Context::default(),
+            ),
+            _ => unreachable!(),
+        }
+        app.mark_diagnostics_changed();
+        let mut harness = harness_with_size(app, Vec2::new(900.0, 600.0));
+        open_reference_autofix_menu(&mut harness);
+        assert!(
+            harness
+                .get_by_label(REFERENCE_AUTOFIX_LABEL)
+                .accesskit_node()
+                .is_disabled(),
+            "case {case}"
+        );
+        assert!(!harness.state().diagnostic_fix.busy());
+    }
+}
+
+#[test]
+fn tex_problem_autofix_menu_does_not_rebind_after_source_edits() {
+    let mut harness = harness_with_size(tex_reference_autofix_problem(), Vec2::new(900.0, 600.0));
+    open_reference_autofix_menu(&mut harness);
+    assert!(
+        !harness
+            .get_by_label(REFERENCE_AUTOFIX_LABEL)
+            .accesskit_node()
+            .is_disabled()
+    );
+    harness
+        .state_mut()
+        .document_mut()
+        .edit(CCursorRange::default(), |source| source.push('!'));
+    harness.run_steps(4);
+    assert!(
+        harness
+            .get_by_label(REFERENCE_AUTOFIX_LABEL)
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert!(!harness.state().autofix.busy());
+}
+
+#[test]
+fn tex_problem_autofix_menu_excludes_typst_other_providers_and_unknown_codes() {
+    for case in 0..3 {
+        let mut app = tex_reference_autofix_problem();
+        match case {
+            0 => app.document_mut().replace_unprojected_untitled("$x$"),
+            1 => app.preview.diagnostics[0].provider = Some("TexLab".into()),
+            2 => app.preview.diagnostics[0].details = vec!["Code: unknown-rule".into()],
+            _ => unreachable!(),
+        }
+        app.mark_diagnostics_changed();
+        let mut harness = harness_with_size(app, Vec2::new(900.0, 600.0));
+        open_reference_autofix_menu(&mut harness);
+        assert!(
+            harness.query_by_label(REFERENCE_AUTOFIX_LABEL).is_none(),
+            "case {case}"
+        );
+        harness.get_by_label("Suggest fix");
+        assert!(!harness.state().autofix.busy());
+    }
+}

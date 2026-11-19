@@ -504,6 +504,7 @@ fn problems_keyboard_owner_blocks_source_editing_and_find_commands() {
                 AppCommand::Paste,
                 AppCommand::ToggleComment,
                 AppCommand::Format,
+                AppCommand::Autofix,
             ] {
                 match route {
                     Route::Shortcut => {
@@ -634,6 +635,14 @@ fn command_admission_covers_empty_workspace_busy_file_flow_and_document_kind() {
             (AppCommand::Code, false, false, DocumentKind::Text, false, 0),
             (
                 AppCommand::Format,
+                false,
+                false,
+                DocumentKind::Text,
+                false,
+                0,
+            ),
+            (
+                AppCommand::Autofix,
                 false,
                 false,
                 DocumentKind::Text,

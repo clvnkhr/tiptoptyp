@@ -10,6 +10,13 @@ use crate::tool_profiles::{self, ToolProfile};
 use filter::{Filter, Model};
 use std::collections::HashSet;
 
+#[derive(Clone, Copy)]
+struct AutofixTarget {
+    tab: Option<u64>,
+    document: DocumentKey,
+    rule: crate::tex::autofix::Rule,
+}
+
 pub(super) struct State {
     pub(super) filter: Filter,
     pub(super) model: Model,
@@ -24,6 +31,7 @@ pub(super) struct State {
     filters_popup_open: bool,
     controls_height: f32,
     scroll_layout: Option<ScrollLayout>,
+    autofix_menu_owner: Option<(egui::Id, DocumentKey)>,
     collapsed: HashSet<(String, DiagnosticSeverity)>,
     actions: Actions,
 }
@@ -57,6 +65,7 @@ impl Default for State {
             filters_popup_open: false,
             controls_height: 0.0,
             scroll_layout: None,
+            autofix_menu_owner: None,
             collapsed: HashSet::new(),
             actions: Actions::default(),
         }
@@ -550,8 +559,11 @@ impl EditorApp {
         let mut correction_target = None;
         let mut dictionary_target = None;
         let mut suggestion_target = None;
+        let mut autofix_target = None;
         let suggestion_ready = !self.diagnostic_fix.busy();
         let edits_allowed = !self.source_edit_blocked();
+        let autofix_ready = edits_allowed && !self.document_flow_busy() && !self.autofix.busy();
+        let tex_document = !self.tabs.is_empty() && self.document().kind() == DocumentKind::Tex;
         let current_key = (!self.tabs.is_empty()).then(|| self.document().key());
         // Floating scrollbars expand on hover. Keep row actions outside the
         // full hit area, including when only the hidden toolbar overflows.
@@ -660,6 +672,16 @@ impl EditorApp {
                         let action_count = usize::from(has_fixes) + usize::from(dictionary_word.is_some());
                         let color = diagnostic_color(diagnostic.severity, ui.ctx());
                         let code = diagnostic_code(diagnostic);
+                        let autofix_rule = tex_document
+                            .then(|| {
+                                diagnostic
+                                    .provider
+                                    .as_deref()
+                                    .filter(|provider| provider.eq_ignore_ascii_case("badness"))
+                                    .and(code.as_deref())
+                                    .and_then(|code| crate::tex::autofix::Rule::for_diagnostic(code, &diagnostic.message))
+                            })
+                            .flatten();
                         let details_id = ui.make_persistent_id((
                             "problem-details",
                             self.tabs.active_id(),
@@ -865,11 +887,38 @@ impl EditorApp {
                             && ui.input(|input| {
                                 input.pointer.button_clicked(egui::PointerButton::Secondary)
                             });
+                        // Keep the popup bound to the revision on which it was
+                        // opened. A later repaint must not silently rebind an
+                        // already visible action after the source changes.
+                        let menu_owner_id = details_id.with(("problem-menu-owner", index));
+                        if context_requested {
+                            self.problems.autofix_menu_owner = current_key.map(|key| (menu_owner_id, key));
+                        }
+                        let menu_owner = self.problems.autofix_menu_owner
+                            .filter(|(owner, _)| *owner == menu_owner_id)
+                            .map(|(_, document)| document);
                         let menu = egui::Popup::context_menu(&row)
                             .open_memory(
                                 context_requested.then_some(egui::SetOpenCommand::Bool(true)),
                             )
                             .show(|ui| {
+                                if let Some(rule) = autofix_rule {
+                                    let enabled = autofix_ready
+                                        && self.problems.actions.suggestions.contains(&index)
+                                        && current_key.is_some()
+                                        && menu_owner == current_key
+                                        && rule.enabled(&self.settings.autofix);
+                                    let autofix = ui.add_enabled(
+                                        enabled,
+                                        egui::Button::new(format!("Autofix all: {}", rule.label())),
+                                    ).on_hover_text("Fix all occurrences of this enabled rule in the current TeX document in one undo step.");
+                                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                                    crate::desktop_test::observe(&format!("problem.{index}.autofix"), &autofix);
+                                    if autofix.clicked() {
+                                        autofix_target = menu_owner.map(|document| AutofixTarget { tab: self.tabs.active_id(), document, rule });
+                                        ui.close();
+                                    }
+                                }
                                 let suggestion = ui.add_enabled(
                                     self.problems.actions.suggestions.contains(&index)
                                         && edits_allowed && suggestion_ready,
@@ -905,6 +954,9 @@ impl EditorApp {
                                     ui.close();
                                 }
                             });
+                        if menu.is_none() && self.problems.autofix_menu_owner.is_some_and(|(owner, _)| owner == menu_owner_id) {
+                            self.problems.autofix_menu_owner = None;
+                        }
                         self.problems.popup_open |= menu.is_some();
                         let row = if self.snapshot_scene == Some(UiSnapshotScene::ProblemsPanel)
                             && index == 0
@@ -1009,7 +1061,15 @@ impl EditorApp {
         if copied {
             self.focus_problems_search(ui.ctx());
         }
-        if let Some(diagnostic) = suggestion_target {
+        if let Some(target) = autofix_target {
+            if !self.tabs.is_empty()
+                && self.tabs.active_id() == target.tab
+                && self.document().key() == target.document
+                && target.rule.enabled(&self.settings.autofix)
+            {
+                self.begin_autofix_rule(target.rule, ui.ctx());
+            }
+        } else if let Some(diagnostic) = suggestion_target {
             let cursor = egui::text_edit::TextEditState::load(ui.ctx(), source_editor_id(ui.ctx()))
                 .and_then(|state| state.cursor.char_range())
                 .unwrap_or_default();

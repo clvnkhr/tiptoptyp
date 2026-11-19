@@ -374,6 +374,171 @@ pub(super) fn park_main(app: &mut EditorApp, root: &Path, context: &egui::Contex
     assert_ne!(main, chapter);
     (main, chapter)
 }
+
+#[test]
+fn on_save_autofix_refuses_unwritable_overleaf_owners_before_editing() {
+    for parked in [false, true] {
+        for condition in 0..7 {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().canonicalize().unwrap();
+            let context = egui::Context::default();
+            let mut app = fixture(&root, &context);
+            app.snapshot_scene = None;
+            app.settings.autofix_on_save = true;
+            app.settings.autofix.enabled = [crate::tex::autofix::Rule::ReferenceTies].into();
+            let main = if parked {
+                park_main(&mut app, &root, &context).0
+            } else {
+                app.tabs.active_id().unwrap()
+            };
+            app.tabs
+                .document_mut(main)
+                .unwrap()
+                .edit(CCursorRange::default(), |text| {
+                    *text = "Figure \\ref{fig:a}.\n".into();
+                });
+            assert!(app.autofix_save_admitted(main, &root.join("main.tex"), SaveIntent::Explicit));
+            match condition {
+                0 => {
+                    app.overleaf.blocked.insert("a".into());
+                }
+                1 => app.overleaf.authentication.set_required(true),
+                2 => app.overleaf.connection.as_mut().unwrap().hydration = Hydration::waiting(),
+                3 => app.overleaf.connection.as_mut().unwrap().transport = Transport::Offline,
+                4 => {
+                    let model = &mut app.overleaf.connection.as_mut().unwrap().model;
+                    model.set_draft("a", "Local model draft\n".into()).unwrap();
+                    model
+                        .apply(BrowserEvent::Document {
+                            epoch: EPOCH,
+                            id: "a".into(),
+                            path: "main.tex".into(),
+                            source: "Remote change\n".into(),
+                        })
+                        .unwrap();
+                    assert!(model.document("a").unwrap().conflict().is_some());
+                }
+                5 => {
+                    app.stage_overleaf_rebase("a", "Main old\n").unwrap();
+                    assert!(app.overleaf.rebases.contains_key("a"));
+                }
+                6 => {
+                    let mut session = crate::overleaf::workspace_session::WorkspaceSession::new(
+                        &app.overleaf.connection.as_ref().unwrap().project,
+                        [3; 16],
+                    );
+                    session.offline = true;
+                    app.overleaf.offline.install(session, false);
+                }
+                _ => unreachable!(),
+            }
+            let key = app.document_for_tab(main).unwrap().key();
+            assert!(
+                !app.submit_save(
+                    main,
+                    root.join("main.tex"),
+                    SaveIntent::Explicit,
+                    false,
+                    &context
+                ),
+                "parked={parked}, condition={condition}"
+            );
+            assert!(!app.autofix.busy());
+            assert!(!app.document_workflow.save_in_flight());
+            assert_eq!(app.document_for_tab(main).unwrap().key(), key);
+            assert_eq!(
+                app.document_for_tab(main).unwrap().source(),
+                "Figure \\ref{fig:a}.\n"
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("main.tex")).unwrap(),
+                "Main old\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn on_save_autofix_preserves_locked_overleaf_recovery_copies_without_editing() {
+    for parked in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let destination = local.path().join("recovered.tex");
+        let context = egui::Context::default();
+        let mut app = fixture(&root, &context);
+        app.snapshot_scene = None;
+        app.settings.autofix_on_save = true;
+        let tab = if parked {
+            park_main(&mut app, &root, &context).0
+        } else {
+            app.tabs.active_id().unwrap()
+        };
+        let original = "Figure  \\ref{fig:a}.\n";
+        app.tabs
+            .document_mut(tab)
+            .unwrap()
+            .edit(CCursorRange::default(), |source| *source = original.into());
+        app.overleaf.blocked.insert("a".into());
+        assert!(app.overleaf_tab_source_locked(tab));
+        assert!(app.submit_save(
+            tab,
+            destination.clone(),
+            SaveIntent::Explicit,
+            true,
+            &context
+        ));
+        assert!(!app.autofix.busy());
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(destination).unwrap(), original);
+        assert_eq!(app.document_for_tab(tab).unwrap().source(), original);
+        assert!(!app.document_for_tab(tab).unwrap().is_dirty());
+        assert_eq!(
+            fs::read_to_string(root.join("main.tex")).unwrap(),
+            "Main old\n"
+        );
+        assert!(app.formatting.saved_document().is_none());
+    }
+}
+
+#[test]
+fn on_save_autofix_saves_a_parked_local_owner_while_another_overleaf_owner_is_locked() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let local = tempfile::tempdir().unwrap();
+    let path = local.path().join("local.tex");
+    let original = "Figure  \\ref{fig:a}.\n";
+    fs::write(&path, original).unwrap();
+    let context = egui::Context::default();
+    let mut app = fixture(&root, &context);
+    app.snapshot_scene = None;
+    app.settings.autofix_on_save = true;
+    app.settings.autofix.enabled = [crate::tex::autofix::Rule::ReferenceTies].into();
+    let remote = app.tabs.active_id().unwrap();
+    app.lifecycle = DocumentLifecycle::Active;
+    app.new_tab(&context);
+    app.lifecycle = DocumentLifecycle::Dormant;
+    let parked = app.tabs.active_id().unwrap();
+    app.document_mut().replace_loaded_unprojected(
+        original.into(),
+        path.clone(),
+        DocumentKind::Tex,
+        Some(fingerprint(original.as_bytes())),
+    );
+    app.activate_tab(remote, &context);
+    app.overleaf.blocked.insert("a".into());
+    assert!(app.source_edit_locked());
+    let key = app.document().key();
+    assert!(app.submit_save(parked, path.clone(), SaveIntent::Explicit, false, &context));
+    app.autofix.wait_until_ready_for_test().unwrap();
+    app.update_autofix(&context);
+    app.finish_save_for_test(&context);
+    assert_eq!(fs::read_to_string(path).unwrap(), "Figure~\\ref{fig:a}.\n");
+    assert_eq!(app.tabs.active_id(), Some(remote));
+    assert_eq!(app.document().key(), key);
+    assert_eq!(app.document().source(), "Main old\n");
+}
+
 fn pending_save(app: &mut EditorApp, tab: u64, id: &str, source: &str) -> u64 {
     let document = app.tabs.document_mut(tab).unwrap();
     document.edit(CCursorRange::default(), |text| *text = source.into());

@@ -1,4 +1,5 @@
 mod activity_panel;
+mod autofix;
 mod build;
 #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
 mod desktop_inspection;
@@ -982,6 +983,7 @@ enum SettingsSection {
     Editor,
     CommentControls,
     Grammar,
+    Autofixing,
     Writing,
     Preview,
     Tools,
@@ -991,11 +993,12 @@ enum SettingsSection {
 }
 
 impl SettingsSection {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Appearance,
         Self::Editor,
         Self::CommentControls,
         Self::Grammar,
+        Self::Autofixing,
         Self::Writing,
         Self::Preview,
         Self::Tools,
@@ -1010,6 +1013,7 @@ impl SettingsSection {
             Self::Editor => "Editor",
             Self::CommentControls => "Comment controls",
             Self::Grammar => "Grammar & spelling",
+            Self::Autofixing => "Autofixing",
             Self::Writing => "Writing",
             Self::Preview => "Preview",
             Self::Tools => "Tools",
@@ -1053,6 +1057,7 @@ enum SettingsTarget {
     Ltex,
     LiquidGrammar,
     LiquidFix,
+    Autofix,
     Handwriting,
     UnicodeWarnings,
     MitexDollars,
@@ -1091,7 +1096,7 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
-    const ALL: [Self; 66] = [
+    const ALL: [Self; 67] = [
         Self::Appearance,
         Self::TypstSyntax,
         Self::LightTheme,
@@ -1123,6 +1128,7 @@ impl SettingsTarget {
         Self::Ltex,
         Self::LiquidGrammar,
         Self::LiquidFix,
+        Self::Autofix,
         Self::Handwriting,
         Self::UnicodeWarnings,
         Self::MitexDollars,
@@ -1194,6 +1200,7 @@ impl SettingsTarget {
             Self::Ltex => "LTeX+ spelling and grammar",
             Self::LiquidGrammar => "Liquid selection grammar",
             Self::LiquidFix => "Liquid fix suggestions",
+            Self::Autofix => "TeX autofixing",
             Self::UnicodeWarnings => "Flag invisible and confusable characters",
             Self::Snippets => "Snippets",
             Self::Templates => "Document templates",
@@ -1276,8 +1283,8 @@ impl SettingsTarget {
             | Self::HarperCapitalizedNames
             | Self::TexProseRules
             | Self::Ltex
-            | Self::LiquidGrammar
-            | Self::LiquidFix => SettingsSection::Grammar,
+            | Self::LiquidGrammar => SettingsSection::Grammar,
+            Self::Autofix | Self::LiquidFix => SettingsSection::Autofixing,
             Self::AsciiPunctuation
             | Self::Handwriting
             | Self::UnicodeWarnings
@@ -1359,6 +1366,9 @@ impl SettingsTarget {
             }
             Self::LiquidGrammar => {
                 "liquid local selected text selection grammar model machine learning native onnx threads cache input filtering placeholder math code links formatted emph strong textbf"
+            }
+            Self::Autofix => {
+                "autofix automatic fix fixes repair TeX latex document enabled rules diagnostic ref eqref nbsp nonbreaking space tilde shortcut undo on save saving"
             }
             Self::LiquidFix => {
                 "liquid foundation model LFM LFM3 local fix fixes suggest suggestion diagnostic error replacement install download review diff threads cache"
@@ -1446,13 +1456,21 @@ impl SettingsTarget {
     }
 
     fn matches_terms(self, terms: &[String]) -> bool {
-        let haystack = format!(
+        let mut haystack = format!(
             "{} {} {}",
             self.label(),
             self.section().title(),
             self.search_text()
         )
         .to_lowercase();
+        if self == Self::Autofix {
+            for &rule in crate::tex::autofix::Rule::ALL {
+                for text in [rule.id(), rule.label(), rule.description()] {
+                    haystack.push(' ');
+                    haystack.push_str(&text.to_lowercase());
+                }
+            }
+        }
         terms.iter().all(|term| haystack.contains(term))
     }
 }
@@ -1555,6 +1573,7 @@ pub struct EditorApp {
     ltex: ltex::LtexState,
     liquid: liquid::State,
     diagnostic_fix: diagnostic_fix::State,
+    autofix: autofix::State,
     template_picker: Option<usize>,
     encoding_import: Option<encoding_import::EncodingImport>,
     capabilities: CapabilityCache,
@@ -1884,6 +1903,7 @@ impl EditorApp {
             ltex: Default::default(),
             liquid: Default::default(),
             diagnostic_fix: Default::default(),
+            autofix: Default::default(),
             template_picker: None,
             encoding_import: None,
             capabilities,
@@ -2189,6 +2209,12 @@ impl EditorApp {
             CommandRequirement::TypesettingDocument => {
                 self.document().kind().typesetting_language().is_some()
             }
+            CommandRequirement::TexDocument => {
+                self.document().kind() == DocumentKind::Tex
+                    && !self.source_edit_blocked()
+                    && !self.document_flow_busy()
+                    && !self.autofix.busy()
+            }
             CommandRequirement::SourcePreview => self.source_preview_available(),
             CommandRequirement::InteractivePreview => {
                 (self.document().kind().is_typst() && self.interactive_preview_active())
@@ -2277,6 +2303,7 @@ impl EditorApp {
         }
         self.overleaf = overleaf::State::default();
         self.diagnostic_fix = diagnostic_fix::State::default();
+        self.autofix = autofix::State::default();
         self.workspace_switch = workspace_switch::State::default();
         self.terminal = TerminalTabs::default();
         self.bottom_panel = BottomPanel::default();
@@ -2823,6 +2850,7 @@ impl EditorApp {
             return;
         }
         self.stop_overleaf_cursor();
+        self.autofix.cancel_tab(self.tabs.active_id());
         self.activity.completion = None;
         self.activity.hover = None;
         self.activity.intelligence_error = None;
@@ -3477,6 +3505,7 @@ impl EditorApp {
                         && matches!(
                             command,
                             AppCommand::Format
+                                | AppCommand::Autofix
                                 | AppCommand::ToggleComment
                                 | AppCommand::NewTable
                                 | AppCommand::EditTable
@@ -3974,6 +4003,7 @@ impl EditorApp {
                 }
             }
             AppCommand::Format => self.request_format_document(),
+            AppCommand::Autofix => self.begin_autofix(context),
             AppCommand::SyncPreview => {
                 let cursor = self.editor_snapshot(context).cursor.primary.index.0;
                 self.jump_source_to_preview(cursor);
@@ -4231,6 +4261,7 @@ impl EditorApp {
             AppCommand::ToggleComment
             | AppCommand::ComfyPreview
             | AppCommand::Format
+            | AppCommand::Autofix
             | AppCommand::NewTable
             | AppCommand::EditTable => {}
             _ => return false,
@@ -5574,7 +5605,7 @@ impl EditorApp {
 
     fn poll_document_dialog(&mut self, context: &egui::Context) {
         self.poll_document_dialog_inner(context);
-        self.document_workflow.finish_dispatch();
+        self.finish_document_dispatch();
     }
 
     fn poll_document_dialog_inner(&mut self, context: &egui::Context) {
@@ -5837,7 +5868,7 @@ impl EditorApp {
         frame: Option<&eframe::Frame>,
     ) {
         self.execute_pending_document_action_inner(context, frame);
-        self.document_workflow.finish_dispatch();
+        self.finish_document_dispatch();
         self.advance_tab_window_close(context);
         self.advance_workspace_switch(context);
     }
@@ -5968,6 +5999,7 @@ impl EditorApp {
     }
 
     fn reset_document_services(&mut self) {
+        self.autofix.cancel();
         if !self.lifecycle.allows_document_work() {
             return;
         }
@@ -8053,7 +8085,7 @@ impl EditorApp {
         self.mark_edited();
         let saved_after_format = if save_after_format {
             if let Some(path) = self.document().path().clone() {
-                if !self.save_to_with_intent(path, SaveIntent::Explicit, context) {
+                if !self.save_to_after_format(path, context) {
                     return;
                 }
                 true
@@ -10267,6 +10299,7 @@ impl EditorApp {
         self.prepare_diagnostic_visibility(Some(&context));
         self.update_liquid();
         self.update_diagnostic_fix();
+        self.update_autofix(&context);
         crate::resource_repair::poll();
         self.handle_dropped_file(&context);
         self.update_asset_hover(&context);
@@ -12475,6 +12508,7 @@ fn source_mutating_command(command: AppCommand) -> bool {
             | AppCommand::Paste
             | AppCommand::ToggleComment
             | AppCommand::Format
+            | AppCommand::Autofix
             | AppCommand::NewTable
             | AppCommand::EditTable
     )
@@ -12693,6 +12727,7 @@ struct CommandAvailability {
     can_redo: bool,
     saved_document: bool,
     typesetting_document: bool,
+    tex_document: bool,
     source_preview: bool,
     interactive_preview: bool,
     new_table: bool,
@@ -12713,6 +12748,7 @@ impl CommandAvailability {
             CommandRequirement::Undo => self.can_undo,
             CommandRequirement::Redo => self.can_redo,
             CommandRequirement::TypesettingDocument => self.typesetting_document,
+            CommandRequirement::TexDocument => self.tex_document,
             CommandRequirement::SourcePreview => self.source_preview,
             CommandRequirement::InteractivePreview => self.interactive_preview,
         }

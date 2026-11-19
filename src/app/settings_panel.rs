@@ -1375,47 +1375,6 @@ impl SettingsPanel<'_> {
                     &mut settings_scroll_target,
                 );
                 super::settings_writing::prose_rules(ui, edited, self.settings);
-                settings_target_anchor(ui, SettingsTarget::LiquidFix, &mut settings_scroll_target);
-                ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    ui.strong(SettingsTarget::LiquidFix.label());
-                    let download = ui.add_enabled(
-                        !self.status.resource_repair_busy,
-                        egui::Button::new("Download fix model"),
-                    );
-                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                    crate::desktop_test::observe("settings.diagnostic_fix.download", &download);
-                    if download.clicked() {
-                        self.actions.push(SettingsAction::DownloadDiagnosticFix);
-                    }
-                    let repair_active = self.status.resource_repair_component
-                        == Some(crate::resource_repair::Component::DiagnosticFix);
-                    if self.status.resource_repair_busy && repair_active {
-                        let cancel = ui.small_button("Cancel");
-                        cancel.widget_info(|| {
-                            egui::WidgetInfo::labeled(
-                                egui::WidgetType::Button,
-                                true,
-                                "Cancel fix model download",
-                            )
-                        });
-                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-                        crate::desktop_test::observe(
-                            "settings.diagnostic_fix.cancel_download",
-                            &cancel,
-                        );
-                        if cancel.clicked() {
-                            self.actions.push(SettingsAction::CancelResourceRepair);
-                        }
-                    }
-                    if repair_active
-                        && let Some(status) = self.status.resource_repair_status.as_deref()
-                    {
-                        ui.weak(status);
-                    }
-                });
-                ui.weak("LFM3 1.7B · about 1.1 GB");
-                ui.label("Right-click a diagnostic → Suggest fix. Downloads on first use; review changes before accepting.");
                 settings_target_anchor(
                     ui,
                     SettingsTarget::LiquidGrammar,
@@ -1463,31 +1422,54 @@ impl SettingsPanel<'_> {
                 });
                 ui.label("Select text, right-click → Check selection with Liquid. Review changes before applying.");
                 ui.weak("Downloads automatically on first use. Later checks work offline.");
-                ui.weak("Model folder and CPU threads apply to both Liquid models.");
-                settings_control_row(ui, "Model folder", |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut edited.liquid_cache_directory)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("Default app data folder"),
-                    );
-                });
-                settings_control_row(ui, "CPU threads", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::DragValue::new(&mut edited.liquid_threads).range(1..=8));
-                        super::tool_reference::profile_buttons(
-                            ui,
-                            crate::tool_reference::ReferenceId::Liquid,
-                            self.settings,
-                        );
-                    });
-                });
+                liquid_runtime_controls(ui, edited, self.settings);
                 liquid_input_controls(ui, &mut edited.liquid_input);
-                if let Err(error) = crate::liquid_runtime::validate_settings(
-                    &edited.liquid_cache_directory,
-                    edited.liquid_threads,
-                ) {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
-                }
+            }
+            SettingsSection::Autofixing => {
+                settings_target_anchor(ui, SettingsTarget::Autofix, &mut settings_scroll_target);
+                tex_autofix_preferences(ui, edited);
+                settings_target_anchor(ui, SettingsTarget::LiquidFix, &mut settings_scroll_target);
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(SettingsTarget::LiquidFix.label());
+                    let download = ui.add_enabled(
+                        !self.status.resource_repair_busy,
+                        egui::Button::new("Download fix model"),
+                    );
+                    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                    crate::desktop_test::observe("settings.diagnostic_fix.download", &download);
+                    if download.clicked() {
+                        self.actions.push(SettingsAction::DownloadDiagnosticFix);
+                    }
+                    let repair_active = self.status.resource_repair_component
+                        == Some(crate::resource_repair::Component::DiagnosticFix);
+                    if self.status.resource_repair_busy && repair_active {
+                        let cancel = ui.small_button("Cancel");
+                        cancel.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                true,
+                                "Cancel fix model download",
+                            )
+                        });
+                        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+                        crate::desktop_test::observe(
+                            "settings.diagnostic_fix.cancel_download",
+                            &cancel,
+                        );
+                        if cancel.clicked() {
+                            self.actions.push(SettingsAction::CancelResourceRepair);
+                        }
+                    }
+                    if repair_active
+                        && let Some(status) = self.status.resource_repair_status.as_deref()
+                    {
+                        ui.weak(status);
+                    }
+                });
+                ui.weak("LFM3 1.7B · about 1.1 GB");
+                ui.label("Right-click a diagnostic → Suggest fix. Downloads on first use; review changes before accepting.");
+                liquid_runtime_controls(ui, edited, self.settings);
             }
             SettingsSection::Writing => {
                 settings_target_anchor(
@@ -2413,6 +2395,65 @@ const LIQUID_EXAMPLES: [(&str, crate::document::DocumentKind, &str); 2] = [
         "Before #emph[the result] is $u$.",
     ),
 ];
+fn tex_autofix_preferences(ui: &mut egui::Ui, edited: &mut AppSettings) {
+    ui.strong(SettingsTarget::Autofix.label());
+    ui.label("Enabled rules apply to the current TeX document in one undo step.");
+    let on_save = ui
+        .checkbox(&mut edited.autofix_on_save, "Autofix on save")
+        .on_hover_text("Apply the enabled TeX autofix rules before saving. Off by default.");
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("settings.autofix.on_save", &on_save);
+    #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+    let _ = on_save;
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Autofix TeX document");
+        ui.monospace(
+            edited
+                .effective_shortcuts()
+                .display(ShortcutAction::Autofix)
+                .unwrap_or_else(|| "Unbound".into()),
+        );
+    });
+    for &rule in crate::tex::autofix::Rule::ALL {
+        let mut enabled = rule.enabled(&edited.autofix);
+        let response = ui
+            .checkbox(&mut enabled, rule.label())
+            .on_hover_text(rule.description());
+        #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+        crate::desktop_test::observe(&format!("settings.autofix.{}", rule.id()), &response);
+        if response.changed() {
+            rule.set_enabled(&mut edited.autofix, enabled);
+        }
+    }
+}
+
+fn liquid_runtime_controls(ui: &mut egui::Ui, edited: &mut AppSettings, settings: &AppSettings) {
+    ui.weak("Model folder and CPU threads apply to both Liquid models.");
+    settings_control_row(ui, "Model folder", |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut edited.liquid_cache_directory)
+                .desired_width(f32::INFINITY)
+                .hint_text("Default app data folder"),
+        );
+    });
+    settings_control_row(ui, "CPU threads", |ui| {
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(&mut edited.liquid_threads).range(1..=8));
+            super::tool_reference::profile_buttons(
+                ui,
+                crate::tool_reference::ReferenceId::Liquid,
+                settings,
+            );
+        });
+    });
+    if let Err(error) = crate::liquid_runtime::validate_settings(
+        &edited.liquid_cache_directory,
+        edited.liquid_threads,
+    ) {
+        ui.colored_label(ui.visuals().error_fg_color, error);
+    }
+}
+
 fn liquid_input_controls(ui: &mut egui::Ui, options: &mut crate::liquid_grammar::InputOptions) {
     use crate::liquid_grammar::{FormattedText, ProtectedContent, Selection};
     ui.label("Math, code and links stay protected. Formatting syntax is never sent.");

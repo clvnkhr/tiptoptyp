@@ -103,6 +103,61 @@ mod tests {
     use egui_kittest::{Harness, kittest::Queryable as _};
 
     #[test]
+    fn autofixing_has_a_dedicated_category_and_owns_liquid_fix_setup() {
+        assert!(
+            SettingsSection::ALL
+                .iter()
+                .any(|section| section.title() == "Autofixing")
+        );
+        assert_eq!(SettingsTarget::LiquidFix.section().title(), "Autofixing");
+    }
+
+    #[test]
+    fn autofix_rules_and_liquid_model_setup_are_searchable_in_their_new_category() {
+        for query in [
+            "autofix",
+            "eqref",
+            "ref",
+            "tilde",
+            "nbsp",
+            "TeX fixes",
+            "Autofix on save",
+        ] {
+            assert!(
+                super::super::settings_search_results(query).contains(&SettingsTarget::Autofix),
+                "{query}"
+            );
+        }
+        for &rule in crate::tex::autofix::Rule::ALL {
+            assert!(
+                super::super::settings_search_results(rule.label())
+                    .contains(&SettingsTarget::Autofix),
+                "{}",
+                rule.label()
+            );
+            assert!(
+                super::super::settings_search_results(rule.id()).contains(&SettingsTarget::Autofix),
+                "{}",
+                rule.id()
+            );
+        }
+        for query in ["fix model", "Liquid fix", "autofixing download"] {
+            assert!(
+                super::super::settings_search_results(query).contains(&SettingsTarget::LiquidFix),
+                "{query}"
+            );
+        }
+        assert_eq!(
+            SettingsTarget::Autofix.section(),
+            SettingsSection::Autofixing
+        );
+        assert_eq!(
+            SettingsTarget::LiquidGrammar.section(),
+            SettingsSection::Grammar
+        );
+    }
+
+    #[test]
     fn every_search_target_has_a_visible_category_and_colors_reveal_only_when_needed() {
         for target in SettingsTarget::ALL {
             let mut selected = SettingsSection::Templates;

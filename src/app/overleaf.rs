@@ -1148,6 +1148,83 @@ impl EditorApp {
             }
         }
     }
+    /// A correction may edit only a source whose eventual save is currently
+    /// admissible. Inspect the exact tab, including parked document owners.
+    pub(super) fn overleaf_autofix_save_admitted(&mut self, tab: u64) -> bool {
+        let result = (|| -> Result<bool, String> {
+            let offline = self.overleaf.offline.active();
+            if self.document_workflow.save_in_flight()
+                || self.overleaf.save.active()
+                || self.overleaf_file_operation_pending()
+                || (offline && self.overleaf.io.is_running())
+            {
+                return Ok(false);
+            }
+            let entry = self.overleaf_entry_for_tab(tab).ok_or(if offline {
+                "This file is not in the saved Overleaf project."
+            } else {
+                "The original Overleaf document is unavailable. Reconnect or Save As a local copy to retain your draft."
+            })?;
+            if entry.kind != EntryKind::Doc {
+                return Err("This Overleaf file is not an editable document.".into());
+            }
+            if self.overleaf.rebases.contains_key(&entry.id) {
+                return Ok(false);
+            }
+            if self.overleaf.blocked.contains(&entry.id) {
+                return Err(
+                    "Review the Overleaf conflict before saving. Your local draft is retained."
+                        .into(),
+                );
+            }
+            let connection = self
+                .overleaf
+                .connection
+                .as_ref()
+                .ok_or("Connect to Overleaf first.")?;
+            let document = connection.model.document(&entry.id).ok_or(
+                "Wait for Overleaf to finish syncing before saving. Your draft is retained.",
+            )?;
+            if document.conflict().is_some() {
+                let id = entry.id.clone();
+                self.overleaf.blocked.insert(id);
+                return Err("Overleaf changed while you were editing. Review the retained draft before saving.".into());
+            }
+            if offline {
+                if !connection
+                    .storage
+                    .as_ref()
+                    .is_some_and(|storage| storage.persistent())
+                {
+                    return Err("Keep a local copy before working offline.".into());
+                }
+            } else {
+                if self.overleaf.authentication.required() {
+                    return Err("Sign in to Overleaf before saving.".into());
+                }
+                if connection.hydration.pending() {
+                    return Err("Wait for Overleaf to finish syncing before saving. Your draft is retained.".into());
+                }
+                if !connection.online() {
+                    return Err("Overleaf is offline. Your local edits remain unsynced; reconnect or Save As a local copy.".into());
+                }
+            }
+            Ok(true)
+        })();
+        match result {
+            Ok(admitted) => admitted,
+            Err(message) => {
+                self.document_workflow.cancel_continuation();
+                self.overleaf.error = Some(message.clone());
+                self.notice = Some(Notice {
+                    message,
+                    kind: NoticeKind::Error,
+                });
+                false
+            }
+        }
+    }
+
     /// Cache ownership is checked before every filesystem save admission.
     pub(super) fn submit_overleaf_save(
         &mut self,

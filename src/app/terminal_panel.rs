@@ -718,7 +718,8 @@ impl EditorApp {
             AppCommand::Undo
             | AppCommand::Redo
             | AppCommand::ToggleComment
-            | AppCommand::Format => {}
+            | AppCommand::Format
+            | AppCommand::Autofix => {}
             _ => return false,
         }
         true

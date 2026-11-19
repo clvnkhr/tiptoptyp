@@ -180,7 +180,7 @@ for developer experiments and model preparation.
 
 For diagnostic repairs, right-click an error line or a Problems diagnostic and
 choose **Suggest fix**. The separate Liquid LFM3 1.7B model downloads on first use,
-or through **Grammar & spelling → Liquid fix suggestions → Download fix model**.
+or through **Autofixing → Liquid fix suggestions → Download fix model**.
 Review the diff before accepting. This model requires macOS 13.3+.
 
 **Settings → Comment controls** customizes the formatting-only,

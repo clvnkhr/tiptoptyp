@@ -406,6 +406,12 @@ impl EditorApp {
         add(Group::Checks, "Liquid", "Liquid", self.liquid.activity());
         add(
             Group::Checks,
+            "TeX autofix",
+            "TeX autofix",
+            self.autofix.activity(),
+        );
+        add(
+            Group::Checks,
             "Suggested fix",
             "Liquid",
             self.diagnostic_fix.activity(),

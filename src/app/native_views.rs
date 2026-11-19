@@ -1030,7 +1030,7 @@ impl EditorApp {
                 self.schedule_autosave_if_needed();
             }
         }
-        self.document_workflow.finish_dispatch();
+        self.finish_document_dispatch();
         context.request_repaint();
     }
 
@@ -1541,6 +1541,7 @@ impl EditorApp {
             can_undo,
             can_redo,
             typesetting_document: can_format,
+            tex_document: self.native_command_enabled(AppCommand::Autofix),
             interactive_preview: can_sync_preview,
             new_table: self.native_command_enabled(AppCommand::NewTable),
             edit_table: self.native_command_enabled(AppCommand::EditTable),

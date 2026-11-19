@@ -409,7 +409,7 @@ impl EditorApp {
             ));
             self.mark_edited();
             if save_after_format && let Some(path) = self.document().path().clone() {
-                self.save_to_with_intent(path, SaveIntent::Explicit, context);
+                self.save_to_after_format(path, context);
             }
             Ok(())
         })();

@@ -303,10 +303,20 @@ impl EditorApp {
         }
     }
     pub(in crate::app) fn overleaf_source_locked(&self) -> bool {
+        self.overleaf_reopen_locked()
+            || self
+                .tabs
+                .active_id()
+                .is_some_and(|tab| self.overleaf_tab_source_locked(tab))
+    }
+    pub(in crate::app) fn overleaf_tab_source_locked(&self, tab: u64) -> bool {
         if self.overleaf_reopen_locked() {
             return true;
         }
-        let Some(path) = self.document().path() else {
+        let Some(path) = self
+            .document_for_tab(tab)
+            .and_then(|document| document.path().as_deref())
+        else {
             return false;
         };
         if let Some(connection) = &self.overleaf.connection
@@ -314,28 +324,20 @@ impl EditorApp {
         {
             if self.overleaf.offline.active() {
                 return self.overleaf_file_operation_pending()
-                    || self
-                        .tabs
-                        .active_id()
-                        .and_then(|tab| self.overleaf_entry_for_tab(tab))
-                        .is_none_or(|entry| {
-                            entry.kind != EntryKind::Doc
-                                || connection.model.document(&entry.id).is_none()
-                                || self.overleaf.blocked.contains(&entry.id)
-                        });
+                    || self.overleaf_entry_for_tab(tab).is_none_or(|entry| {
+                        entry.kind != EntryKind::Doc
+                            || connection.model.document(&entry.id).is_none()
+                            || self.overleaf.blocked.contains(&entry.id)
+                    });
             }
             return self.overleaf.authentication.required()
                 || !connection.online()
                 || connection.hydration.pending()
                 || self.overleaf_file_operation_pending()
-                || self
-                    .tabs
-                    .active_id()
-                    .and_then(|tab| self.overleaf_entry_for_tab(tab))
-                    .is_none_or(|entry| {
-                        self.overleaf.blocked.contains(&entry.id)
-                            || self.overleaf.rebases.contains_key(&entry.id)
-                    });
+                || self.overleaf_entry_for_tab(tab).is_none_or(|entry| {
+                    self.overleaf.blocked.contains(&entry.id)
+                        || self.overleaf.rebases.contains_key(&entry.id)
+                });
         }
         self.is_overleaf_path(path)
     }

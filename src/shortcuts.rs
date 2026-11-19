@@ -51,6 +51,7 @@ pub(crate) enum ShortcutAction {
     Find,
     FindReplace,
     Format,
+    Autofix,
     SyncPreview,
     Panel,
     MaximizePanel,
@@ -105,7 +106,7 @@ pub(crate) enum ShortcutAction {
 }
 
 impl ShortcutAction {
-    pub(crate) const ALL: [Self; 89] = [
+    pub(crate) const ALL: [Self; 90] = [
         Self::Settings,
         Self::CommandPalette,
         Self::New,
@@ -144,6 +145,7 @@ impl ShortcutAction {
         Self::Find,
         Self::FindReplace,
         Self::Format,
+        Self::Autofix,
         Self::SyncPreview,
         Self::Panel,
         Self::MaximizePanel,
@@ -237,6 +239,7 @@ impl ShortcutAction {
             Self::Find => "edit.find",
             Self::FindReplace => "edit.find_replace",
             Self::Format => "edit.format",
+            Self::Autofix => "edit.autofix",
             Self::SyncPreview => "edit.sync_preview",
             Self::Panel => "view.panel",
             Self::MaximizePanel => "view.maximize_panel",
@@ -335,6 +338,7 @@ impl ShortcutAction {
             Self::Find => "Find",
             Self::FindReplace => "Find and replace",
             Self::Format => "Format document",
+            Self::Autofix => "Autofix TeX document",
             Self::SyncPreview => "Reveal in preview",
             Self::Panel => "Panel",
             Self::MaximizePanel => "Maximize/Restore Panel",
@@ -427,6 +431,7 @@ impl ShortcutAction {
             | Self::Find
             | Self::FindReplace
             | Self::Format
+            | Self::Autofix
             | Self::Complete => "Editor",
             Self::SyncPreview
             | Self::PreviewZoomIn
@@ -1256,6 +1261,7 @@ fn default_binding(action: ShortcutAction, platform: ShortcutPlatform) -> Option
             shift: true,
             alt: true,
         },
+        Action::Autofix => ShortcutChord::primary(Key::F).alt().shift(),
         Action::SyncPreview => ShortcutChord::primary(Key::J).shift(),
         Action::Panel => ShortcutChord::primary(Key::Num5),
         Action::MaximizePanel => ShortcutChord::primary(Key::Num5).alt(),
@@ -1677,6 +1683,45 @@ mod tests {
                 ShortcutChord::parse(text).unwrap().appkit_key_equivalent(),
                 expected
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod autofix_tests {
+    use super::*;
+    #[test]
+    fn tex_autofix_chord_wins_over_format_and_find_without_collisions() {
+        for platform in [ShortcutPlatform::MacOs, ShortcutPlatform::Other] {
+            let bindings = ShortcutBindings::defaults(platform);
+            let chord = bindings.binding(ShortcutAction::Autofix).unwrap();
+            assert_eq!(chord, ShortcutChord::primary(egui::Key::F).alt().shift());
+            assert!(bindings.conflicts().is_empty());
+            let context = egui::Context::default();
+            context
+                .run_ui(
+                    egui::RawInput {
+                        events: vec![egui::Event::Key {
+                            key: chord.key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: chord.egui().modifiers,
+                        }],
+                        ..Default::default()
+                    },
+                    |ui| {
+                        assert_eq!(
+                            ui.input_mut(|input| crate::native_menu::consume_shortcut(
+                                input,
+                                &bindings,
+                                |_| true
+                            )),
+                            Some(crate::native_menu::AppCommand::Autofix)
+                        );
+                    },
+                )
+                .drop_without_applying_deltas();
         }
     }
 }

@@ -392,6 +392,8 @@ fn resource_repair_buttons_emit_explicit_actions_without_changing_preferences() 
     assert_eq!(harness.state().settings, settings);
     assert_eq!(harness.state().updates, 0);
     harness.state_mut().actions.clear();
+    harness.state_mut().ui.category = SettingsSection::Autofixing;
+    harness.run();
     harness.get_by_label("Download fix model").click();
     harness.run();
     assert!(matches!(
@@ -417,17 +419,24 @@ fn resource_repairs_disable_repeat_actions_and_present_borrowed_status() {
     harness.state_mut().repair_busy = true;
     harness.state_mut().repair_status = Some("Downloading Liquid…".into());
     harness.run();
-    for label in [
-        "Redownload LTeX+",
-        "Restart LTeX+",
-        "Download Liquid",
-        "Download fix model",
-    ] {
+    for label in ["Redownload LTeX+", "Restart LTeX+", "Download Liquid"] {
         assert!(harness.get_by_label(label).accesskit_node().is_disabled());
     }
     assert!(harness.query_all(by().label("Downloading Liquid…")).count() > 0);
     assert!(harness.state().actions.is_empty());
     assert_eq!(harness.state().updates, 0);
+    harness.state_mut().ui.category = SettingsSection::Autofixing;
+    harness.run();
+    assert!(
+        harness
+            .get_by_label("Download fix model")
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert!(harness.query_by_label("Downloading Liquid…").is_none());
+    assert!(harness.query_by_label("Cancel Liquid download").is_none());
+    harness.state_mut().ui.category = SettingsSection::Grammar;
+    harness.run();
     harness.get_by_label("Cancel Liquid download").click();
     harness.run();
     assert!(matches!(
@@ -439,17 +448,21 @@ fn resource_repairs_disable_repeat_actions_and_present_borrowed_status() {
     harness.state_mut().repair_busy = false;
     harness.state_mut().repair_status = Some("Liquid downloaded".into());
     harness.run();
-    for label in [
-        "Redownload LTeX+",
-        "Restart LTeX+",
-        "Download Liquid",
-        "Download fix model",
-    ] {
+    for label in ["Redownload LTeX+", "Restart LTeX+", "Download Liquid"] {
         assert!(!harness.get_by_label(label).accesskit_node().is_disabled());
     }
     assert!(harness.query_all(by().label("Liquid downloaded")).count() > 0);
     assert!(harness.state().actions.is_empty());
     assert_eq!(harness.state().updates, 0);
+    harness.state_mut().ui.category = SettingsSection::Autofixing;
+    harness.run();
+    assert!(
+        !harness
+            .get_by_label("Download fix model")
+            .accesskit_node()
+            .is_disabled()
+    );
+    assert!(harness.query_by_label("Liquid downloaded").is_none());
 }
 
 #[test]
@@ -532,6 +545,7 @@ fn resource_repair_status_and_cancel_belong_only_to_the_matching_section() {
         harness.state_mut().repair_component = Some(component);
         harness.state_mut().repair_busy = true;
         harness.state_mut().repair_status = Some(status.into());
+        harness.state_mut().ui.category = target.section();
         harness.run();
         assert_eq!(harness.query_all(by().label(status)).count(), 1);
         harness.get_by_label(cancel);
@@ -541,16 +555,25 @@ fn resource_repair_status_and_cancel_belong_only_to_the_matching_section() {
         let status_y = harness.get_by_label(status).rect().center().y;
         let section_y = harness.get_by_label(target.label()).rect().top();
         assert!(status_y >= section_y, "status must stay inside {target:?}");
-        if component != Component::Liquid {
-            let next_section = if component == Component::Ltex {
-                SettingsTarget::LiquidFix
-            } else {
-                SettingsTarget::LiquidGrammar
-            };
-            assert!(status_y < harness.get_by_label(next_section.label()).rect().top());
+        if component == Component::Ltex {
+            assert!(
+                status_y
+                    < harness
+                        .get_by_label(SettingsTarget::LiquidGrammar.label())
+                        .rect()
+                        .top()
+            );
         }
-        for label in ["Redownload LTeX+", "Download Liquid", "Download fix model"] {
-            assert!(harness.get_by_label(label).accesskit_node().is_disabled());
+        for (label, section) in [
+            ("Redownload LTeX+", SettingsSection::Grammar),
+            ("Download Liquid", SettingsSection::Grammar),
+            ("Download fix model", SettingsSection::Autofixing),
+        ] {
+            if section == target.section() {
+                assert!(harness.get_by_label(label).accesskit_node().is_disabled());
+            } else {
+                assert!(harness.query_by_label(label).is_none());
+            }
         }
         harness.get_by_label(cancel).click();
         harness.run();
@@ -645,7 +668,7 @@ fn grammar_and_writing_categories_preserve_settings_and_separate_controls() {
         ] {
             assert!(
                 harness.query_by_label(label).is_none(),
-                "{label} must belong to Grammar & spelling"
+                "{label} must stay outside Writing"
             );
         }
         harness
@@ -659,7 +682,11 @@ fn grammar_and_writing_categories_preserve_settings_and_separate_controls() {
         harness.get_by_label("Harper spelling and grammar");
         harness.get_by_label("LTeX+ spelling and grammar");
         harness.get_by_label(SettingsTarget::LiquidGrammar.label());
-        harness.get_by_label(SettingsTarget::LiquidFix.label());
+        assert!(
+            harness
+                .query_by_label(SettingsTarget::LiquidFix.label())
+                .is_none()
+        );
         harness.get_by_label(SettingsTarget::TexProseRules.label());
         assert_eq!(harness.state().settings, settings);
         assert_eq!(harness.state().updates, 0);
@@ -709,7 +736,6 @@ fn grammar_search_targets_route_to_the_shared_category_without_saving_preference
         SettingsTarget::HarperCapitalizedNames,
         SettingsTarget::Ltex,
         SettingsTarget::LiquidGrammar,
-        SettingsTarget::LiquidFix,
         SettingsTarget::TexProseRules,
     ] {
         harness.state_mut().ui.category = SettingsSection::Writing;
@@ -806,11 +832,11 @@ fn fix_model_settings_are_searchable_separately_from_selection_grammar() {
     harness.state_mut().ui.category = SettingsSection::Editor;
     harness.state_mut().ui.scroll_target = Some(SettingsTarget::LiquidFix);
     harness.run();
-    assert_eq!(harness.state().ui.category, SettingsSection::Grammar);
+    assert_eq!(harness.state().ui.category, SettingsSection::Autofixing);
     assert!(harness.state().ui.scroll_target.is_none());
     harness.get_by_label("Download fix model");
     harness.get_by_label("LFM3 1.7B · about 1.1 GB");
-    harness.get_by_label("Download Liquid");
+    assert!(harness.query_by_label("Download Liquid").is_none());
     harness.run_steps(4);
     assert_eq!(harness.state().settings, original);
     assert!(harness.state().actions.is_empty());

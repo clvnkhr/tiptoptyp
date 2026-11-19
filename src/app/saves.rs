@@ -93,13 +93,109 @@ impl EditorApp {
         intent: SaveIntent,
         context: &egui::Context,
     ) -> bool {
-        // Auto-save and the second write after formatting never request formatting.
+        // Auto-save, confirmed overwrites and other non-formatting saves still
+        // share the ordinary on-save correction admission.
         let Some(tab) = self.tabs.active_id() else {
             return false;
         };
         self.submit_save(tab, path, intent, false, context)
     }
+    /// Formatting completes a save that already passed on-save correction.
+    /// Do not rescan its result or request another formatter pass.
+    pub(super) fn save_to_after_format(&mut self, path: PathBuf, context: &egui::Context) -> bool {
+        let Some(tab) = self.tabs.active_id() else {
+            return false;
+        };
+        self.submit_save_prepared(tab, path, SaveIntent::Explicit, false, context)
+    }
     pub(super) fn submit_save(
+        &mut self,
+        tab: u64,
+        path: PathBuf,
+        intent: SaveIntent,
+        format_after: bool,
+        context: &egui::Context,
+    ) -> bool {
+        let preserve_draft = self.settings.autofix_on_save
+            && !self.is_overleaf_path(&path)
+            && self.overleaf_tab_source_locked(tab);
+        let correct_before_save = self.settings.autofix_on_save
+            // Saving a protected draft (including Save As a local Overleaf
+            // recovery copy) must remain possible without editing that source.
+            && !preserve_draft
+            && self
+                .document_for_tab(tab)
+                .is_some_and(|document| document.kind() == DocumentKind::Tex)
+            && crate::tex::autofix::Rule::ALL
+                .iter()
+                .any(|rule| rule.enabled(&self.settings.autofix));
+        if correct_before_save {
+            if !self.autofix_save_admitted(tab, &path, intent) {
+                return false;
+            }
+            return self.prepare_autofix_save(tab, path, intent, format_after, context);
+        }
+        self.submit_save_prepared(tab, path, intent, format_after && !preserve_draft, context)
+    }
+
+    /// Check mutable destination and transport guards before any source edits.
+    /// A deferred scan must recheck this policy when its result is admitted.
+    pub(super) fn autofix_save_admitted(
+        &mut self,
+        tab: u64,
+        path: &Path,
+        intent: SaveIntent,
+    ) -> bool {
+        if self.document_workflow.save_in_flight()
+            || self.local_save.is_running()
+            || self.snapshot_scene.is_some()
+        {
+            return false;
+        }
+        if self.is_overleaf_path(path) {
+            return self.overleaf_autofix_save_admitted(tab);
+        }
+        self.local_save_destination_admitted(tab, &canonical_or_absolute(path), intent)
+    }
+
+    fn local_save_destination_admitted(
+        &mut self,
+        tab: u64,
+        path: &Path,
+        intent: SaveIntent,
+    ) -> bool {
+        if self.tabs.ids().any(|id| {
+            id != tab
+                && self.document_for_tab(id).is_some_and(|document| {
+                    document
+                        .path()
+                        .as_deref()
+                        .is_some_and(|current| same_path(current, path))
+                })
+        }) {
+            self.show_file_error(
+                "This file is already open in another tab; switch to it before saving".into(),
+            );
+            return false;
+        }
+        let Some(document) = self.document_for_tab(tab) else {
+            return false;
+        };
+        let path_changed = document
+            .path()
+            .as_ref()
+            .is_none_or(|current| !same_path(current, path));
+        if intent == SaveIntent::Auto && (document.disk_fingerprint().is_none() || path_changed) {
+            self.notice = Some(Notice {
+                message: "Auto-save paused: no known disk baseline".into(),
+                kind: NoticeKind::Error,
+            });
+            return false;
+        }
+        true
+    }
+
+    pub(super) fn submit_save_prepared(
         &mut self,
         tab: u64,
         path: PathBuf,
@@ -119,15 +215,7 @@ impl EditorApp {
         }
         self.activity.save_error = None;
         let path = canonical_or_absolute(&path);
-        if self.tabs.ids().any(|id| {
-            id != tab
-                && self
-                    .document_for_tab(id)
-                    .is_some_and(|document| document.path().as_ref() == Some(&path))
-        }) {
-            self.show_file_error(
-                "This file is already open in another tab; switch to it before saving".into(),
-            );
+        if !self.local_save_destination_admitted(tab, &path, intent) {
             return false;
         }
         let Some(document) = self.document_for_tab(tab) else {
@@ -141,13 +229,6 @@ impl EditorApp {
         let expected = match intent {
             SaveIntent::ExplicitConfirmed { observed } => {
                 observed.map_or(ExpectedDiskState::Missing, ExpectedDiskState::Fingerprint)
-            }
-            SaveIntent::Auto if document.disk_fingerprint().is_none() || path_changed => {
-                self.notice = Some(Notice {
-                    message: "Auto-save paused: no known disk baseline".into(),
-                    kind: NoticeKind::Error,
-                });
-                return false;
             }
             _ if path_changed => ExpectedDiskState::Unchecked,
             _ => document
@@ -229,7 +310,7 @@ impl EditorApp {
 
     pub(super) fn poll_save(&mut self, context: &egui::Context) {
         self.poll_save_inner(context);
-        self.document_workflow.finish_dispatch();
+        self.finish_document_dispatch();
     }
 
     fn poll_save_inner(&mut self, context: &egui::Context) {
@@ -482,6 +563,171 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
+    fn ordinary_saves_bypass_autofix_when_disabled_unselected_or_not_tex() {
+        for (on_save, enabled, kind, filename) in [
+            (false, true, DocumentKind::Tex, "note.tex"),
+            (true, false, DocumentKind::Tex, "note.tex"),
+            (true, true, DocumentKind::Text, "note.txt"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join(filename);
+            fs::write(&path, "old").unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+            app.snapshot_scene = None;
+            app.settings.autofix_on_save = on_save;
+            app.settings.autofix.enabled.clear();
+            crate::tex::autofix::Rule::ReferenceTies
+                .set_enabled(&mut app.settings.autofix, enabled);
+            app.document_mut().replace_loaded_unprojected(
+                "old".into(),
+                path.clone(),
+                kind,
+                Some(fingerprint(b"old")),
+            );
+            let source = "Figure \\ref{fig:a}.";
+            app.document_mut()
+                .edit(CCursorRange::default(), |text| *text = source.into());
+            assert!(app.save_to_with_intent(path.clone(), SaveIntent::Explicit, &context));
+            assert!(app.local_save.is_running());
+            assert!(!app.autofix.busy());
+            app.finish_save_for_test(&context);
+            assert_eq!(app.document().source(), source);
+            assert_eq!(fs::read_to_string(path).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn formatter_resave_does_not_start_a_second_autofix_or_formatter_pass() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.tex");
+        fs::write(&path, "old").unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.settings.autofix_on_save = true;
+        app.settings.autofix.enabled = [crate::tex::autofix::Rule::ReferenceTies].into();
+        app.document_mut().replace_loaded_unprojected(
+            "old".into(),
+            path.clone(),
+            DocumentKind::Tex,
+            Some(fingerprint(b"old")),
+        );
+        let source = "Figure \\ref{fig:a}.";
+        app.document_mut()
+            .edit(CCursorRange::default(), |text| *text = source.into());
+        assert!(app.save_to_after_format(path.clone(), &context));
+        assert!(app.local_save.is_running());
+        assert!(!app.autofix.busy());
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(path).unwrap(), source);
+        assert!(app.formatting.saved_document().is_none());
+        assert!(app.formatting.request_key().is_none());
+    }
+
+    #[test]
+    fn snapshot_save_never_admits_an_on_save_autofix() {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.settings.autofix_on_save = true;
+        app.document_mut().replace_untitled_kind(DocumentKind::Tex);
+        app.document_mut().edit(CCursorRange::default(), |text| {
+            *text = "Figure \\ref{fig:a}.".into();
+        });
+        let key = app.document().key();
+        let path = root.path().join("snapshot.tex");
+        assert!(!app.save_to(path.clone(), &context));
+        assert!(!app.autofix.busy());
+        assert!(!app.local_save.is_running());
+        assert_eq!(app.document().key(), key);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn auto_save_without_a_matching_baseline_never_edits_or_starts_autofix() {
+        for changed_destination in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let original = root.path().join("original.tex");
+            fs::write(&original, "old").unwrap();
+            let context = egui::Context::default();
+            let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+            app.snapshot_scene = None;
+            app.settings.autofix_on_save = true;
+            app.document_mut().replace_loaded_unprojected(
+                "old".into(),
+                original.clone(),
+                DocumentKind::Tex,
+                changed_destination.then(|| fingerprint(b"old")),
+            );
+            app.document_mut().edit(CCursorRange::default(), |text| {
+                *text = "Figure \\ref{fig:a}.".into();
+            });
+            let key = app.document().key();
+            let destination = if changed_destination {
+                root.path().join("other.tex")
+            } else {
+                original.clone()
+            };
+            assert!(!app.save_to_with_intent(destination, SaveIntent::Auto, &context));
+            assert!(!app.autofix.busy());
+            assert!(!app.local_save.is_running());
+            assert_eq!(app.document().key(), key);
+            assert_eq!(fs::read_to_string(original).unwrap(), "old");
+            assert!(!root.path().join("other.tex").exists());
+            assert_eq!(
+                app.notice.as_ref().unwrap().message,
+                "Auto-save paused: no known disk baseline"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_open_destination_is_rejected_before_correcting_the_source() {
+        let root = tempfile::tempdir().unwrap();
+        let first_path = root.path().join("first.tex");
+        let second_path = root.path().join("second.tex");
+        fs::write(&first_path, "old").unwrap();
+        fs::write(&second_path, "other").unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
+        app.snapshot_scene = None;
+        app.settings.autofix_on_save = true;
+        app.document_mut().replace_loaded_unprojected(
+            "old".into(),
+            first_path.clone(),
+            DocumentKind::Tex,
+            Some(fingerprint(b"old")),
+        );
+        app.document_mut().edit(CCursorRange::default(), |text| {
+            *text = "Figure \\ref{fig:a}.".into();
+        });
+        let first = app.tabs.active_id().unwrap();
+        app.lifecycle = DocumentLifecycle::Active;
+        app.new_tab(&context);
+        app.lifecycle = DocumentLifecycle::Dormant;
+        app.document_mut().replace_loaded_unprojected(
+            "other".into(),
+            second_path.clone(),
+            DocumentKind::Tex,
+            Some(fingerprint(b"other")),
+        );
+        let key = app.document_for_tab(first).unwrap().key();
+        assert!(!app.submit_save(
+            first,
+            second_path.clone(),
+            SaveIntent::Explicit,
+            false,
+            &context
+        ));
+        assert!(!app.autofix.busy());
+        assert!(!app.local_save.is_running());
+        assert_eq!(app.document_for_tab(first).unwrap().key(), key);
+        assert_eq!(fs::read_to_string(first_path).unwrap(), "old");
+        assert_eq!(fs::read_to_string(second_path).unwrap(), "other");
+    }
+
+    #[test]
     fn an_old_local_completion_cannot_release_a_newer_shared_save() {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -723,7 +969,7 @@ mod tests {
             !app.save_to(path.clone(), &context),
             "only one immutable request per owner"
         );
-        app.document_workflow.finish_dispatch();
+        app.finish_document_dispatch();
         assert!(app.document_workflow.has_continuation());
         app.document_mut()
             .edit(CCursorRange::default(), |source| source.push_str(" newer"));
@@ -794,7 +1040,7 @@ mod tests {
             },
             &context
         ));
-        app.document_workflow.finish_dispatch();
+        app.finish_document_dispatch();
         app.finish_save_for_test(&context);
         assert_eq!(fs::read_to_string(path).unwrap(), "submitted");
         assert!(matches!(

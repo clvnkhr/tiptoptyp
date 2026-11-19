@@ -312,6 +312,10 @@ impl Tabs {
         self.index_of(id)?;
         self.records.get_mut(&id).map(|tab| &mut tab.document)
     }
+    pub(super) fn record_mut(&mut self, id: u64) -> Option<&mut TabRecord> {
+        self.index_of(id)?;
+        self.records.get_mut(&id)
+    }
     pub(super) fn active_id(&self) -> Option<u64> {
         self.active
     }

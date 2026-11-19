@@ -276,6 +276,118 @@ mod tests {
     }
 
     #[test]
+    fn autofixing_settings_toggle_each_rule_and_keep_model_downloads_separate() {
+        let mut window = SettingsWindow::default();
+        window.ui.category = SettingsSection::Grammar;
+        let mut harness = settings_harness(window);
+        harness.get_by_label("Download Liquid");
+        assert!(harness.query_by_label("Download fix model").is_none());
+        assert!(!harness.state().has_actions());
+
+        harness.state_mut().ui.category = SettingsSection::Autofixing;
+        harness.run_steps(2);
+        harness.get_by_label("Download fix model");
+        assert!(harness.query_by_label("Download Liquid").is_none());
+        assert!(
+            !harness.state().has_actions(),
+            "opening the category must not prepare a model or change settings"
+        );
+        for &rule in crate::tex::autofix::Rule::ALL {
+            let mut expected = harness
+                .state()
+                .input
+                .as_ref()
+                .unwrap()
+                .settings
+                .autofix
+                .clone();
+            let was_enabled = rule.enabled(&expected);
+            rule.set_enabled(&mut expected, !was_enabled);
+            harness.get_by_label(rule.label()).click();
+            harness.run_steps(2);
+            assert_eq!(
+                harness.state().input.as_ref().unwrap().settings.autofix,
+                expected,
+                "only {} may change",
+                rule.id()
+            );
+        }
+        let mut active = AppSettings::default();
+        let (actions, close) = harness.state_mut().take_actions(&mut active);
+        assert!(actions.is_empty() && !close);
+        assert_eq!(
+            active.autofix,
+            harness.state().input.as_ref().unwrap().settings.autofix
+        );
+
+        harness.get_by_label("Download fix model").click();
+        harness.run_steps(2);
+        let (actions, close) = harness.state_mut().take_actions(&mut active);
+        assert!(!close);
+        assert!(matches!(
+            actions.as_slice(),
+            [SettingsAction::DownloadDiagnosticFix]
+        ));
+        harness.run_steps(2);
+        assert!(
+            !harness.state().has_actions(),
+            "idle frames must not duplicate settings or download actions"
+        );
+    }
+
+    #[test]
+    fn autofix_on_save_checkbox_starts_off_and_publishes_only_its_setting() {
+        let mut window = SettingsWindow::default();
+        window.ui.category = SettingsSection::Autofixing;
+        let mut harness = settings_harness(window);
+        assert!(
+            !harness
+                .state()
+                .input
+                .as_ref()
+                .unwrap()
+                .settings
+                .autofix_on_save
+        );
+        let rules = harness
+            .state()
+            .input
+            .as_ref()
+            .unwrap()
+            .settings
+            .autofix
+            .clone();
+        assert!(!harness.state().has_actions());
+        harness.get_by_label("Autofix on save").click();
+        harness.run_steps(2);
+        assert!(
+            harness
+                .state()
+                .input
+                .as_ref()
+                .unwrap()
+                .settings
+                .autofix_on_save
+        );
+        let mut live = AppSettings::default();
+        live.line_wrap = !live.line_wrap;
+        let (actions, close) = harness.state_mut().take_actions(&mut live);
+        assert!(actions.is_empty() && !close);
+        assert!(live.autofix_on_save);
+        assert!(!live.line_wrap);
+        assert_eq!(live.autofix, rules);
+        let saved = crate::settings_json::parse(&serde_json::to_string(&live).unwrap()).unwrap();
+        assert_eq!(saved, live);
+        harness.run_steps(2);
+        assert!(!harness.state().has_actions());
+        harness.get_by_label("Autofix on save").click();
+        harness.run_steps(2);
+        harness.state_mut().take_actions(&mut live);
+        assert!(!live.autofix_on_save);
+        assert_eq!(live.autofix, rules);
+    }
+
+    #[test]
     fn settings_native_menu_close_dismisses_reference_before_the_settings_window() {
         let mut harness = settings_harness(SettingsWindow::default());
         open_reference(&mut harness);

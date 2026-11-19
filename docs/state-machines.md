@@ -336,3 +336,27 @@ current code; its transitions are not a pass. These owned-view checks do not
 establish composed editor geometry. The desktop `partial_cache_edges` journey is
 unavailable while macOS scroll-to-zoom owns global Ctrl-wheel; no zoom input was
 posted and that system preference was preserved.
+
+### TeX autofix scan
+
+`src/app/autofix.rs::State` is Idle, Running(Task), Cancelling(Task), or
+Failed(message). The task owns the exact document key and immutable source,
+enabled rules, comment markers, tool resolution, cancellation handle, and one
+result receiver. Its purpose is an editor action or a save carrying the exact
+target tab, destination, save intent, formatter follow-up and close continuation.
+Repeated shortcuts do not duplicate a running or draining scan. Editing,
+document departure, closing, changed preferences, or a read-only owner cancels
+admission. Cancelling retains the worker until its bounded subprocess exits;
+late results cannot edit another source or retire a newer task. A successful
+current result validates every original byte span and applies all selected
+nonoverlapping fixes in one document edit/undo transaction. A no-op does not
+change revision or undo history. Opt-in save preparation also supports parked
+tabs; it edits only that tab and hands the corrected revision to the ordinary
+durable-save lifecycle. Admission rechecks destination and Overleaf conflict
+guards before editing. Formatter resaves bypass preparation to prevent loops.
+A stale or cancelled save leaves the draft dirty; autosaves are rescheduled and
+explicit saves report that another save is needed. Liquid's separate review
+lifecycle is unchanged.
+Activity exposes TeX autofix; desktop inspection reports idle/running/cancelling/
+failed without source contents. Completion wakes only its owning viewport;
+there is no polling repaint loop or idle disk work.

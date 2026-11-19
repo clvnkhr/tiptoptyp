@@ -1,6 +1,6 @@
 # Settings customization
 
-Settings uses compact categories: Appearance, Editor, Comment controls, Grammar & spelling, Writing,
+Settings uses compact categories: Appearance, Editor, Comment controls, Grammar & spelling, Autofixing, Writing,
 Preview, Tools, Shortcuts, Snippets and Templates. Wide windows show the categories beside the
 form; narrow windows use a selector next to search. Search spans every category.
 Choose a result to switch to its category and briefly highlight its control.
@@ -148,11 +148,11 @@ an argument to pass to the binary. Search Settings for “ignored codes” to fi
 ## Grammar & spelling
 
 Settings → **Grammar & spelling** keeps **Harper spelling and grammar**,
-**LTeX+ spelling and grammar**, **Liquid fix suggestions**, **Liquid selection grammar**, and **TeX prose rules**
+**LTeX+ spelling and grammar**, **Liquid selection grammar**, and **TeX prose rules**
 together. TeX prose rules apply to Harper and Liquid; LTeX+ uses its own LaTeX
 configuration. Harper and LTeX+ remain independent background checkers, with
 separate provider names in Problems. Liquid selection grammar checks selected
-text; Liquid fix suggestions target a diagnostic. Both open a review before
+text; **Autofixing → Liquid fix suggestions** targets a diagnostic. Both open a review before
 applying changes. Writing retains handwriting, punctuation, Unicode and math
 formatting preferences.
 
@@ -301,9 +301,30 @@ supplied by the app. Environment is a JSON object of strings, for example
 `{"LC_ALL":"C"}`; blank working directory uses the newer file's directory.
 See the [official manual](https://mirrors.ctan.org/support/latexdiff/doc/latexdiff-man.pdf).
 
+## Autofixing
+
+Open **Settings → Autofixing** to choose which deterministic TeX corrections the
+**Autofix TeX document** command may apply. Each rule has its own toggle and
+description. The command works on the current TeX document and groups all accepted
+corrections into one undo step. Its shortcut is configurable under **Shortcuts**;
+the default is **Cmd/Ctrl+Alt+Shift+F**. **Autofix on save** is off by default;
+turn it on in this section to apply the same enabled rules before saving TeX.
+The saved JSON preference is `autofix_on_save`. Autofixing never runs while typing.
+
+Right-click a recognized Badness finding in Problems for **Autofix all: …**.
+That action fixes all occurrences of its named rule in the current file, provided
+the rule is enabled. **Suggest fix** remains the separate Liquid action with a diff
+review. An open autofix menu becomes unavailable if its source changes.
+
+For example, the reference-spacing rule changes the whitespace before `\ref` and
+`\eqref` to `~`. The complete rule inventory, including diagnostics that need
+manual correction or a reviewed suggestion, is in [TeX autofixing](tex-autofix.md).
+Search Settings for “autofix”, “eqref”, “ref”, “tilde” or “fix model” to reach this
+section. Liquid suggestions remain a separate action with a diff review.
+
 ## Optional Liquid fix suggestions
 
-Settings → **Grammar & spelling → Liquid fix suggestions** offers **Download fix
+Settings → **Autofixing → Liquid fix suggestions** offers **Download fix
 model** to prepare or repair Liquid LFM3 1.7B (about 1.1 GB) and its local runtime.
 The download runs in the background, shows its result in that section, and can be
 cancelled. Opening Settings never starts a download or loads the model.
@@ -314,8 +335,8 @@ in the diff window, then choose **Accept** or **Cancel**. Accept changes the bou
 source in one undo step; edits made while a suggestion is pending invalidate its
 review. This model requires macOS 13.3 or later and works offline after setup.
 
-The **Model folder** and **CPU threads** controls in Liquid selection grammar
-apply to both Liquid models. **Download Liquid** prepares only the selection
+The **Model folder** and **CPU threads** controls are available in Autofixing and
+Liquid selection grammar and apply to both Liquid models. **Download Liquid** prepares only the selection
 grammar model; **Download fix model** prepares the foundation model for fixes.
 
 ## Optional Liquid grammar
