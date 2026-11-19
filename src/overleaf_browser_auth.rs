@@ -1,4 +1,5 @@
 //! Login continuation uses committed routes, never login-page DOM or credentials.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 use crate::overleaf::ProjectUrl;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

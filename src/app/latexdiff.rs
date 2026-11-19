@@ -385,7 +385,7 @@ impl EditorApp {
     }
     fn pick_latexdiff_file(
         &mut self,
-        context: &egui::Context,
+        _context: &egui::Context,
         frame: Option<&eframe::Frame>,
         action: Action,
     ) {
@@ -394,7 +394,7 @@ impl EditorApp {
         };
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(parent) =
-            crate::native_window::for_viewport(context, scoped_child_viewport_id(context, SALT))
+            crate::native_window::for_viewport(_context, scoped_child_viewport_id(_context, SALT))
         {
             picker = picker.set_parent(&parent);
         }

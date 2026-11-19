@@ -127,6 +127,7 @@ mod writing;
 
 use launch::LaunchOptions;
 use screenshot::{CaptureController, ScreenshotApp};
+#[cfg(target_os = "macos")]
 use shortcuts::ShortcutBindings;
 use tiptoptyp::themes::{
     builtin as builtin_themes, sublime as sublime_theme, transform as theme_transform,

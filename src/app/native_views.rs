@@ -106,7 +106,7 @@ fn table_window_size(scene: Option<UiSnapshotScene>) -> [f32; 2] {
 impl EditorApp {
     pub(super) fn open_web_preview_context_menu(
         &mut self,
-        context: &egui::Context,
+        _context: &egui::Context,
         request: preview_jump::WebMenuRequest,
     ) {
         if self.document_flow_busy()
@@ -120,7 +120,7 @@ impl EditorApp {
         if let Some(applied) = self.webview_applied.filter(|applied| applied.visible)
             && let Some(window) = self.webview_parent
             && let Some(anchor) =
-                preview_jump::web_menu_anchor(applied.bounds, request.point, context.zoom_factor())
+                preview_jump::web_menu_anchor(applied.bounds, request.point, _context.zoom_factor())
         {
             self.open_app_popup(AppPopup::PreviewSource {
                 anchor,
@@ -133,7 +133,7 @@ impl EditorApp {
                     window,
                 },
             });
-            context.request_repaint();
+            _context.request_repaint();
         }
     }
 

@@ -5059,14 +5059,14 @@ impl EditorApp {
     fn settings_file_dialog(
         &mut self,
         _frame: Option<&eframe::Frame>,
-        context: &egui::Context,
+        _context: &egui::Context,
     ) -> Option<AsyncFileDialog> {
         let dialog = AsyncFileDialog::new();
 
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let Some(parent) = crate::native_window::for_viewport(
-                context,
+                _context,
                 crate::child_view::child_viewport_id(egui::ViewportId::ROOT, "tiptoptyp-settings"),
             ) else {
                 self.show_file_error(
@@ -5206,7 +5206,12 @@ impl EditorApp {
             .add_filter("LaTeX source", crate::document::TEX_SOURCE_EXTENSIONS)
             .add_filter("PDF documents", &["pdf"]);
         let target = if new_window {
-            dialog = dialog.set_title("Open document or folder in new window");
+            let title = if cfg!(target_os = "macos") {
+                "Open document or folder in new window"
+            } else {
+                "Open document in new window"
+            };
+            dialog = dialog.set_title(title);
             DocumentDialogTarget::OpenFileInNewWindow
         } else {
             dialog = dialog
@@ -5222,12 +5227,17 @@ impl EditorApp {
         if let Some(directory) = self.current_directory() {
             dialog = dialog.set_directory(directory);
         }
+        // rfd's combined picker is macOS-only; other platforms use Open folder for directories.
+        #[cfg(target_os = "macos")]
+        let selection = dialog.pick_file_or_folder();
+        #[cfg(not(target_os = "macos"))]
+        let selection = dialog.pick_file();
         self.document_workflow.start_dialog(PendingDialog::new(
             DocumentDialogRequest {
                 target,
                 key: self.document().key(),
             },
-            dialog.pick_file_or_folder(),
+            selection,
         ));
     }
 

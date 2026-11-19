@@ -216,22 +216,24 @@ impl EditorApp {
         }
     }
 
-    pub(super) fn choose_workspace_parent(&mut self, context: &egui::Context) {
+    pub(super) fn choose_workspace_parent(&mut self, _context: &egui::Context) {
         if self.workspace_creation.busy() {
             return;
         }
         let Some(draft) = &self.workspace_creation.draft else {
             return;
         };
-        let mut dialog = AsyncFileDialog::new()
+        let dialog = AsyncFileDialog::new()
             .set_title("New workspace parent folder")
             .set_directory(&draft.parent);
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(parent) =
-            crate::native_window::for_viewport(context, scoped_child_viewport_id(context, SALT))
+        let dialog = if let Some(parent) =
+            crate::native_window::for_viewport(_context, scoped_child_viewport_id(_context, SALT))
         {
-            dialog = dialog.set_parent(&parent);
-        }
+            dialog.set_parent(&parent)
+        } else {
+            dialog
+        };
         self.workspace_creation.phase = Phase::Picking(crate::workflow::PendingDialog::new(
             (),
             dialog.pick_folder(),

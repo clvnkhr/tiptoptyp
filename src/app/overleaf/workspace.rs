@@ -565,7 +565,7 @@ impl EditorApp {
         }
         context.request_repaint();
     }
-    pub(in crate::app) fn choose_overleaf_directory(&mut self, context: &egui::Context) {
+    pub(in crate::app) fn choose_overleaf_directory(&mut self, _context: &egui::Context) {
         if self.overleaf.folder_picker.is_some() {
             return;
         }
@@ -575,7 +575,7 @@ impl EditorApp {
         let mut dialog = AsyncFileDialog::new().set_title("Overleaf local copies");
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(parent) =
-            crate::native_window::for_viewport(context, scoped_child_viewport_id(context, SALT))
+            crate::native_window::for_viewport(_context, scoped_child_viewport_id(_context, SALT))
         {
             dialog = dialog.set_parent(&parent);
         }
