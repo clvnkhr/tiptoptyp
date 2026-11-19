@@ -360,3 +360,35 @@ lifecycle is unchanged.
 Activity exposes TeX autofix; desktop inspection reports idle/running/cancelling/
 failed without source contents. Completion wakes only its owning viewport;
 there is no polling repaint loop or idle disk work.
+
+### TeX closer prefix input
+
+`src/auto_pairs/provisional.rs::State` is Idle or Borrowing(CloserPrefix).
+This editor interaction is separate from the syntax cache. Its payload owns
+the exact document revision, stable tab ID, source/diff widget scope, validated
+closing-token span and text, consumed byte/scalar prefix, and last painted
+viewport frame. Equal document keys in different tabs cannot share provenance.
+
+Only a committed typed backslash over a parser-matched closing command begins
+borrowing. Matching characters advance the prefix and complete the closer
+without changing source or Undo history. Divergent typing inserts its text and
+restores the borrowed prefix before the original remainder; the caret stays
+after the user's text. A batch that completes the closer and contains following
+text completes first and processes the remainder normally. Backspace rewinds
+the virtual overstep without deleting a closing command. Capacity failures
+leave both source and borrowed state intact.
+
+Ordered native input receipts retire provenance before manual navigation,
+pointer/selection changes, modified deletion, paste, IME, cut and Undo. Moving
+away and back within one frame does not revive it. Paste and IME insert literal
+payloads at their current caret. Exact token/caret/revision checks fence every
+continuation and rewind. The owning editor transaction can admit its resulting
+revision only when its final token, caret and owner still agree.
+
+Read-only, disabled and unfocused editors cancel ownership. Viewport paint
+receipts also retire state when a source surface is hidden, replaced by another
+panel, or stops painting; tab/document service departure cancels explicitly.
+Desktop inspection exposes `auto_pair_phase` as idle/borrowing without token or
+document contents. Idle checks inspect only the phase; active checks compare
+the closing token, and input receipts are bounded by the current event batch.
+This lifecycle adds no worker, timer, repaint loop or idle source scan.

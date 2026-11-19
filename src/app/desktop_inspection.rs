@@ -496,6 +496,7 @@ impl EditorApp {
                 .collect::<Vec<_>>()
         );
         interaction["formatting_phase"] = serde_json::json!(self.formatting.phase());
+        interaction["auto_pair_phase"] = serde_json::json!(self.auto_pair_input.phase());
         interaction["hover_phase"] =
             serde_json::json!(self.editor_hover.as_ref().map(|hover| match &hover.phase {
                 HoverPhase::Unrequested => "unrequested",

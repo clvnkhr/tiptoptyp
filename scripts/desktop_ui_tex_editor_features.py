@@ -97,6 +97,26 @@ def editor_pair_result(document, source, position, expected, kind):
             and tex_editor_match(document, source) == expected)
 
 
+def tex_backslash_edit_result(document, owner, source, position, revision=None):
+    """Source, scalar caret and owner must all belong to the native edit."""
+    from desktop_ui_journeys import fingerprint
+    fields = ('path', 'tabs', 'active_tab_id', 'preview_tab_id', 'preview_path',
+              'workspace_root_fingerprint')
+    if any(field not in state for state in (document, owner) for field in fields):
+        raise AssertionError('Backslash edit ownership inspection is incomplete')
+    return (all(type(document[field]) is type(owner[field]) and document[field] == owner[field]
+                for field in fields)
+            and document.get('document_kind') == 'Tex'
+            and document.get('source_fingerprint') == fingerprint(source)
+            and type(document.get('source_bytes')) is int
+            and document['source_bytes'] == len(source.encode('utf-8'))
+            and isinstance(document.get('cursor'), list)
+            and all(type(at) is int for at in document['cursor'])
+            and document['cursor'] == [position, position]
+            and document.get('editor_keyboard_focused') is True
+            and (revision is None or document.get('revision') == revision))
+
+
 def tex_editor_folds(document):
     headers, collapsed = document.get('fold_headers'), document.get('fold_collapsed')
     if (not isinstance(headers, list) or not isinstance(collapsed, list)
@@ -140,6 +160,165 @@ def tex_editor_disk_receipt(path):
 
 
 class TexEditorFeaturesJourneys:
+    def tex_backslash_closers(self):
+        """Focused command-continuation regression, independently runnable."""
+        before = deepcopy(self.snapshot()['document'])
+        if before.get('document_kind') != 'Tex':
+            raise AssertionError('Backslash closer regression requires its named TeX fixture')
+        preferences = {field: before[field] for field in TEX_EDITOR_PREFERENCES}
+        paused = before.get('compilation_paused')
+        if type(paused) is not bool:
+            raise AssertionError('Compilation pause inspection is unavailable')
+        path = self.directory / 'backslash-closers-native.tex'
+        prefix = 'α '
+        if path.exists():
+            raise AssertionError('Backslash closer fixture must have a fresh owned path')
+        path.write_text(prefix, encoding='utf-8')
+        self.tex_editor_preferences(dict(auto_save=False, auto_pair_delimiters=True, line_wrap=False))
+        if not paused:
+            self.key(15, 'cmd+shift')
+            self.wait('Compilation pauses during the source-only overtype regression', lambda d: d['compilation_paused'])
+        self.key(19)
+        self.wait('Backslash closer fixture gets the code viewport', lambda d: d['view_mode'] == 'Code')
+        self.open_harper_fixture(path)
+        self.source_is(prefix)
+        try:
+            self.tex_editor_backslash_closer_cases(prefix)
+            self.tex_editor_replace_fixture(prefix)
+            if path.read_text(encoding='utf-8') != prefix:
+                raise AssertionError('Backslash overtype regression changed the saved fixture')
+        finally:
+            self.close_scratch(before['tabs'])
+            self.tex_editor_preferences(preferences)
+            if not paused:
+                self.key(15, 'cmd+shift')
+                self.wait('Backslash regression restores automatic compilation', lambda d: not d['compilation_paused'])
+            if before.get('view_mode') in ('Code', 'Split', 'Preview'):
+                self.key({'Code': 19, 'Split': 20, 'Preview': 21}[before['view_mode']])
+                self.wait('Backslash regression restores the original view', lambda d: d['view_mode'] == before['view_mode'])
+
+    def tex_editor_backslash_closer_cases(self, prefix):
+        from desktop_ui_journeys import fingerprint
+        owner = deepcopy(self.snapshot()['document'])
+
+        def expect(source, position, revision=None):
+            self.wait('Backslash command edit keeps its exact source, caret and owner', lambda d:
+                      tex_backslash_edit_result(d, owner, source, position, revision))
+
+        for opening, closing in [('(', ')'), ('[', ']')]:
+            start = len(prefix)
+            paired = prefix + '\\' + opening + '\\' + closing
+            close = start + 2
+
+            def create_pair():
+                self.tex_editor_replace_fixture(prefix)
+                self.key(125, 'cmd')
+                self.native('text', '\\')
+                self.native('text', opening)
+                expect(paired, close)
+
+            create_pair()
+            revision = self.snapshot()['document']['revision']
+            self.native('text', '\\')
+            expect(paired, close + 1, revision)
+            self.native('text', 'a')
+            continued = prefix + '\\' + opening + '\\a\\' + closing
+            broken = prefix + '\\' + opening + '\\a' + closing
+
+            def continued_command(document):
+                if document.get('source_fingerprint') == fingerprint(broken):
+                    raise AssertionError('Typing a command consumed the existing math closer backslash')
+                return tex_backslash_edit_result(document, owner, continued, close + 2)
+
+            self.wait('A command after the typed backslash preserves the original math closer', continued_command)
+            self.native('text', 'lpha')
+            command = prefix + '\\' + opening + '\\alpha\\' + closing
+            command_close = start + 2 + len('\\alpha')
+            expect(command, command_close)
+            revision = self.snapshot()['document']['revision']
+            self.native('text', '\\')
+            expect(command, command_close + 1, revision)
+            self.native('text', closing)
+            expect(command, command_close + 2, revision)
+
+            create_pair()
+            self.tex_editor_caret(paired, close + 1)
+            self.native('text', 'a')
+            expect(broken, close + 2)
+
+            create_pair()
+            self.native('text', '\\')
+            expect(paired, close + 1)
+            self.key(123, 'none')
+            self.key(124, 'none')
+            expect(paired, close + 1)
+            self.native('text', 'a')
+            expect(broken, close + 2)
+
+            create_pair()
+            self.native('text', '\\')
+            expect(paired, close + 1)
+            self.wait_target('editor.caret')
+            caret = self.snapshot()['targets']['editor.caret']
+            self.native('move', caret['x'], caret['y'])
+            self.native('click', caret['x'], caret['y'])
+            expect(paired, close + 1)
+            self.native('text', 'a')
+            expect(broken, close + 2)
+            create_pair()
+            revision = self.snapshot()['document']['revision']
+            self.native('text', '\\')
+            expect(paired, close + 1, revision)
+            self.key(51, 'none')
+            expect(paired, close, revision)
+            self.native('text', 'a')
+            expect(prefix + '\\' + opening + 'a\\' + closing, close + 1)
+
+            create_pair()
+            self.native('text', '\\')
+            expect(paired, close + 1)
+            self.paste_source('a', lambda: expect(broken, close + 2))
+
+            create_pair()
+            self.native('text', '\\')
+            expect(paired, close + 1)
+            self.key(45)
+            self.wait('A new clean document retires old closer provenance', lambda d:
+                      d['tabs'] == owner['tabs'] + 1 and d['path'] is None
+                      and d['source_bytes'] == 0 and not d['dirty'])
+            self.key(13)
+            expect(paired, close + 1)
+            self.native('text', 'a')
+            expect(broken, close + 2)
+            self.record('tex.editor.backslash_closer', delimiter=opening,
+                        typed_command_preserves_closer=True, real_closer_skip_no_edit=True,
+                        manual_arrow_insertion_literal=True, pending_arrow_cancels=True,
+                        pending_mouse_cancels=True, pending_paste_literal=True,
+                        backspace_rewinds_without_edit=True, owner_departure_cancels=True,
+                        exact_source_and_owner=True)
+        environment = prefix + '\\begin{equation}\n  \n\\end{equation}'
+        close = environment.index('\\end{equation}')
+        self.tex_editor_replace_fixture(environment)
+        self.tex_editor_caret(environment, close)
+        revision = self.snapshot()['document']['revision']
+        self.native('text', '\\')
+        expect(environment, close + 1, revision)
+        self.native('text', 'a')
+        continued = environment[:close] + '\\a' + environment[close:]
+        expect(continued, close + 2)
+        self.native('text', 'lpha')
+        expect(environment[:close] + '\\alpha' + environment[close:], close + len('\\alpha'))
+        self.tex_editor_replace_fixture(environment)
+        self.tex_editor_caret(environment, close)
+        revision = self.snapshot()['document']['revision']
+        self.native('text', '\\')
+        expect(environment, close + 1, revision)
+        self.native('text', 'end{equation}')
+        expect(environment, close + len('\\end{equation}'), revision)
+        self.record('tex.editor.environment_closer', typed_command_preserves_end=True,
+                    matching_end_overtype_without_edit=True, exact_source_and_owner=True)
+        self.tex_editor_replace_fixture(prefix)
+
     def tex_editor_replace_fixture(self, source):
         self.click('editor.source')
         self.key(0)

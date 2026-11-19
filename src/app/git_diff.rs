@@ -106,8 +106,28 @@ impl EditorApp {
         let mitex_dollars = self.document().config().is_some();
         let settings = &self.settings;
         let source_id = source_editor_id(ui.ctx());
+        let pair_owner = crate::auto_pairs::provisional::Owner {
+            document: key,
+            tab: self
+                .tabs
+                .active_id()
+                .expect("diff editor requires an active tab"),
+            editor: source_id.with("diff"),
+        };
+        let pairing_allowed =
+            settings.auto_pair_delimiters && self.document().kind() == DocumentKind::Tex;
+        self.auto_pair_input.reconcile(
+            pair_owner,
+            self.tabs.current_record().document.source(),
+            snapshot
+                .cursor
+                .is_empty()
+                .then_some(snapshot.cursor.primary.index.0),
+            pairing_allowed && ui.memory(|memory| memory.has_focus(source_id)),
+        );
         let diff = self.document_diff.as_mut().unwrap();
         let auto_pair = &mut self.auto_pair_syntax;
+        let auto_pair_input = &mut self.auto_pair_input;
         let kind = self.tabs.current_record().document.kind();
         if settings.ascii_punctuation && ui.memory(|m| m.has_focus(source_id)) {
             ui.input_mut(|input| crate::auto_pairs::ascii_punctuation(&mut input.events));
@@ -128,6 +148,8 @@ impl EditorApp {
                     crate::auto_pairs::PairingBuffer::new(
                         source,
                         auto_pair,
+                        auto_pair_input,
+                        pair_owner,
                         settings.auto_pair_delimiters && kind.typesetting_language().is_some(),
                         &input.events,
                     )
@@ -161,6 +183,14 @@ impl EditorApp {
             .cursor
             .char_range()
             .unwrap_or(snapshot.cursor);
+        self.auto_pair_input.finish(
+            pair_owner,
+            self.tabs.current_record().document.key(),
+            self.tabs.current_record().document.source(),
+            cursor.is_empty().then_some(cursor.primary.index.0),
+            pairing_allowed && output.edit.response.has_focus(),
+            ui.ctx().cumulative_frame_nr(),
+        );
         // Keep menu, Undo/Redo, preview following and inspection on the source
         // editor's existing identity, even while it is presented as a diff.
         if self.document().key() != key {

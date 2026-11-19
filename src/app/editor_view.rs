@@ -5,6 +5,7 @@ use eframe::egui::text::{ByteIndex, LayoutJob, LayoutSection};
 
 impl EditorApp {
     pub(super) fn focus_source_editor(&mut self, context: &egui::Context) {
+        self.auto_pair_input.cancel();
         if self.document().kind().preview_only() {
             return;
         }
@@ -505,6 +506,24 @@ impl EditorApp {
             .tabs
             .active_id()
             .expect("editor requires an active tab");
+        let pair_owner = crate::auto_pairs::provisional::Owner {
+            document: document_key,
+            tab: active_tab,
+            editor: editor_id.with("source"),
+        };
+        let auto_pair_input = &mut self.auto_pair_input;
+        auto_pair_input.reconcile(
+            pair_owner,
+            self.tabs.current_record().document.source(),
+            snapshot_before_edit
+                .cursor
+                .is_empty()
+                .then_some(snapshot_before_edit.cursor.primary.index.0),
+            auto_pair_enabled
+                && document_kind == DocumentKind::Tex
+                && !read_only
+                && ui.memory(|memory| memory.has_focus(editor_id)),
+        );
         let record = self.tabs.current_record_mut();
         let document = &mut record.document;
         let folding = &mut record.folding;
@@ -606,36 +625,38 @@ impl EditorApp {
                 self.snippet_session = None;
             }
             let mut output = document.edit(snapshot_before_edit.cursor, |source| {
-                let mut readonly;
-                let mut pairing;
-                let buffer: &mut dyn egui::TextBuffer = if read_only {
-                    readonly = source.as_str();
-                    &mut readonly
-                } else {
-                    pairing = ui.input(|input| {
-                        crate::auto_pairs::PairingBuffer::new(
-                            source,
-                            auto_pair_syntax,
-                            auto_pair_enabled,
-                            &input.events,
-                        )
-                        .with_surround(surround_enabled, &input.events)
-                        .with_indentation(indent_spaces)
-                        .with_document_kind(document_kind)
-                    });
-                    &mut pairing
-                };
-                let editor = egui::TextEdit::multiline(buffer)
-                    .id(source_editor_id(ui.ctx()))
-                    .code_editor()
-                    .desired_width(editor_width)
-                    .min_size(Vec2::new(editor_width, 0.0))
-                    // The surface is painted across the complete viewport
-                    // below. Keep TextEdit's own frame empty so its intrinsic
-                    // document height cannot leave an internal border behind.
-                    .frame(egui::Frame::new().inner_margin(editor_margin))
-                    .layouter(&mut layouter);
                 let mut output = {
+                    let mut readonly;
+                    let mut pairing;
+                    let buffer: &mut dyn egui::TextBuffer = if read_only {
+                        readonly = source.as_str();
+                        &mut readonly
+                    } else {
+                        pairing = ui.input(|input| {
+                            crate::auto_pairs::PairingBuffer::new(
+                                source,
+                                auto_pair_syntax,
+                                auto_pair_input,
+                                pair_owner,
+                                auto_pair_enabled,
+                                &input.events,
+                            )
+                            .with_surround(surround_enabled, &input.events)
+                            .with_indentation(indent_spaces)
+                            .with_document_kind(document_kind)
+                        });
+                        &mut pairing
+                    };
+                    let editor = egui::TextEdit::multiline(buffer)
+                        .id(source_editor_id(ui.ctx()))
+                        .code_editor()
+                        .desired_width(editor_width)
+                        .min_size(Vec2::new(editor_width, 0.0))
+                        // The surface is painted across the complete viewport
+                        // below. Keep TextEdit's own frame empty so its intrinsic
+                        // document height cannot leave an internal border behind.
+                        .frame(egui::Frame::new().inner_margin(editor_margin))
+                        .layouter(&mut layouter);
                     // An immutable TextBuffer prevents writes, but egui still
                     // collapses its selection after an attempted edit. Exclude
                     // mutating events owned by the focused source editor;
@@ -687,6 +708,22 @@ impl EditorApp {
                 }
                 output
             });
+            auto_pair_input.finish(
+                pair_owner,
+                document.key(),
+                document.source(),
+                output
+                    .state
+                    .cursor
+                    .char_range()
+                    .filter(|range| range.is_empty())
+                    .map(|range| range.primary.index.0),
+                auto_pair_enabled
+                    && document_kind == DocumentKind::Tex
+                    && !read_only
+                    && output.response.has_focus(),
+                ui.ctx().cumulative_frame_nr(),
+            );
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             crate::desktop_test::observe("editor.source", &output.response);
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]

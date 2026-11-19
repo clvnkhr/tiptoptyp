@@ -31,6 +31,7 @@ on:
           "tex",
           "tex_magic",
           "tex_editing",
+          "tex_backslash_closers",
           "tex_intelligence",
           "tex_save",
           "tex_preview_scroll",

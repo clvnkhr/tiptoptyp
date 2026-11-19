@@ -1511,6 +1511,7 @@ pub struct EditorApp {
     highlighter: SyntaxHighlighter,
     source_rows: editor_layout::RowIndex,
     auto_pair_syntax: crate::auto_pairs::PairSyntax,
+    auto_pair_input: crate::auto_pairs::provisional::State,
     guide_levels: crate::editor_decoration::GuideLevels,
     generic_highlighter: GenericSyntaxHighlighter,
 
@@ -1841,6 +1842,7 @@ impl EditorApp {
             highlighter,
             source_rows: Default::default(),
             auto_pair_syntax: crate::auto_pairs::PairSyntax::default(),
+            auto_pair_input: crate::auto_pairs::provisional::State::default(),
             guide_levels: crate::editor_decoration::GuideLevels::default(),
             generic_highlighter,
             compiler: Compiler::new(crate::worker::RepaintTarget::new(context, viewport)),
@@ -3750,6 +3752,7 @@ impl EditorApp {
         context: &egui::Context,
         frame: Option<&eframe::Frame>,
     ) {
+        self.auto_pair_input.cancel();
         if self.route_overleaf_command(command, context) {
             return;
         }
@@ -5999,6 +6002,7 @@ impl EditorApp {
     }
 
     fn reset_document_services(&mut self) {
+        self.auto_pair_input.cancel();
         self.autofix.cancel();
         if !self.lifecycle.allows_document_work() {
             return;
@@ -9384,6 +9388,7 @@ impl EditorApp {
             return;
         };
         if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::Escape)) {
+            self.auto_pair_input.cancel();
             self.editor_completion = None;
             return;
         }
@@ -9392,10 +9397,12 @@ impl EditorApp {
         }
         let len = completion.items.len();
         if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::ArrowDown)) {
+            self.auto_pair_input.cancel();
             completion.selected = (completion.selected + 1) % len;
             context.request_repaint();
         }
         if context.input_mut(|input| input.consume_key(Modifiers::NONE, egui::Key::ArrowUp)) {
+            self.auto_pair_input.cancel();
             completion.selected = completion.selected.checked_sub(1).unwrap_or(len - 1);
             context.request_repaint();
         }
@@ -9942,6 +9949,11 @@ impl EditorApp {
     pub(crate) fn ui_in_window(&mut self, ui: &mut egui::Ui, frame: Option<&eframe::Frame>) {
         let _span = crate::performance::span("ui.editor.pass");
         let context = ui.ctx().clone();
+        self.auto_pair_input
+            .begin_frame(context.cumulative_frame_nr());
+        if context.input(|input| input.viewport().focused == Some(false)) {
+            self.auto_pair_input.cancel();
+        }
         ChildViewHost::resume_owner(&context);
         // Capture the exact platform parent before opening any popup viewport
         // or consuming native menu commands. Each EditorApp retains its own
@@ -10331,6 +10343,8 @@ impl EditorApp {
         self.show_workspace_chooser(&context);
         self.show_package_manager_window(&context);
         self.reconcile_child_view_lifecycles(&context);
+        self.auto_pair_input
+            .end_frame(context.cumulative_frame_nr());
         // Every transaction is observed, including edits introduced by new
         // commands which do not explicitly request immediate service updates.
         self.mark_edited();

@@ -9,11 +9,34 @@ from desktop_ui_journeys import fingerprint
 from desktop_ui_tex_editor_features import (
     TEX_EDITOR_PREFERENCES, TEX_EDITOR_SOURCE, TexEditorFeaturesJourneys, editor_pair_result,
     tex_editor_folds, tex_editor_match, tex_editor_owner_restored,
-    tex_editor_preference_edits, tex_editor_render_ready,
+    tex_editor_preference_edits, tex_editor_render_ready, tex_backslash_edit_result,
 )
 
 
 class TexEditorFeatureContract(unittest.TestCase):
+    def test_backslash_edit_receipt_rejects_lost_closer_wrong_scalar_caret_and_foreign_owner(self):
+        source = 'α \\(\\a\\)'
+        owner = dict(path='/private/tmp/closer.tex', tabs=2, active_tab_id=3,
+                     preview_tab_id=1, preview_path='/main.tex', workspace_root_fingerprint=fingerprint('/workspace'))
+        document = dict(owner, document_kind='Tex', source_fingerprint=fingerprint(source),
+                        source_bytes=len(source.encode()), cursor=[6, 6],
+                        editor_keyboard_focused=True, revision='12')
+        self.assertTrue(tex_backslash_edit_result(document, owner, source, 6, '12'))
+        for field, value in [('source_fingerprint', fingerprint('α \\(\\a)')),
+                             ('source_bytes', len(source)), ('cursor', [5, 5]),
+                             ('cursor', [6, True]), ('document_kind', 'Typst'),
+                             ('editor_keyboard_focused', False), ('revision', '13'),
+                             ('path', '/foreign.tex'), ('active_tab_id', 1),
+                             ('preview_tab_id', 3), ('tabs', 1),
+                             ('workspace_root_fingerprint', fingerprint('/foreign'))]:
+            with self.subTest(field=field):
+                self.assertFalse(tex_backslash_edit_result(dict(document, **{field: value}), owner, source, 6, '12'))
+        for field in owner:
+            partial = dict(document)
+            partial.pop(field)
+            with self.subTest(field=field), self.assertRaisesRegex(AssertionError, 'ownership inspection'):
+                tex_backslash_edit_result(partial, owner, source, 6)
+
     def test_preference_edits_use_actual_values_and_preserve_custom_incoming_choices(self):
         before = dict(auto_save=True, auto_pair_delimiters=False,
                       line_numbers=False, line_wrap=True, sticky_context=False)

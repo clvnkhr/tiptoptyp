@@ -51,21 +51,30 @@ impl Syntax {
     }
 
     pub(super) fn command_step(&self, byte: usize, text: &str) -> Option<usize> {
-        let pair = self.index.pair_at(byte)?;
-        let close = self.source.get(pair[1].clone())?;
-        if !matches!(close, "\\]" | "\\)") || !self.source[pair[0].clone()].starts_with('\\') {
-            return None;
-        }
-        let remaining = &self.source[byte..pair[1].end];
-        if text == remaining {
-            Some(remaining.len())
-        } else if text == "\\" && byte == pair[1].start {
+        let span = self.command_closer(byte)?;
+        let close = self.source.get(span.clone())?;
+        let remaining = &self.source[byte..span.end];
+        if text == remaining && (byte == span.start || matches!(close, "\\]" | "\\)")) {
+            Some(remaining.chars().count())
+        } else if text == "\\" && byte == span.start {
             Some(1)
-        } else if byte == pair[1].start && close.ends_with(text) && matches!(text, "]" | ")") {
+        } else if byte == span.start
+            && matches!(close, "\\]" | "\\)")
+            && close.ends_with(text)
+            && matches!(text, "]" | ")")
+        {
             Some(2)
         } else {
             None
         }
+    }
+
+    pub(super) fn command_closer(&self, byte: usize) -> Option<std::ops::Range<usize>> {
+        let pair = self.index.pair_at(byte)?;
+        (pair[1].contains(&byte)
+            && self.source.get(pair[1].clone())?.starts_with('\\')
+            && self.source.get(pair[0].clone())?.starts_with('\\'))
+        .then_some(pair[1].clone())
     }
 
     pub(super) fn empty_command(&self, byte: usize) -> bool {

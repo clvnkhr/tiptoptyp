@@ -19,7 +19,7 @@ class ExplicitJourneyRangeContract(unittest.TestCase):
         full = runner.selected_journeys('all')
         remaining = runner.selected_journeys('all', 'arxiv_tables')
         self.assertEqual(remaining, full[full.index('tables') + 1:])
-        self.assertEqual(len(remaining), 51)
+        self.assertEqual(len(remaining), 52)
         self.assertNotIn('tables', remaining)
         self.assertEqual(remaining[-len(runner.TEX_JOURNEYS):], list(runner.TEX_JOURNEYS))
         self.assertEqual(runner.selected_journeys('all'), full)
