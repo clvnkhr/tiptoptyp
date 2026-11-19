@@ -158,7 +158,7 @@ pub(super) fn menu_row_content_width(
         let plain = egui::Color32::WHITE;
         (
             fonts
-                .layout_no_wrap(label.to_owned(), font.clone(), plain)
+                .layout_job(menu_caption_job(style, label, plain))
                 .size()
                 .x,
             if right.is_empty() {
@@ -170,6 +170,45 @@ pub(super) fn menu_row_content_width(
     });
     let gap = if right.is_empty() { 0.0 } else { MENU_ROW_GAP };
     pad + caption + gap + trailing + pad
+}
+
+/// Keep TeX examples visually literal while leaving their captions in the
+/// interface font. Sizing and painting use this same job.
+pub(super) fn menu_caption_job(
+    style: &egui::Style,
+    label: &str,
+    color: egui::Color32,
+) -> egui::text::LayoutJob {
+    let font = egui::TextStyle::Button.resolve(style);
+    let code_start = if label.starts_with("Inline math \\") || label.starts_with("Display math \\")
+    {
+        label.find('\\').unwrap_or(label.len())
+    } else {
+        label.len()
+    };
+    let (caption, code) = label.split_at(code_start);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        caption,
+        0.0,
+        egui::TextFormat {
+            font_id: font.clone(),
+            color,
+            ..Default::default()
+        },
+    );
+    if !code.is_empty() {
+        job.append(
+            code,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::monospace(font.size),
+                color,
+                ..Default::default()
+            },
+        );
+    }
+    job
 }
 
 /// Measured content widths for the editor menu: the parent column stretches

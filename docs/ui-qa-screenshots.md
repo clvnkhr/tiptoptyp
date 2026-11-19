@@ -98,6 +98,8 @@ The accepted scenes and their framebuffer targets are:
 | `alert-dialog` | `modal` | Informational or error alert card |
 | `overwrite-dialog` | `modal` | Existing-file overwrite confirmation card |
 | `editor-context-menu` | `popup` | Editor right-click menu |
+| `tex-inline-math-menu` | `popup` | TeX inline-math conversion flyout offering display math with a monospace delimiter example |
+| `tex-display-math-menu` | `popup` | TeX display-math conversion flyout offering inline math with a monospace delimiter example |
 | `explorer-context-menu` | `popup` | Explorer right-click menu |
 | `unicode-completion` | `main` | Hebrew, mathematical, and alchemical glyphs in symbol completions |
 | `draw-symbol` | `main` | Dark handwriting ink with ranked, right-aligned language-specific commands on translucent backgrounds |

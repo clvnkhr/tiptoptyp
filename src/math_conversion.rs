@@ -8,7 +8,7 @@ pub(crate) struct Target {
     pub(crate) original: String,
     body: String,
     kind: DocumentKind,
-    typst_display: bool,
+    display: bool,
     pub(crate) document_key: Option<tiptoptyp_core::document::DocumentKey>,
 }
 impl Target {
@@ -41,17 +41,52 @@ impl Target {
         if !original.ends_with(&close) {
             return None;
         }
+        let display = if kind == DocumentKind::Typst {
+            typst_syntax::parse(original)
+                .children()
+                .find_map(|node| node.cast::<typst_syntax::ast::Equation>())
+                .is_some_and(|equation| equation.block())
+        } else {
+            original.starts_with(r"\[")
+                || original.starts_with("$$")
+                || (original.starts_with(r"\begin") && close != r"\end{math}")
+        };
+        // Bind the punctuation to the exact same source transaction as the
+        // formula. A stale context menu must not consume newly edited prose.
+        let mut range = block.range;
+        let formula_end = range.end;
+        if kind == DocumentKind::Tex && !display {
+            let punctuation_bytes: usize = source[range.end..]
+                .chars()
+                .take_while(|ch| {
+                    matches!(
+                        ch,
+                        '.' | ','
+                            | ';'
+                            | ':'
+                            | '!'
+                            | '?'
+                            | '…'
+                            | '，'
+                            | '。'
+                            | '；'
+                            | '：'
+                            | '！'
+                            | '？'
+                    )
+                })
+                .map(char::len_utf8)
+                .sum();
+            range.end += punctuation_bytes;
+        }
+        let body = format!("{body}{}", &source[formula_end..range.end]);
         Some(Self {
-            range: block.range,
-            original: original.into(),
-            body: body.into(),
+            original: source[range.clone()].into(),
+            range,
+            body,
             kind,
             document_key: None,
-            typst_display: kind == DocumentKind::Typst
-                && typst_syntax::parse(original)
-                    .children()
-                    .find_map(|node| node.cast::<typst_syntax::ast::Equation>())
-                    .is_some_and(|equation| equation.block()),
+            display,
         })
     }
     pub(crate) fn bind_document(mut self, key: tiptoptyp_core::document::DocumentKey) -> Self {
@@ -62,9 +97,19 @@ impl Target {
     pub(crate) fn choices(&self) -> &'static [&'static str] {
         if self.kind == DocumentKind::Typst {
             &["Inline math", "Display math"]
+        } else if self.display {
+            &[
+                r"Inline math \(...\)",
+                "align",
+                "align*",
+                "gather",
+                "gather*",
+                "equation",
+                "equation*",
+            ]
         } else {
             &[
-                "Inline math (\\(…\\))",
+                r"Display math \[...\]",
                 "align",
                 "align*",
                 "gather",
@@ -83,7 +128,7 @@ impl Target {
         }
         // Typst uses whitespace on both sides of the equation body, rather
         // than line breaks, to distinguish display math from inline math.
-        Some(if self.typst_display {
+        Some(if self.display {
             ("Convert to inline math", "Inline math")
         } else {
             ("Convert to display math", "Display math")
@@ -105,7 +150,12 @@ impl Target {
         } else if choice.starts_with("Inline math") {
             format!("\\({}\\)", self.body)
         } else {
-            format!("\\begin{{{choice}}}{}\\end{{{choice}}}", self.body)
+            let body = &self.body;
+            if choice == r"Display math \[...\]" {
+                format!(r"\[{body}\]")
+            } else {
+                format!("\\begin{{{choice}}}{body}\\end{{{choice}}}")
+            }
         })
     }
 }
@@ -113,6 +163,85 @@ impl Target {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tex_menu_offers_the_other_delimiter_form_without_extra_parentheses() {
+        for source in [r"\(x\)", "$x$", r"\begin{math}x\end{math}"] {
+            let target = Target::at(source, 2, DocumentKind::Tex).unwrap();
+            assert_eq!(target.choices()[0], r"Display math \[...\]", "{source}");
+            assert_eq!(target.replacement(target.choices()[0]).unwrap(), r"\[x\]");
+        }
+        for source in [r"\[x\]", "$$x$$", r"\begin{equation}x\end{equation}"] {
+            let target = Target::at(source, 2, DocumentKind::Tex).unwrap();
+            assert_eq!(target.choices()[0], r"Inline math \(...\)", "{source}");
+            assert_eq!(target.replacement(target.choices()[0]).unwrap(), r"\(x\)");
+        }
+    }
+
+    #[test]
+    fn tex_inline_to_display_moves_immediate_punctuation_into_each_display_form() {
+        let source = "Before \\(α + x\\),;… after.";
+        let target = Target::at(source, 10, DocumentKind::Tex).unwrap();
+        for (choice, expected) in [
+            (r"Display math \[...\]", r"\[α + x,;…\]"),
+            ("equation", r"\begin{equation}α + x,;…\end{equation}"),
+            ("align*", r"\begin{align*}α + x,;…\end{align*}"),
+        ] {
+            let replacement = target.replacement(choice).expect("display conversion");
+            let mut converted = source.to_owned();
+            converted.replace_range(target.range.clone(), &replacement);
+            assert_eq!(converted, format!("Before {expected} after."));
+        }
+    }
+
+    #[test]
+    fn punctuation_capture_stops_at_whitespace_quotes_brackets_and_commands() {
+        for suffix in [
+            " after",
+            " , after",
+            "\n, after",
+            "\".",
+            ").",
+            r"\,",
+            "% comment",
+        ] {
+            let source = format!(r"\(α\){suffix}");
+            let target = Target::at(&source, 2, DocumentKind::Tex).unwrap();
+            assert_eq!(target.original, r"\(α\)");
+            assert_eq!(target.replacement(target.choices()[0]).unwrap(), r"\[α\]");
+            assert_eq!(&source[target.range.end..], suffix);
+        }
+        for (source, choice, expected) in [
+            (r"\(x\)...", r"Display math \[...\]", r"\[x...\]"),
+            (
+                r"\begin{math}x\end{math}。",
+                "equation",
+                r"\begin{equation}x。\end{equation}",
+            ),
+            (
+                "\\(x % explanation\n\\).",
+                r"Display math \[...\]",
+                "\\[x % explanation\n.\\]",
+            ),
+        ] {
+            let target = Target::at(source, 2, DocumentKind::Tex).unwrap();
+            assert_eq!(target.replacement(choice).unwrap(), expected);
+            assert_eq!(target.range.end, source.len());
+        }
+    }
+
+    #[test]
+    fn display_and_typst_conversions_preserve_punctuation_outside_the_formula() {
+        for (source, kind) in [
+            (r"\[x\].", DocumentKind::Tex),
+            ("$x$.", DocumentKind::Typst),
+        ] {
+            let target = Target::at(source, 2, kind).unwrap();
+            assert_eq!(&source[target.range.end..], ".");
+            assert!(!target.original.ends_with('.'));
+            assert_eq!(target.body, "x");
+        }
+    }
+
     #[test]
     fn single_alternative_offers_the_other_typst_form_directly() {
         let inline = Target::at("$x$", 1, DocumentKind::Typst).expect("inline Typst math");

@@ -3587,12 +3587,12 @@ fn menu_columns_fit_their_longest_labels_with_room_for_larger_fonts() {
                 ui.ctx().format_shortcut(&chord)
             });
             let geometry =
-                editor_menu_geometry(ui.ctx(), ui.style(), &rows, &["Inline math (\\(…\\))"], 4);
+                editor_menu_geometry(ui.ctx(), ui.style(), &rows, &["Inline math \\(...\\)"], 4);
             let widths = super::popup_layout::editor_menu_widths(
                 ui.ctx(),
                 ui.style(),
                 &rows,
-                &["Inline math (\\(…\\))"],
+                &["Inline math \\(...\\)"],
             );
             for row in &rows {
                 let need = super::popup_layout::menu_row_content_width(
@@ -3627,7 +3627,7 @@ fn menu_columns_fit_their_longest_labels_with_room_for_larger_fonts() {
             let choice_need = super::popup_layout::menu_row_content_width(
                 ui.ctx(),
                 ui.style(),
-                "Inline math (\\(…\\))",
+                "Inline math \\(...\\)",
                 "",
             );
             assert!(
@@ -3638,6 +3638,71 @@ fn menu_columns_fit_their_longest_labels_with_room_for_larger_fonts() {
         })
         .textures_delta
         .clear();
+}
+
+#[test]
+fn tex_math_menu_examples_use_monospace_without_changing_the_caption_font() {
+    let style = egui::Style::default();
+    for label in [r"Inline math \(...\)", r"Display math \[...\]"] {
+        let job = super::popup_layout::menu_caption_job(&style, label, Color32::WHITE);
+        assert_eq!(job.text, label);
+        assert_eq!(job.sections.len(), 2);
+        assert_eq!(
+            job.sections[0].format.font_id,
+            egui::TextStyle::Button.resolve(&style)
+        );
+        assert_eq!(
+            job.sections[1].format.font_id.family,
+            egui::FontFamily::Monospace
+        );
+        let code = &job.sections[1].byte_range;
+        assert!(job.text[code.start.0..code.end.0].starts_with('\\'));
+    }
+    let ordinary = super::popup_layout::menu_caption_job(&style, "Undo", Color32::WHITE);
+    assert_eq!(ordinary.sections.len(), 1);
+}
+
+#[test]
+fn tex_math_flyout_offers_the_opposite_form_and_dispatches_its_exact_choice() {
+    use egui_kittest::{Harness, kittest::Queryable as _};
+    for (source, choice, absent) in [
+        (r"\(x\),", r"Display math \[...\]", "Inline math"),
+        (r"\[x\]", r"Inline math \(...\)", "Display math"),
+    ] {
+        let target = crate::math_conversion::Target::at(source, 2, DocumentKind::Tex).unwrap();
+        let expected = EditorMenuAction::ConvertMath(target.clone(), choice.into());
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(640.0, 650.0))
+            .build_ui_state(
+                move |ui, action| {
+                    show_editor_context_menu_ui(
+                        ui,
+                        EditorContextMenuOptions {
+                            can_undo: true,
+                            can_redo: true,
+                            has_selection: false,
+                            can_format: true,
+                            can_sync_preview: false,
+                            link: None,
+                            table: None,
+                            math: Some(&target),
+                            liquid_selection: None,
+                            diagnostic_fix: None,
+                        },
+                        &ShortcutBindings::current_defaults(),
+                        action,
+                    )
+                },
+                None::<EditorMenuAction>,
+            );
+        harness.run();
+        harness.get_by_label("Convert to… ›").hover();
+        harness.run();
+        assert!(harness.query_by_label_contains(absent).is_none());
+        harness.get_by_label_contains(choice).click();
+        harness.run();
+        assert_eq!(harness.state(), &Some(expected));
+    }
 }
 
 #[test]
@@ -3752,11 +3817,11 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
             None::<EditorMenuAction>,
         );
     harness.run();
-    assert!(harness.query_by_label_contains("Inline math (").is_none());
+    assert!(harness.query_by_label_contains("Inline math \\(").is_none());
     harness.get_by_label("Convert to… ›").hover();
     harness.run();
     let parent = harness.get_by_label("Convert to… ›").rect();
-    let choice = harness.get_by_label_contains("Inline math (").rect();
+    let choice = harness.get_by_label_contains("Inline math \\(").rect();
     assert!(
         parent.width() < 400.0,
         "parent rows narrow for the measured column instead of stretching: {parent:?}"
@@ -3776,7 +3841,7 @@ fn convert_submenu_hides_until_hovered_and_places_choices_beside_the_parent() {
     // Leaving both rows closes the flyout without selecting anything.
     harness.get_by_label_contains("Undo").hover();
     harness.run();
-    assert!(harness.query_by_label_contains("Inline math (").is_none());
+    assert!(harness.query_by_label_contains("Inline math \\(").is_none());
     assert!(harness.state().is_none());
 }
 
@@ -4316,9 +4381,19 @@ fn source_and_docked_tex_context_menus_ignore_typst_literals() {
 #[test]
 fn docked_diff_right_click_preserves_selection_and_math_conversion_target() {
     use crate::git::editor::document_diff::DocumentDiff;
-    for (kind, source, formula) in [
-        (DocumentKind::Typst, "Body α $x$.\n", "$x$"),
-        (DocumentKind::Tex, "Body α \\(x\\).\n", "\\(x\\)"),
+    for (kind, source, formula, converted_source) in [
+        (
+            DocumentKind::Typst,
+            "Body α $x$.\n",
+            "$x$",
+            "Body α $\nx\n$.\n",
+        ),
+        (
+            DocumentKind::Tex,
+            "Body α \\(x\\).\n",
+            "\\(x\\).",
+            "Body α \\[x.\\]\n",
+        ),
     ] {
         let directory = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
@@ -4387,6 +4462,12 @@ fn docked_diff_right_click_preserves_selection_and_math_conversion_target() {
             kind.is_typst()
                 .then_some(("Convert to display math", "Display math"))
         );
+        let choice = target
+            .single_alternative()
+            .map_or(target.choices()[0], |(_, choice)| choice);
+        let mut converted = source.to_owned();
+        converted.replace_range(target.range.clone(), &target.replacement(choice).unwrap());
+        assert_eq!(converted, converted_source);
         assert!(
             app.document_diff.is_some(),
             "opening a menu closed the diff"

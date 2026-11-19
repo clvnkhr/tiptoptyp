@@ -20,6 +20,7 @@ or use an explicit `% !TeX root` comment, when editing a partial source file.
 | Indentation, guides and newline editing | Syntax-aware blocks, math and content | TeX groups, environments and math, using the same indentation preference and Undo/Redo rules |
 | Find/replace, tabs, Git and ordinary editing | Shared editor | Shared editor, including paired typing in the editable Git diff view |
 | Snippets, templates and tables | Typst syntax and imports | TeX syntax, magic-comment snippets, packages and booktabs/table editing |
+| Math conversion | Right-click offers the other inline/display form directly | The conversion submenu offers `\(...\)` for display input or `\[...\]` for inline input, plus equation/alignment environments. Immediate sentence punctuation moves inside the chosen display form; whitespace, quotes and closing brackets stop capture. Each conversion is one Undo |
 | Completion, hover, definitions and diagnostics | Tinymist plus local snippets/providers | Texlab, tex-fmt and TeX lint services plus local snippets/providers |
 | Grammar, diagnostic fixes and comment controls | Shared settings and review flows | Same controls, with TeX-aware prose/math exclusions and `%` comment markers |
 | Project contents and included files | Imports/includes, symbols, labels/references, packages and bibliography files | Inputs/includes/subfiles, sections/macros, labels/references, packages and bibliography files |

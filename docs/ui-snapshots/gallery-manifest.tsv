@@ -61,6 +61,8 @@ scene	preview-controls	preview-controls	preview-controls	component	transparent	-
 scene	file-menu	popup	popup-file-menu	component	transparent	-
 scene	edit-menu	popup	popup-edit-menu	component	transparent	-
 scene	editor-context-menu	popup	popup-editor-context-menu	component	transparent	-
+scene	tex-inline-math-menu	popup	popup-tex-inline-math-menu	targeted	transparent	-
+scene	tex-display-math-menu	popup	popup-tex-display-math-menu	targeted	transparent	-
 scene	explorer-context-menu	popup	popup-explorer-context-menu	component	transparent	-
 scene	settings-window	settings	settings-settings-window	component	-	settings-state
 scene	settings-editor	settings	settings-settings-editor	targeted	-	-

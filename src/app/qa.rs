@@ -3,6 +3,15 @@
 use super::*;
 use crate::explorer::ExplorerSection;
 
+const TEX_MATH_FLYOUT_SNAPSHOT: &str = "qa-tex-math-flyout";
+
+pub(super) fn math_conversion_flyout_open(context: &egui::Context) -> bool {
+    context.data(|data| {
+        data.get_temp::<bool>(egui::Id::new(TEX_MATH_FLYOUT_SNAPSHOT))
+            .unwrap_or(false)
+    })
+}
+
 #[derive(Default)]
 pub(super) struct QaSession {
     document: Option<SceneDocument>,
@@ -227,6 +236,15 @@ impl QaSession {
         let Some(scene) = app.snapshot_scene else {
             return;
         };
+        context.data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(TEX_MATH_FLYOUT_SNAPSHOT),
+                matches!(
+                    scene,
+                    UiSnapshotScene::TexInlineMathMenu | UiSnapshotScene::TexDisplayMathMenu
+                ),
+            );
+        });
         if self.document.is_none() {
             self.document = Some(SceneDocument::capture(app.document()));
         }
@@ -797,20 +815,26 @@ impl QaSession {
                     });
                 }
             }
-            UiSnapshotScene::EditorContextMenu => {
-                // Typst math menu: a single direct convert row, no flyout.
-                let path = app.workspace_root.join("menu-math.typ");
+            UiSnapshotScene::EditorContextMenu
+            | UiSnapshotScene::TexInlineMathMenu
+            | UiSnapshotScene::TexDisplayMathMenu => {
+                let (source, name, kind) = match scene {
+                    UiSnapshotScene::TexInlineMathMenu => {
+                        (r"\(x + y\),", "menu-math.tex", DocumentKind::Tex)
+                    }
+                    UiSnapshotScene::TexDisplayMathMenu => {
+                        (r"\[x + y\]", "menu-math.tex", DocumentKind::Tex)
+                    }
+                    _ => ("$ x $", "menu-math.typ", DocumentKind::Typst),
+                };
+                let path = app.workspace_root.join(name);
                 let disk_fingerprint = app.document().disk_fingerprint();
                 app.document_mut()
-                    .replace_loaded("$ x $".into(), path, DocumentKind::Typst, disk_fingerprint)
+                    .replace_loaded(source.into(), path, kind, disk_fingerprint)
                     .expect("QA math fixture replacement");
                 app.prepare_editor_source_data();
-                let math = crate::math_conversion::Target::at(
-                    app.document().source(),
-                    2,
-                    DocumentKind::Typst,
-                )
-                .map(|target| target.bind_document(app.document().key()));
+                let math = crate::math_conversion::Target::at(app.document().source(), 2, kind)
+                    .map(|target| target.bind_document(app.document().key()));
                 app.app_popup = Some(AppPopup::Editor {
                     source: Some(preview_jump::SourceLocation {
                         key: app.document().key(),
@@ -1048,6 +1072,7 @@ impl QaSession {
         app.pdfium_preview.clear_reveal();
         app.close_document_diff();
         context.data_mut(|data| data.remove::<bool>(egui::Id::new("qa-explorer-drop")));
+        context.data_mut(|data| data.remove::<bool>(egui::Id::new(TEX_MATH_FLYOUT_SNAPSHOT)));
         self.git_fixture_prepared = false;
         app.git.visible = false;
         app.git_editor = crate::git::editor::GitEditorState::default();
@@ -1155,6 +1180,47 @@ fn prepare_git_panel_capture(context: &egui::Context, explorer: &mut ExplorerPan
 mod tests {
     use super::*;
     use egui_kittest::{Harness, kittest::Queryable as _};
+
+    #[test]
+    fn tex_math_menu_scenes_own_the_flyout_state_and_restore_the_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        let original = app.document().source().clone();
+        let mut qa = QaSession::default();
+        for (scene, choice) in [
+            (UiSnapshotScene::TexInlineMathMenu, r"Display math \[...\]"),
+            (UiSnapshotScene::TexDisplayMathMenu, r"Inline math \(...\)"),
+        ] {
+            app.snapshot_scene = Some(scene);
+            qa.prepare(&mut app, &context);
+            assert_eq!(app.document().kind(), DocumentKind::Tex);
+            assert!(math_conversion_flyout_open(&context));
+            let Some(AppPopup::Editor {
+                math: Some(target), ..
+            }) = app.app_popup.as_ref()
+            else {
+                panic!("TeX math scene must route to the real editor menu");
+            };
+            assert_eq!(target.choices()[0], choice);
+            assert_eq!(target.document_key, Some(app.document().key()));
+            qa.set_step(
+                &mut app,
+                &UiCaptureStep {
+                    theme: CaptureThemeProfile {
+                        name: "catppuccin-latte".into(),
+                        invert: false,
+                        hue_shift_degrees: 0,
+                    },
+                    scene: UiSnapshotScene::Main,
+                },
+                &context,
+            );
+            assert!(!math_conversion_flyout_open(&context));
+            assert_eq!(app.document().source(), &original);
+            assert!(app.app_popup.is_none());
+        }
+    }
 
     #[test]
     fn delimiter_scene_keeps_the_caret_inside_the_innermost_pair() {

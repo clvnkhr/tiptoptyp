@@ -12637,11 +12637,16 @@ fn menu_row(ui: &mut egui::Ui, label: &str, right: &str) -> egui::Response {
         ui.visuals().weak_text_color()
     };
     let pad = ui.spacing().button_padding.x;
-    ui.painter().text(
-        rect.left_center() + egui::vec2(pad, 0.0),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font.clone(),
+    let caption = ui.fonts_mut(|fonts| {
+        fonts.layout_job(popup_layout::menu_caption_job(
+            ui.style(),
+            label,
+            text_color,
+        ))
+    });
+    ui.painter().galley(
+        rect.left_center() + egui::vec2(pad, -caption.size().y / 2.0),
+        caption,
         text_color,
     );
     if !right.is_empty() {
@@ -13095,6 +13100,8 @@ fn math_convert_submenu(
     }
     let id = ui.id().with("math-convert-submenu");
     let mut open: bool = ui.data(|data| data.get_temp(id).unwrap_or(false));
+    let snapshot_open = qa::math_conversion_flyout_open(ui.ctx());
+    open |= snapshot_open;
     let row = menu_row(ui, "Convert to…", "›");
     if row.hovered() || row.clicked() {
         open = true;
@@ -13139,7 +13146,7 @@ fn math_convert_submenu(
                 .ctx()
                 .pointer_hover_pos()
                 .is_some_and(|pointer| flyout.response.rect.expand(3.0).contains(pointer));
-        if !row.hovered() && !inside {
+        if !row.hovered() && !inside && !snapshot_open {
             open = false;
         }
     }

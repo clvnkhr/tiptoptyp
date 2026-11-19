@@ -93,7 +93,7 @@ mod tests {
     fn converting_math_queues_formatting_for_the_edited_version_without_manual_save() {
         for (kind, source, choice) in [
             (DocumentKind::Typst, "$x$", "Display math"),
-            (DocumentKind::Tex, "\\[x\\]", "Inline math (\\(…\\))"),
+            (DocumentKind::Tex, "\\[x\\]", "Inline math \\(...\\)"),
         ] {
             let directory = tempfile::tempdir().unwrap();
             let context = egui::Context::default();
@@ -146,6 +146,54 @@ mod tests {
     }
 
     #[test]
+    fn tex_punctuation_conversion_is_one_undo_and_rejects_a_stale_menu() {
+        let directory = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::dormant_for_tests(&context, directory.path().into());
+        app.snapshot_scene = None;
+        app.settings.format_after_math_conversion = false;
+        let source = "Before \\(α\\), after.";
+        app.document_mut().replace_loaded_unprojected(
+            source.into(),
+            directory.path().join("math.tex"),
+            DocumentKind::Tex,
+            None,
+        );
+        context
+            .run_ui(egui::RawInput::default(), |ui| app.show_editor(ui))
+            .drop_without_applying_deltas();
+        let target = crate::math_conversion::Target::at(source, 10, DocumentKind::Tex)
+            .unwrap()
+            .bind_document(app.document().key());
+        app.pending_app_popup_action = Some(AppPopupAction::Editor(EditorMenuAction::ConvertMath(
+            target.clone(),
+            r"Display math \[...\]".into(),
+        )));
+        app.execute_pending_app_popup_action(&context, None);
+        assert_eq!(app.document().source(), "Before \\[α,\\] after.");
+        app.undo_editor(&context, false);
+        assert_eq!(app.document().source(), source);
+
+        // The punctuation shares the formula's captured range and owner.
+        app.document_mut().edit(CCursorRange::default(), |source| {
+            *source = "Before \\(α\\); after.".into();
+        });
+        app.pending_app_popup_action = Some(AppPopupAction::Editor(EditorMenuAction::ConvertMath(
+            target,
+            r"Display math \[...\]".into(),
+        )));
+        app.execute_pending_app_popup_action(&context, None);
+        assert_eq!(app.document().source(), "Before \\(α\\); after.");
+        assert!(
+            app.notice
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("formula changed")
+        );
+    }
+
+    #[test]
     fn disabled_automatic_formatting_and_disabled_tex_formatter_still_convert() {
         for (kind, automatic, formatter) in [
             (
@@ -180,7 +228,7 @@ mod tests {
                 &context,
                 source,
                 if kind == DocumentKind::Tex {
-                    "Inline math (\\(…\\))"
+                    "Inline math \\(...\\)"
                 } else {
                     "Display math"
                 },

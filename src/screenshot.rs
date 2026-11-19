@@ -105,6 +105,8 @@ pub enum UiSnapshotScene {
     AlertDialog,
     OverwriteDialog,
     EditorContextMenu,
+    TexInlineMathMenu,
+    TexDisplayMathMenu,
     ExplorerContextMenu,
     DocumentFontSelector,
     FontCompletion,
@@ -141,7 +143,7 @@ pub enum UiSnapshotScene {
 }
 
 impl UiSnapshotScene {
-    pub const ALL: [Self; 72] = [
+    pub const ALL: [Self; 74] = [
         Self::Snippets,
         Self::Shortcuts,
         Self::Packages,
@@ -181,6 +183,8 @@ impl UiSnapshotScene {
         Self::AlertDialog,
         Self::OverwriteDialog,
         Self::EditorContextMenu,
+        Self::TexInlineMathMenu,
+        Self::TexDisplayMathMenu,
         Self::ExplorerContextMenu,
         Self::DocumentFontSelector,
         Self::FontCompletion,
@@ -258,6 +262,8 @@ impl UiSnapshotScene {
             Self::AlertDialog => "alert-dialog",
             Self::OverwriteDialog => "overwrite-dialog",
             Self::EditorContextMenu => "editor-context-menu",
+            Self::TexInlineMathMenu => "tex-inline-math-menu",
+            Self::TexDisplayMathMenu => "tex-display-math-menu",
             Self::ExplorerContextMenu => "explorer-context-menu",
             Self::DocumentFontSelector => "document-font-selector",
             Self::FontCompletion => "font-completion",
@@ -339,6 +345,8 @@ impl UiSnapshotScene {
             Self::FileMenu
             | Self::EditMenu
             | Self::EditorContextMenu
+            | Self::TexInlineMathMenu
+            | Self::TexDisplayMathMenu
             | Self::ExplorerContextMenu
             | Self::DocumentFontSelector
             | Self::StatusLog => "popup",
@@ -416,6 +424,8 @@ impl UiSnapshotScene {
             "alert-dialog" => Self::AlertDialog,
             "overwrite-dialog" => Self::OverwriteDialog,
             "editor-context-menu" => Self::EditorContextMenu,
+            "tex-inline-math-menu" => Self::TexInlineMathMenu,
+            "tex-display-math-menu" => Self::TexDisplayMathMenu,
             "explorer-context-menu" => Self::ExplorerContextMenu,
             "document-font-selector" => Self::DocumentFontSelector,
             "font-completion" => Self::FontCompletion,
