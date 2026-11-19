@@ -1368,7 +1368,7 @@ impl SettingsTarget {
                 "liquid local selected text selection grammar model machine learning native onnx threads cache input filtering placeholder math code links formatted emph strong textbf"
             }
             Self::Autofix => {
-                "autofix automatic fix fixes repair TeX latex document enabled rules diagnostic ref eqref nbsp nonbreaking space tilde shortcut undo on save saving"
+                "autofix automatic fix fixes repair TeX latex document enabled rules diagnostic ref eqref nbsp nonbreaking space tilde shortcut undo on save saving manual autosave auto save"
             }
             Self::LiquidFix => {
                 "liquid foundation model LFM LFM3 local fix fixes suggest suggestion diagnostic error replacement install download review diff threads cache"

@@ -8,9 +8,12 @@ operation and applies its admitted edits as one undo step. It does not require
 an up-to-date Problems panel. The action is available from the Edit menu; its
 shortcut can be changed in Settings → Keyboard shortcuts.
 
-**Autofix on save**, in the same Autofixing section, is off by default. Enabling
-it applies the selected TeX rules when saving. Manual autofixing remains
-available independently of this switch.
+**Autofix on manual save** and **Autofix on autosave**, in the same Autofixing
+section, are independent and both off by default. Each applies the selected TeX
+rules only for that kind of save. A confirmed manual overwrite follows the
+manual-save option. Changing the other option does not cancel an already
+running save correction. The bulk autofix action remains available independently
+of both save options.
 Saving a protected Overleaf draft as a local recovery copy preserves its exact
 text and skips autofixing and formatting; resolving its conflict remains a
 separate action. Saving a healthy parked tab does not edit the active tab.

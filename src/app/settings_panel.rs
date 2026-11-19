@@ -2398,13 +2398,22 @@ const LIQUID_EXAMPLES: [(&str, crate::document::DocumentKind, &str); 2] = [
 fn tex_autofix_preferences(ui: &mut egui::Ui, edited: &mut AppSettings) {
     ui.strong(SettingsTarget::Autofix.label());
     ui.label("Enabled rules apply to the current TeX document in one undo step.");
-    let on_save = ui
-        .checkbox(&mut edited.autofix_on_save, "Autofix on save")
-        .on_hover_text("Apply the enabled TeX autofix rules before saving. Off by default.");
+    let on_manual_save = ui
+        .checkbox(&mut edited.autofix_on_manual_save, "Autofix on manual save")
+        .on_hover_text("Apply the enabled TeX autofix rules before a manual save. Off by default.");
     #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
-    crate::desktop_test::observe("settings.autofix.on_save", &on_save);
+    crate::desktop_test::observe("settings.autofix.on_manual_save", &on_manual_save);
     #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
-    let _ = on_save;
+    let _ = on_manual_save;
+    let on_autosave = ui
+        .checkbox(&mut edited.autofix_on_autosave, "Autofix on autosave")
+        .on_hover_text(
+            "Apply the enabled TeX autofix rules before an automatic save. Off by default.",
+        );
+    #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
+    crate::desktop_test::observe("settings.autofix.on_autosave", &on_autosave);
+    #[cfg(not(all(feature = "desktop-ui-tests", target_os = "macos")))]
+    let _ = on_autosave;
     ui.horizontal_wrapped(|ui| {
         ui.label("Autofix TeX document");
         ui.monospace(

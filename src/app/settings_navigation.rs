@@ -121,7 +121,8 @@ mod tests {
             "tilde",
             "nbsp",
             "TeX fixes",
-            "Autofix on save",
+            "Autofix on manual save",
+            "Autofix on autosave",
         ] {
             assert!(
                 super::super::settings_search_results(query).contains(&SettingsTarget::Autofix),

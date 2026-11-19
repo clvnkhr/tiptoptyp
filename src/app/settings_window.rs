@@ -336,55 +336,40 @@ mod tests {
     }
 
     #[test]
-    fn autofix_on_save_checkbox_starts_off_and_publishes_only_its_setting() {
+    fn autofix_save_checkboxes_default_off_and_publish_independent_choices() {
         let mut window = SettingsWindow::default();
         window.ui.category = SettingsSection::Autofixing;
         let mut harness = settings_harness(window);
-        assert!(
-            !harness
-                .state()
-                .input
-                .as_ref()
-                .unwrap()
-                .settings
-                .autofix_on_save
-        );
-        let rules = harness
-            .state()
-            .input
-            .as_ref()
-            .unwrap()
-            .settings
-            .autofix
-            .clone();
+        let settings = &harness.state().input.as_ref().unwrap().settings;
+        assert!(!settings.autofix_on_manual_save);
+        assert!(!settings.autofix_on_autosave);
+        let rules = settings.autofix.clone();
         assert!(!harness.state().has_actions());
-        harness.get_by_label("Autofix on save").click();
-        harness.run_steps(2);
-        assert!(
-            harness
-                .state()
-                .input
-                .as_ref()
-                .unwrap()
-                .settings
-                .autofix_on_save
-        );
         let mut live = AppSettings::default();
         live.line_wrap = !live.line_wrap;
-        let (actions, close) = harness.state_mut().take_actions(&mut live);
-        assert!(actions.is_empty() && !close);
-        assert!(live.autofix_on_save);
-        assert!(!live.line_wrap);
-        assert_eq!(live.autofix, rules);
-        let saved = crate::settings_json::parse(&serde_json::to_string(&live).unwrap()).unwrap();
-        assert_eq!(saved, live);
-        harness.run_steps(2);
-        assert!(!harness.state().has_actions());
-        harness.get_by_label("Autofix on save").click();
-        harness.run_steps(2);
-        harness.state_mut().take_actions(&mut live);
-        assert!(!live.autofix_on_save);
-        assert_eq!(live.autofix, rules);
+        for (label, manual, automatic) in [
+            ("Autofix on manual save", true, false),
+            ("Autofix on autosave", true, true),
+            ("Autofix on manual save", false, true),
+            ("Autofix on autosave", false, false),
+        ] {
+            harness.get_by_label(label).click();
+            harness.run_steps(2);
+            let settings = &harness.state().input.as_ref().unwrap().settings;
+            assert_eq!(settings.autofix_on_manual_save, manual);
+            assert_eq!(settings.autofix_on_autosave, automatic);
+            let (actions, close) = harness.state_mut().take_actions(&mut live);
+            assert!(actions.is_empty() && !close);
+            assert_eq!(live.autofix_on_manual_save, manual);
+            assert_eq!(live.autofix_on_autosave, automatic);
+            assert!(!live.line_wrap);
+            assert_eq!(live.autofix, rules);
+            let saved =
+                crate::settings_json::parse(&serde_json::to_string(&live).unwrap()).unwrap();
+            assert_eq!(saved, live);
+            harness.run_steps(2);
+            assert!(!harness.state().has_actions());
+        }
     }
 
     #[test]

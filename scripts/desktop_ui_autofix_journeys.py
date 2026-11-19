@@ -8,15 +8,19 @@ AUTOFIX_SOURCE = (
     '\\begin{verbatim}\nLiteral \\ref{literal}.\n\\end{verbatim}\n'
 )
 AUTOFIX_EXPECTED = AUTOFIX_SOURCE.replace('Figure \t\n  \\ref', 'Figure~\\ref').replace('equation  \\eqref', 'equation~\\eqref')
+AUTOFIX_SAVE_FIELDS = {'manual': 'autofix_on_manual_save', 'auto': 'autofix_on_autosave'}
 AUTOFIX_OWNER_FIELDS = ('path', 'document_kind', 'tabs', 'active_tab_id',
                         'preview_tab_id', 'preview_path', 'workspace_root_fingerprint')
 
 
-def autofix_saved(document, owner, source, enabled):
+def autofix_saved(document, owner, source, trigger, enabled):
     """A saved fix needs its exact source owner and completed save pipeline."""
     from desktop_ui_journeys import fingerprint
-    if type(document.get('autofix_on_save')) is not bool:
-        raise AssertionError('Effective autofix-on-save inspection is unavailable')
+    if trigger not in AUTOFIX_SAVE_FIELDS:
+        raise AssertionError('Unknown autofix save trigger')
+    for field in AUTOFIX_SAVE_FIELDS.values():
+        if type(document.get(field)) is not bool:
+            raise AssertionError('Effective autofix save-trigger inspection is unavailable: ' + field)
     state = document.get('autofix')
     if not isinstance(state, dict) or state.get('phase') not in ('idle', 'running', 'cancelling', 'failed'):
         raise AssertionError('Autofix lifecycle inspection is unavailable')
@@ -27,7 +31,7 @@ def autofix_saved(document, owner, source, enabled):
             raise AssertionError('Save inspection is missing ' + field)
     return (all(type(document[field]) is type(owner[field]) and document[field] == owner[field]
                 for field in AUTOFIX_OWNER_FIELDS)
-            and document['autofix_on_save'] is enabled
+            and document[AUTOFIX_SAVE_FIELDS[trigger]] is enabled
             and document.get('source_fingerprint') == fingerprint(source)
             and document.get('source_bytes') == len(source.encode('utf-8'))
             and document['dirty'] is False and document.get('modal_open') is False
@@ -52,9 +56,9 @@ class AutofixJourneys:
         auto_save = before['auto_save']
         original_rules = before['autofix_rules']
         original_enabled = 'reference-ties' in original_rules['enabled']
-        original_on_save = before.get('autofix_on_save')
-        if type(original_on_save) is not bool:
-            raise AssertionError('Effective autofix-on-save preference is unavailable')
+        original_save = {trigger: before.get(field) for trigger, field in AUTOFIX_SAVE_FIELDS.items()}
+        if any(type(value) is not bool for value in original_save.values()):
+            raise AssertionError('Effective autofix save-trigger preferences are unavailable')
         original_formatter = before['tex_formatter']
         if original_formatter not in ('badness', 'tex-fmt', 'disabled'):
             raise AssertionError('Effective TeX formatter inspection is unavailable')
@@ -73,23 +77,35 @@ class AutofixJourneys:
             self.close_settings()
             self.click('editor.source')
 
-        def on_save_enabled(enabled):
-            if self.snapshot()['document']['autofix_on_save'] is enabled:
+        def on_save_enabled(trigger, enabled):
+            field = AUTOFIX_SAVE_FIELDS[trigger]
+            if self.snapshot()['document'][field] is enabled:
                 return
+            other = {key: self.snapshot()['document'][key]
+                     for key in AUTOFIX_SAVE_FIELDS.values() if key != field}
+            label = 'Autofix on manual save' if trigger == 'manual' else 'Autofix on autosave'
+            target = 'settings.autofix.on_manual_save' if trigger == 'manual' else 'settings.autofix.on_autosave'
             self.settings()
-            self.setting_section('autofix on save', 'TeX autofixing')
-            self.wait_target('settings.autofix.on_save')
-            self.click('settings.autofix.on_save')
-            self.wait('Autofix on save checkbox changes the applied preference', lambda d:
-                      d['autofix_on_save'] is enabled)
+            self.setting_section(label.lower(), 'TeX autofixing')
+            self.wait_target(target)
+            self.click(target)
+            self.wait(label + ' checkbox changes only its applied preference', lambda d:
+                      d[field] is enabled and all(d[key] is value for key, value in other.items()))
             self.close_settings()
             self.click('editor.source')
+
+        def global_autosave(enabled):
+            current = self.snapshot()['document']['auto_save']
+            if current is not enabled:
+                self.tex_settings([('"auto_save": ' + str(current).lower(),
+                                    '"auto_save": ' + str(enabled).lower())])
 
         if auto_save:
             self.tex_settings([('"auto_save": true', '"auto_save": false')])
         path, owner = self.autofix_fixture('autofix-native.tex', AUTOFIX_SOURCE)
         try:
-            on_save_enabled(False)
+            on_save_enabled('manual', False)
+            on_save_enabled('auto', True)
             reference_enabled(False)
             self.key(3, 'cmd+alt+shift')
             self.wait('Disabled reference rule leaves source and issue unchanged', lambda d:
@@ -125,36 +141,68 @@ class AutofixJourneys:
             self.click('editor.source')
             self.key(0)
             self.paste_source(off_source)
-            self.wait('Native edit is unsaved while autofix on save is off', lambda d:
-                      d['dirty'] and d['autofix_on_save'] is False)
+            self.wait('Native edit is unsaved while manual-save autofix is off', lambda d:
+                      d['dirty'] and d['autofix_on_manual_save'] is False
+                      and d['autofix_on_autosave'] is True)
             self.key(1)
             self.wait('Saving with autofix off preserves the reference spacing', lambda d:
-                      autofix_saved(d, save_owner, off_source, False), timeout=35)
+                      autofix_saved(d, save_owner, off_source, 'manual', False), timeout=35)
             if path.read_text(encoding='utf-8') != off_source:
-                raise AssertionError('Disabled autofix on save changed or lost the saved source')
-            on_save_enabled(True)
+                raise AssertionError('Disabled manual-save autofix changed or lost the saved source')
+            on_save_enabled('manual', True)
+            on_save_enabled('auto', False)
             on_source = AUTOFIX_SOURCE.replace('α Figure', 'γ Figure')
             on_expected = AUTOFIX_EXPECTED.replace('α Figure', 'γ Figure')
             self.click('editor.source')
             self.key(0)
             self.paste_source(on_source)
             self.wait('Typing does not trigger the opted-in save fix', lambda d:
-                      d['dirty'] and d['autofix_on_save'] is True
+                      d['dirty'] and d['autofix_on_manual_save'] is True
+                      and d['autofix_on_autosave'] is False
                       and d['source_fingerprint'] == fingerprint(on_source))
             self.key(1)
             self.wait('Save fixes the source before finishing its owned write', lambda d:
-                      autofix_saved(d, save_owner, on_expected, True), timeout=35)
+                      autofix_saved(d, save_owner, on_expected, 'manual', True), timeout=35)
             if path.read_text(encoding='utf-8') != on_expected:
-                raise AssertionError('Autofix on save did not write the corrected source')
-            on_save_enabled(False)
+                raise AssertionError('Autofix on manual save did not write the corrected source')
+            # Exercise the actual autosave scheduler, with the manual option
+            # opposite each automatic option so one cannot stand in for the other.
+            global_autosave(True)
+            auto_off_source = AUTOFIX_SOURCE.replace('α Figure', 'δ Figure')
+            self.click('editor.source')
+            self.key(0)
+            self.paste_source(auto_off_source)
+            self.wait('Autosave with only manual fixes enabled preserves source spacing', lambda d:
+                      d['auto_save'] is True and d['autofix_on_manual_save'] is True
+                      and autofix_saved(d, save_owner, auto_off_source, 'auto', False), timeout=35)
+            if path.read_text(encoding='utf-8') != auto_off_source:
+                raise AssertionError('Manual-save preference leaked into autosave')
+            on_save_enabled('manual', False)
+            on_save_enabled('auto', True)
+            auto_on_source = AUTOFIX_SOURCE.replace('α Figure', 'ε Figure')
+            auto_on_expected = AUTOFIX_EXPECTED.replace('α Figure', 'ε Figure')
+            self.click('editor.source')
+            self.key(0)
+            self.paste_source(auto_on_source)
+            self.wait('Autosave independently corrects its source before completing', lambda d:
+                      d['auto_save'] is True and d['autofix_on_manual_save'] is False
+                      and autofix_saved(d, save_owner, auto_on_expected, 'auto', True), timeout=35)
+            if path.read_text(encoding='utf-8') != auto_on_expected:
+                raise AssertionError('Autofix on autosave did not write corrected source')
+            global_autosave(False)
             self.record('tex_autofix', native_shortcut=True, settings_toggle=True,
                         all_enabled_references=True, comment_and_raw_protected=True,
                         one_step_undo_redo=True, idempotent=True, manual_disk_unchanged=True,
-                        initial_default_off=not original_on_save, on_save_toggle=True,
-                        disabled_save_preserved=True, save_corrected_source_and_disk=True,
-                        saved_clean_and_idle=True, saved_source_owner_preserved=True)
+                        initial_manual_default_off=not original_save['manual'],
+                        initial_autosave_default_off=not original_save['auto'],
+                        independent_save_toggles=True, manual_disabled_preserved=True,
+                        manual_save_corrected=True, autosave_disabled_preserved=True,
+                        autosave_corrected=True, saved_clean_and_idle=True,
+                        saved_source_owner_preserved=True)
         finally:
-            on_save_enabled(original_on_save)
+            global_autosave(False)
+            for trigger, enabled in original_save.items():
+                on_save_enabled(trigger, enabled)
             reference_enabled(original_enabled)
             if formatter_changed:
                 self.tex_settings([('"formatter": "disabled"',

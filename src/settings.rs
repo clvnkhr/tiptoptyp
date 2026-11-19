@@ -791,7 +791,9 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) autofix: crate::tex::autofix::Settings,
     #[serde(default)]
-    pub(crate) autofix_on_save: bool,
+    pub(crate) autofix_on_manual_save: bool,
+    #[serde(default)]
+    pub(crate) autofix_on_autosave: bool,
     #[serde(default)]
     pub(crate) mitex_auto_enable: bool,
     #[serde(default = "default_mitex_version")]
@@ -917,7 +919,8 @@ impl Default for AppSettings {
             format_after_math_conversion: true,
             comment_controls: Default::default(),
             autofix: Default::default(),
-            autofix_on_save: false,
+            autofix_on_manual_save: false,
+            autofix_on_autosave: false,
             mitex_auto_enable: false,
             mitex_version: default_mitex_version(),
             rainbow_brackets: crate::rainbow::RainbowBrackets::default(),
@@ -1045,7 +1048,8 @@ impl AppSettings {
             ascii_punctuation,
             format_after_math_conversion,
             comment_controls,
-            autofix_on_save,
+            autofix_on_manual_save,
+            autofix_on_autosave,
             mitex_auto_enable,
             mitex_version,
             rainbow_brackets,
@@ -1476,49 +1480,65 @@ mod tests {
     }
 
     #[test]
-    fn autofix_on_save_defaults_off_and_persists_explicit_choices() {
+    fn autofix_save_triggers_default_off_and_persist_independently() {
         let defaults = AppSettings::default();
-        assert!(!defaults.autofix_on_save);
-        let mut missing = serde_json::to_value(&defaults).unwrap();
-        missing.as_object_mut().unwrap().remove("autofix_on_save");
-        assert!(
-            !crate::settings_json::parse(&missing.to_string())
-                .unwrap()
-                .autofix_on_save
-        );
-        for enabled in [true, false] {
-            let mut settings = defaults.clone();
-            settings.autofix_on_save = enabled;
-            let mut storage = MemoryStorage::default();
-            settings.save(&mut storage).unwrap();
-            let restored = AppSettings::load(Some(&storage)).unwrap();
-            assert_eq!(restored, settings);
-            assert_eq!(restored.autofix, defaults.autofix);
+        assert!(!defaults.autofix_on_manual_save);
+        assert!(!defaults.autofix_on_autosave);
+        for field in ["autofix_on_manual_save", "autofix_on_autosave"] {
+            let mut missing = serde_json::to_value(&defaults).unwrap();
+            missing.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                crate::settings_json::parse(&missing.to_string()).unwrap(),
+                defaults
+            );
+            let mut invalid = serde_json::to_value(&defaults).unwrap();
+            invalid[field] = serde_json::json!("true");
+            assert_saved_settings_rejected(invalid, field);
         }
-        let mut invalid = serde_json::to_value(defaults).unwrap();
-        invalid["autofix_on_save"] = serde_json::json!("true");
-        assert_saved_settings_rejected(invalid, "autofix_on_save");
+        for manual in [true, false] {
+            for automatic in [true, false] {
+                let mut settings = defaults.clone();
+                settings.autofix_on_manual_save = manual;
+                settings.autofix_on_autosave = automatic;
+                let mut storage = MemoryStorage::default();
+                settings.save(&mut storage).unwrap();
+                let restored = AppSettings::load(Some(&storage)).unwrap();
+                assert_eq!(restored, settings);
+                assert_eq!(restored.autofix, defaults.autofix);
+            }
+        }
     }
 
     #[test]
-    fn deferred_autofix_on_save_edits_preserve_newer_rules_and_other_preferences() {
+    fn deferred_autofix_save_edits_preserve_the_other_trigger_and_newer_rules() {
         use crate::tex::autofix::Rule;
         let base = AppSettings::default();
         let mut current = base.clone();
         current.line_wrap = !base.line_wrap;
+        current.autofix_on_autosave = true;
         Rule::ReferenceTies.set_enabled(&mut current.autofix, false);
         let mut edited = base.clone();
-        edited.autofix_on_save = true;
+        edited.autofix_on_manual_save = true;
         current.apply_edits(&base, edited);
-        assert!(current.autofix_on_save);
+        assert!(current.autofix_on_manual_save);
+        assert!(current.autofix_on_autosave);
         assert_ne!(current.line_wrap, base.line_wrap);
         assert!(!Rule::ReferenceTies.enabled(&current.autofix));
         let mut other = base.clone();
         Rule::StraightQuotes.set_enabled(&mut other.autofix, true);
         current.apply_edits(&base, other);
-        assert!(current.autofix_on_save);
+        assert!(current.autofix_on_manual_save);
+        assert!(current.autofix_on_autosave);
         assert!(Rule::StraightQuotes.enabled(&current.autofix));
         assert!(!Rule::ReferenceTies.enabled(&current.autofix));
+
+        let base = current.clone();
+        current.autofix_on_manual_save = false;
+        let mut edited = base.clone();
+        edited.autofix_on_autosave = false;
+        current.apply_edits(&base, edited);
+        assert!(!current.autofix_on_manual_save);
+        assert!(!current.autofix_on_autosave);
     }
 
     #[test]
@@ -1877,7 +1897,8 @@ mod tests {
                 },
             },
             autofix: Default::default(),
-            autofix_on_save: true,
+            autofix_on_manual_save: true,
+            autofix_on_autosave: true,
             mitex_auto_enable: true,
             mitex_version: "0.2.7".into(),
             rainbow_brackets: crate::rainbow::RainbowBrackets {

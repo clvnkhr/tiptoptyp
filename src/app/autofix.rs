@@ -383,8 +383,12 @@ impl EditorApp {
             Purpose::Edit => (!self.source_edit_blocked()
                 && self.tabs.active_id() == Some(task.tab))
             .then(|| self.document().key()),
-            Purpose::Save { continuation, .. } => {
-                if !self.settings.autofix_on_save
+            Purpose::Save {
+                intent,
+                continuation,
+                ..
+            } => {
+                if !self.autofix_enabled_for_save(*intent)
                     || (self.tabs.active_id() == Some(task.tab) && self.source_edit_locked())
                     || self.document_workflow.continuation_token() != *continuation
                     || self.document_workflow.save_in_flight()

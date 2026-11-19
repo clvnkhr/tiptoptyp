@@ -93,8 +93,8 @@ impl EditorApp {
         intent: SaveIntent,
         context: &egui::Context,
     ) -> bool {
-        // Auto-save, confirmed overwrites and other non-formatting saves still
-        // share the ordinary on-save correction admission.
+        // Save intent owns which opt-in correction preference applies, including
+        // confirmed manual overwrites and non-formatting automatic saves.
         let Some(tab) = self.tabs.active_id() else {
             return false;
         };
@@ -116,10 +116,9 @@ impl EditorApp {
         format_after: bool,
         context: &egui::Context,
     ) -> bool {
-        let preserve_draft = self.settings.autofix_on_save
-            && !self.is_overleaf_path(&path)
-            && self.overleaf_tab_source_locked(tab);
-        let correct_before_save = self.settings.autofix_on_save
+        let autofix_enabled = self.autofix_enabled_for_save(intent);
+        let preserve_draft = !self.is_overleaf_path(&path) && self.overleaf_tab_source_locked(tab);
+        let correct_before_save = autofix_enabled
             // Saving a protected draft (including Save As a local Overleaf
             // recovery copy) must remain possible without editing that source.
             && !preserve_draft
@@ -136,6 +135,15 @@ impl EditorApp {
             return self.prepare_autofix_save(tab, path, intent, format_after, context);
         }
         self.submit_save_prepared(tab, path, intent, format_after && !preserve_draft, context)
+    }
+
+    pub(super) fn autofix_enabled_for_save(&self, intent: SaveIntent) -> bool {
+        match intent {
+            SaveIntent::Explicit | SaveIntent::ExplicitConfirmed { .. } => {
+                self.settings.autofix_on_manual_save
+            }
+            SaveIntent::Auto => self.settings.autofix_on_autosave,
+        }
     }
 
     /// Check mutable destination and transport guards before any source edits.
@@ -575,7 +583,7 @@ mod tests {
             let context = egui::Context::default();
             let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
             app.snapshot_scene = None;
-            app.settings.autofix_on_save = on_save;
+            app.settings.autofix_on_manual_save = on_save;
             app.settings.autofix.enabled.clear();
             crate::tex::autofix::Rule::ReferenceTies
                 .set_enabled(&mut app.settings.autofix, enabled);
@@ -605,7 +613,7 @@ mod tests {
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
         app.snapshot_scene = None;
-        app.settings.autofix_on_save = true;
+        app.settings.autofix_on_manual_save = true;
         app.settings.autofix.enabled = [crate::tex::autofix::Rule::ReferenceTies].into();
         app.document_mut().replace_loaded_unprojected(
             "old".into(),
@@ -630,7 +638,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
-        app.settings.autofix_on_save = true;
+        app.settings.autofix_on_manual_save = true;
         app.document_mut().replace_untitled_kind(DocumentKind::Tex);
         app.document_mut().edit(CCursorRange::default(), |text| {
             *text = "Figure \\ref{fig:a}.".into();
@@ -653,7 +661,7 @@ mod tests {
             let context = egui::Context::default();
             let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
             app.snapshot_scene = None;
-            app.settings.autofix_on_save = true;
+            app.settings.autofix_on_autosave = true;
             app.document_mut().replace_loaded_unprojected(
                 "old".into(),
                 original.clone(),
@@ -692,7 +700,7 @@ mod tests {
         let context = egui::Context::default();
         let mut app = EditorApp::dormant_for_tests(&context, root.path().into());
         app.snapshot_scene = None;
-        app.settings.autofix_on_save = true;
+        app.settings.autofix_on_manual_save = true;
         app.document_mut().replace_loaded_unprojected(
             "old".into(),
             first_path.clone(),

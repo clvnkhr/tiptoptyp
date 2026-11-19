@@ -384,7 +384,7 @@ fn on_save_autofix_refuses_unwritable_overleaf_owners_before_editing() {
             let context = egui::Context::default();
             let mut app = fixture(&root, &context);
             app.snapshot_scene = None;
-            app.settings.autofix_on_save = true;
+            app.settings.autofix_on_manual_save = true;
             app.settings.autofix.enabled = [crate::tex::autofix::Rule::ReferenceTies].into();
             let main = if parked {
                 park_main(&mut app, &root, &context).0
@@ -461,43 +461,46 @@ fn on_save_autofix_refuses_unwritable_overleaf_owners_before_editing() {
 #[test]
 fn on_save_autofix_preserves_locked_overleaf_recovery_copies_without_editing() {
     for parked in [false, true] {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().canonicalize().unwrap();
-        let local = tempfile::tempdir().unwrap();
-        let destination = local.path().join("recovered.tex");
-        let context = egui::Context::default();
-        let mut app = fixture(&root, &context);
-        app.snapshot_scene = None;
-        app.settings.autofix_on_save = true;
-        let tab = if parked {
-            park_main(&mut app, &root, &context).0
-        } else {
-            app.tabs.active_id().unwrap()
-        };
-        let original = "Figure  \\ref{fig:a}.\n";
-        app.tabs
-            .document_mut(tab)
-            .unwrap()
-            .edit(CCursorRange::default(), |source| *source = original.into());
-        app.overleaf.blocked.insert("a".into());
-        assert!(app.overleaf_tab_source_locked(tab));
-        assert!(app.submit_save(
-            tab,
-            destination.clone(),
-            SaveIntent::Explicit,
-            true,
-            &context
-        ));
-        assert!(!app.autofix.busy());
-        app.finish_save_for_test(&context);
-        assert_eq!(fs::read_to_string(destination).unwrap(), original);
-        assert_eq!(app.document_for_tab(tab).unwrap().source(), original);
-        assert!(!app.document_for_tab(tab).unwrap().is_dirty());
-        assert_eq!(
-            fs::read_to_string(root.join("main.tex")).unwrap(),
-            "Main old\n"
-        );
-        assert!(app.formatting.saved_document().is_none());
+        for (manual, automatic) in [(false, false), (true, false), (false, true), (true, true)] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().canonicalize().unwrap();
+            let local = tempfile::tempdir().unwrap();
+            let destination = local.path().join("recovered.tex");
+            let context = egui::Context::default();
+            let mut app = fixture(&root, &context);
+            app.snapshot_scene = None;
+            app.settings.autofix_on_manual_save = manual;
+            app.settings.autofix_on_autosave = automatic;
+            let tab = if parked {
+                park_main(&mut app, &root, &context).0
+            } else {
+                app.tabs.active_id().unwrap()
+            };
+            let original = "Figure  \\ref{fig:a}.\n";
+            app.tabs
+                .document_mut(tab)
+                .unwrap()
+                .edit(CCursorRange::default(), |source| *source = original.into());
+            app.overleaf.blocked.insert("a".into());
+            assert!(app.overleaf_tab_source_locked(tab));
+            assert!(app.submit_save(
+                tab,
+                destination.clone(),
+                SaveIntent::Explicit,
+                true,
+                &context
+            ));
+            assert!(!app.autofix.busy());
+            app.finish_save_for_test(&context);
+            assert_eq!(fs::read_to_string(destination).unwrap(), original);
+            assert_eq!(app.document_for_tab(tab).unwrap().source(), original);
+            assert!(!app.document_for_tab(tab).unwrap().is_dirty());
+            assert_eq!(
+                fs::read_to_string(root.join("main.tex")).unwrap(),
+                "Main old\n"
+            );
+            assert!(app.formatting.saved_document().is_none());
+        }
     }
 }
 
@@ -512,7 +515,7 @@ fn on_save_autofix_saves_a_parked_local_owner_while_another_overleaf_owner_is_lo
     let context = egui::Context::default();
     let mut app = fixture(&root, &context);
     app.snapshot_scene = None;
-    app.settings.autofix_on_save = true;
+    app.settings.autofix_on_manual_save = true;
     app.settings.autofix.enabled = [crate::tex::autofix::Rule::ReferenceTies].into();
     let remote = app.tabs.active_id().unwrap();
     app.lifecycle = DocumentLifecycle::Active;

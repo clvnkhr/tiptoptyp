@@ -352,8 +352,12 @@ current result validates every original byte span and applies all selected
 nonoverlapping fixes in one document edit/undo transaction. A no-op does not
 change revision or undo history. Opt-in save preparation also supports parked
 tabs; it edits only that tab and hands the corrected revision to the ordinary
-durable-save lifecycle. Admission rechecks destination and Overleaf conflict
-guards before editing. Formatter resaves bypass preparation to prevent loops.
+durable-save lifecycle. The save payload's immutable `SaveIntent` selects the
+manual-save or autosave preference both at admission and completion;
+`ExplicitConfirmed` remains a manual save. Both preferences default off. Turning
+off the owning trigger cancels preparation; changing only the other trigger
+does not. Admission rechecks destination and Overleaf conflict guards before
+editing. Formatter resaves bypass preparation to prevent loops.
 A stale or cancelled save leaves the draft dirty; autosaves are rescheduled and
 explicit saves report that another save is needed. Liquid's separate review
 lifecycle is unchanged.

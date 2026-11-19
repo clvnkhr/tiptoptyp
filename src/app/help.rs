@@ -78,7 +78,7 @@ pub(super) fn show(ui: &mut egui::Ui, settings: &AppSettings) {
             documentation_link(ui, "Typst LuaSnip examples", "https://github.com/pseudofractal/typst-notes.nvim/blob/main/snippets/typst.lua");
         });
         ui.heading("TeX autofixing");
-        ui.label("Settings → Autofixing chooses the TeX rules applied by Autofix TeX document. Run it from Edit, the command palette or its shortcut (Cmd/Ctrl+Alt+Shift+F by default). Enabled corrections apply to the current document in one undo step. Autofix on save is off by default; turn it on here to apply the same rules before saving TeX. Liquid fix suggestions have a separate diff review.");
+        ui.label("Settings → Autofixing chooses the TeX rules applied by Autofix TeX document. Run it from Edit, the command palette or its shortcut (Cmd/Ctrl+Alt+Shift+F by default). Enabled corrections apply to the current document in one undo step. Autofix on manual save and Autofix on autosave are independent options, both off by default; enable either to apply the same rules before that kind of TeX save. Liquid fix suggestions have a separate diff review.");
         ui.heading("Liquid fix suggestions");
         ui.label("Right-click an error line or a diagnostic in Problems → Suggest fix. Liquid LFM3 1.7B runs locally and opens a diff for Accept or Cancel. The first use downloads the optional model (about 1.1 GB) and its runtime; Settings → Autofixing → Liquid fix suggestions also has Download fix model. Fix suggestions require macOS 13.3 or later. Both Liquid models share Model folder and CPU threads, available in Autofixing and Grammar & spelling.");
         ui.heading("Liquid selection grammar");

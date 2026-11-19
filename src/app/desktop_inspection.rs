@@ -527,7 +527,8 @@ impl EditorApp {
                 });
         interaction["autofix"] = self.autofix.inspect();
         interaction["autofix_rules"] = serde_json::to_value(&self.settings.autofix).unwrap();
-        interaction["autofix_on_save"] = serde_json::json!(self.settings.autofix_on_save);
+        interaction["autofix_on_manual_save"] =
+        interaction["autofix_on_autosave"] = serde_json::json!(self.settings.autofix_on_autosave);
         interaction["format_after_math_conversion"] =
             serde_json::json!(self.settings.format_after_math_conversion);
         interaction["explorer_panel_width"] = serde_json::json!(

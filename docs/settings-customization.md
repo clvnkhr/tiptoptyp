@@ -307,9 +307,11 @@ Open **Settings → Autofixing** to choose which deterministic TeX corrections t
 **Autofix TeX document** command may apply. Each rule has its own toggle and
 description. The command works on the current TeX document and groups all accepted
 corrections into one undo step. Its shortcut is configurable under **Shortcuts**;
-the default is **Cmd/Ctrl+Alt+Shift+F**. **Autofix on save** is off by default;
-turn it on in this section to apply the same enabled rules before saving TeX.
-The saved JSON preference is `autofix_on_save`. Autofixing never runs while typing.
+the default is **Cmd/Ctrl+Alt+Shift+F**. **Autofix on manual save** and **Autofix on
+autosave** are independent options, both off by default. Enable either in this
+section to apply the same enabled rules before that kind of TeX save. The saved
+JSON preferences are `autofix_on_manual_save` and `autofix_on_autosave`. Typing
+alone does not trigger autofixing; an opted-in autosave follows its normal delay.
 
 Right-click a recognized Badness finding in Problems for **Autofix all: …**.
 That action fixes all occurrences of its named rule in the current file, provided

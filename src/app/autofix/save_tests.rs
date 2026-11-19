@@ -11,7 +11,8 @@ fn fixture(context: &egui::Context, root: &Path) -> (EditorApp, u64, PathBuf) {
     let mut app = EditorApp::dormant_for_tests(context, root.into());
     app.snapshot_scene = None;
     app.settings.auto_save = false;
-    app.settings.autofix_on_save = true;
+    app.settings.autofix_on_manual_save = true;
+    app.settings.autofix_on_autosave = true;
     app.settings.autofix.enabled = [Rule::ReferenceTies].into();
     app.document_mut().replace_loaded_unprojected(
         ORIGINAL.into(),
@@ -76,14 +77,59 @@ fn corrected_explicit_and_auto_saves_are_durable_with_one_undo_step() {
 }
 
 #[test]
-fn on_save_preference_rule_or_tool_changes_cancel_a_ready_scan_without_writing() {
-    for change in 0..3 {
+fn save_dispatch_uses_only_the_preference_for_its_exact_trigger() {
+    for intent in [
+        SaveIntent::Explicit,
+        SaveIntent::ExplicitConfirmed {
+            observed: Some(fingerprint(ORIGINAL.as_bytes())),
+        },
+        SaveIntent::Auto,
+    ] {
+        for manual in [false, true] {
+            for automatic in [false, true] {
+                let root = tempfile::tempdir().unwrap();
+                let context = egui::Context::default();
+                let (mut app, tab, path) = fixture(&context, root.path());
+                app.settings.autofix_on_manual_save = manual;
+                app.settings.autofix_on_autosave = automatic;
+                let enabled = if intent == SaveIntent::Auto {
+                    automatic
+                } else {
+                    manual
+                };
+                assert!(app.submit_save(tab, path.clone(), intent, false, &context));
+                assert_eq!(app.autofix.busy(), enabled);
+                assert_eq!(app.local_save.is_running(), !enabled);
+                if enabled {
+                    app.autofix.wait_until_ready_for_test().unwrap();
+                    app.update_autofix(&context);
+                }
+                app.finish_save_for_test(&context);
+                let expected = if enabled { CORRECTED } else { ORIGINAL };
+                assert_eq!(app.document().source(), expected);
+                assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+                assert!(!app.document().is_dirty());
+                assert!(matches!(app.autofix, State::Idle));
+            }
+        }
+    }
+}
+
+#[test]
+fn matching_save_preference_rule_or_tool_changes_cancel_a_ready_scan_without_writing() {
+    for (intent, change) in [SaveIntent::Explicit, SaveIntent::Auto]
+        .into_iter()
+        .flat_map(|intent| (0..3).map(move |change| (intent, change)))
+    {
         let root = tempfile::tempdir().unwrap();
         let context = egui::Context::default();
         let (mut app, tab, path) = fixture(&context, root.path());
-        prepare_ready_save(&mut app, tab, &path, SaveIntent::Explicit, &context);
+        prepare_ready_save(&mut app, tab, &path, intent, &context);
         match change {
-            0 => app.settings.autofix_on_save = false,
+            0 => match intent {
+                SaveIntent::Auto => app.settings.autofix_on_autosave = false,
+                _ => app.settings.autofix_on_manual_save = false,
+            },
             1 => Rule::ReferenceTies.set_enabled(&mut app.settings.autofix, false),
             2 => {
                 app.tex_tools.badness.origin = crate::toolchain::ToolOrigin::Custom;
@@ -100,6 +146,29 @@ fn on_save_preference_rule_or_tool_changes_cancel_a_ready_scan_without_writing()
         assert_eq!(fs::read_to_string(path).unwrap(), ORIGINAL);
         assert!(!app.local_save.is_running());
         assert!(!app.document_workflow.save_in_flight());
+        assert!(matches!(app.autofix, State::Idle));
+    }
+}
+
+#[test]
+fn unrelated_save_preference_changes_do_not_cancel_the_owned_trigger() {
+    for intent in [SaveIntent::Explicit, SaveIntent::Auto] {
+        let root = tempfile::tempdir().unwrap();
+        let context = egui::Context::default();
+        let (mut app, tab, path) = fixture(&context, root.path());
+        prepare_ready_save(&mut app, tab, &path, intent, &context);
+        let mut settings = app.settings.clone();
+        match intent {
+            SaveIntent::Auto => settings.autofix_on_manual_save = false,
+            _ => settings.autofix_on_autosave = false,
+        }
+        app.apply_shared_settings(settings, &context);
+        app.update_autofix(&context);
+        assert_eq!(app.document().source(), CORRECTED);
+        assert!(app.local_save.is_running());
+        app.finish_save_for_test(&context);
+        assert_eq!(fs::read_to_string(&path).unwrap(), CORRECTED);
+        assert!(!app.document().is_dirty());
         assert!(matches!(app.autofix, State::Idle));
     }
 }
@@ -257,7 +326,7 @@ fn cancelling_a_close_save_releases_its_own_continuation_for_retry() {
             description: "closing".into(),
         });
     prepare_ready_save(&mut app, tab, &path, SaveIntent::Explicit, &context);
-    app.settings.autofix_on_save = false;
+    app.settings.autofix_on_manual_save = false;
     app.update_autofix(&context);
     assert!(!app.document_workflow.has_continuation());
     assert!(app.document_workflow.take_action().is_none());
