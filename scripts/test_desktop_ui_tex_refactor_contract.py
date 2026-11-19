@@ -109,6 +109,7 @@ class TexRefactorObservationContracts(unittest.TestCase):
                 ('tex_refactor.diff', 'frame', 19),
                 ('tex_refactor.cancel', 'viewport', 'other-child'),
                 ('tex_refactor.accept', 'age_ms', 501),
+                ('tex_refactor.accept', 'height', -212.0),
                 ('tex_refactor.cancel', 'age_ms', True),
                 ('tex_refactor.diff', 'width', 0),
                 ('tex_refactor.diff', 'height', float('nan'))]:
