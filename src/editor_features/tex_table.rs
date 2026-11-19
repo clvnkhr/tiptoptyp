@@ -1,6 +1,7 @@
 //! Bounded, lossless TeX table editing. Only tables with a known grid are
 //! exposed to the editor; unsupported structural expansion is rejected.
 use super::{SourceEdit, byte_range_to_char, char_to_byte};
+use std::{ops::Range, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TexTableEnvironment {
@@ -614,11 +615,207 @@ impl TexTable {
     }
 }
 
+#[derive(Debug, Clone)]
+struct TableCandidate {
+    begin: usize,
+    args: usize,
+    close: usize,
+    end: usize,
+    environment: TexTableEnvironment,
+    source_range: Range<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TexTableId(usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TableSelectionUpdate {
+    Unchanged,
+    Changed(Option<TexTableId>),
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum CursorSelection {
+    #[default]
+    Unqueried,
+    Selected(Option<TexTableId>),
+}
+
+/// A source-owned environment index. Caret movement queries the balanced range
+/// tree; only entering a different complete table asks the lossless parser for
+/// another model. Rejected inner tables remain targets, never outer fallbacks.
+pub(crate) struct TexTableIndex {
+    source: Arc<str>,
+    candidates: Vec<TableCandidate>,
+    maximum_end: Vec<usize>,
+    selected: CursorSelection,
+    packages: Option<Vec<String>>,
+    #[cfg(test)]
+    query_visits: usize,
+    #[cfg(test)]
+    parse_count: usize,
+    #[cfg(test)]
+    package_scans: usize,
+}
+impl TexTableIndex {
+    /// `char_starts` is the existing scalar-to-byte map for this exact source,
+    /// including its EOF entry. Borrow it while indexing rather than retaining
+    /// a second full-document map or rescanning prefixes during table changes.
+    pub(crate) fn new(source: Arc<str>, char_starts: &[usize]) -> Self {
+        debug_assert_eq!(char_starts.first(), Some(&0));
+        debug_assert_eq!(char_starts.last(), Some(&source.len()));
+        let mut candidates = Vec::new();
+        visit_tables(&source, |begin, args, close, end, environment| {
+            candidates.push(TableCandidate {
+                begin,
+                args,
+                close,
+                end,
+                environment,
+                source_range: char_starts.partition_point(|byte| *byte < begin)
+                    ..char_starts.partition_point(|byte| *byte < end),
+            });
+        });
+        candidates.sort_unstable_by_key(|table| table.begin);
+        let mut index = Self {
+            source,
+            maximum_end: vec![0; candidates.len()],
+            candidates,
+            selected: CursorSelection::Unqueried,
+            packages: None,
+            #[cfg(test)]
+            query_visits: 0,
+            #[cfg(test)]
+            parse_count: 0,
+            #[cfg(test)]
+            package_scans: 0,
+        };
+        fn build(index: &mut TexTableIndex, range: Range<usize>) -> usize {
+            if range.is_empty() {
+                return 0;
+            }
+            let middle = range.start + range.len() / 2;
+            let end = index.candidates[middle]
+                .end
+                .max(build(index, range.start..middle))
+                .max(build(index, middle + 1..range.end));
+            index.maximum_end[middle] = end;
+            end
+        }
+        let length = index.candidates.len();
+        build(&mut index, 0..length);
+        index
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_counts(&self) -> (usize, usize, usize) {
+        (self.query_visits, self.parse_count, self.package_scans)
+    }
+
+    pub(crate) fn reset_selection(&mut self) {
+        self.selected = CursorSelection::Unqueried;
+    }
+
+    fn candidate_at(&self, byte: usize, visits: &mut usize) -> Option<TexTableId> {
+        fn find(
+            index: &TexTableIndex,
+            range: Range<usize>,
+            byte: usize,
+            _visits: &mut usize,
+        ) -> Option<TexTableId> {
+            if range.is_empty() {
+                return None;
+            }
+            #[cfg(test)]
+            {
+                *_visits += 1;
+            }
+            let middle = range.start + range.len() / 2;
+            if index.maximum_end[middle] <= byte || index.candidates[range.start].begin > byte {
+                return None;
+            }
+            if let Some(found) = find(index, middle + 1..range.end, byte, _visits) {
+                return Some(found);
+            }
+            let table = &index.candidates[middle];
+            if table.begin <= byte && byte < table.end {
+                return Some(TexTableId(middle));
+            }
+            find(index, range.start..middle, byte, _visits)
+        }
+        self.source
+            .is_char_boundary(byte)
+            .then(|| find(self, 0..self.candidates.len(), byte, visits))
+            .flatten()
+    }
+
+    pub(crate) fn update(&mut self, byte: usize) -> TableSelectionUpdate {
+        let mut visits = 0;
+        let selected = self.candidate_at(byte, &mut visits);
+        #[cfg(test)]
+        {
+            self.query_visits = visits;
+        }
+        let next = CursorSelection::Selected(selected);
+        if self.selected == next {
+            TableSelectionUpdate::Unchanged
+        } else {
+            self.selected = next;
+            TableSelectionUpdate::Changed(selected)
+        }
+    }
+
+    pub(crate) fn parse(&mut self, id: TexTableId) -> Option<TexTable> {
+        let table = self.candidates.get(id.0)?;
+        #[cfg(test)]
+        {
+            self.parse_count += 1;
+        }
+        let mut metadata = || {
+            let packages = self.packages.get_or_insert_with(|| {
+                #[cfg(test)]
+                {
+                    self.package_scans += 1;
+                }
+                packages(&self.source)
+            });
+            (table.source_range.clone(), packages.clone())
+        };
+        parse_table(
+            &self.source,
+            table.begin,
+            table.args,
+            table.close,
+            table.end,
+            table.environment,
+            &mut metadata,
+        )
+    }
+}
+
 pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable> {
     let cursor = char_to_byte(source, char_cursor)?;
-    let mut stack: Vec<(String, usize, usize)> = Vec::new();
     let mut found = None;
     let mut smallest = usize::MAX;
+    visit_tables(source, |begin, args, close, end, environment| {
+        if begin <= cursor && cursor < end && end - begin < smallest {
+            smallest = end - begin;
+            found = Some((begin, args, close, end, environment));
+        }
+    });
+    let (begin, args, close, end, environment) = found?;
+    parse_table(source, begin, args, close, end, environment, &mut || {
+        (byte_range_to_char(source, begin..end), packages(source))
+    })
+}
+
+/// One lexical walk serves both explicit one-shot edits and the revision cache.
+/// Keep literal, malformed-environment and nesting semantics in one place.
+fn visit_tables(
+    source: &str,
+    mut visit: impl FnMut(usize, usize, usize, usize, TexTableEnvironment),
+) {
+    let mut stack: Vec<(&str, usize, usize)> = Vec::new();
     let mut i = 0;
     while i < source.len() {
         match source.as_bytes()[i] {
@@ -648,7 +845,7 @@ pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable>
                     if stack.len() >= 128 {
                         break;
                     }
-                    stack.push((env.to_owned(), start, end));
+                    stack.push((env, start, end));
                 } else {
                     let Some((opening, begin, args)) = stack.pop() else {
                         continue;
@@ -657,24 +854,14 @@ pub(crate) fn tex_table_at(source: &str, char_cursor: usize) -> Option<TexTable>
                         stack.clear();
                         continue;
                     }
-                    if begin <= cursor
-                        && cursor < end
-                        && let Some(environment) = TexTableEnvironment::from_name(env)
-                    {
-                        // Inner matched tables are encountered first. Keep
-                        // the smallest containing environment, even if its
-                        // unsupported geometry prevents opening an editor.
-                        if end - begin < smallest {
-                            smallest = end - begin;
-                            found = parse_table(source, begin, args, start, end, environment);
-                        }
+                    if let Some(environment) = TexTableEnvironment::from_name(env) {
+                        visit(begin, args, start, end, environment);
                     }
                 }
             }
             _ => i = next_char(source, i),
         }
     }
-    found
 }
 
 fn parse_table(
@@ -684,9 +871,10 @@ fn parse_table(
     close: usize,
     end: usize,
     environment: TexTableEnvironment,
+    metadata: &mut dyn FnMut() -> (Range<usize>, Vec<String>),
 ) -> Option<TexTable> {
     if environment.is_math() && !environment.has_column_spec() {
-        return parse_math_table(source, begin, args, close, end, environment);
+        return parse_math_table(source, begin, args, close, end, environment, metadata);
     }
     // xltabular's position is before its width. The other width-taking
     // environments put position after width. NiceTabular additionally accepts
@@ -739,11 +927,12 @@ fn parse_table(
     let (cells, rows) = parsed?;
     let spans = cell_spans(&cells, &rows, columns?);
     let owners = cell_owners(&spans);
+    let (source_range, packages) = metadata();
     Some(TexTable {
-        source_range: byte_range_to_char(source, begin..end),
+        source_range,
         source: source.get(begin..end)?.to_owned(),
         environment,
-        packages: packages(source),
+        packages,
         column_spec: spec.to_owned(),
         cells: Some(cells),
         header: source.get(begin..body_start)?.to_owned(),
@@ -777,6 +966,7 @@ fn parse_math_table(
     close: usize,
     end: usize,
     environment: TexTableEnvironment,
+    metadata: &mut dyn FnMut() -> (Range<usize>, Vec<String>),
 ) -> Option<TexTable> {
     if environment.is_star_matrix() {
         if let Some((alignment, next)) = group(source, body_start, b'[', b']') {
@@ -807,11 +997,12 @@ fn parse_math_table(
     let (cells, rows) = split_rows(body, columns)?;
     let spans = cell_spans(&cells, &rows, columns);
     let owners = cell_owners(&spans);
+    let (source_range, packages) = metadata();
     Some(TexTable {
-        source_range: byte_range_to_char(source, begin..end),
+        source_range,
         source: source.get(begin..end)?.to_owned(),
         environment,
-        packages: packages(source),
+        packages,
         column_spec: String::new(),
         cells: Some(cells),
         header: source.get(begin..body_start)?.to_owned(),
@@ -1810,6 +2001,146 @@ fn next_char(source: &str, start: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scalar_starts(source: &str) -> Vec<usize> {
+        source
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain(std::iter::once(source.len()))
+            .collect()
+    }
+
+    fn indexed_target(index: &mut TexTableIndex, retained: &mut Option<TexTable>, byte: usize) {
+        if let TableSelectionUpdate::Changed(selected) = index.update(byte) {
+            *retained = selected.and_then(|id| index.parse(id));
+        }
+    }
+
+    #[test]
+    fn indexed_caret_sweeps_preserve_every_lossless_field_and_rejected_inner_target() {
+        let mut fixtures = vec![
+            "α🦀\r\n\\usepackage[table]{xcolor}\n\\RequirePackage{array,booktabs}\n\\begin{tabular}{cc}A & β \\\\ C & D\\end{tabular} after \\".to_owned(),
+            r"\begin{pmatrix}\begin{matrix}a&b\\c&d\end{matrix}&z\\u&v\end{pmatrix}".to_owned(),
+            r"\begin{tabular}{c}outer\begin{tabular}{\dynamic}inner\end{tabular}tail\end{tabular}".to_owned(),
+            "% \\begin{tabular}{c}fake\\end{tabular}\n\\verbα\\begin{matrix}literal\\end{matrix}α\n\\begin{tabular}{l}real\\end{tabular}".to_owned(),
+            "\\begin{Verbatim}\n\\begin{tabular}{c}fake\\end{tabular}\n\\end{Verbatim}\n\\begin{matrix}x&y\\end{matrix}".to_owned(),
+            r"\begin{tabular}{l}A\end{matrix} \begin{tabular}{l}B\end{tabular}".to_owned(),
+            r"\begin{tabular}{l}incomplete".to_owned(),
+            r"\begin{tblr}{colspec={Q[l]X[2,r]},hlines}A&2\\B&3\end{tblr}".to_owned(),
+        ];
+        for name in TexTable::math_environment_names() {
+            let arguments = if *name == "array" { "{cc}" } else { "" };
+            let body = if *name == "gathered" {
+                r"α\\β"
+            } else {
+                r"α&β\\γ&δ"
+            };
+            fixtures.push(format!(
+                "prefix é \\begin{{{name}}}{arguments}{body}\\end{{{name}}} suffix"
+            ));
+        }
+        for source in fixtures {
+            let starts = scalar_starts(&source);
+            let mut index = TexTableIndex::new(Arc::from(source.as_str()), &starts);
+            let mut retained = None;
+            for (cursor, &byte) in starts.iter().enumerate() {
+                indexed_target(&mut index, &mut retained, byte);
+                assert_eq!(
+                    retained,
+                    tex_table_at(&source, cursor),
+                    "{source}: {cursor}"
+                );
+            }
+            indexed_target(&mut index, &mut retained, usize::MAX);
+            assert!(retained.is_none());
+        }
+        let source =
+            r"\begin{tabular}{c}outer\begin{tabular}{\dynamic}inner\end{tabular}tail\end{tabular}";
+        let mut index = TexTableIndex::new(Arc::from(source), &scalar_starts(source));
+        let mut retained = None;
+        indexed_target(&mut index, &mut retained, source.find("outer").unwrap());
+        assert!(retained.is_some());
+        indexed_target(&mut index, &mut retained, source.find("inner").unwrap());
+        assert!(
+            retained.is_none(),
+            "unsupported inner geometry must not retarget the outer grid"
+        );
+    }
+
+    #[test]
+    fn indexed_cursor_selection_reuses_positive_negative_and_package_results() {
+        let source = format!(
+            "\\usepackage{{array,booktabs}}\n{}\\begin{{tabular}}{{c}}α\\end{{tabular}} gap \\begin{{matrix}}β&γ\\end{{matrix}} gap \\begin{{tabular}}{{\\dynamic}}rejected\\end{{tabular}}",
+            "plain 文 prose.\n".repeat(1024)
+        );
+        let starts = scalar_starts(&source);
+        let mut index = TexTableIndex::new(Arc::from(source.as_str()), &starts);
+        let mut retained = None;
+        for &byte in starts.iter().take(100) {
+            indexed_target(&mut index, &mut retained, byte);
+        }
+        assert!(retained.is_none());
+        assert_eq!((index.parse_count, index.package_scans), (0, 0));
+        let first = source.find("\\begin{tabular}").unwrap();
+        let first_end =
+            source[first..].find("\\end{tabular}").unwrap() + first + "\\end{tabular}".len();
+        for &byte in starts
+            .iter()
+            .filter(|byte| first <= **byte && **byte < first_end)
+        {
+            indexed_target(&mut index, &mut retained, byte);
+        }
+        assert_eq!((index.parse_count, index.package_scans), (1, 1));
+        assert_eq!(retained.as_ref().unwrap().packages, ["array", "booktabs"]);
+        let second = source.find("\\begin{matrix}").unwrap();
+        let second_end =
+            source[second..].find("\\end{matrix}").unwrap() + second + "\\end{matrix}".len();
+        for &byte in starts
+            .iter()
+            .filter(|byte| second <= **byte && **byte < second_end)
+        {
+            indexed_target(&mut index, &mut retained, byte);
+        }
+        assert_eq!((index.parse_count, index.package_scans), (2, 1));
+        let rejected = source.find("rejected").unwrap();
+        for byte in rejected..rejected + "rejected".len() {
+            indexed_target(&mut index, &mut retained, byte);
+            assert!(retained.is_none());
+        }
+        assert_eq!((index.parse_count, index.package_scans), (3, 1));
+        index.reset_selection();
+        indexed_target(&mut index, &mut retained, second);
+        assert_eq!((index.parse_count, index.package_scans), (4, 1));
+    }
+
+    #[test]
+    fn indexed_queries_skip_a_hundred_thousand_completed_siblings() {
+        let row = "\\begin{matrix}a&b\\end{matrix} gap\n";
+        let source = row.repeat(100_000);
+        let starts = scalar_starts(&source);
+        let mut index = TexTableIndex::new(Arc::from(source.as_str()), &starts);
+        assert_eq!(index.candidates.len(), 100_000);
+        for sibling in [0, 1, 50_000, 99_999] {
+            for offset in [1, row.find("gap").unwrap()] {
+                let byte = sibling * row.len() + offset;
+                let expected = offset == 1;
+                let selected = match index.update(byte) {
+                    TableSelectionUpdate::Changed(selected) => selected,
+                    TableSelectionUpdate::Unchanged => match index.selected {
+                        CursorSelection::Selected(selected) => selected,
+                        CursorSelection::Unqueried => panic!("query never selected a state"),
+                    },
+                };
+                assert_eq!(selected.is_some(), expected);
+                assert!(
+                    index.query_visits <= 72,
+                    "visited {} table nodes",
+                    index.query_visits
+                );
+            }
+        }
+        assert_eq!((index.parse_count, index.package_scans), (0, 0));
+    }
 
     fn arxiv_table(source: &str) -> TexTable {
         let cursor = source[..source.find("\\begin{tabular}").unwrap()]

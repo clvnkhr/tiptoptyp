@@ -142,6 +142,9 @@ pub(crate) struct EditorDerivedData {
     delimiter_pair: Option<[Range<usize>; 2]>,
     table_query: Option<(DocumentKey, usize, crate::document::DocumentKind)>,
     table_at_cursor: Option<TableTarget>,
+    tex_tables: Option<(DocumentKey, crate::editor_features::TexTableIndex)>,
+    #[cfg(test)]
+    tex_table_index_builds: usize,
     hover_query: Option<(DocumentKey, usize)>,
     hover_range: Option<Range<usize>>,
     snippet_query: Option<SnippetContextCache>,
@@ -198,6 +201,9 @@ impl Default for EditorDerivedData {
             delimiter_pair: None,
             table_query: None,
             table_at_cursor: None,
+            tex_tables: None,
+            #[cfg(test)]
+            tex_table_index_builds: 0,
             hover_query: None,
             hover_range: None,
             snippet_query: None,
@@ -316,6 +322,9 @@ impl EditorDerivedData {
             return;
         }
 
+        // Drop the previous revision's source-owned table index promptly, even
+        // when the newly selected document never requests a TeX table query.
+        self.tex_tables = None;
         let mut line_starts = vec![0];
         let mut char_starts = Vec::with_capacity(source.len().saturating_add(1));
         char_starts.push(0);
@@ -690,8 +699,41 @@ impl EditorDerivedData {
                         .map(TableTarget::Typst)
                 })
         } else if kind == crate::document::DocumentKind::Tex {
-            crate::editor_features::tex_table_at(&self.source_snapshot, cursor)
-                .map(TableTarget::Tex)
+            if self
+                .tex_tables
+                .as_ref()
+                .is_none_or(|(owner, _)| *owner != key)
+            {
+                self.tex_tables = Some((
+                    key,
+                    crate::editor_features::TexTableIndex::new(
+                        Arc::clone(&self.source_snapshot),
+                        &self.char_starts,
+                    ),
+                ));
+                #[cfg(test)]
+                {
+                    self.tex_table_index_builds += 1;
+                }
+            }
+            let byte = self.char_starts.get(cursor).copied().unwrap_or(usize::MAX);
+            let (_, index) = self.tex_tables.as_mut().unwrap();
+            if self
+                .table_query
+                .is_some_and(|(_, _, previous)| previous != kind)
+            {
+                // A different language may have replaced the retained target.
+                index.reset_selection();
+            }
+            if let crate::editor_features::TableSelectionUpdate::Changed(selected) =
+                index.update(byte)
+            {
+                self.table_at_cursor = selected
+                    .and_then(|id| index.parse(id))
+                    .map(TableTarget::Tex);
+            }
+            self.table_query = Some((key, cursor, kind));
+            return;
         } else {
             None
         };
@@ -1804,6 +1846,75 @@ mod tests {
             1,
             "TeX table queries must not parse Typst syntax"
         );
+    }
+
+    #[test]
+    fn tex_caret_motion_retains_one_revision_index_and_one_model_per_selected_table() {
+        use crate::document::DocumentKind;
+        let mut data = EditorDerivedData::default();
+        let source = format!(
+            "\\usepackage{{array}}\n{}\\begin{{tabular}}{{c}}α\\end{{tabular}} tail",
+            "plain 文 prose.\n".repeat(1024)
+        );
+        let key = revision(1);
+        data.prepare_source(&DocumentSnapshot::fixture(key, &source));
+        for cursor in 0..100 {
+            data.prepare_table_at_cursor(cursor, DocumentKind::Tex);
+            assert!(data.cached_table_at_cursor(key).is_none());
+        }
+        assert_eq!(data.tex_table_index_builds, 1);
+        assert_eq!(data.tex_tables.as_ref().unwrap().1.test_counts().1, 0);
+        let begin = source[..source.find("\\begin{tabular}").unwrap()]
+            .chars()
+            .count();
+        data.prepare_table_at_cursor(begin, DocumentKind::Tex);
+        let pointer = match data.cached_table_at_cursor(key).unwrap() {
+            TableTarget::Tex(table) => table.source.as_ptr(),
+            _ => panic!("expected a TeX model"),
+        };
+        for cursor in begin + 1..begin + "\\begin{tabular}{c}α\\end{tabular}".chars().count() {
+            data.prepare_table_at_cursor(cursor, DocumentKind::Tex);
+            match data.cached_table_at_cursor(key).unwrap() {
+                TableTarget::Tex(table) => assert_eq!(table.source.as_ptr(), pointer),
+                _ => panic!("expected retained TeX model"),
+            }
+        }
+        assert_eq!(data.tex_table_index_builds, 1);
+        let (_, parses, package_scans) = data.tex_tables.as_ref().unwrap().1.test_counts();
+        assert_eq!((parses, package_scans), (1, 1));
+        data.prepare_table_at_cursor(begin + 1, DocumentKind::Typst);
+        assert!(data.cached_table_at_cursor(key).is_none());
+        data.prepare_table_at_cursor(begin + 1, DocumentKind::Tex);
+        assert!(matches!(
+            data.cached_table_at_cursor(key),
+            Some(TableTarget::Tex(_))
+        ));
+        assert_eq!(data.tex_table_index_builds, 1);
+        assert_eq!(data.tex_tables.as_ref().unwrap().1.test_counts().1, 2);
+
+        let previous_source = Arc::downgrade(&data.source_snapshot);
+        let next = revision(2);
+        let edited = source.replace('α', "β").replace("{array}", "{color}");
+        data.prepare_source(&DocumentSnapshot::fixture(next, &edited));
+        assert!(
+            previous_source.upgrade().is_none(),
+            "stale source-owned indexes must leave with their revision"
+        );
+        assert!(data.cached_table_at_cursor(next).is_none());
+        data.prepare_table_at_cursor(begin, DocumentKind::Tex);
+        assert_eq!(data.tex_table_index_builds, 2);
+        assert!(
+            matches!(data.cached_table_at_cursor(next), Some(TableTarget::Tex(table)) if table.source.contains('β') && table.packages == ["color"])
+        );
+        let other = DocumentKey::new(
+            tiptoptyp_core::document::WindowSessionId::new(42),
+            next.epoch,
+            next.revision,
+        );
+        data.prepare_source(&DocumentSnapshot::fixture(other, &edited));
+        assert!(data.cached_table_at_cursor(other).is_none());
+        data.prepare_table_at_cursor(begin, DocumentKind::Tex);
+        assert_eq!(data.tex_table_index_builds, 3);
     }
 
     #[test]
