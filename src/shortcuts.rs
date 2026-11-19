@@ -633,18 +633,22 @@ impl ShortcutChord {
         self.key
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) const fn primary_modifier(self) -> bool {
         self.primary
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) const fn control_modifier(self) -> bool {
         self.control
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) const fn shift_modifier(self) -> bool {
         self.shift
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) const fn alt_modifier(self) -> bool {
         self.alt
     }
@@ -714,6 +718,7 @@ impl ShortcutChord {
         parts.join("+")
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn appkit_key_equivalent(self) -> String {
         let key = self.key;
         if (egui::Key::A..=egui::Key::Z).contains(&key) {
@@ -1057,10 +1062,12 @@ pub(crate) struct ShortcutBindings {
 }
 
 impl ShortcutBindings {
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn current_defaults() -> Self {
         Self::defaults(ShortcutPlatform::current())
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn defaults(platform: ShortcutPlatform) -> Self {
         Self::from_overrides(platform, &ShortcutOverrides::default())
     }

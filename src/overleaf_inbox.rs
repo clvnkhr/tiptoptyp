@@ -12,6 +12,7 @@ use std::sync::{
 // either consumer is scheduled. Bound both burst length and retained wire size.
 const RAW_CAPACITY: usize = 64;
 const TYPED_CAPACITY: usize = 64;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const RAW_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
 const TYPED_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -19,11 +20,13 @@ const RAW_OVERFLOW: u8 = 1;
 const TYPED_OVERFLOW: u8 = 2;
 const TOO_LARGE: u8 = 3;
 const START_FAILED: u8 = 4;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const WORKER_STOPPED: u8 = 5;
 type Decoded = Result<BrowserEvent, String>;
 type Typed = (u64, usize, Decoded);
 #[derive(Default)]
 struct Ingress {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     sequence: u64,
     reliable_sequence: u64,
     presence: Option<(u64, String)>,
@@ -36,7 +39,11 @@ struct TypedState {
 }
 
 enum Raw {
-    Message { sequence: u64, message: String },
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
+    Message {
+        sequence: u64,
+        message: String,
+    },
     Wake,
 }
 struct Shared {
@@ -47,12 +54,15 @@ struct Shared {
     repaint: RepaintTarget,
     // Ephemeral full snapshots never displace authoritative source/save events.
     ingress: Mutex<Ingress>,
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     raw_messages: AtomicUsize,
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     raw_bytes: AtomicUsize,
     wake_pending: AtomicBool,
     typed: Mutex<TypedState>,
 }
 impl Shared {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     fn release_raw(&self, bytes: usize) {
         self.raw_bytes.fetch_sub(bytes, Ordering::AcqRel);
         self.raw_messages.fetch_sub(1, Ordering::AcqRel);
@@ -98,6 +108,7 @@ impl Drop for Sender {
         }
     }
 }
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 impl Sender {
     pub(crate) fn send(&self, message: String) -> Result<(), String> {
         if !self.shared.receiver_alive.load(Ordering::Acquire)
@@ -202,7 +213,9 @@ impl Inbox {
             failure: AtomicU8::new(0),
             repaint: RepaintTarget::current(context),
             ingress: Mutex::default(),
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             raw_messages: AtomicUsize::new(0),
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             raw_bytes: AtomicUsize::new(0),
             wake_pending: AtomicBool::new(false),
             typed: Mutex::default(),
@@ -292,7 +305,10 @@ fn decode_loop(
     shared: Arc<Shared>,
     mut decode: impl FnMut(&str) -> Decoded,
 ) {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     let mut reliable_sequence = 0;
+    #[cfg(not(any(target_os = "macos", target_os = "windows", test)))]
+    let reliable_sequence = 0;
     loop {
         if !shared.receiver_alive.load(Ordering::Acquire)
             || shared.failure.load(Ordering::Acquire) != 0
@@ -309,13 +325,24 @@ fn decode_loop(
         let Some(next) = next else {
             return;
         };
-        let message = match next {
-            Raw::Message { sequence, message } => {
-                shared.release_raw(message.len());
-                reliable_sequence = sequence;
-                Some((sequence, message))
+        let message: Option<(u64, String)> = {
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
+            {
+                match next {
+                    Raw::Message { sequence, message } => {
+                        shared.release_raw(message.len());
+                        reliable_sequence = sequence;
+                        Some((sequence, message))
+                    }
+                    Raw::Wake => {
+                        shared.wake_pending.store(false, Ordering::Release);
+                        None
+                    }
+                }
             }
-            Raw::Wake => {
+            #[cfg(not(any(target_os = "macos", target_os = "windows", test)))]
+            {
+                let Raw::Wake = next;
                 shared.wake_pending.store(false, Ordering::Release);
                 None
             }

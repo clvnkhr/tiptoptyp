@@ -7,6 +7,7 @@ pub(super) struct SourceLocation {
     pub char_index: usize,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 #[derive(Debug, Clone)]
 pub(super) struct WebMenuRequest {
     pub generation: crate::tinymist::Generation,
@@ -14,6 +15,7 @@ pub(super) struct WebMenuRequest {
     pub point: Pos2,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 impl WebMenuRequest {
     pub(super) fn parse(
         value: &serde_json::Value,
@@ -31,17 +33,20 @@ impl WebMenuRequest {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 #[derive(Debug, Clone)]
 pub(super) struct WebSourceLocation {
     pub generation: crate::tinymist::Generation,
     pub token: u64,
     pub path: PathBuf,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub url: String,
     pub window: egui::ViewportId,
 }
 
 /// Native child coordinates are logical desktop points; egui's interface zoom
 /// applies once when positioning the menu in its owning window.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(super) fn web_menu_anchor(bounds: NativeRect, point: Pos2, zoom: f32) -> Option<Pos2> {
     (point.is_finite()
         && zoom.is_finite()
@@ -138,6 +143,7 @@ mod tests {
         let request =
             WebMenuRequest::parse(&serde_json::json!({"token":3,"x":1.5,"y":2.25}), generation)
                 .unwrap();
+        assert_eq!(request.generation, generation);
         assert_eq!(request.token, 3);
         assert_eq!(request.point, Pos2::new(1.5, 2.25));
     }
@@ -183,6 +189,7 @@ mod tests {
                 generation: crate::tinymist::Generation(1),
                 token: 7,
                 path: app.preview_document_path(),
+                #[cfg(any(target_os = "macos", target_os = "windows"))]
                 url: "http://localhost/old".into(),
                 window: egui::ViewportId::ROOT,
             };

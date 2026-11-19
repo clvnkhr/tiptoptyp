@@ -203,12 +203,14 @@ mod macos {
     }
 }
 
-pub(crate) fn attach(context: &eframe::egui::Context) {
-    let child = context.viewport_id();
-    let parent = crate::window_host::management_target(context, child);
-    if child == parent {
-        return;
-    }
+pub(crate) fn attach(_context: &eframe::egui::Context) {
     #[cfg(target_os = "macos")]
-    macos::attach(context, child, parent);
+    {
+        let child = _context.viewport_id();
+        let parent = crate::window_host::management_target(_context, child);
+        if child == parent {
+            return;
+        }
+        macos::attach(_context, child, parent);
+    }
 }

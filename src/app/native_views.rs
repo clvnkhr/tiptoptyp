@@ -68,6 +68,7 @@ impl EditorApp {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct WebviewAppliedState {
     bounds: NativeRect,
@@ -75,6 +76,7 @@ pub(super) struct WebviewAppliedState {
     pub(super) visible: bool,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WebviewPropertyDiff {
     bounds: bool,
@@ -82,6 +84,7 @@ struct WebviewPropertyDiff {
     visible: bool,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn webview_property_diff(
     previous: Option<WebviewAppliedState>,
     next: WebviewAppliedState,
@@ -104,39 +107,46 @@ fn table_window_size(scene: Option<UiSnapshotScene>) -> [f32; 2] {
 }
 
 impl EditorApp {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub(super) fn open_web_preview_context_menu(
         &mut self,
         _context: &egui::Context,
-        request: preview_jump::WebMenuRequest,
+        _request: preview_jump::WebMenuRequest,
     ) {
-        if self.document_flow_busy()
-            || self.process_close_pending()
-            || self.tinymist_sync.generation() != Some(request.generation)
-            || !self.interactive_preview_active()
-        {
-            return;
-        }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(applied) = self.webview_applied.filter(|applied| applied.visible)
-            && let Some(window) = self.webview_parent
-            && let Some(anchor) =
-                preview_jump::web_menu_anchor(applied.bounds, request.point, _context.zoom_factor())
         {
-            self.open_app_popup(AppPopup::PreviewSource {
-                anchor,
-                window,
-                target: preview_jump::WebSourceLocation {
-                    generation: request.generation,
-                    token: request.token,
-                    path: self.preview_document_path(),
-                    url: self.webview_url.clone().unwrap_or_default(),
+            if self.document_flow_busy()
+                || self.process_close_pending()
+                || self.tinymist_sync.generation() != Some(_request.generation)
+                || !self.interactive_preview_active()
+            {
+                return;
+            }
+            if let Some(applied) = self.webview_applied.filter(|applied| applied.visible)
+                && let Some(window) = self.webview_parent
+                && let Some(anchor) = preview_jump::web_menu_anchor(
+                    applied.bounds,
+                    _request.point,
+                    _context.zoom_factor(),
+                )
+            {
+                self.open_app_popup(AppPopup::PreviewSource {
+                    anchor,
                     window,
-                },
-            });
-            _context.request_repaint();
+                    target: preview_jump::WebSourceLocation {
+                        generation: _request.generation,
+                        token: _request.token,
+                        path: self.preview_document_path(),
+                        url: self.webview_url.clone().unwrap_or_default(),
+                        window,
+                    },
+                });
+                _context.request_repaint();
+            }
         }
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pub(super) fn reveal_web_preview_source(&mut self, target: preview_jump::WebSourceLocation) {
         let trace = std::env::var_os("TIPTOPTYP_UI_TRACE").is_some();
         let current = self.interactive_preview_active()
@@ -148,6 +158,7 @@ impl EditorApp {
                 target.token
             );
         }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if !current {
             return;
         }
@@ -172,10 +183,19 @@ impl EditorApp {
     /// Native objects stay on the owning UI thread; discard their cached
     /// presentation identity together so a recreated view cannot inherit it.
     pub(super) fn discard_webview(&mut self) {
-        self.pending_web_preview_menu = None;
-        if matches!(self.app_popup, Some(AppPopup::PreviewSource { .. })) {
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
+        {
+            self.pending_web_preview_menu = None;
+        }
+        if self
+            .app_popup
+            .as_ref()
+            .and_then(AppPopup::preview_source_window)
+            .is_some()
+        {
             self.close_app_popup();
         }
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
         if matches!(
             self.pending_app_popup_action,
             Some(AppPopupAction::RevealPreviewSource(_))
@@ -1399,7 +1419,11 @@ impl EditorApp {
             self.close_app_popup();
             return;
         }
-        if matches!(&self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if *window != context.viewport_id())
+        if self
+            .app_popup
+            .as_ref()
+            .and_then(AppPopup::preview_source_window)
+            .is_some_and(|window| window != context.viewport_id())
         {
             return;
         }
@@ -1409,10 +1433,9 @@ impl EditorApp {
         let Some(popup) = self.app_popup.take() else {
             return;
         };
-        let popup_owner = match &popup {
-            AppPopup::PreviewSource { window, .. } => *window,
-            _ => context.viewport_id(),
-        };
+        let popup_owner = popup
+            .preview_source_window()
+            .unwrap_or_else(|| context.viewport_id());
         let Some(window_rect) = context.input_for(popup_owner, |input| input.viewport().inner_rect)
         else {
             self.close_app_popup();
@@ -1435,6 +1458,7 @@ impl EditorApp {
         };
         let (anchor, desired_size) = match &popup {
             AppPopup::CommandPalette { anchor } => (*anchor, Vec2::new(600.0, 260.0)),
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             AppPopup::PreviewSource { anchor, .. } => {
                 let margin = theme::menu_card_frame(&style).total_margin().sum();
                 (
@@ -1615,6 +1639,7 @@ impl EditorApp {
                             Vec2::new(menu_width, menu_height),
                             popup_generation,
                             |ui| match &popup {
+                                #[cfg(any(target_os = "macos", target_os = "windows", test))]
                                 AppPopup::PreviewSource { target, .. } => {
                                     if menu_item(ui, "Reveal in Source", None).clicked() {
                                         action = Some(AppPopupAction::RevealPreviewSource(

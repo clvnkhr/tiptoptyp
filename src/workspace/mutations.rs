@@ -516,6 +516,10 @@ impl MutationDirectory {
             // SAFETY: successful fstatat initialized the metadata.
             let metadata = unsafe { metadata.assume_init() };
             Ok(CreatedIdentity {
+                // Linux dev_t is already u64; macOS uses a signed 32-bit identifier.
+                #[cfg(target_os = "linux")]
+                device: metadata.st_dev,
+                #[cfg(not(target_os = "linux"))]
                 device: metadata.st_dev as u64,
                 inode: metadata.st_ino,
             })

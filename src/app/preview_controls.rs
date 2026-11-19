@@ -832,7 +832,11 @@ impl EditorApp {
                         Target::Asset(_) => self.show_asset_view(ui),
                     });
                 self.show_preview_controls(ui.ctx(), true);
-                if matches!(self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if window == ui.ctx().viewport_id())
+                if self
+                    .app_popup
+                    .as_ref()
+                    .and_then(AppPopup::preview_source_window)
+                    == Some(ui.ctx().viewport_id())
                 {
                     self.show_app_popup_window(ui.ctx());
                 }
@@ -880,6 +884,7 @@ impl EditorApp {
                     if let Some((_, location)) = self.preview_controls.native_outline.get(*index) {
                         self.preview_control_action_for(target, Action::Location(location.clone()));
                     }
+                    #[cfg(any(target_os = "macos", target_os = "windows"))]
                     return;
                 }
                 _ => {}

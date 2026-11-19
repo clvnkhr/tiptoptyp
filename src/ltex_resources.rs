@@ -39,6 +39,7 @@ impl Prepared {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn prepare() -> Result<Prepared, String> {
     prepare_with_cancel(&AtomicBool::new(false))
 }

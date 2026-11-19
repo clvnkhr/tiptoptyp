@@ -520,17 +520,6 @@ pub(crate) fn enable_native_webview_magnification(webview: &wry::WebView) {
     unsafe { webview.webview().setAllowsMagnification(true) };
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-#[derive(Clone, Copy)]
-pub(crate) struct NativeWindowHandle;
-
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-impl NativeWindowHandle {
-    pub(crate) fn is_same_window(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn for_viewport(
     context: &eframe::egui::Context,

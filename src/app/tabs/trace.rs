@@ -80,6 +80,7 @@ impl Trace {
         }
     }
 
+    #[cfg(target_os = "macos")]
     pub(super) fn native_drag(&mut self, context: &egui::Context) {
         if enabled() {
             eprintln!(

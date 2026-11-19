@@ -233,12 +233,14 @@ pub(super) enum BadgeAction {
     StopFollowing,
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 #[derive(Clone, Copy)]
 struct PopupGeometry {
     frame: u64,
     viewport: egui::ViewportId,
     bounds: Rect,
 }
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 impl PopupGeometry {
     fn obscures(self, frame: u64, viewport: egui::ViewportId, rect: Rect) -> bool {
         self.frame == frame
@@ -249,12 +251,14 @@ impl PopupGeometry {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn popup_geometry_id() -> egui::Id {
     egui::Id::new("overleaf-collaborator-popup-geometry")
 }
 
 /// Only the current menu frame can obscure a native preview. Closed menus and
 /// data from another viewport cannot keep a child view hidden.
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 pub(super) fn popup_obscures(context: &egui::Context, rect: Rect) -> bool {
     context
         .data(|data| data.get_temp::<PopupGeometry>(popup_geometry_id()))
@@ -384,6 +388,7 @@ pub(super) fn badges(
     collaborators: &[Collaborator],
     following: Option<&str>,
 ) -> Option<(Rect, Option<BadgeAction>)> {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     ui.ctx()
         .data_mut(|data| data.remove::<PopupGeometry>(popup_geometry_id()));
     let pending_id = ui.id().with("overleaf-pending-seek");
@@ -533,7 +538,7 @@ pub(super) fn badges(
             font,
             ui.visuals().text_color(),
         );
-        let popup = egui::Popup::menu(&response)
+        let _popup = egui::Popup::menu(&response)
             .width(160.0)
             // Keep clicks open so double/triple clicks can start/stop following.
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -564,7 +569,8 @@ pub(super) fn badges(
                         }
                     });
             });
-        if let Some(popup) = popup {
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
+        if let Some(popup) = _popup {
             let geometry = PopupGeometry {
                 frame: ui.ctx().cumulative_frame_nr(),
                 viewport: ui.ctx().viewport_id(),

@@ -5,7 +5,9 @@ use std::{
 
 use eframe::egui;
 
-use crate::shortcuts::{ShortcutAction, ShortcutBindings, ShortcutChord};
+#[cfg(any(target_os = "macos", test))]
+use crate::shortcuts::ShortcutChord;
+use crate::shortcuts::{ShortcutAction, ShortcutBindings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandMenu {
@@ -38,6 +40,7 @@ pub(crate) struct CommandSpec {
     pub(crate) section: u8,
     pub(crate) requirement: CommandRequirement,
     pub(crate) shortcut_action: ShortcutAction,
+    #[cfg(any(target_os = "macos", test))]
     native_id: isize,
 }
 
@@ -50,13 +53,17 @@ macro_rules! commands {
         pub(crate) const COMMAND_SPECS: &[CommandSpec] = &[$(CommandSpec {
             command: AppCommand::$command, title: $title, menu: CommandMenu::$menu,
             section: $section, requirement: CommandRequirement::$requirement,
-            shortcut_action: ShortcutAction::$command, native_id: $tag,
+            shortcut_action: ShortcutAction::$command,
+            #[cfg(any(target_os = "macos", test))]
+            native_id: $tag,
         }),+];
         pub(crate) fn command_spec(command: AppCommand) -> &'static CommandSpec {
             match command { $(AppCommand::$command => &CommandSpec {
                 command: AppCommand::$command, title: $title, menu: CommandMenu::$menu,
                 section: $section, requirement: CommandRequirement::$requirement,
-                shortcut_action: ShortcutAction::$command, native_id: $tag,
+                shortcut_action: ShortcutAction::$command,
+                #[cfg(any(target_os = "macos", test))]
+                native_id: $tag,
             }),+ }
         }
     };
@@ -161,6 +168,13 @@ impl NativeMenuReceiver {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    not(any(target_os = "macos", test)),
+    expect(
+        dead_code,
+        reason = "AppKit produces these requests; the shared process dispatcher and its portable tests retain the complete request protocol."
+    )
+)]
 pub(crate) enum NativeMenuRequest {
     Command(AppCommand),
     Reopen,
@@ -202,6 +216,7 @@ pub(crate) fn channel() -> (Sender<NativeMenuRequest>, NativeMenuReceiver) {
     (sender, NativeMenuReceiver { receiver })
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NativeMenuItemState {
     native_id: isize,
@@ -210,6 +225,7 @@ struct NativeMenuItemState {
     enabled: bool,
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn native_menu_item_states(
     bindings: &ShortcutBindings,
     mut enabled: impl FnMut(AppCommand) -> bool,

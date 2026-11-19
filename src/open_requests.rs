@@ -2,16 +2,26 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        mpsc::{self, Receiver, SendError, Sender, TryRecvError},
+        mpsc::{self, Receiver, Sender, TryRecvError},
     },
 };
 
+#[cfg(any(target_os = "macos", test))]
+use std::sync::mpsc::SendError;
+
+#[cfg(any(target_os = "macos", test))]
 #[derive(Clone)]
 pub(crate) struct OpenRequestSender {
     sender: Sender<PathBuf>,
     repaint: Arc<Mutex<Option<eframe::egui::Context>>>,
 }
 
+// Other platforms have no application-level native producer. Keep the channel
+// endpoint's ownership and disconnection semantics without an unused wrapper.
+#[cfg(not(any(target_os = "macos", test)))]
+pub(crate) type OpenRequestSender = Sender<PathBuf>;
+
+#[cfg(any(target_os = "macos", test))]
 impl OpenRequestSender {
     pub(crate) fn send(&self, path: PathBuf) -> Result<(), SendError<PathBuf>> {
         self.sender.send(path)?;
@@ -51,13 +61,12 @@ impl OpenRequestReceiver {
 pub(crate) fn channel() -> (OpenRequestSender, OpenRequestReceiver) {
     let (sender, receiver) = mpsc::channel();
     let repaint = Arc::new(Mutex::new(None));
-    (
-        OpenRequestSender {
-            sender,
-            repaint: repaint.clone(),
-        },
-        OpenRequestReceiver { receiver, repaint },
-    )
+    #[cfg(any(target_os = "macos", test))]
+    let sender = OpenRequestSender {
+        sender,
+        repaint: repaint.clone(),
+    };
+    (sender, OpenRequestReceiver { receiver, repaint })
 }
 
 /// Add Finder document-open support without replacing winit's application

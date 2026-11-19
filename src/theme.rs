@@ -355,12 +355,12 @@ impl PreparedFontFile {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 fn font_selection(bytes: &[u8], requested_weight: u16) -> Option<FontSelection> {
     PreparedFontFile::from_bytes(bytes.to_vec()).selection(requested_weight)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 fn weighted_font_data(
     bytes: Vec<u8>,
     requested_weight: u16,

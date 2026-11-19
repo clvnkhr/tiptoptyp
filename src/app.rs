@@ -521,6 +521,7 @@ const fn retain_preview_surface_for_restart(
     handoff_requested && preview_will_restart && has_preview_url && has_webview
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn webview_navigation_required(
     current_url: Option<&str>,
     next_url: &str,
@@ -919,6 +920,7 @@ enum AppPopup {
     CommandPalette {
         anchor: Pos2,
     },
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     PreviewSource {
         anchor: Pos2,
         window: egui::ViewportId,
@@ -963,8 +965,19 @@ enum AppPopup {
     },
 }
 
+impl AppPopup {
+    fn preview_source_window(&self) -> Option<egui::ViewportId> {
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
+        if let Self::PreviewSource { window, .. } = self {
+            return Some(*window);
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 enum AppPopupAction {
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     RevealPreviewSource(preview_jump::WebSourceLocation),
     Palette {
         action: ShortcutAction,
@@ -1632,6 +1645,7 @@ pub struct EditorApp {
     formatting: formatting::State,
     diagnostic_tooltip: Option<DiagnosticTooltipOverlay>,
     app_popup: Option<AppPopup>,
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     pending_web_preview_menu: Option<preview_jump::WebMenuRequest>,
     command_palette: command_palette::State,
     command_palette_origin: Option<palette_actions::Origin>,
@@ -1682,6 +1696,7 @@ pub struct EditorApp {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     webview_applied: Option<native_views::WebviewAppliedState>,
     web_link_sender: mpsc::Sender<String>,
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     web_action_sender: mpsc::Sender<String>,
     pdfium_preview: pdfium_view::PdfiumView,
     pdfium_asset: pdfium_view::PdfiumView,
@@ -1816,7 +1831,7 @@ impl EditorApp {
         let preview_dark =
             settings.document_theme.resolve(active_interface_theme) == egui::Theme::Dark;
         let (web_link_sender, web_link_receiver) = mpsc::channel();
-        let (web_action_sender, web_action_receiver) = mpsc::channel();
+        let (_web_action_sender, web_action_receiver) = mpsc::channel();
 
         let mut generic_highlighter = GenericSyntaxHighlighter::default();
         generic_highlighter.set_custom_theme(Some(active_theme.syntect_theme.clone()));
@@ -1967,6 +1982,7 @@ impl EditorApp {
             formatting: formatting::State::Idle,
             diagnostic_tooltip: None,
             app_popup: None,
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             pending_web_preview_menu: None,
             command_palette: Default::default(),
             command_palette_origin: None,
@@ -2012,7 +2028,8 @@ impl EditorApp {
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             webview_applied: None,
             web_link_sender,
-            web_action_sender,
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            web_action_sender: _web_action_sender,
             pdfium_preview: pdfium_view::PdfiumView::default(),
             pdfium_asset: pdfium_view::PdfiumView::default(),
             preview_controls: Default::default(),
@@ -6956,6 +6973,7 @@ impl EditorApp {
                 self.claim_native_preview_keyboard(context);
             }
         }
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
         if let Some(request) = self.pending_web_preview_menu.take() {
             self.open_web_preview_context_menu(context, request);
         }
@@ -6975,15 +6993,24 @@ impl EditorApp {
             return;
         };
         if value.get("type").and_then(|v| v.as_str()) == Some("preview-loaded") {
-            self.pending_web_preview_menu = None;
-            if matches!(self.app_popup, Some(AppPopup::PreviewSource { .. })) {
-                self.close_app_popup();
-            }
-            if matches!(
-                self.pending_app_popup_action,
-                Some(AppPopupAction::RevealPreviewSource(_))
-            ) {
-                self.pending_app_popup_action = None;
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
+            {
+                self.pending_web_preview_menu = None;
+                if self
+                    .app_popup
+                    .as_ref()
+                    .and_then(AppPopup::preview_source_window)
+                    .is_some()
+                {
+                    self.close_app_popup();
+                }
+                #[cfg(any(target_os = "macos", target_os = "windows", test))]
+                if matches!(
+                    self.pending_app_popup_action,
+                    Some(AppPopupAction::RevealPreviewSource(_))
+                ) {
+                    self.pending_app_popup_action = None;
+                }
             }
             #[cfg(all(feature = "desktop-ui-tests", target_os = "macos"))]
             crate::desktop_test::reset_renderer();
@@ -7019,6 +7046,7 @@ impl EditorApp {
             return;
         };
         match value.get("type").and_then(|value| value.as_str()) {
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             Some("preview-context-menu") => {
                 self.pending_web_preview_menu =
                     preview_jump::WebMenuRequest::parse(&value, generation);
@@ -7363,6 +7391,7 @@ impl EditorApp {
                     == crate::preview::PreviewBackend::Pdfium)
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
     fn fail_local_webview(&mut self, message: String) {
         self.discard_webview();
         self.preview.webview_state = ServiceState::Failed(message);
@@ -8353,6 +8382,7 @@ impl EditorApp {
             return;
         };
         match action {
+            #[cfg(any(target_os = "macos", target_os = "windows", test))]
             AppPopupAction::RevealPreviewSource(target) => self.reveal_web_preview_source(target),
             AppPopupAction::Palette { action, origin } => {
                 self.execute_palette_action(action, origin, context, frame)
@@ -10424,8 +10454,11 @@ impl EditorApp {
             Some(UiSnapshotScene::DiagnosticTooltip | UiSnapshotScene::FunctionTooltip)
         );
         let preview_window = scoped_child_viewport_id(context, "preview-window");
-        if !matches!(self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if window == preview_window)
-        {
+        let source_popup_window = self
+            .app_popup
+            .as_ref()
+            .and_then(AppPopup::preview_source_window);
+        if source_popup_window != Some(preview_window) {
             ChildViewHost::close_viewport(
                 context,
                 crate::child_view::child_viewport_id(preview_window, "tiptoptyp-popup-overlay"),
@@ -10440,7 +10473,7 @@ impl EditorApp {
             (self.template_picker.is_some(), "tiptoptyp-templates"),
             (
                 !matches!(self.app_popup, None | Some(AppPopup::GitChunk { .. }))
-                    && !matches!(self.app_popup, Some(AppPopup::PreviewSource { window, .. }) if window != context.viewport_id()),
+                    && source_popup_window.is_none_or(|window| window == context.viewport_id()),
                 "tiptoptyp-popup-overlay",
             ),
             (self.asset_hover.is_some(), "asset-hover-overlay"),

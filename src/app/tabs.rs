@@ -170,6 +170,7 @@ impl Tabs {
             false
         }
     }
+    #[cfg(target_os = "macos")]
     pub(super) fn trace_native_drag(&mut self, context: &egui::Context) {
         self.drag_trace.native_drag(context);
     }
@@ -351,6 +352,7 @@ impl Tabs {
         self.order.iter().position(|&value| value == id)
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub(super) fn claims_window_drag(&self, pointer: Option<Pos2>, primary_down: bool) -> bool {
         pointer.is_some_and(|pointer| {
             self.tab_drag_rects
