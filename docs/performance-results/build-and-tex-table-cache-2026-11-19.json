@@ -281,8 +281,6 @@
     "captured_after_source": "Measured as working-tree with HEAD at 585b42d; all four production hashes match committed 98b90c0."
   },
   "cache_cleanup": {
-    "automatic_runner_removed": true,
-    "actual_target_pruned": false,
     "fixture_contracts_passed": 24,
     "regressions": [
       "Locked finalized cache is retained with Rust-compatible sibling lock.",
@@ -292,7 +290,69 @@
       "/private/tmp/ttt-incremental-cache-safety.json",
       "/private/tmp/ttt-prune-before-regression.log",
       "/private/tmp/ttt-prune-before-fd-regressions.log"
-    ]
+    ],
+    "initial_implementation_removed_automatic_runner": true,
+    "actual_target_pruned_during_initial_measurements": false,
+    "automatic_runner_restored": "2026-11-20",
+    "automatic_cleanup_required": true,
+    "retained_finalized_sessions_per_crate_default": 1,
+    "restoration_reason": "User requires the automatic disk-space constraint. Restore the post-exit macOS runner while retaining bounded discovery and compiler-compatible lock/FD safety.",
+    "restored_runner_fixture_contracts_passed": 37,
+    "measurement_scope": "Cargo build does not invoke the execution runner. Restoring automatic post-exit cleanup does not change the recorded build or pure component workloads.",
+    "restoration_verification": {
+      "required_format_checks_passed": true,
+      "strict_clippy": {
+        "command": "cargo +1.98.1 clippy --all-targets -- -D warnings",
+        "passed": true,
+        "log": "/private/tmp/ttt-auto-cache-clippy-final.log"
+      },
+      "rust_tests": {
+        "command": "cargo +1.98.1 test --no-fail-fast",
+        "passed": 3956,
+        "ignored": 91,
+        "log": "/private/tmp/ttt-auto-cache-tests-final.log",
+        "runner": "Explicit CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER points to repository scripts/cargo-run-clean.sh; default cleanup enabled."
+      },
+      "script_contracts": {
+        "command": "python3 -m unittest discover -s scripts -p 'test_*contract.py'",
+        "tests": 570,
+        "passed": true,
+        "log": "/private/tmp/ttt-auto-cache-contracts-final-frozen.log"
+      },
+      "normal_cargo_runner": "Used by Rust tests on macOS with cleanup enabled; no cleanup failures reported.",
+      "performance_impact": "Bounded post-exit cache discovery only. No runtime editor, idle repaint, worker or per-frame behavior changes; the prior Cargo-build and component workloads do not execute this runner.",
+      "packaging_tests": {
+        "command": "cargo +1.98.1 test --manifest-path xtask/Cargo.toml",
+        "passed": 55,
+        "ignored": 1,
+        "log": "/private/tmp/ttt-auto-cache-xtask-final.log",
+        "runner": "Explicit CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER points to repository scripts/cargo-run-clean.sh; default cleanup enabled."
+      },
+      "real_cargo_probe": {
+        "status": "passed",
+        "receipt": "/private/tmp/ttt-auto-cache-real-cargo-final.json",
+        "scope": "Private workspace and copied runner/pruner; actual Cargo member test with relative target directory. No app cache candidates.",
+        "command": "CARGO_TARGET_DIR=\"custom target\" cargo +1.98.1 test --offline -p cleanup-integration-probe --lib",
+        "exit": 0,
+        "actual_old_removed": true,
+        "actual_newest_retained": true,
+        "member_decoy_old_retained": true,
+        "member_decoy_newest_retained": true,
+        "runner_sha256": "d5615c90600e6a289c3fe5ca31eadaa229cd2f4629cfb784cc049e6ff94544ab",
+        "pruner_sha256": "93e2d133dc39c78b4ba8a802f8d799e856c73a12f61bf41051197c1873bd51a6"
+      }
+    },
+    "target_selection_regression": {
+      "problem": "Cargo runs member tests from the package directory while preserving a relative CARGO_TARGET_DIR from the original invocation. Resolving that environment value against runner cwd can prune a decoy cache and miss the actual one.",
+      "before_fixture_observation": {
+        "actual_target_old_session_survives": true,
+        "member_relative_decoy_old_session_survives": false
+      },
+      "before_log": "/private/tmp/ttt-cargo-runner-member-before.log",
+      "real_cargo_probe": "/private/tmp/ttt-cargo-runner-root-probe.json",
+      "fix": "Infer the nearest valid Cargo-marked target from at most four artifact-layout candidates, holding its directory through marker verification and cleanup. Do not resolve target environment paths against runner cwd; preserve marked ancestors and member-relative decoys.",
+      "cross_target_profiles_before_log": "/private/tmp/ttt-cargo-runner-profile-before.log"
+    }
   },
   "verification": {
     "default_rust_tests": {
@@ -335,10 +395,23 @@
     },
     "native_tables": {
       "command": "python3 scripts/test-desktop-ui.py --journey tables",
-      "status": "unavailable",
-      "reason": "Desktop preflight reports locked=true, desktop=false; Accessibility and input permissions are present. No interaction occurred.",
-      "artifacts": ".tiptoptyp/desktop-ui-tests/run-3yhmrwjx/",
-      "visual_verification": false
+      "status": "passed",
+      "journeys": [
+        "tables"
+      ],
+      "artifacts": ".tiptoptyp/desktop-ui-tests/run-etfjwwt2/",
+      "build_profile": "debug",
+      "version": "tiptoptyp Dev 0.1.0 (fcbda206f816.1795114772)",
+      "binary_sha256": "316b9416758d0a03e90dc522350f7a82ea9237ac281b64b0588751c2b65dc60b",
+      "evidence": "native input and read-only state; no visual composition verification",
+      "visual_verification": false,
+      "previous_unavailable_attempt": {
+        "command": "python3 scripts/test-desktop-ui.py --journey tables",
+        "status": "unavailable",
+        "reason": "Desktop preflight reports locked=true, desktop=false; Accessibility and input permissions are present. No interaction occurred.",
+        "artifacts": ".tiptoptyp/desktop-ui-tests/run-3yhmrwjx/",
+        "visual_verification": false
+      }
     },
     "profiling_rust_tests": {
       "command": "cargo +1.98.1 test --features profiling --no-fail-fast",

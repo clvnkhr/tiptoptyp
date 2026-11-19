@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicitly prune old finalized Rust caches, retaining protected sessions."""
+"""Prune old finalized Rust caches, retaining protected sessions."""
 
 from __future__ import annotations
 
@@ -23,10 +23,8 @@ except ImportError:  # pragma: no cover - non-POSIX hosts retain every session.
 FINALIZED_SESSION = re.compile(r"s-([0-9a-z]{10})-([0-9a-z]{7})-([0-9a-z]{25})\Z")
 MIN_AGE_SECONDS = 10
 MAX_PAYLOAD_DEPTH = 64
-ARTIFACT_DIRECTORIES = {
-    ".fingerprint", "build", "deps", "doc", "examples", "incremental", "package", "tmp"
-}
 TARGET_TRIPLE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+){2,}\Z")
+CARGO_CACHE_SIGNATURE = b"Signature: 8a477f597d28d172789f06886806bc55\n"
 ANCHORED_FILESYSTEM = (
     os.name == "posix"
     and hasattr(os, "O_NOFOLLOW")
@@ -79,6 +77,47 @@ def entries(directory: int) -> list[str]:
         return []
 
 
+def cargo_target_candidates(executable: Path) -> tuple[Path, ...]:
+    """Consider only profile[/deps|examples]/artifact, with an optional triple."""
+    try:
+        executable = Path(os.path.abspath(executable))
+        if not stat.S_ISREG(os.stat(executable, follow_symlinks=False).st_mode):
+            return ()
+    except OSError:
+        return ()
+    profiles = [executable.parent]
+    if executable.parent.name in {"deps", "examples"}:
+        # Those names can also be user-defined profiles, so consider both
+        # interpretations and let the target's held cache marker admit it.
+        profiles.append(executable.parent.parent)
+    candidates = []
+    for profile in profiles:
+        target = profile.parent
+        candidates.append(target)
+        if TARGET_TRIPLE.fullmatch(target.name):
+            candidates.append(target.parent)
+    return tuple(dict.fromkeys(candidates))
+
+
+def cargo_cache_marker(target: int) -> bool:
+    """Verify a bounded, no-follow marker read in the retained target object."""
+    handle = None
+    try:
+        handle = os.open(
+            "CACHEDIR.TAG", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            | getattr(os, "O_CLOEXEC", 0), dir_fd=target,
+        )
+        return (
+            stat.S_ISREG(os.fstat(handle).st_mode)
+            and os.read(handle, len(CARGO_CACHE_SIGNATURE)) == CARGO_CACHE_SIGNATURE
+        )
+    except OSError:
+        return False
+    finally:
+        if handle is not None:
+            os.close(handle)
+
+
 def incremental_directories(target: int):
     """Hold the profile/triple ancestors while yielding incremental handles."""
     for name in entries(target):
@@ -91,8 +130,6 @@ def incremental_directories(target: int):
             if not TARGET_TRIPLE.fullmatch(name):
                 continue
             for profile_name in entries(directory):
-                if profile_name in ARTIFACT_DIRECTORIES:
-                    continue
                 with open_directory(profile_name, directory) as profile:
                     if profile is None:
                         continue
@@ -250,22 +287,41 @@ def prune_crates(incremental: int, keep: int, dry_run: bool, now: float) -> tupl
     return removed, removed_bytes, protected
 
 
+def prune_directory(root: int, keep: int, dry_run: bool) -> tuple[int, int, int]:
+    totals = [0, 0, 0]
+    now = time.time()
+    with closing(incremental_directories(root)) as incremental:
+        for directory in incremental:
+            result = prune_crates(directory, keep, dry_run, now)
+            totals = [left + right for left, right in zip(totals, result)]
+    return tuple(totals)
+
+
 def prune_target(target: Path, keep: int = 1, dry_run: bool = False) -> tuple[int, int, int]:
     """Return (removed sessions, logical file bytes, protected sessions)."""
     if keep < 1:
         raise ValueError("keep must be at least one")
     if os.name != "posix" or not ANCHORED_FILESYSTEM:
         return 0, 0, 0
-    totals = [0, 0, 0]
-    now = time.time()
     with open_directory(target) as root:
-        if root is None:
-            return 0, 0, 0
-        with closing(incremental_directories(root)) as incremental:
-            for directory in incremental:
-                result = prune_crates(directory, keep, dry_run, now)
-                totals = [left + right for left, right in zip(totals, result)]
-    return tuple(totals)
+        return (0, 0, 0) if root is None else prune_directory(root, keep, dry_run)
+
+
+def prune_artifact_target(
+    executable: Path, keep: int = 1, dry_run: bool = False, known_targets=(),
+) -> tuple[int, int, int]:
+    """Admit only the closest marked Cargo root, never other marked ancestors."""
+    if keep < 1:
+        raise ValueError("keep must be at least one")
+    if os.name != "posix" or not ANCHORED_FILESYSTEM:
+        return 0, 0, 0
+    for target in cargo_target_candidates(executable):
+        if target in known_targets:
+            return 0, 0, 0  # This actual root was already pruned explicitly.
+        with open_directory(target) as root:
+            if root is not None and cargo_cache_marker(root):
+                return prune_directory(root, keep, dry_run)
+    return 0, 0, 0
 
 
 def main() -> int:
@@ -274,13 +330,18 @@ def main() -> int:
     parser.add_argument("--keep", type=int, default=1)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--cargo-executable", type=Path)
     args = parser.parse_args()
     if args.keep < 1:
         parser.error("--keep must be at least one")
 
     totals = [0, 0, 0]
-    for target in args.targets:
+    targets = {Path(os.path.abspath(target)) for target in args.targets}
+    for target in targets:
         result = prune_target(target, args.keep, args.dry_run)
+        totals = [left + right for left, right in zip(totals, result)]
+    if args.cargo_executable is not None:
+        result = prune_artifact_target(args.cargo_executable, args.keep, args.dry_run, targets)
         totals = [left + right for left, right in zip(totals, result)]
     if not args.quiet:
         action = "would remove" if args.dry_run else "removed"

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import os
 from contextlib import contextmanager
+import json
 from pathlib import Path
 import select
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -97,21 +100,324 @@ class CacheFixture(unittest.TestCase):
 
 
 class CargoRunnerContractTests(unittest.TestCase):
-    def test_normal_cargo_invocations_have_no_cleanup_runner(self):
+    def test_macos_cargo_runner_enables_post_run_cleanup(self):
         config = tomllib.loads((ROOT / ".cargo/config.toml").read_text())
-        for target in config.get("target", {}).values():
-            self.assertNotIn("runner", target)
-        self.assertFalse((ROOT / "scripts/cargo-run-clean.sh").exists())
+        self.assertEqual(
+            config["target"]['cfg(target_os = "macos")']["runner"],
+            "scripts/cargo-run-clean.sh",
+        )
+        self.assertTrue(os.access(ROOT / "scripts/cargo-run-clean.sh", os.X_OK))
 
-    def test_active_documentation_has_no_automatic_cleanup_switch(self):
+    def test_documentation_explains_automatic_cleanup_and_overrides(self):
         readme = (ROOT / "README.md").read_text()
-        self.assertNotIn("TIPTOPTYP_KEEP_CARGO_CACHE", readme)
-        self.assertNotIn("TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS", readme)
+        self.assertIn("After the launched process exits", readme)
+        self.assertIn("TIPTOPTYP_KEEP_CARGO_CACHE=1", readme)
+        self.assertIn("TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS", readme)
         self.assertIn("prune_cargo_incremental.py --dry-run", readme)
 
 
 @unittest.skipUnless(LOCKING_AVAILABLE, "requires Rust-compatible POSIX file locks")
+class CargoRunnerExecutionTests(unittest.TestCase):
+    """Run private copies only; repository build caches are never candidates."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        self.repository = self.directory / "repository with spaces"
+        scripts = self.repository / "scripts"
+        scripts.mkdir(parents=True)
+        for name in ["cargo-run-clean.sh", "prune_cargo_incremental.py"]:
+            shutil.copy2(ROOT / "scripts" / name, scripts / name)
+        self.runner = scripts / "cargo-run-clean.sh"
+        self.commands = self.directory / "commands"
+        self.commands.mkdir()
+        self.python_command("exec " + shlex.quote(sys.executable) + ' "$@"')
+        self.caller = self.directory / "unrelated caller"
+        self.caller.mkdir()
+        self.receipt = self.directory / "child.json"
+        self.child = self.directory / "child.py"
+        self.child.write_text("""
+import json, os, pathlib, sys
+paths = json.loads(os.environ['RUNNER_EXPECT_SESSIONS'])
+def check():
+    assert all(pathlib.Path(path).is_dir() for path in paths), 'cleanup ran before child exit'
+check()
+if os.environ.get('RUNNER_WAIT') == '1':
+    print('ready', flush=True)
+    assert sys.stdin.readline().strip() == 'finish'
+    check()
+pathlib.Path(os.environ['RUNNER_RECEIPT']).write_text(json.dumps({
+    'argv': sys.argv[1:], 'cwd': os.getcwd(), 'sessions_before_exit': paths,
+}))
+sys.exit(int(os.environ.get('RUNNER_EXIT', '0')))
+""")
+        self.env = os.environ.copy()
+        for name in ["CARGO_TARGET_DIR", "TIPTOPTYP_KEEP_CARGO_CACHE", "TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS"]:
+            self.env.pop(name, None)
+        self.env.update({
+            "PATH": str(self.commands) + os.pathsep + "/usr/bin:/bin",
+            "RUNNER_RECEIPT": str(self.receipt),
+            "RUNNER_EXPECT_SESSIONS": "[]",
+        })
+
+    def python_command(self, body):
+        command = self.commands / "python3"
+        command.write_text("#!/bin/sh\n" + body + "\n")
+        command.chmod(0o755)
+
+    def pair(self, target, profile="debug"):
+        crate = target / profile / "incremental/crate-hash"
+        old, lock = session(crate, age=300)
+        newest, _ = session(crate, age=200, nonce=2)
+        return old, lock, newest
+
+    def artifact(self, target, layout="debug", marker=True):
+        executable = target / layout / "fixture-artifact"
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("#!" + sys.executable + "\n" + self.child.read_text())
+        executable.chmod(0o755)
+        if marker:
+            (target / "CACHEDIR.TAG").write_bytes(
+                b"Signature: 8a477f597d28d172789f06886806bc55\n# Cargo cache\n"
+            )
+        return executable
+
+    def invoke(self, *arguments, executable=None, **environment):
+        child = [str(executable)] if executable is not None else [sys.executable, str(self.child)]
+        return subprocess.run(
+            [str(self.runner), *child, *arguments],
+            cwd=self.caller, env={**self.env, **environment},
+            text=True, capture_output=True, timeout=10,
+        )
+
+    def test_default_cleans_both_repository_roots_and_preserves_arguments_and_status(self):
+        pairs = [self.pair(self.repository / relative) for relative in ["target", "xtask/target"]]
+        arguments = ["argument with spaces", "", "--flag", "literal;$()[]*", "line\nbreak"]
+        result = self.invoke(
+            *arguments, RUNNER_EXIT="37",
+            RUNNER_EXPECT_SESSIONS=json.dumps([str(old) for old, _, _ in pairs]),
+        )
+        self.assertEqual(result.returncode, 37, result.stderr)
+        receipt = json.loads(self.receipt.read_text())
+        self.assertEqual(receipt["argv"], arguments)
+        self.assertEqual(Path(receipt["cwd"]), self.caller.resolve())
+        for old, lock, newest in pairs:
+            self.assertFalse(old.exists())
+            self.assertTrue(lock.exists())
+            self.assertTrue(newest.exists())
+
+    def test_configured_target_supports_absolute_and_caller_relative_paths(self):
+        for configured in ["relative target", str(self.directory / "absolute target")]:
+            with self.subTest(configured=configured):
+                target = Path(configured)
+                if not target.is_absolute():
+                    target = self.caller / target
+                old, lock, newest = self.pair(target)
+                result = self.invoke(executable=self.artifact(target), CARGO_TARGET_DIR=configured)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(old.exists())
+                self.assertTrue(lock.exists())
+                self.assertTrue(newest.exists())
+
+    def test_member_working_directory_does_not_redirect_relative_target_cleanup(self):
+        target = self.repository / "custom"
+        old, _, newest = self.pair(target)
+        executable = self.artifact(target, "debug/deps")
+        self.caller = self.repository / "core"
+        self.caller.mkdir()
+        decoy, _, _ = self.pair(self.caller / "custom")
+        result = self.invoke(executable=executable, CARGO_TARGET_DIR="custom")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (old.exists(), decoy.exists()), (False, True),
+            "cleanup must prune the artifact's target and preserve the member-relative decoy",
+        )
+        self.assertTrue(newest.exists())
+        self.assertTrue(decoy.exists(), "relative env was resolved against the member directory")
+
+    def test_actual_artifact_selects_custom_run_test_example_and_triple_targets(self):
+        layouts = [
+            ("debug", "debug"), ("debug/deps", "debug"),
+            ("release/examples", "release"), ("fast-edit", "fast-edit"),
+            ("deps", "deps"), ("examples", "examples"),
+            ("deps/examples", "deps"), ("examples/deps", "examples"),
+            ("aarch64-apple-darwin/debug", "aarch64-apple-darwin/debug"),
+            ("aarch64-apple-darwin/debug/deps", "aarch64-apple-darwin/debug"),
+            ("aarch64-apple-darwin/deps", "aarch64-apple-darwin/deps"),
+            ("aarch64-apple-darwin/examples/deps", "aarch64-apple-darwin/examples"),
+            ("x86_64-unknown-linux-gnu/release/examples", "x86_64-unknown-linux-gnu/release"),
+        ]
+        for index, (layout, profile) in enumerate(layouts):
+            with self.subTest(layout=layout):
+                target = self.directory / ("custom-target-" + str(index))
+                old, lock, newest = self.pair(target, profile)
+                executable = self.artifact(target, layout)
+                decoy, _, _ = self.pair(self.directory / ("unused-env-" + str(index)))
+                result = self.invoke(executable=executable, CARGO_TARGET_DIR=str(decoy.parents[3]))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(old.exists())
+                self.assertTrue(lock.exists())
+                self.assertTrue(newest.exists())
+                self.assertTrue(decoy.exists(), "an overridden environment target was pruned")
+
+    def test_closest_marked_root_excludes_other_marked_ancestors(self):
+        parent = self.directory / "parent-target"
+        parent_old, _, _ = self.pair(parent)
+        (parent / "CACHEDIR.TAG").write_bytes(prune_cargo_incremental.CARGO_CACHE_SIGNATURE)
+        target = parent / "debug"
+        old, _, newest = self.pair(target)
+        executable = self.artifact(target, "deps")
+        result = self.invoke(executable=executable)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(old.exists())
+        self.assertTrue(newest.exists())
+        self.assertTrue(parent_old.exists(), "a marked ancestor was also pruned")
+
+    def test_empty_closest_marked_root_still_excludes_other_marked_ancestors(self):
+        parent = self.directory / "parent-target"
+        parent_old, _, _ = self.pair(parent)
+        (parent / "CACHEDIR.TAG").write_bytes(prune_cargo_incremental.CARGO_CACHE_SIGNATURE)
+        executable = self.artifact(parent / "debug", "examples")
+        result = self.invoke(executable=executable)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(parent_old.exists())
+
+    def test_ambiguous_artifacts_or_unverified_markers_never_authorize_cleanup(self):
+        for kind in ["missing", "invalid", "symlink", "directory", "non-cargo layout"]:
+            with self.subTest(kind=kind):
+                target = self.directory / kind
+                old, _, _ = self.pair(target)
+                layout = "debug/build/package/out" if kind == "non-cargo layout" else "debug/deps"
+                executable = self.artifact(target, layout, marker=False)
+                tag = target / "CACHEDIR.TAG"
+                if kind == "invalid":
+                    tag.write_bytes(b"not a Cargo cache signature\n")
+                elif kind == "symlink":
+                    valid_tag = self.directory / "valid-tag"
+                    valid_tag.write_bytes(b"Signature: 8a477f597d28d172789f06886806bc55\n")
+                    tag.symlink_to(valid_tag)
+                elif kind == "directory":
+                    tag.mkdir()
+                elif kind == "non-cargo layout":
+                    tag.write_bytes(b"Signature: 8a477f597d28d172789f06886806bc55\n")
+                result = self.invoke(executable=executable, CARGO_TARGET_DIR=str(target))
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(old.exists())
+
+    def test_cleanup_waits_until_child_has_exited(self):
+        old, _, newest = self.pair(self.repository / "target")
+        process = subprocess.Popen(
+            [str(self.runner), sys.executable, str(self.child)],
+            cwd=self.caller,
+            env={**self.env, "RUNNER_WAIT": "1", "RUNNER_EXPECT_SESSIONS": json.dumps([str(old)])},
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        def finish():
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=5)
+
+        self.addCleanup(finish)
+        self.assertTrue(select.select([process.stdout], [], [], 5)[0], "child did not start")
+        self.assertEqual(process.stdout.readline().strip(), "ready")
+        self.assertIsNone(process.poll())
+        self.assertTrue(old.exists())
+        _, stderr = process.communicate("finish\n", timeout=10)
+        self.assertEqual(process.returncode, 0, stderr)
+        self.assertFalse(old.exists())
+        self.assertTrue(newest.exists())
+
+    def test_opt_out_skips_python_and_preserves_all_sessions(self):
+        old, _, newest = self.pair(self.repository / "target")
+        invoked = self.directory / "python-was-invoked"
+        self.python_command("touch " + shlex.quote(str(invoked)) + "\nexit 99")
+        result = self.invoke(TIPTOPTYP_KEEP_CARGO_CACHE="1", RUNNER_EXIT="23")
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertTrue(old.exists())
+        self.assertTrue(newest.exists())
+        self.assertFalse(invoked.exists())
+
+    def test_retention_override_keeps_requested_newest_sessions(self):
+        old, _, newest = self.pair(self.repository / "target")
+        oldest, _ = session(old.parent, age=400, nonce=3)
+        result = self.invoke(TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS="2")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(oldest.exists())
+        self.assertTrue(old.exists())
+        self.assertTrue(newest.exists())
+
+    def test_cleanup_failures_preserve_sessions_and_child_exit_status(self):
+        for child_status in ["0", "31"]:
+            for failure in ["python failure", "missing python", "missing pruner", "invalid retention", "zero retention"]:
+                with self.subTest(failure=failure, child_status=child_status):
+                    target = self.repository / (failure + child_status)
+                    old, _, newest = self.pair(target)
+                    executable = self.artifact(target)
+                    environment = {"CARGO_TARGET_DIR": str(target), "RUNNER_EXIT": child_status}
+                    script = self.repository / "scripts/prune_cargo_incremental.py"
+                    original = script.read_bytes()
+                    if failure == "python failure":
+                        self.python_command("exit 42")
+                    elif failure == "missing python":
+                        (self.commands / "dirname").symlink_to(shutil.which("dirname"))
+                        (self.commands / "python3").unlink()
+                        environment["PATH"] = str(self.commands)
+                    elif failure == "missing pruner":
+                        script.unlink()
+                    elif failure == "invalid retention":
+                        environment["TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS"] = "not-an-integer"
+                    else:
+                        environment["TIPTOPTYP_CARGO_CACHE_KEEP_SESSIONS"] = "0"
+                    try:
+                        result = self.invoke(executable=executable, **environment)
+                    finally:
+                        script.write_bytes(original)
+                        self.python_command("exec " + shlex.quote(sys.executable) + ' "$@"')
+                        (self.commands / "dirname").unlink(missing_ok=True)
+                    self.assertEqual(result.returncode, int(child_status), result.stderr)
+                    self.assertIn("cache pruning failed", result.stderr)
+                    self.assertTrue(old.exists())
+                    self.assertTrue(newest.exists())
+
+    def test_missing_executable_is_rejected_without_cleanup(self):
+        old, _, _ = self.pair(self.repository / "target")
+        result = subprocess.run(
+            [str(self.runner)], cwd=self.caller, env=self.env,
+            text=True, capture_output=True, timeout=5,
+        )
+        self.assertEqual(result.returncode, 64, result.stderr)
+        self.assertIn("missing executable", result.stderr)
+        self.assertTrue(old.exists())
+
+
+@unittest.skipUnless(LOCKING_AVAILABLE, "requires Rust-compatible POSIX file locks")
 class PruneCargoIncrementalTests(CacheFixture):
+    def test_marker_validation_and_cleanup_retain_the_same_target_directory(self):
+        old, _, newest = self.pair()
+        (self.target / "CACHEDIR.TAG").write_bytes(prune_cargo_incremental.CARGO_CACHE_SIGNATURE)
+        executable = self.target / "debug/fixture"
+        executable.touch()
+        outside = self.root / "outside"
+        outside_old, _ = session(outside / "debug/incremental/crate-hash", age=300)
+        session(outside_old.parent, age=200, nonce=2)
+        saved = self.root / "saved-target"
+        marker = prune_cargo_incremental.cargo_cache_marker
+
+        def swap_after_verification(directory):
+            admitted = marker(directory)
+            if admitted:
+                self.target.rename(saved)
+                self.target.symlink_to(outside, target_is_directory=True)
+            return admitted
+
+        with mock.patch.object(prune_cargo_incremental, "cargo_cache_marker", side_effect=swap_after_verification):
+            self.assertEqual(prune_cargo_incremental.prune_artifact_target(executable), (1, 3, 0))
+        self.assertFalse((saved / old.relative_to(self.target)).exists())
+        self.assertTrue((saved / newest.relative_to(self.target)).exists())
+        self.assertTrue(outside_old.exists())
+
     def test_keeps_newest_finalized_session_and_unrelated_outputs(self):
         old, lock, newest = self.pair()
         lock_inode = lock.stat().st_ino

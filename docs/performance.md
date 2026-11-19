@@ -6,8 +6,11 @@ The build script no longer watches the Git index or unrelated loose refs, and
 its Git queries leave the index untouched. It watches the active revision and actual
 build inputs instead. A non-inlined version getter limits propagation of the
 changing build identity into UI code. See [build identity](build-identity.md).
-Ordinary runs and tests also retain Cargo's incremental caches; cleanup is now
-an explicit, lock-protected operation described in the [README](../README.md).
+On macOS, ordinary Cargo runs and tests automatically prune older finalized
+incremental caches after the child exits, retaining the newest session per crate
+and protecting active caches with compiler-compatible locks and anchored
+directory handles. This is a required disk-space constraint. Cleanup uses bounded
+target-directory discovery; see the controls and dry run in the [README](../README.md).
 
 Controlled local build measurements used the same Rust 1.98.1 compiler,
 `cargo build --locked --bin tiptoptyp --timings`, dev profile (opt-level 1,

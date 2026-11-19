@@ -135,6 +135,10 @@ repeated transition and frame-stability checks over single settled states.
 Performance is an ongoing requirement, not a one-off cleanup. See
 `docs/performance.md` for profiling commands and interpretation.
 
+- Automatic Cargo incremental-cache cleanup is a required disk-space constraint
+  on macOS. Keep the post-exit runner enabled for ordinary runs and tests,
+  retaining the newest session per crate and protecting working, recent and
+  locked sessions. Improve cleanup safety and cost without removing it.
 - Consider idle repaint frequency, per-frame allocation/work, cache invalidation,
   main-thread blocking, background-job duplication, and scaling with document or
   workspace size when changing relevant code. State when a change has no material

@@ -1,2 +1,7 @@
 [alias]
 xtask = "run --manifest-path xtask/Cargo.toml --"
+
+# Prune old, unlocked incremental sessions after the launched process exits.
+# This also applies to macOS test executables; ordinary builds do not prune.
+[target.'cfg(target_os = "macos")']
+runner = "scripts/cargo-run-clean.sh"
