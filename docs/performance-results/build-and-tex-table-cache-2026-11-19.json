@@ -1,0 +1,358 @@
+{
+  "schema_version": 1,
+  "measured_utc_date": "2026-11-19",
+  "baseline_revision": "585b42dd5fb70abfc9de5d3e6df8cc5bd38dc4aa",
+  "implementation_commits": {
+    "build_identity": "5a6e286",
+    "tex_table_cache": "98b90c0",
+    "cache_preservation": "78788dc"
+  },
+  "host": {
+    "model": "Mac14,5",
+    "cpu": "Apple M2 Max",
+    "memory_bytes": 34359738368,
+    "logical_cpus": 12,
+    "os": "macOS 14.6.1",
+    "architecture": "aarch64"
+  },
+  "compiler": {
+    "pinned_channel": "1.98.1",
+    "verbose_version": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: aarch64-apple-darwin\nrelease: 1.98.1\nLLVM version: 22.1.8",
+    "executable_sha256": "766eda9d8f53afd6fc7f27b3cd2e444dd22afacb5afa710a5625fc8e45b8c941"
+  },
+  "build": {
+    "command": [
+      "cargo",
+      "+1.98.1",
+      "build",
+      "--locked",
+      "--bin",
+      "tiptoptyp",
+      "--timings"
+    ],
+    "profile": "dev opt-level=1, debug=2, incremental=true",
+    "jobs": 2,
+    "controlled_inputs": "Prepared dependency caches; touch Git index or build.rs mtime only. No concurrent builds/profiles.",
+    "baseline_artifacts": ".tiptoptyp/profiles/build-baseline-_hmi5_qu/",
+    "after_artifacts": ".tiptoptyp/profiles/build-after-gnvql83e/",
+    "before_runs": [
+      {
+        "label": "warm_noop_1",
+        "wall_seconds": 134.6207794160582,
+        "exit": 0
+      },
+      {
+        "label": "warm_noop_2",
+        "wall_seconds": 41.34544908301905,
+        "exit": 0
+      },
+      {
+        "label": "index_mtime_only",
+        "wall_seconds": 42.22581579093821,
+        "exit": 0
+      },
+      {
+        "label": "warm_noop_3",
+        "wall_seconds": 1.2238770828116685,
+        "exit": 0
+      },
+      {
+        "label": "build_script_mtime_only",
+        "wall_seconds": 40.78072270890698,
+        "exit": 0
+      },
+      {
+        "label": "warm_noop_after_identity",
+        "wall_seconds": 39.67483633314259,
+        "exit": 0
+      }
+    ],
+    "after_runs": [
+      {
+        "label": "prepare_changed_source",
+        "wall_seconds": 116.19640866690315,
+        "exit": 0,
+        "binary_sha256": "c11eccc75282ef7b2a6014bf5fa8ef453d463d1a6cdd23bd02ffad134f53f38f",
+        "version": "tiptoptyp Dev 0.1.0 (585b42dd5fb7-dirty.1795101971)"
+      },
+      {
+        "label": "warm_noop_1",
+        "wall_seconds": 1.4006844591349363,
+        "exit": 0,
+        "binary_sha256": "c11eccc75282ef7b2a6014bf5fa8ef453d463d1a6cdd23bd02ffad134f53f38f",
+        "version": "tiptoptyp Dev 0.1.0 (585b42dd5fb7-dirty.1795101971)"
+      },
+      {
+        "label": "index_mtime_only",
+        "wall_seconds": 0.5013267081230879,
+        "exit": 0,
+        "binary_sha256": "c11eccc75282ef7b2a6014bf5fa8ef453d463d1a6cdd23bd02ffad134f53f38f",
+        "version": "tiptoptyp Dev 0.1.0 (585b42dd5fb7-dirty.1795101971)"
+      },
+      {
+        "label": "warm_noop_2",
+        "wall_seconds": 0.506305041955784,
+        "exit": 0,
+        "binary_sha256": "c11eccc75282ef7b2a6014bf5fa8ef453d463d1a6cdd23bd02ffad134f53f38f",
+        "version": "tiptoptyp Dev 0.1.0 (585b42dd5fb7-dirty.1795101971)"
+      },
+      {
+        "label": "build_script_mtime_only",
+        "wall_seconds": 22.879398165969178,
+        "exit": 0,
+        "binary_sha256": "b17c388f4fd4e2893c206ee72c2f13ad704b7a3e87e6c26e073d31f0c9342466",
+        "version": "tiptoptyp Dev 0.1.0 (585b42dd5fb7-dirty.1795102093)"
+      },
+      {
+        "label": "warm_noop_after_identity",
+        "wall_seconds": 1.0049498330336064,
+        "exit": 0,
+        "binary_sha256": "b17c388f4fd4e2893c206ee72c2f13ad704b7a3e87e6c26e073d31f0c9342466",
+        "version": "tiptoptyp Dev 0.1.0 (585b42dd5fb7-dirty.1795102093)"
+      }
+    ],
+    "excluded_from_speedup_comparison": [
+      "before warm_noop_1: dependency-feature cache miss",
+      "after prepare_changed_source: changed-source preparation"
+    ],
+    "assertions": [
+      "Index-only after build preserved exact executable SHA-256 and compiled version.",
+      "Build-script-only after build changed the compiled version."
+    ],
+    "limitations": [
+      "Single controlled local sample per operation; not a cold-build or arbitrary source-edit comparison.",
+      "True no-op builds were possible before; this fixes spurious invalidation.",
+      "Initial and changed-source preparation times are unlike workloads and cannot be compared as a speedup."
+    ]
+  },
+  "tex_table_lookup": {
+    "raw_artifacts": ".tiptoptyp/profiles/tex-table-lookup-krpm4ulg/",
+    "scope": "Actual production TeX table scanner/index/cache and lossless parser, with a small last-caret adapter matching EditorDerivedData's existing fast path. The scalar byte map is prepared outside timing, as the editor already retains it. Warm caret lookup and cold index plus first-target costs are reported separately.",
+    "limitations": "Local optimized component measurements, not whole-editor, keystroke, compiler, provider, layout, painting, startup, allocation or native-input latency. No wall-time CI threshold or cross-platform guarantee. Other host activity is uncontrolled; do not run concurrently with a build or another profiler. Stable-caret timings near clock/observer overhead are a control, not a speed claim.",
+    "viewport_theme": "Not applicable: pure component operation",
+    "compiler_flags": [
+      "--edition=2024",
+      "-C",
+      "opt-level=3"
+    ],
+    "round_order": [
+      [
+        "before",
+        "after"
+      ],
+      [
+        "after",
+        "before"
+      ],
+      [
+        "before",
+        "after"
+      ]
+    ],
+    "warmup_batches": 3,
+    "measured_batches": 9,
+    "carets_per_batch": 32,
+    "aggregation": "Median of per-process batch medians; every raw batch is retained",
+    "golden_validation": "Complete TexTable Debug representation versus historical production parser, outside timing",
+    "golden_checks": 960,
+    "before": {
+      "label": "before",
+      "selector": "585b42d",
+      "revision": "585b42dd5fb70abfc9de5d3e6df8cc5bd38dc4aa",
+      "source_sha256": {
+        "src/editor_features/tex_table.rs": "5c9a31a860c0683932dc8db2e57aa1eb648b582c295b197af502f2bf00833b6b",
+        "src/editor_features.rs": "054f01f5a9cd4d53d4439790472728aa22e7631a593b2ed67789ad6c8e2fe8d8",
+        "src/editor_math_guides.rs": "d2139d33e371b01e1342d4bc48eaab7abcd6bbff125b065ca135627397cabfcf",
+        "src/editor_data.rs": "afd6ef024bc8df953bccefcd6549433711393f6adcb4a8f640a7ac1841a0454c"
+      },
+      "helper_sha256": "2d5163ca269e810706df6a053c54d9d6002fd3228167a1ccb10e20856f56ab44",
+      "inline_sha256": "3dc0326a031671af82bf3a43049b5c880ec5a26b71d5c6a9af19987b9aea229e"
+    },
+    "after": {
+      "label": "after",
+      "selector": "working-tree",
+      "revision": "585b42dd5fb70abfc9de5d3e6df8cc5bd38dc4aa",
+      "source_sha256": {
+        "src/editor_features/tex_table.rs": "2eb38807f1d9411c66fde8e5cb10066b4aca5e51df254dedd1d8b83774b63062",
+        "src/editor_features.rs": "d9b6b89a695c4210531a7b14b4985cc66bc60fec9cb12a69dc253e3483a4ce0f",
+        "src/editor_math_guides.rs": "d2139d33e371b01e1342d4bc48eaab7abcd6bbff125b065ca135627397cabfcf",
+        "src/editor_data.rs": "2f7f97237431576cd54394d3bf05b22bf4ef1377d57451481846bcb0a00c13c9"
+      },
+      "helper_sha256": "2d5163ca269e810706df6a053c54d9d6002fd3228167a1ccb10e20856f56ab44",
+      "inline_sha256": "3dc0326a031671af82bf3a43049b5c880ec5a26b71d5c6a9af19987b9aea229e",
+      "source_worktree_status": "M src/editor_data.rs\n M src/editor_features.rs\n M src/editor_features/tex_table.rs"
+    },
+    "probe_hashes": {
+      "adapter_sha256": "261670dde93166b5bfe9431d0cdc9e9ec2d43e7db7bc7c256b91c9d57f4449bc",
+      "template_sha256": "e87c66a9630ca5ccba21db0da0a1ef61f0e3b7a4871cdf67042ef3a05661fc9e",
+      "script_sha256": "35786217ef3cc37109e96628ab99ba29f157f83b5a711b1b576d2b036559c642"
+    },
+    "probe_binary_sha256": {
+      "before": "cf593fd14ee505ad1ff4c4cfb3a8a4082b3c32b9e10bceaacb43ec3719a54b25",
+      "after": "bf0ad232990efab2c49e38b8caf02e6743e5cb2162924d263cefb1b6cfdd9618"
+    },
+    "fixtures": {
+      "no-table-1MiB": {
+        "source_sha256": "f885eb54e82f10ef5d8742d3c48a2fcc45a4706cd9c32689ed818d47b864be06",
+        "carets_sha256": "17439292d47fcd92a1db267d7347f83a8b123f9c0e0d41b28c84c8e251e8af88"
+      },
+      "inside-one-table-1MiB": {
+        "source_sha256": "dc97a9c032b571e03d2e7beba53fd3a25cef655ac62224cea5aabd77c517715d",
+        "carets_sha256": "18773a4c925187c97511f787de34648d9d200f550297a6dde32dade125ef53f5"
+      },
+      "many-sibling-tables": {
+        "source_sha256": "c1e331bf0446fb81a69013e5c904fd5cbe76472ebd93eee97c73dbf054356f67",
+        "carets_sha256": "1818ce550ca5607492ae2cc33edd3dc9c4a1e2b9789f0309544d0bd9ef8cddf9"
+      },
+      "unsupported-inner-table": {
+        "source_sha256": "fd7e6e0251cb0fd3a6ecd934cd1fe222103b1b46d84c12601be98977ddd64ebf",
+        "carets_sha256": "f7988c27d86b87571e455296096ab15402f3e28d2d06ce91c162faeecf85c6d0"
+      },
+      "stable-caret-control": {
+        "source_sha256": "dc97a9c032b571e03d2e7beba53fd3a25cef655ac62224cea5aabd77c517715d",
+        "carets_sha256": "43fb603fc14dbe06c699ca4320195c47b25b85b99a14819fafbabb22b60ff5bc"
+      }
+    },
+    "summary_ns": {
+      "no-table-1MiB": {
+        "before": {
+          "warm_median_ns": 1161250,
+          "cold_index_and_first_target_median_ns": 827667
+        },
+        "after": {
+          "warm_median_ns": 2.625,
+          "cold_index_and_first_target_median_ns": 749833
+        }
+      },
+      "inside-one-table-1MiB": {
+        "before": {
+          "warm_median_ns": 2533282.5625,
+          "cold_index_and_first_target_median_ns": 2505958
+        },
+        "after": {
+          "warm_median_ns": 5.1875,
+          "cold_index_and_first_target_median_ns": 1673083
+        }
+      },
+      "many-sibling-tables": {
+        "before": {
+          "warm_median_ns": 1247141.9375,
+          "cold_index_and_first_target_median_ns": 1138625
+        },
+        "after": {
+          "warm_median_ns": 1548.1875,
+          "cold_index_and_first_target_median_ns": 1148375
+        }
+      },
+      "unsupported-inner-table": {
+        "before": {
+          "warm_median_ns": 332365.875,
+          "cold_index_and_first_target_median_ns": 328875
+        },
+        "after": {
+          "warm_median_ns": 5.21875,
+          "cold_index_and_first_target_median_ns": 160292
+        }
+      },
+      "stable-caret-control": {
+        "before": {
+          "warm_median_ns": 1.3125,
+          "cold_index_and_first_target_median_ns": 2498167
+        },
+        "after": {
+          "warm_median_ns": 1.3125,
+          "cold_index_and_first_target_median_ns": 1620917
+        }
+      }
+    },
+    "interpretation": [
+      "Warm sub-microsecond samples and unchanged stable-caret control are near measurement overhead; no ratio claimed at that floor.",
+      "Dense sibling-table cold cost is effectively comparable (about 0.9% higher), not a demonstrated improvement.",
+      "No builds or other profiling sessions ran concurrently; ordinary host activity was uncontrolled."
+    ],
+    "reproduction_command": [
+      "python3",
+      "scripts/bench_tex_table_lookup.py",
+      "--before-ref",
+      "585b42d",
+      "--after-ref",
+      "98b90c0"
+    ],
+    "captured_after_source": "Measured as working-tree with HEAD at 585b42d; all four production hashes match committed 98b90c0."
+  },
+  "cache_cleanup": {
+    "automatic_runner_removed": true,
+    "actual_target_pruned": false,
+    "fixture_contracts_passed": 24,
+    "regressions": [
+      "Locked finalized cache is retained with Rust-compatible sibling lock.",
+      "Four ancestor replacements and final-session replacement preserve external payloads."
+    ],
+    "evidence": [
+      "/private/tmp/ttt-incremental-cache-safety.json",
+      "/private/tmp/ttt-prune-before-regression.log",
+      "/private/tmp/ttt-prune-before-fd-regressions.log"
+    ]
+  },
+  "verification": {
+    "default_rust_tests": {
+      "command": "cargo +1.98.1 test --no-fail-fast",
+      "passed": 3956,
+      "ignored": 91,
+      "targets": 25,
+      "log": "/private/tmp/ttt-perf-tests-repeat.log",
+      "initial_attempt": "Four existing fake-process startup watchdogs exceeded five seconds. Focused TeX checks (226 tests, two threads) passed, then the full suite passed at normal parallelism without code or deadline changes. Original log: /private/tmp/ttt-perf-tests.log."
+    },
+    "default_clippy": {
+      "command": "cargo +1.98.1 clippy --all-targets -- -D warnings",
+      "passed": true,
+      "log": "/private/tmp/ttt-perf-clippy.log"
+    },
+    "profiling_clippy": {
+      "command": "cargo +1.98.1 clippy --all-targets --features profiling -- -D warnings",
+      "passed": true,
+      "log": "/private/tmp/ttt-perf-profiling-clippy.log"
+    },
+    "formatting": {
+      "commands": [
+        "cargo +1.98.1 fmt --all -- --check",
+        "cargo +1.98.1 fmt --manifest-path xtask/Cargo.toml -- --check"
+      ],
+      "passed": true
+    },
+    "python": {
+      "command": "python3 -m unittest discover -s scripts -p 'test_*.py'",
+      "tests": 754,
+      "skipped": 1,
+      "passed": true,
+      "log": "/private/tmp/ttt-perf-python-all-unrestricted.log",
+      "environment": "Temporary local test listeners require execution outside the restricted filesystem/network environment; the restricted first attempt rejected bind operations."
+    },
+    "dependency_policy": {
+      "command": "cargo +1.98.1 deny check",
+      "passed": true,
+      "log": "/private/tmp/ttt-perf-deny.log"
+    },
+    "native_tables": {
+      "command": "python3 scripts/test-desktop-ui.py --journey tables",
+      "status": "unavailable",
+      "reason": "Desktop preflight reports locked=true, desktop=false; Accessibility and input permissions are present. No interaction occurred.",
+      "artifacts": ".tiptoptyp/desktop-ui-tests/run-3yhmrwjx/",
+      "visual_verification": false
+    },
+    "profiling_rust_tests": {
+      "command": "cargo +1.98.1 test --features profiling --no-fail-fast",
+      "passed": 3964,
+      "ignored": 91,
+      "targets": 25,
+      "log": "/private/tmp/ttt-perf-profiling-tests.log"
+    },
+    "packaging_tests": {
+      "command": "cargo +1.98.1 test --manifest-path xtask/Cargo.toml",
+      "passed": 55,
+      "ignored": 1,
+      "targets": 1,
+      "log": "/private/tmp/ttt-perf-xtask-tests.log"
+    }
+  }
+}

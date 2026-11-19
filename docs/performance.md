@@ -1,5 +1,90 @@
 # Performance workflow
 
+## Build invalidation and TeX table lookup (19 November 2026)
+
+The build script no longer watches the Git index or unrelated loose refs, and
+its Git queries leave the index untouched. It watches the active revision and actual
+build inputs instead. A non-inlined version getter limits propagation of the
+changing build identity into UI code. See [build identity](build-identity.md).
+Ordinary runs and tests also retain Cargo's incremental caches; cleanup is now
+an explicit, lock-protected operation described in the [README](../README.md).
+
+Controlled local build measurements used the same Rust 1.98.1 compiler,
+`cargo build --locked --bin tiptoptyp --timings`, dev profile (opt-level 1,
+debug 2, incremental), and two build jobs on an M2 Max / 32 GiB / macOS 14.6.1.
+Only the indicated input's modification time changed between prepared builds.
+
+| Prepared build operation | Before | After |
+| --- | ---: | ---: |
+| Git index modification time only | 42.23 s | 0.50 s |
+| Build-script modification time only, refreshing identity | 40.78 s | 22.88 s |
+| Unchanged build immediately after that identity refresh | 39.67 s | 1.00 s |
+
+The index-only after run retained the exact executable hash; the identity run
+changed its compiled version. These are single controlled samples, not
+cold-build or arbitrary source-edit speedups. An initial dependency-feature
+cache miss (134.62 s) and the changed-source preparation (116.20 s) are excluded
+from the comparison. True no-op builds already existed before this change
+(1.22 s); the fix removes spurious invalidation rather than claiming every
+previous build recompiled.
+
+TeX table selection now builds an index once per document revision and retains
+the selected table model while the caret stays in it. A balanced interval query
+finds the innermost candidate without scanning the whole source again. Package
+metadata is collected lazily once per revision. Edits, document-owner changes
+and language transitions invalidate the relevant state; unsupported inner
+tables still reject selection rather than falling back to an outer table.
+
+The optimized component probe uses the actual production scanner, index and
+parser, with identical synthetic documents and caret sequences before/after.
+It runs three rounds in AB / BA / AB order, with three warmup batches and nine
+measured batches per process. Each batch has 32 queries. The table below reports
+medians of process medians; cold index construction plus first selection is
+separate from repeated caret queries.
+
+| Workload | Warm before | Warm after | Cold before | Cold after |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MiB, no tables | 1.16 ms | <1 µs | 0.83 ms | 0.75 ms |
+| 1 MiB, caret moves within one table | 2.53 ms | <1 µs | 2.51 ms | 1.67 ms |
+| 5,000 sibling tables, changing selection | 1.25 ms | 1.55 µs | 1.14 ms | 1.15 ms |
+| Unsupported inner table | 0.33 ms | <1 µs | 0.33 ms | 0.16 ms |
+
+The stable-caret control is unchanged and near measurement overhead. Very small
+warm measurements are also near that floor; no nanosecond speedup ratio is
+claimed. Dense-table cold construction is effectively comparable, not faster.
+All 960 complete table-model comparisons against the historical parser passed
+outside timing. Deterministic tests protect bounded query work, model reuse,
+package freshness and ownership/revision invalidation.
+
+Reproduce the component measurement without compiling the full GUI:
+
+```sh
+python3 scripts/bench_tex_table_lookup.py --before-ref 585b42d --after-ref 98b90c0
+```
+
+The script checks the pinned compiler, builds both probes at opt-level 3 and
+retains sources, hashes, fixtures, carets, binaries and raw batches in a fresh
+`.tiptoptyp/profiles/tex-table-lookup-*/` directory. Do not run builds or another
+profiler concurrently. Viewport and theme do not apply to this pure operation.
+The probe excludes editor layout, drawing, providers, startup and native input;
+it does not establish whole-app typing latency or a cross-platform guarantee.
+
+The committed [measurement receipt](performance-results/build-and-tex-table-cache-2026-11-19.json)
+records the environment, exact summaries and local raw-artifact locations.
+Those ignored artifacts retain the original Cargo timing reports and probe
+samples. Whole-app profiling remains a separate workflow below.
+
+A separate build experiment could isolate Detypify's Tract model loading and
+execution from `src/handwriting.rs` in an opaque library crate, so unchanged
+inference code can be reused across app/test builds and ordinary UI edits.
+There is no measured gain for that proposal yet. First distinguish application
+code generation, monomorphization, linking and peak memory with Cargo timings
+and compiler self-profiles; keep compiler, optimization, jobs, features and
+dependency cache state identical. Normal/test feature unification matters:
+`tiptoptyp-core/test-support` can cause a plain build after tests to rebuild
+dependencies. Preserve inference outputs and worker lifecycle tests if pursuing
+the experiment, rather than exposing Tract types across the new boundary.
+
 ## Historical PDF thumbnail probe (23 September 2026)
 
 Hayro was subsequently removed; see [the PDFium thumbnail consolidation](hayro-removal.md)
