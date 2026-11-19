@@ -1,3 +1,5 @@
+#[path = "build_support/build_identity.rs"]
+mod build_identity;
 #[path = "build_support/locked_versions.rs"]
 mod locked_versions;
 #[path = "build_support/tinymist_configuration.rs"]
@@ -35,44 +37,16 @@ fn main() {
 }
 
 fn emit_build_identity() {
-    // Refresh for code/assets and Git operations, including linked worktrees.
+    // Observe source inputs and the current HEAD without mutating Git's index.
     // Never inspect Git or the filesystem from a UI frame.
-    for path in [
-        "src",
-        "core/src",
-        "core/Cargo.toml",
-        "assets",
-        "Cargo.toml",
-        "Cargo.lock",
-        "build_support",
-    ] {
-        println!("cargo:rerun-if-changed={path}");
+    let root = std::path::Path::new(".");
+    for path in build_identity::watch_paths(root) {
+        println!("cargo:rerun-if-changed={}", path.display());
     }
-    for name in ["HEAD", "index", "refs", "packed-refs"] {
-        if let Some(path) = git(&["rev-parse", "--git-path", name])
-            && std::path::Path::new(&path).exists()
-        {
-            println!("cargo:rerun-if-changed={path}");
-        }
-    }
-    let revision =
-        git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown-revision".into());
-    let dirty = match git(&["status", "--porcelain", "--untracked-files=normal"]) {
-        Some(status) if status.is_empty() => "",
-        Some(_) => "-dirty",
-        None => "-unknown-state",
-    };
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("build clock after Unix epoch")
         .as_secs();
-    println!("cargo:rustc-env=TIPTOPTYP_BUILD_ID={revision}{dirty}.{stamp}");
-}
-
-fn git(args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git").args(args).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    let identity = build_identity::build_id(root, stamp);
+    println!("cargo:rustc-env=TIPTOPTYP_BUILD_ID={identity}");
 }

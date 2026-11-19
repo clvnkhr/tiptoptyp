@@ -475,7 +475,7 @@ mod tests {
             "{}",
             serde_json::json!({
                 "measurement":"source_reveal_local_geometry",
-                "build":crate::build_info::VERSION,
+                "build":crate::build_info::version(),
                 "os":std::env::consts::OS,
                 "arch":std::env::consts::ARCH,
                 "optimized":!cfg!(debug_assertions),

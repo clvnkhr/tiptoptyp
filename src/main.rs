@@ -139,7 +139,7 @@ fn main() -> eframe::Result {
         .skip(1)
         .any(|arg| arg == "--version" || arg == "-V")
     {
-        println!("{}", build_info::VERSION);
+        println!("{}", build_info::version());
         return Ok(());
     }
     if std::env::args_os()

@@ -1799,7 +1799,7 @@ impl SettingsPanel<'_> {
                 let status = if deterministic_settings {
                     format!("{} (deterministic QA build)", crate::build_info::APP_NAME)
                 } else {
-                    crate::build_info::VERSION.to_owned()
+                    crate::build_info::version().to_owned()
                 };
                 ui.add(egui::Label::new(status).wrap());
                 settings_target_anchor(

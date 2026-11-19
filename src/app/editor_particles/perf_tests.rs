@@ -386,7 +386,7 @@ fn editor_effect_cursor_lookup_cost_probe() {
                         "{}",
                         serde_json::json!({
                             "measurement": "editor_effect_cursor_lookup",
-                            "build": crate::build_info::VERSION,
+                            "build": crate::build_info::version(),
                             "os": std::env::consts::OS,
                             "arch": std::env::consts::ARCH,
                             "optimized": !cfg!(debug_assertions),

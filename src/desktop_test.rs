@@ -380,7 +380,7 @@ fn snapshot(viewport: Option<String>) -> Value {
         })
         .collect();
     json!({
-        "schema": 1, "pid": std::process::id(), "build": crate::build_info::VERSION,
+        "schema": 1, "pid": std::process::id(), "build": crate::build_info::version(),
         "request": request, "renderer_generation": state.renderer.generation, "renderer_phase": state.renderer.phase(), "document": state.document, "targets": targets, "scrolls": state.scrolls, "wheel": state.wheel,
         "renderer": state.renderer.sample().filter(|(viewport, _)| state.document["viewport"].as_str() == Some(*viewport))
             .map(|(viewport, sample)| json!({"viewport": viewport, "value": sample.value, "age_ms": sample.observed.elapsed().as_millis()})),
