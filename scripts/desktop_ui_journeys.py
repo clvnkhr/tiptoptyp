@@ -569,11 +569,13 @@ def assert_git_overview(document, expected_count=3):
     content_height = number(observation.get("content_height"), "content height")
     offset = number(observation.get("offset"), "scroll offset")
     minimum = number(observation.get("minimum_thumb_height"), "minimum thumb height")
+    leading = number(observation.get("leading_occlusion"), "leading overlay cover")
     thumb = observation.get("thumb")
     if not isinstance(thumb, (list, tuple)) or len(thumb) != 2:
         raise AssertionError("missing Git overview scrollbar thumb")
     thumb = tuple(number(edge, "thumb edge") for edge in thumb)
-    if content_height <= height or minimum < 0 or not 0 <= offset <= content_height - height + 0.5:
+    if (content_height <= height or minimum < 0 or not 0 <= leading < height
+            or not 0 <= offset <= content_height - height + 0.5):
         raise AssertionError("Git overview does not own the scrollable source geometry")
     thumb_height = min(height, max(minimum, height * height / content_height))
     travel = height - thumb_height
@@ -598,9 +600,10 @@ def assert_git_overview(document, expected_count=3):
         ranges.append((start, end))
     ranges.sort()
     for rect, (start, end) in zip(marks, ranges):
+        cover = min(leading, start + 1)
         for head in (rect[1], (rect[1] + rect[3]) / 2, rect[3] - 0.001):
             at = (head - track[1]) / travel * max_offset
-            if at > end + 0.5 or at + height < start - 0.5:
+            if at + cover > end + 0.5 or at + height < start - 0.5:
                 raise AssertionError("scrollbar top touches Git color while its rendered hunk is offscreen")
     return {"viewport": viewport, "track": track, "ticks": tuple(marks),
             "thumb": thumb, "content_height": content_height}
@@ -1499,14 +1502,22 @@ class EditorJourneys(AutofixJourneys, ExplorerJourneys, OverleafJourneys, Activi
         self.close_scratch(count)
 
     def git_hunks(self):
-        wrap = self.snapshot()["document"]["line_wrap"]
+        original = self.snapshot()["document"]
+        wrap = original["line_wrap"]
+        sticky = original["sticky_context"]
         try:
             if not wrap:
                 self.key(6, "cmd+alt")
                 self.wait("Git overview uses wrapped source", lambda d: d["line_wrap"])
+            if not sticky:
+                self.key(17, "cmd+alt")
+                self.wait("Git overview uses sticky context", lambda d: d["sticky_context"])
             with self.exact_math_conversion():
                 self._git_hunks()
         finally:
+            if self.snapshot()["document"]["sticky_context"] != sticky:
+                self.key(17, "cmd+alt")
+                self.wait("Git overview restores sticky context", lambda d: d["sticky_context"] == sticky)
             if self.snapshot()["document"]["line_wrap"] != wrap:
                 self.key(6, "cmd+alt")
                 self.wait("Git overview restores wrapping", lambda d: d["line_wrap"] == wrap)
@@ -1541,7 +1552,7 @@ class EditorJourneys(AutofixJourneys, ExplorerJourneys, OverleafJourneys, Activi
         last_hunk = initial["targets"].get("git.hunk.2")
         if last_hunk and last_hunk["frame"] == initial["document"]["frame"]:
             raise AssertionError("last fixture hunk must be offscreen when its overview tick is checked")
-        # The long first logical line wraps across multiple viewports. A
+        # The long logical line below a sticky heading wraps across viewports. A
         # line-count percentage can look globally stable while pointing at
         # completely different rendered source. Use the actual native thumb.
         first_hunk = initial["targets"].get("git.hunk.0")

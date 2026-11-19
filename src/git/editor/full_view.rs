@@ -815,6 +815,7 @@ pub(crate) fn show(
             content_height: scroll.content_size.y,
             offset: scroll.state.offset.y,
             content_origin,
+            leading_occlusion: 0.0,
         },
     }
 }

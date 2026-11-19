@@ -2426,7 +2426,7 @@ class MathConversionPreparationContract(unittest.TestCase):
                 for fail in (False, True):
                     with self.subTest(journey=name, initial=initial, fail=fail):
                         journey = EditorJourneys()
-                        state = {"format_after_math_conversion": initial}
+                        state = {"format_after_math_conversion": initial, "line_wrap": True, "sticky_context": True}
                         actions = []
                         journey.snapshot = lambda: {"document": dict(state)}
                         journey.settings = lambda: actions.append("settings")
@@ -2461,6 +2461,44 @@ class MathConversionPreparationContract(unittest.TestCase):
                                   "settings.editor.math_format", "verified", "close settings"]
                         expected = toggle + ["exact source and single undo"] + toggle if initial else ["exact source and single undo"]
                         self.assertEqual(actions, expected)
+
+    def test_git_overview_requires_wrapping_and_sticky_rows_and_restores_both_after_failure(self):
+        from contextlib import nullcontext
+        from desktop_ui_journeys import EditorJourneys
+        for initial, sticky in ((False, False), (False, True), (True, False), (True, True)):
+            for fail in (False, True):
+                with self.subTest(initial=initial, sticky=sticky, fail=fail):
+                    journey = EditorJourneys()
+                    state = {"line_wrap": initial, "sticky_context": sticky}
+                    toggles = []
+                    journey.snapshot = lambda: {"document": dict(state)}
+                    journey.exact_math_conversion = nullcontext
+
+                    def key(code, modifiers):
+                        self.assertIn(code, (6, 17))
+                        self.assertEqual(modifiers, "cmd+alt")
+                        field = "line_wrap" if code == 6 else "sticky_context"
+                        state[field] = not state[field]
+                        toggles.append((code, state[field]))
+
+                    def body():
+                        self.assertTrue(state["line_wrap"])
+                        self.assertTrue(state["sticky_context"])
+                        if fail:
+                            raise RuntimeError("fixture assertion failed")
+
+                    journey.key = key
+                    journey.wait = lambda description, predicate: self.assertTrue(predicate(state), description)
+                    journey._git_hunks = body
+                    if fail:
+                        with self.assertRaisesRegex(RuntimeError, "fixture assertion failed"):
+                            journey.git_hunks()
+                    else:
+                        journey.git_hunks()
+                    self.assertIs(state["line_wrap"], initial)
+                    self.assertIs(state["sticky_context"], sticky)
+                    expected = ([] if initial else [(6, True)]) + ([] if sticky else [(17, True), (17, False)]) + ([] if initial else [(6, False)])
+                    self.assertEqual(toggles, expected)
 
 
     def test_clicking_the_toggle_is_not_proof_the_effective_preference_changed(self):

@@ -24,6 +24,8 @@ pub(crate) struct Geometry {
     pub(crate) content_height: f32,
     pub(crate) offset: f32,
     pub(crate) content_origin: f32,
+    /// Maximum source height hidden by a leading overlay at any scroll offset.
+    pub(crate) leading_occlusion: f32,
 }
 
 /// Resolve only changed ranges through the existing logical-to-rendered row
@@ -80,14 +82,24 @@ struct Mapping {
     viewport_height: f32,
     max_offset: f32,
     thumb_height: f32,
+    leading_occlusion: f32,
 }
 impl Mapping {
-    fn new(track: Rect, content_height: f32, viewport_height: f32, minimum: f32) -> Option<Self> {
+    fn new(
+        track: Rect,
+        content_height: f32,
+        viewport_height: f32,
+        minimum: f32,
+        leading_occlusion: f32,
+    ) -> Option<Self> {
         if !content_height.is_finite()
             || !viewport_height.is_finite()
             || !minimum.is_finite()
+            || !leading_occlusion.is_finite()
             || content_height < 0.0
             || viewport_height <= 0.0
+            || leading_occlusion < 0.0
+            || leading_occlusion >= viewport_height
         {
             return None;
         }
@@ -104,6 +116,11 @@ impl Mapping {
             viewport_height,
             max_offset: (content_height - viewport_height).max(0.0),
             thumb_height,
+            leading_occlusion: if content_height > viewport_height {
+                leading_occlusion
+            } else {
+                0.0
+            },
         })
     }
     fn position(self, content_y: f32) -> f32 {
@@ -131,8 +148,13 @@ impl Mapping {
         }
         let start = content.min.clamp(0.0, self.content_height);
         let end = content.max.clamp(start, self.content_height);
-        let bottom = self.position((end - 0.5).max(start));
-        let natural_top = self.position(start);
+        // Sticky ancestors are unique source rows before the hunk; their
+        // combined height cannot exceed that rendered prefix. The one-point
+        // opaque bottom cover is the only extra height. If a hunk's own row
+        // enters the stack, its visible sticky copy already reveals the hunk.
+        let leading = self.leading_occlusion.min(start + 1.0);
+        let bottom = self.position((end - leading - 0.5).max(0.0));
+        let natural_top = self.position((start - leading).max(0.0));
         // Grow thin marks upward only within scroll positions where the hunk
         // intersects the viewport. Never promise visibility by painting beyond
         // the range a tiny/minimum thumb can represent. Very large documents
@@ -192,6 +214,7 @@ pub(crate) fn paint(ui: &egui::Ui, viewport: Rect, geometry: Geometry, markers: 
         geometry.content_height,
         viewport.height(),
         minimum_thumb_height,
+        geometry.leading_occlusion,
     ) else {
         return;
     };
@@ -264,6 +287,7 @@ pub(crate) fn inspection(context: &egui::Context) -> Option<serde_json::Value> {
         let rect = |r: Rect| [r.left(), r.top(), r.right(), r.bottom()];
         serde_json::json!({"viewport":rect(viewport), "track":rect(track),
             "content_height":geometry.content_height, "offset":geometry.offset,
+            "leading_occlusion":geometry.leading_occlusion,
             "thumb":[thumb.min,thumb.max], "minimum_thumb_height":minimum_thumb_height,
             "rendered_changes":markers.into_iter().map(|marker| serde_json::json!({
                 "kind":format!("{:?}",marker.kind),
@@ -281,7 +305,14 @@ mod tests {
         Rect::from_min_max(pos2(20.0, 40.0), pos2(420.0, 640.0))
     }
     fn mapping(content_height: f32, minimum: f32) -> Mapping {
-        Mapping::new(track(viewport()).unwrap(), content_height, 600.0, minimum).unwrap()
+        Mapping::new(
+            track(viewport()).unwrap(),
+            content_height,
+            600.0,
+            minimum,
+            0.0,
+        )
+        .unwrap()
     }
     fn offset_at(mapping: Mapping, head: f32) -> f32 {
         (head - mapping.track.top()) / (mapping.track.height() - mapping.thumb_height)
@@ -291,8 +322,9 @@ mod tests {
         let mark = mapping.marker(content).expect("visible tick");
         for head in [mark.top(), mark.center().y, mark.bottom() - 0.001] {
             let offset = offset_at(mapping, head);
+            let leading = mapping.leading_occlusion.min(content.min + 1.0);
             assert!(
-                offset < content.max && offset + mapping.viewport_height > content.min,
+                offset + leading < content.max && offset + mapping.viewport_height > content.min,
                 "head={head} offset={offset} content={content:?} mark={mark:?}"
             );
         }
@@ -325,6 +357,28 @@ mod tests {
         for offset in [0.0, 530_000.0, mapping.max_offset] {
             assert!((offset_at(mapping, mapping.thumb(offset).min) - offset).abs() < 0.1);
         }
+    }
+
+    #[test]
+    fn thumb_contacts_keep_hunks_below_the_maximum_sticky_header_cover() {
+        let content = Rangef::new(5300.0, 5340.0);
+        let uncovered = mapping(9000.0, 12.0);
+        let leading = 600.0 * 0.45 + 1.0;
+        let previous = uncovered.marker(content).unwrap();
+        assert!(
+            offset_at(uncovered, previous.top()) + leading >= content.max,
+            "the old preferred anchor hides this whole hunk behind the sticky rows"
+        );
+        let mapping =
+            Mapping::new(track(viewport()).unwrap(), 9000.0, 600.0, 12.0, leading).unwrap();
+        assert_visible_at_every_contact(mapping, content);
+        assert_visible_at_every_contact(mapping, Rangef::new(8970.0, 9000.0));
+        // The prefix envelope retains early changes, including a first-row
+        // change: ancestors cannot cover more source than precedes that row.
+        assert_visible_at_every_contact(mapping, Rangef::new(20.0, 40.0));
+        assert_visible_at_every_contact(mapping, Rangef::new(0.0, 20.0));
+        assert!(Mapping::new(viewport(), 9000.0, 600.0, 12.0, f32::NAN).is_none());
+        assert!(Mapping::new(viewport(), 9000.0, 600.0, 12.0, 600.0).is_none());
     }
 
     #[test]
@@ -372,7 +426,7 @@ mod tests {
         }
         assert!(track(Rect::NOTHING).is_none());
         assert!(track(Rect::from_min_max(pos2(0.0, 0.0), pos2(0.0, 30.0))).is_none());
-        assert!(Mapping::new(viewport(), f32::NAN, 600.0, 12.0).is_none());
+        assert!(Mapping::new(viewport(), f32::NAN, 600.0, 12.0, 0.0).is_none());
         assert!(
             mapping(1000.0, 12.0)
                 .marker(Rangef::new(5.0, 3.0))
@@ -415,6 +469,7 @@ mod tests {
                     content_height: 2000.0,
                     offset: 0.0,
                     content_origin: 0.0,
+                    leading_occlusion: 0.0,
                 },
                 &marks,
             );

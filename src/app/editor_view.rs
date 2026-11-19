@@ -1544,6 +1544,14 @@ impl EditorApp {
                     content_height: scroll_output.content_size.y,
                     offset: scroll_output.state.offset.y,
                     content_origin: 0.0,
+                    leading_occlusion: if sticky_context_enabled {
+                        sticky_context_overlay_geometry(scroll_output.inner_rect, None)
+                            .map_or(0.0, |geometry| {
+                                geometry.max_height + STICKY_CONTEXT_BOTTOM_COVER
+                            })
+                    } else {
+                        0.0
+                    },
                 },
                 &git_overview_markers,
             );

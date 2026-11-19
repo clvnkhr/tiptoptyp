@@ -11,6 +11,7 @@ class GitOverviewContract(unittest.TestCase):
         return {"editor_panel_width": 400, "editor_panel_rect": [30, 20, 430, 670], "git_overview": {
             "viewport": [30, 50, 430, 650], "track": [425, 50, 429, 650],
             "content_height": 9000, "offset": 0, "minimum_thumb_height": 12,
+            "leading_occlusion": 0,
             "thumb": [50, 90],
             "rendered_changes": [{"kind": "Modified", "content": extent}
                                  for extent in ([5300, 5320], [7000, 7020], [8800, 8820])],
@@ -58,6 +59,16 @@ class GitOverviewContract(unittest.TestCase):
             mutate(document)
             with self.subTest(document=document), self.assertRaises(AssertionError):
                 assert_git_overview(document)
+
+    def test_contact_must_reveal_the_hunk_below_the_leading_sticky_cover(self):
+        document = self.document()
+        document["git_overview"]["leading_occlusion"] = 271
+        with self.assertRaisesRegex(AssertionError, "rendered hunk is offscreen"):
+            assert_git_overview(document)
+        for tick, y in zip(document["git_overview"]["ticks"], (384.5667, 497.9, 608)):
+            tick["rect"][1] = y
+            tick["rect"][3] = y + 2
+        assert_git_overview(document)
 
     def test_rejects_a_shifted_viewport_even_when_its_width_matches_the_pane(self):
         document = self.document()
