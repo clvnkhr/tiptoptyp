@@ -672,21 +672,23 @@ fn publication_and_group_toggles_retire_tooltips_anchored_to_previous_rows() {
         ),
     );
     harness.state_mut().mark_diagnostics_changed();
-    harness.run();
+    // Check ownership after bounded UI updates; background index replies can
+    // still request repaints and are unrelated to tooltip retirement.
+    harness.run_steps(4);
     assert_no_problem_hover(&harness);
     harness.get_by_label("Newly published diagnostic");
 
     let origin = harness.get_by_label("Redundant braces").rect();
     seed_problem_hover(&harness, origin, detail.clone());
     harness.get_by_label("Badness · Warning (1)").click();
-    harness.run();
+    harness.run_steps(4);
     assert_no_problem_hover(&harness);
     assert!(harness.query_by_label("Redundant braces").is_none());
 
     // A retained/late tooltip for that old row must also retire when reopening.
     seed_problem_hover(&harness, origin, detail);
     harness.get_by_label("Badness · Warning (1)").click();
-    harness.run();
+    harness.run_steps(4);
     assert_no_problem_hover(&harness);
     harness.get_by_label("Redundant braces");
     assert!(harness.state().pending_editor_selection.is_none());
