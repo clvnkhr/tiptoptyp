@@ -273,17 +273,7 @@ class PreviewJumpJourneys:
 
     def jump_open_fixture(self, path, source):
         path.write_text(source)
-        self.focus_document_window()
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, "cmd+shift")
-        time.sleep(0.3)
-        self.key(0)
-        self.native("text", str(path))
-        self.key(36, "none")
-        time.sleep(0.5)
-        self.native("ax-press-title", "Open")
-        document = self.wait("source-jump fixture opened", lambda d: d["path"] == str(path), timeout=15)["document"]
+        document = self.open_native_file(path)["document"]
         tab = document["active_tab_id"]
         self.key(35, "cmd+alt")
         self.wait("source-jump fixture owns preview", lambda d:

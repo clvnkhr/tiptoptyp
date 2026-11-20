@@ -365,7 +365,7 @@ class DiagnosticFixJourneys:
         fixture = diagnostic_fix_fixture()
         path = self.directory / 'diagnostic-fix.typ'
         path.write_text(fixture['source'], encoding='utf-8')
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         self.key(125, 'cmd')
         self.native('text', '// native undo sentinel')
         self.source_is(fixture['working'])

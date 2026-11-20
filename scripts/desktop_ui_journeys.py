@@ -1020,14 +1020,7 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
     def dialogs(self):
         opened = self.directory / "opened.tex"
         opened.write_text("\\documentclass{article}\n\\begin{document}\nOpened.\n\\end{document}\n")
-        self.key(31, "cmd")  # Cmd+O
-        import time
-        time.sleep(0.8)  # rfd creates the native panel asynchronously.
-        self.native("ax-press-description", "search")
-        self.native("text", opened.name)
-        time.sleep(0.8)
-        self.native("ax-press-title", "Open")
-        self.wait("native Open panel loads a TeX file", lambda d: d["path"] == str(opened), timeout=15)
+        self.open_native_file(opened)
 
         self.key(45)  # New empty document.
         self.wait("dialog journey gets an empty tab", lambda d: d["path"] is None and d["source_bytes"] == 0)
@@ -1040,7 +1033,7 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
         self.wait("plain launch starts with no document or demo tab", empty_workspace_ready)
         # This native path helper waits for Open and Go-to-Folder readiness;
         # the search field is optional in macOS's initial empty-workspace panel.
-        self.open_harper_fixture(source)
+        self.open_native_file(source)
         self.wait("the explicitly opened fixture owns its visible Tinymist preview", lambda d:
                   startup_fixture_ready(d, source), timeout=45)
 
@@ -1611,14 +1604,7 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
     def _git_hunks(self):
         source = self.directory / "hunks.typ"
         if self.snapshot()["document"]["path"] != str(source):
-            import time
-            self.key(31)
-            time.sleep(0.8)
-            self.native("ax-press-description", "search")
-            self.native("text", source.name)
-            time.sleep(0.8)
-            self.native("ax-press-title", "Open")
-            self.wait("hunk fixture opened", lambda d: d["path"] == str(source), timeout=15)
+            self.open_native_file(source)
         lines = source.read_text().splitlines(keepends=True)
         original = "".join(lines)
         self.choose_backend("Pdfium")
@@ -1978,17 +1964,8 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
                            + r'. \( \int_0^1 x^2\,dx = 1/3 \).\par' + '\n')
         source += r'\end{document}' + '\n'
         fixture.write_text(source)
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, "cmd+shift")
-        time.sleep(0.3)
-        self.key(0)
-        self.native("text", str(fixture))
-        self.key(36, "none")
-        time.sleep(0.5)
-        self.native("ax-press-title", "Open")
-        self.wait("isolated PDFium resize document opened", lambda d: d["path"] == str(fixture), timeout=15)
-        fixture_tab = self.snapshot()["document"]["active_tab_id"]
+        opened = self.open_native_file(fixture)
+        fixture_tab = opened["document"]["active_tab_id"]
         self.key(35, "cmd+alt")
         self.wait("resize fixture is designated for preview", lambda d:
                   d["preview_tab_id"] == fixture_tab and d["preview_path"] == str(fixture))
@@ -2162,16 +2139,7 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
         destination = fixture.with_suffix(".pdf")
         # The aggregate run can already have a journey.pdf from other tests.
         # A new document path isolates output ownership without deleting files.
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, "cmd+shift")
-        time.sleep(0.3)
-        self.key(0)
-        self.native("text", str(fixture))
-        self.key(36, "none")
-        time.sleep(0.5)
-        self.native("ax-press-title", "Open")
-        self.wait("isolated three-page Typst document opened", lambda d: d["path"] == str(fixture), timeout=15)
+        self.open_native_file(fixture)
         self.key(35, "cmd+alt")
         self.wait("PDF source is designated for preview", lambda d: d["preview_tab_id"] == d["active_tab_id"] and d["preview_path"] == str(fixture), timeout=30)
         self.key(20)  # Split view so readiness refers to a visible renderer.
@@ -3284,13 +3252,7 @@ class EditorJourneys(TexRefactorJourneys, AutofixJourneys, ExplorerJourneys, Ove
             # Aggregate runs start on another journey's document. Prepare and
             # open our own fixture rather than waiting for a file never loaded.
             fixture.write_text(original)
-            self.key(31)
-            time.sleep(0.8)
-            self.native("ax-press-description", "search")
-            self.native("text", fixture.name)
-            time.sleep(0.8)
-            self.native("ax-press-title", "Open")
-        self.wait("menu fixture opened", lambda d: d["path"] == str(fixture), timeout=15)
+            self.open_native_file(fixture)
         self.wait_target("editor.source")
         self.click("editor.source")
         self.wait_target("editor.caret")

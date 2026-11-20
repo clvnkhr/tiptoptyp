@@ -349,22 +349,12 @@ class TexJourneys(TexEditorFeaturesJourneys):
 
     def tex_document(self):
         from pathlib import Path
-        import time
         path = self.directory / "journey.tex"
         if self.snapshot()["document"]["path"] != str(path):
             path.write_text(TEX_SOURCE)
-            self.focus_document_window()
-            self.key(31)  # Open a named TeX document, not an untyped scratch tab.
-            time.sleep(0.8)
-            self.key(5, "cmd+shift")
-            time.sleep(0.3)
-            self.key(0)
-            self.native("text", str(path))
-            self.key(36, "none")
-            time.sleep(0.5)
-            self.native("ax-press-title", "Open")
-            self.wait("TeX document opened", lambda d: d["path"] == str(path), timeout=15)
-        self.click("editor.source")
+            self.open_native_file(path)
+        else:
+            self.click("editor.source")
         return Path(path)
 
     def tex_settings(self, replacements):
@@ -414,8 +404,8 @@ class TexJourneys(TexEditorFeaturesJourneys):
             time.sleep(.05)
         raise AssertionError("Native Go-to-Folder path entry did not become ready")
 
-    def open_harper_fixture(self, path):
-        """Select the complete real path only after each native dialog is ready."""
+    def open_native_file(self, path, *, focus_source=True):
+        """Open an exact path using native readiness instead of fixed sleeps."""
         self.focus_document_window()
         self.key(31)
         # No selected file is required yet; the Open button may be disabled.
@@ -427,9 +417,12 @@ class TexJourneys(TexEditorFeaturesJourneys):
         self.key(36, "none")
         self.wait_native_button("Open")
         self.native("ax-press-title", "Open")
-        self.wait("named Harper fixture opened", lambda d: d["path"] == str(path), timeout=15)
-        self.click("editor.source")
-        self.wait("Harper fixture owns keyboard", lambda d: d["editor_keyboard_focused"])
+        opened = self.wait("native file opened", lambda d: d["path"] == str(path), timeout=15)
+        if focus_source:
+            self.click("editor.source")
+            return self.wait("opened source owns keyboard", lambda d:
+                             d["path"] == str(path) and d["editor_keyboard_focused"])
+        return opened
 
     def harper_suppression(self, suffix, path, original):
         """Switch exclusions in real editable source without deleting provider results."""
@@ -486,7 +479,7 @@ class TexJourneys(TexEditorFeaturesJourneys):
                       ("harper-math-prose." + suffix)).read_text()
             path = self.directory / ("harper-math-prose." + suffix)
             path.write_text(source)
-            self.open_harper_fixture(path)
+            self.open_native_file(path)
             self.wait("correct " + suffix + " sentences survive display math and compounds",
                       lambda d: harper_fresh(d, source, path, []), timeout=30)
             self.stable_state(lambda d: harper_fresh(d, source, path, []))
@@ -614,7 +607,7 @@ class TexJourneys(TexEditorFeaturesJourneys):
                   "Misspelld follows.\n")
         path = self.directory / "harper-settings.typ"
         path.write_text(source)
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         locations = [[1, 12], [2, 12], [3, 26], [4, 9], [6, 1]]
         self.wait("Harper reports unknown words, sentence-initial typo and repetition",
                   lambda d: harper_fresh(d, source, path, locations), timeout=30)
@@ -1162,16 +1155,16 @@ class TexJourneys(TexEditorFeaturesJourneys):
 
     def save_to_fixture(self, destination):
         """Native Save panels choose their own directory; never assume the cwd."""
-        import time
         self.key(1)
-        time.sleep(0.8)
+        self.wait_native_button("Save", require_enabled=False)
         self.key(5, "cmd+shift")  # Native Go to Folder.
-        time.sleep(0.3)
+        self.wait_native_path_entry()
         self.key(0)
         self.native("text", str(destination.parent))
         self.key(36, "none")
-        time.sleep(0.5)
+        self.wait_native_button("Save", require_enabled=False)
         self.native("ax-set-text", destination.name)
+        self.wait_native_button("Save")
         self.native("ax-press-title", "Save")
 
     def tex_save(self):
@@ -1199,7 +1192,7 @@ class TexJourneys(TexEditorFeaturesJourneys):
             raise AssertionError("TeX manual Save lost the last edit")
         self.key(13)
         self.wait("saved TeX tab closes without a discard prompt", lambda d: d["path"] != str(destination) and not d["modal_open"])
-        self.open_harper_fixture(destination)
+        self.open_native_file(destination)
         self.source_is(edited)
         # TeX uses its single engine gear for both building and saving a PDF.
         # Pin this tab so an aggregate run cannot build a previous Typst entry.

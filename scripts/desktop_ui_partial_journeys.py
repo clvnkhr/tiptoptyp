@@ -426,7 +426,7 @@ class PartialPreviewJourneys:
         # Establish the intended input owner before posting the Open command.
         self.click("editor.source")
         self.wait("editor owns keyboard before native Open", lambda d: d["editor_keyboard_focused"])
-        self.open_harper_fixture(fixture)
+        self.open_native_file(fixture)
         created_tabs = [self.snapshot()["document"]["active_tab_id"]]
         self.key(35, "cmd+alt")  # Designate this tab as the preview entry.
         self.key(20)  # Split view.
@@ -544,7 +544,7 @@ class PartialPreviewJourneys:
             full_fixture.write_text(full_source.replace("width: 500pt, height: 680pt", "width: 210mm, height: 297mm"))
             self.click("editor.source")
             self.wait("editor owns keyboard before full fixture Open", lambda d: d["editor_keyboard_focused"])
-            self.open_harper_fixture(full_fixture)
+            self.open_native_file(full_fixture)
             created_tabs.append(self.snapshot()["document"]["active_tab_id"])
             self.key(35, "cmd+alt")
         # Both Tinymist modes remain independently selectable and effective.

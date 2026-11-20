@@ -263,15 +263,7 @@ class PaletteJourneys:
                           and d["path"] is None and d["source_bytes"] == 0, frames=16)
         self.key(13)
         self.wait("clean palette document closes", lambda d: d["tabs"] == 0)
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, "cmd+shift")
-        time.sleep(0.3)
-        self.key(0)
-        self.native("text", str(path))
-        self.key(36, "none")
-        time.sleep(0.5)
-        self.native("ax-press-title", "Open")
+        self.open_native_file(path)
         self.wait("original palette fixture reopens unchanged", lambda d:
                   d["path"] == str(path) and self.palette_source_unchanged(d, before), timeout=15)
         if path.read_bytes() != disk:

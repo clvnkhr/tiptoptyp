@@ -598,7 +598,7 @@ class OverleafJourneys:
                   and not d['modal_open'])
         path = Path(before['path'])
         if self.snapshot()['document']['path'] != str(path):
-            self.open_harper_fixture(path)
+            self.open_native_file(path)
         self.click('editor.source')
         self.key(35, 'cmd+alt')
         self.key(20)
@@ -951,7 +951,7 @@ class OverleafJourneys:
         self.focus_document_window()
         fixture_path = self.directory / 'journey.typ'
         if self.snapshot()['document']['path'] != str(fixture_path):
-            self.open_harper_fixture(fixture_path)
+            self.open_native_file(fixture_path)
         self.click('editor.source')
         self.key(35, 'cmd+alt')  # Pin the real initial Typst document before opening remote text.
         self.key(20)

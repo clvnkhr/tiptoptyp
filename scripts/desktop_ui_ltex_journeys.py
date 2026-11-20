@@ -214,7 +214,7 @@ class LtexJourneys:
         ):
             path = self.directory / ('ltex-grammar.' + suffix)
             path.write_text(source, encoding='utf-8')
-            self.open_harper_fixture(path)
+            self.open_native_file(path)
             before = self.wait('Real LTeX+ returns mapped ' + suffix + ' grammar and corrections',
                                lambda d: ltex_results(d, path, source, mode), timeout=90)['document']['ltex']
             self.key(0)
@@ -233,7 +233,7 @@ class LtexJourneys:
                   'tests/fixtures/ltex/typst-mathematical-prose.typ').read_text(encoding='utf-8')
         path = self.directory / 'ltex-mathematical-prose.typ'
         path.write_text(source, encoding='utf-8')
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         checked = self.wait('Mathematical Typst reports genuine grammar mistakes without syntax or spelling noise',
                             lambda d: ltex_mathematical_results(d, path, source, mode),
                             timeout=90)['document']['ltex']

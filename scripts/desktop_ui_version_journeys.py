@@ -159,7 +159,7 @@ class VersionJourneys:
         second = "= Version fixture\nSecond saved paragraph.\n#pagebreak()\nSecond saved appendix.\n#pagebreak()\nThird saved page.\n"
         path.write_text(initial)
         # The existing helper drives macOS's Open panel by full path.
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         loaded = self.snapshot()["document"]
         tabs, tab = loaded["tabs"], loaded["active_tab_id"]
         if tabs != before["tabs"] + 1:

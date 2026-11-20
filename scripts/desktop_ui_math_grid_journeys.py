@@ -39,7 +39,11 @@ def math_grid_fixtures():
                 raise AssertionError("math-grid fixture edit must change its formula: " + kind)
             cases.append({"kind": kind, "cells": cells, "edited_cell": edited_cell,
                           "line": source[:source.index(patch)].count("\n"),
-                          "applied": source.replace(patch, changed, 1)})
+                          "applied": source.replace(patch, changed, 1),
+                          # Cancel is the shared draft lifetime; retain one
+                          # native witness per language. Every kind keeps its
+                          # distinct controls/formulas through Apply and Undo.
+                          "dispositions": ("apply",) if cases else ("cancel", "apply")})
         fixtures.append({"filename": filename, "source": source, "cases": cases})
     return fixtures
 
@@ -80,10 +84,10 @@ class MathGridJourneys:
             path = self.directory / fixture["filename"]
             path.write_bytes(original.encode("utf-8"))
             count = self.snapshot()["document"]["tabs"]
-            self.open_table_fixture(path)
+            self.open_native_file(path)
             self.source_is(original)
             for case in fixture["cases"]:
-                for disposition in ("cancel", "apply"):
+                for disposition in case["dispositions"]:
                     old = self.open_table_workbench(line=case["line"])
                     assert_math_grid(self.snapshot(), case)
                     target = "table.cell.0.0"

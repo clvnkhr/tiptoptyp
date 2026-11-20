@@ -120,7 +120,7 @@ class IndentationJourneys:
         path = self.directory / ('indent-' + phase + '-' + case['name'] + '.' + suffix)
         disk = case['source'].encode('utf-8')
         path.write_bytes(disk)
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         self.source_is(case['source'])
         self.key(125)  # Cmd+Down: place a real caret at the end of the file.
         for _ in range(len(case['source']) - case['cursor']):
@@ -156,7 +156,7 @@ class IndentationJourneys:
         count = self.snapshot()['document']['tabs']
         path = self.directory / ('indent-paste.' + suffix)
         path.write_bytes(b'')
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         pasted = '\t  pasted {\n \t    literal $value$\n  }\n'
         self.paste_source(pasted)
         document = self.wait('Multiline paste stays verbatim with automatic pairing enabled', lambda d:

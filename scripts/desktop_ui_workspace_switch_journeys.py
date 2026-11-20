@@ -84,12 +84,12 @@ class WorkspaceSwitchJourneys:
         self.tex_settings([
             ('"auto_save": true', '"auto_save": false'),
             (recent_prefix, recent_prefix + json.dumps(str(destination)) + ',')])
-        self.open_harper_fixture(first)
+        self.open_native_file(first)
         self.key(125, 'cmd')
         self.native('text', 'Unsaved parked draft.')
         self.source_is(first_dirty)
         self.wait('First workspace tab is dirty', lambda d: d['dirty'])
-        self.open_harper_fixture(second)
+        self.open_native_file(second)
         self.source_is(second_saved)
         before = self.snapshot()['document']
         retired = workspace_tab_ids(before)
@@ -129,7 +129,7 @@ class WorkspaceSwitchJourneys:
                     cancel_restores_owner=True, all_old_tabs_closed=True,
                     empty_destination=True, discarded_disk_unchanged=True)
 
-        self.open_harper_fixture(destination_file)
+        self.open_native_file(destination_file)
         self.key(125, 'cmd')
         self.native('text', 'Saved during the workspace change.')
         self.source_is(destination_dirty)

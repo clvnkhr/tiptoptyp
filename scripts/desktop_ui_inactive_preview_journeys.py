@@ -159,7 +159,7 @@ class InactivePreviewJourneys:
         self.viewport = None
         secondary = self.directory / 'inactive-secondary.typ'
         secondary.write_text(PREVIEW_SOURCE, encoding='utf-8')
-        self.open_harper_fixture(secondary)
+        self.open_native_file(secondary)
         opened = self.wait('Secondary owns the independent Typst fixture', lambda document:
                            document['path'] == str(secondary) and document['viewport'] != initial['viewport'])
         secondary_title = secondary.name + ' — tiptoptyp'

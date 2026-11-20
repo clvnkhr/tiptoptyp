@@ -595,18 +595,6 @@ class NewestJourneys(ProblemsJourneys):
             time.sleep(0.05)
         raise AssertionError("table cell did not become stably visible after horizontal input: " + name)
 
-    def open_table_fixture(self, path):
-        # Go to the full file path so Open selects the TeX file, not its folder.
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, "cmd+shift")
-        time.sleep(0.3)
-        self.key(0)
-        self.native("text", str(path))
-        self.key(36, "none")
-        time.sleep(0.5)
-        self.native("ax-press-title", "Open")
-        self.wait("private TeX table opens", lambda d: d["path"] == str(path), timeout=15)
 
     def reject_table_workbench(self, name, source, line=0):
         from desktop_ui_journeys import fingerprint
@@ -664,7 +652,7 @@ class NewestJourneys(ProblemsJourneys):
             original = case["source"]
             path.write_bytes(original.encode("utf-8"))
             count = self.snapshot()["document"]["tabs"]
-            self.open_table_fixture(path)
+            self.open_native_file(path)
             self.source_is(original)
             for disposition in ("cancel", "apply"):
                 old = self.open_table_workbench(line=case["line"])
@@ -824,7 +812,7 @@ class NewestJourneys(ProblemsJourneys):
         path = self.directory / "table-workbench.tex"
         path.write_text(tex)
         count = self.snapshot()["document"]["tabs"]
-        self.open_table_fixture(path)
+        self.open_native_file(path)
         self.source_is(tex)
         old = self.open_table_workbench(line=2)
         self.table_target("table.cell.0.0", previous_frame=old.get("table.cell.0.0"))
@@ -867,7 +855,7 @@ class NewestJourneys(ProblemsJourneys):
         path = self.directory / "table-dynamic-columns.tex"
         path.write_text(tex)
         count = self.snapshot()["document"]["tabs"]
-        self.open_table_fixture(path)
+        self.open_native_file(path)
         self.reject_table_workbench("tex-dynamic-columns", tex, line=3)
         unchanged(tex)
         self.close_scratch(count)
@@ -878,7 +866,7 @@ class NewestJourneys(ProblemsJourneys):
         path = self.directory / "table-auto-imports.tex"
         path.write_text(tex)
         count = self.snapshot()["document"]["tabs"]
-        self.open_table_fixture(path)
+        self.open_native_file(path)
         self.open_table_workbench(line=2)
         self.table_target("table.cell.0.0")
         self.click("table.cell.0.0")
@@ -911,7 +899,7 @@ class NewestJourneys(ProblemsJourneys):
         path = self.directory / "table-sampled.tex"
         path.write_text(tex)
         count = self.snapshot()["document"]["tabs"]
-        self.open_table_fixture(path)
+        self.open_native_file(path)
         self.source_is(tex)
         self.open_table_workbench(line=3)
         self.wait("TeX macro resolves to a locked compiler sample", lambda d:
@@ -943,7 +931,7 @@ class NewestJourneys(ProblemsJourneys):
             path = self.directory / ("table-package-" + name + ".tex")
             path.write_text(tex)
             count = self.snapshot()["document"]["tabs"]
-            self.open_table_fixture(path)
+            self.open_native_file(path)
             self.source_is(tex)
             self.open_table_workbench(line=4)
             self.wait(name + " macro resolves to a locked sample", lambda d:
@@ -1025,7 +1013,7 @@ class NewestJourneys(ProblemsJourneys):
             path = self.directory / "table-compact-grid.tex"
             path.write_text(source)
             count = self.snapshot()["document"]["tabs"]
-            self.open_table_fixture(path)
+            self.open_native_file(path)
             line = 2
         applied = source.replace(long_text, edited_long).replace("Neighbour", "Edited neighbour")
         for action in ("cancel", "apply"):

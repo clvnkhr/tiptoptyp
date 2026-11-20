@@ -13,6 +13,10 @@ CUSTOM_COMMENT_MARKERS = {
     'formatting': ('layout : pause', 'layout:  resume'),
     'diagnostics': ('checks :pause', 'checks :  resume'),
 }
+# The parser and diagnostic projection tests own the full language/channel
+# matrix. Native input retains both language backends, all custom Settings
+# fields, and a positive/negative witness for each independent channel.
+CUSTOM_COMMENT_CHANNELS = {'typ': ('formatting', 'diagnostics'), 'tex': ('both',)}
 COMMENT_MARKER_TARGETS = tuple(
     'settings.comments.' + group + '.' + switch
     for group in DEFAULT_COMMENT_MARKERS for switch in ('off', 'on')
@@ -343,13 +347,13 @@ class CommentControlsJourneys:
         self.comment_marker_settings(DEFAULT_COMMENT_MARKERS, reset=True)
         self.comment_marker_invalid_draft()
         self.comment_controls_disk_sources = {}
-        # Common defaults first, then three fully independent custom channels.
+        # Defaults exercise both native language backends before Settings edits.
         for suffix in ('typ', 'tex'):
             path = self.directory / ('comment-controls.' + suffix)
             original, _ = comment_format_fixture(suffix, DEFAULT_COMMENT_MARKERS['both'])
             path.write_text(original, encoding='utf-8')
             self.comment_controls_disk_sources[path] = original
-            self.open_harper_fixture(path)
+            self.open_native_file(path)
             if suffix == 'typ':
                 self.wait('Typst language server is ready for comment formatting',
                           lambda d: d['editor_lsp_ready'], timeout=30)
@@ -367,11 +371,11 @@ class CommentControlsJourneys:
                     entered_whitespace_preserved=True)
         for suffix in ('typ', 'tex'):
             path = self.directory / ('comment-controls.' + suffix)
-            self.open_harper_fixture(path)
+            self.open_native_file(path)
             if suffix == 'typ':
                 self.wait('Typst language server returns for custom comment controls',
                           lambda d: d['editor_lsp_ready'], timeout=30)
-            for channel in ('both', 'formatting', 'diagnostics'):
+            for channel in CUSTOM_COMMENT_CHANNELS[suffix]:
                 pair = CUSTOM_COMMENT_MARKERS[channel]
                 self.comment_format_case(path, suffix, pair, protected=channel != 'diagnostics',
                                          channel='custom-' + channel)

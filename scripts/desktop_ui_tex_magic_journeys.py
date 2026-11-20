@@ -139,7 +139,7 @@ class TexMagicJourneys:
         self.tex_magic_library()
         settings = tex_magic_settings(self.snapshot()['document'])
         first = len(tex_magic_invocations(self.directory))
-        self.open_harper_fixture(paths['child'])
+        self.open_native_file(paths['child'])
         self.key(0)
         self.paste_source('texroot')
         self.accept_snippet('texroot')
@@ -158,7 +158,7 @@ class TexMagicJourneys:
                                active=paths['child'], preview=paths['child'], settings=settings)
 
         changed = len(tex_magic_invocations(self.directory))
-        self.open_harper_fixture(paths['main'])
+        self.open_native_file(paths['main'])
         self.key(0)
         self.paste_source(MAGIC_MAIN_EDITED)
         self.wait('A root compiler edit stays unsaved while the child keeps its preview pin', lambda d:
@@ -170,7 +170,7 @@ class TexMagicJourneys:
             raise AssertionError('Building an unsaved magic root changed its original disk source')
 
         redirected = len(tex_magic_invocations(self.directory))
-        self.open_harper_fixture(paths['child'])
+        self.open_native_file(paths['child'])
         self.key(0)
         self.paste_source(MAGIC_CHILD_ALTERNATE)
         self.tex_magic_compile(after=redirected, engine='xelatex', entry=paths['alternate'],
@@ -183,7 +183,7 @@ class TexMagicJourneys:
                     pinned_preview_entry=True, global_settings_unchanged=True,
                     real_tex_engine=False)
 
-        self.open_harper_fixture(paths['snippets'])
+        self.open_native_file(paths['snippets'])
         for prefix in ('% texroot', '% !TeX ro'):
             self.key(0)
             self.paste_source(prefix)
@@ -196,7 +196,7 @@ class TexMagicJourneys:
         self.tex_magic_compile(after=redirected, engine='xelatex', entry=paths['alternate'],
                                source=MAGIC_ALTERNATE, active=paths['snippets'],
                                preview=paths['child'], settings=settings)
-        self.open_harper_fixture(paths['typst'])
+        self.open_native_file(paths['typst'])
         self.key(125, 'cmd')
         self.key(49, 'ctrl')
         excluded = lambda d: tex_magic_typst_excluded(d, paths['typst'])

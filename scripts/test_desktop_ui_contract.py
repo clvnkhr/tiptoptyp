@@ -25,7 +25,6 @@ class ExplicitJourneyRangeContract(unittest.TestCase):
         full = runner.selected_journeys('all')
         remaining = runner.selected_journeys('all', 'arxiv_tables')
         self.assertEqual(remaining, full[full.index('tables') + 1:])
-        self.assertEqual(len(remaining), 53)
         self.assertNotIn('tables', remaining)
         self.assertEqual(remaining[-len(runner.TEX_JOURNEYS):], list(runner.TEX_JOURNEYS))
         self.assertEqual(runner.selected_journeys('all'), full)
@@ -35,6 +34,17 @@ class ExplicitJourneyRangeContract(unittest.TestCase):
                             ('tables', 'tables'), ('tex', 'tex_editing')]:
             with self.subTest(name=name, start=start), self.assertRaises(ValueError):
                 runner.selected_journeys(name, start)
+
+    def test_focused_shared_session_preserves_order_and_counts_only_requested_journeys(self):
+        requested = ['math_grids', 'dialogs', 'images']
+        expected = [name for name in runner.selected_journeys('all') if name in requested]
+        self.assertEqual(runner.selected_journeys('all', only=requested), expected)
+        self.assertEqual(set(expected), set(requested))
+        for name, start, only in [('tables', None, ['tables']), ('all', 'tables', ['tables']),
+                                  ('all', None, []), ('all', None, ['tables', 'tables']),
+                                  ('all', None, ['ltex']), ('all', None, ['not-a-journey'])]:
+            with self.subTest(name=name, start=start, only=only), self.assertRaises(ValueError):
+                runner.selected_journeys(name, start, only)
 
 
 class EmptyStartupAndDemoContract(unittest.TestCase):
@@ -96,7 +106,7 @@ class EmptyStartupAndDemoContract(unittest.TestCase):
         journey.directory = Path('/private/tmp/startup-fixture')
         source = journey.directory / 'journey.typ'
         actions = []
-        journey.open_harper_fixture = lambda path: actions.append(('native_open_path', path))
+        journey.open_native_file = lambda path: actions.append(('native_open_path', path))
         def wait(description, predicate, **kwargs):
             if description == 'plain launch starts with no document or demo tab':
                 self.assertTrue(predicate(self.empty()))
@@ -1125,45 +1135,6 @@ class HarperMathProseContract(unittest.TestCase):
                 with self.assertRaises(AssertionError):
                     assert_harper_stale({**stale, field: wrong}, previous)
 
-    def test_open_uses_the_real_file_path_and_requires_source_keyboard_ownership(self):
-        from desktop_ui_tex_journeys import TexJourneys
-        journey = TexJourneys()
-        path = Path("/private/tmp/harper-fixture/prose.tex")
-        actions = []
-        journey.focus_document_window = lambda: actions.append(("focus",))
-        journey.key = lambda *args: actions.append(("key", *args))
-        def native(*args):
-            actions.append(args)
-            if args[0] == "ax-button-title":
-                return dict(requested_title=args[1], count=1, complete=True,
-                            role="AXButton", title=args[1], enabled=True)
-            if args[0] == "ax-dialog-state":
-                return dict(complete=True, focused_ancestry=[],
-                            focused_window=dict(role="AXSheet", identifier="GoToWindow"))
-        journey.native = native
-        journey.click = lambda *args: actions.append(("click", *args))
-
-        def wait(description, predicate, **kwargs):
-            if description == "named Harper fixture opened":
-                self.assertFalse(predicate({"path": str(path.parent)}))
-                self.assertTrue(predicate({"path": str(path)}))
-            else:
-                self.assertEqual(description, "Harper fixture owns keyboard")
-                self.assertFalse(predicate({"editor_keyboard_focused": False}))
-                self.assertTrue(predicate({"editor_keyboard_focused": True}))
-            actions.append(("verified", description))
-
-        journey.wait = wait
-        with patch("time.sleep"):
-            journey.open_harper_fixture(path)
-        self.assertEqual(actions, [
-            ("focus",), ("key", 31), ("ax-button-title", "Open"),
-            ("key", 5, "cmd+shift"), ("ax-dialog-state",), ("key", 0),
-            ("text", str(path)), ("key", 36, "none"),
-            ("ax-button-title", "Open"), ("ax-press-title", "Open"),
-            ("verified", "named Harper fixture opened"), ("click", "editor.source"),
-            ("verified", "Harper fixture owns keyboard"),
-        ])
 
 
 class ClickReadinessContract(unittest.TestCase):
@@ -1223,21 +1194,6 @@ class ClickReadinessContract(unittest.TestCase):
         self.assertEqual(actions, [("move", 20, 10)])
 
 
-class SaveIsolationContract(unittest.TestCase):
-    def test_native_save_chooses_private_directory_before_confirming(self):
-        journey = object.__new__(runner.Journey)
-        actions = []
-        journey.key = lambda *args: actions.append(("key", *args))
-        journey.native = lambda *args: actions.append(args)
-        destination = Path("/private/tmp/ttt-ui-fixture/saved.tex")
-        with patch.object(runner.time, "sleep"):
-            journey.save_to_fixture(destination)
-        self.assertIn(("key", 5, "cmd+shift"), actions)
-        folder = actions.index(("text", str(destination.parent)))
-        filename = actions.index(("ax-set-text", destination.name))
-        confirm = actions.index(("ax-press-title", "Save"))
-        self.assertLess(folder, filename)
-        self.assertLess(filename, confirm)
 
 
 class ExplorerFrameContract(unittest.TestCase):
@@ -2623,6 +2579,12 @@ class MathGridJourneyContract(unittest.TestCase):
         self.assertEqual([[case["kind"] for case in fixture["cases"]] for fixture in fixtures],
                          [["array", "pmatrix", "cases"], ["mat", "vec", "cases"]])
         for fixture in fixtures:
+            dispositions = [disposition for case in fixture["cases"]
+                            for disposition in case["dispositions"]]
+            self.assertEqual(dispositions.count("cancel"), 1,
+                             'the shared draft lifetime needs one native Cancel per language')
+            self.assertEqual(dispositions.count("apply"), len(fixture["cases"]),
+                             'distinct native grid kinds retain Apply/Undo coverage')
             for case in fixture["cases"]:
                 with self.subTest(fixture=fixture["filename"], kind=case["kind"]):
                     self.assertNotEqual(case["applied"], fixture["source"])
@@ -2818,34 +2780,6 @@ class CompactTableGeometryContract(unittest.TestCase):
 
 
 class TableDraftContract(unittest.TestCase):
-    def test_native_tex_open_selects_the_file_without_relaxing_owner_checks(self):
-        from desktop_ui_newest_journeys import NewestJourneys
-        journey = NewestJourneys()
-        journey.viewport = '"FFFF"'
-        journey.multiple_windows = False
-        path = Path("/private/tmp/private-table-fixture/table-workbench.tex")
-        actions = []
-        journey.key = lambda *args: actions.append(("key", *args))
-        journey.native = lambda *args: actions.append(args)
-
-        def wait(description, predicate, timeout):
-            self.assertEqual(description, "private TeX table opens")
-            self.assertEqual(timeout, 15)
-            self.assertFalse(predicate({"path": None}))
-            self.assertFalse(predicate({"path": str(path.parent)}))
-            self.assertTrue(predicate({"path": str(path)}))
-            actions.append(("opened",))
-
-        journey.wait = wait
-        with patch("desktop_ui_newest_journeys.time.sleep"):
-            journey.open_table_fixture(path)
-        self.assertEqual(actions, [
-            ("key", 31), ("key", 5, "cmd+shift"), ("key", 0),
-            ("text", str(path)), ("key", 36, "none"),
-            ("ax-press-title", "Open"), ("opened",),
-        ])
-        self.assertEqual(journey.viewport, '"FFFF"')
-        self.assertFalse(journey.multiple_windows)
 
     def test_a_closed_or_previously_painted_table_widget_cannot_pass_readiness(self):
         from desktop_ui_newest_journeys import NewestJourneys

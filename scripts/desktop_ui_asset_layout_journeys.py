@@ -1,6 +1,5 @@
 """Opened PDF tabs obey the same layout choices as source tabs."""
 import hashlib
-import time
 
 ASSET_LAYOUT_JOURNEYS = ('pdf_layout',)
 
@@ -50,15 +49,7 @@ class AssetLayoutJourneys:
         path = self.directory / 'opened-layout.pdf'
         encoded = pdf_fixture()
         path.write_bytes(encoded)
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, 'cmd+shift')
-        time.sleep(0.3)
-        self.key(0)
-        self.native('text', str(path))
-        self.key(36, 'none')
-        time.sleep(0.5)
-        self.native('ax-press-title', 'Open')
+        self.open_native_file(path, focus_source=False)
         self.wait('The real PDF opens beside its designated source preview', lambda d:
                   pdf_layout_settled(d, path, 'Split', preview_id), timeout=30)
         for cycle in range(2):

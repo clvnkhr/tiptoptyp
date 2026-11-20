@@ -180,7 +180,7 @@ class TexEditorFeaturesJourneys:
             self.wait('Compilation pauses during the source-only overtype regression', lambda d: d['compilation_paused'])
         self.key(19)
         self.wait('Backslash closer fixture gets the code viewport', lambda d: d['view_mode'] == 'Code')
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         self.source_is(prefix)
         try:
             self.tex_editor_backslash_closer_cases(prefix)
@@ -434,7 +434,7 @@ class TexEditorFeaturesJourneys:
                                      ('typ', 'Typst', TYPST_ENCLOSING_SOURCE)]:
             path = self.directory / ('enclosing-pairs.' + suffix)
             path.write_text(source, encoding='utf-8')
-            self.open_harper_fixture(path)
+            self.open_native_file(path)
             self.source_is(source)
             if kind == 'Tex':
                 self.wait('Environment match capture uses the actual TeX renderer', tex_editor_render_ready)
@@ -553,7 +553,7 @@ class TexEditorFeaturesJourneys:
         path = self.directory / 'tex-editor-features.tex'
         path.write_text(TEX_EDITOR_SOURCE, encoding='utf-8')
         count = before['tabs']
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         self.source_is(TEX_EDITOR_SOURCE)
         self.wait('Native TeX uses the actual TeX highlighter', tex_editor_render_ready)
         if self.snapshot()['document']['preview_tab_id'] != before['preview_tab_id']:

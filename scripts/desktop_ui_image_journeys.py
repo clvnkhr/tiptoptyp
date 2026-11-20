@@ -2,7 +2,6 @@
 
 import hashlib
 import struct
-import time
 import zlib
 
 IMAGE_JOURNEYS = ("images",)
@@ -84,16 +83,7 @@ class ImageJourneys:
         encoded = image_fixture()
         path.write_bytes(encoded)
         checksum = hashlib.sha256(encoded).hexdigest()
-        self.key(31)
-        time.sleep(0.8)
-        self.key(5, "cmd+shift")
-        time.sleep(0.3)
-        self.key(0)
-        self.native("text", str(path))
-        self.key(36, "none")
-        time.sleep(0.5)
-        self.native("ax-press-title", "Open")
-        self.wait("private image file opens", lambda d: d["path"] == str(path), timeout=15)
+        self.open_native_file(path, focus_source=False)
 
         def settled(dark):
             expected = dark_pixels(ORIGINAL_PIXELS) if dark else ORIGINAL_PIXELS

@@ -194,7 +194,7 @@ class EffectsPacingJourneys:
         for suffix in ('txt', 'typ'):
             path = self.directory / ('effects-pacing.' + suffix)
             if self.snapshot()['document']['path'] != str(path):
-                self.open_harper_fixture(path)
+                self.open_native_file(path)
             expected = path.read_text()
             if suffix == 'typ':
                 self.key(35, 'cmd+alt')

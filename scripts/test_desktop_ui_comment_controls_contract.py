@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from desktop_ui_journeys import fingerprint
 from desktop_ui_comment_controls_journeys import (
     COMMENT_CONTROLS_JOURNEYS, COMMENT_MARKER_TARGETS, COMMENT_SETTINGS_QUERIES,
-    CUSTOM_COMMENT_MARKERS, DEFAULT_COMMENT_MARKERS, CommentControlsJourneys, comment_diagnostic_fixture,
+    CUSTOM_COMMENT_CHANNELS, CUSTOM_COMMENT_MARKERS, DEFAULT_COMMENT_MARKERS,
+    CommentControlsJourneys, comment_diagnostic_fixture,
     comment_format_fixture, comment_formatted, comment_marker_body, comment_marker_lines,
     comment_markers_applied, comment_diagnostic_result, comment_settings_fields_ready,
     assert_comment_settings_preserved,
@@ -24,6 +25,26 @@ def marker_observation(markers):
 
 
 class CommentControlsContracts(unittest.TestCase):
+    def test_native_matrix_retains_languages_all_custom_channels_and_cross_feature_passthrough(self):
+        self.assertEqual(set(CUSTOM_COMMENT_CHANNELS), {'typ', 'tex'})
+        custom_cases = [(suffix, channel) for suffix, channels in CUSTOM_COMMENT_CHANNELS.items()
+                        for channel in channels]
+        self.assertEqual(len(custom_cases), 3)
+        self.assertEqual({channel for _, channel in custom_cases}, set(CUSTOM_COMMENT_MARKERS))
+        format_cases = [(suffix, 'default-both', True) for suffix in CUSTOM_COMMENT_CHANNELS]
+        diagnostic_cases = list(format_cases)
+        for suffix, channel in custom_cases:
+            format_cases.append((suffix, 'custom-' + channel, channel != 'diagnostics'))
+            diagnostic_cases.append((suffix, 'custom-' + channel, channel != 'formatting'))
+        self.assertEqual(len(format_cases), 5)
+        self.assertEqual(len(diagnostic_cases), 5)
+        self.assertEqual({suffix for suffix, _, _ in format_cases}, {'typ', 'tex'})
+        self.assertEqual({suffix for suffix, _, _ in diagnostic_cases}, {'typ', 'tex'})
+        self.assertEqual([channel for _, channel, protected in format_cases if not protected],
+                         ['custom-diagnostics'])
+        self.assertEqual([channel for _, channel, protected in diagnostic_cases if not protected],
+                         ['custom-formatting'])
+
     def fresh_marker_fields(self):
         return {'targets': {name: dict(enabled=True, age_ms=0, width=400, height=20)
                             for name in COMMENT_MARKER_TARGETS}}

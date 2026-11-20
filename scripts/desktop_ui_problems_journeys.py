@@ -178,7 +178,7 @@ class ProblemsJourneys:
         source = HARPER_TYPOS * repetitions + "#problems_fixture_unknown_command\n"
         path = self.directory / "problems-filters.typ"
         path.write_text(source, encoding="utf-8")
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         self.key(35, "cmd+alt")
         self.wait("Problems fixture owns preview", lambda d: d["preview_tab_id"] == d["active_tab_id"])
         if self.snapshot()["document"]["panel"] is None:

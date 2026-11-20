@@ -184,7 +184,7 @@ class TexRefactorJourneys:
         if path.exists():
             raise AssertionError('TeX refactor fixture must use its own new file')
         path.write_text(REFACTOR_SOURCE, encoding='utf-8')
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         self.source_is(REFACTOR_SOURCE)
         self.key(125, 'cmd')
         self.wait('Sentinel insertion owns the collapsed document-end caret', lambda d:

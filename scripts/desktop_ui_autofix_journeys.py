@@ -46,7 +46,7 @@ class AutofixJourneys:
         if path.exists():
             raise AssertionError('Autofix fixture must have its own new path')
         path.write_text(source, encoding='utf-8')
-        self.open_harper_fixture(path)
+        self.open_native_file(path)
         self.source_is(source)
         return path, before
 
