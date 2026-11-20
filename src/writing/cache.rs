@@ -26,12 +26,92 @@ struct Block {
     bytes: usize,
     used: u64,
 }
+
 #[derive(Default)]
-pub(crate) struct Checker {
-    context: Option<(DocumentKind, Dialect)>,
+struct ParagraphCache {
     blocks: HashMap<u64, Block>,
     bytes: usize,
     clock: u64,
+}
+
+impl ParagraphCache {
+    fn clear(&mut self) {
+        self.blocks.clear();
+        self.bytes = 0;
+        self.clock = 0;
+    }
+
+    fn get(&mut self, key: u64, text: &[char], tokens: &[Token]) -> Option<&[NamedLint]> {
+        let block = self
+            .blocks
+            .get_mut(&key)
+            .filter(|block| block.text.as_ref() == text && block.tokens == tokens)?;
+        self.clock = self.clock.saturating_add(1);
+        block.used = self.clock;
+        Some(&block.lints)
+    }
+
+    fn insert(&mut self, key: u64, text: &[char], tokens: Vec<Token>, lints: &[NamedLint]) -> bool {
+        let bytes = std::mem::size_of_val(text)
+            + std::mem::size_of_val(tokens.as_slice())
+            + lints
+                .iter()
+                .map(|lint| {
+                    std::mem::size_of::<NamedLint>()
+                        + lint.rule.len()
+                        + lint.message.len()
+                        + lint
+                            .suggestions
+                            .iter()
+                            .map(|suggestion| {
+                                std::mem::size_of_val(suggestion)
+                                    + match suggestion {
+                                        harper_core::linting::Suggestion::ReplaceWith(chars)
+                                        | harper_core::linting::Suggestion::InsertAfter(chars) => {
+                                            std::mem::size_of_val(chars.as_slice())
+                                        }
+                                        harper_core::linting::Suggestion::Remove => 0,
+                                    }
+                            })
+                            .sum::<usize>()
+                })
+                .sum::<usize>();
+        // Reject before removing a colliding entry or cloning its replacement.
+        if bytes > MAX_CACHE_BYTES {
+            return false;
+        }
+        if let Some(old) = self.blocks.remove(&key) {
+            self.bytes -= old.bytes;
+        }
+        while self.blocks.len() >= MAX_BLOCKS || self.bytes + bytes > MAX_CACHE_BYTES {
+            let oldest = self
+                .blocks
+                .iter()
+                .min_by_key(|(_, block)| block.used)
+                .map(|(&key, _)| key)
+                .expect("cache bounds can only require eviction from a nonempty cache");
+            self.bytes -= self.blocks.remove(&oldest).unwrap().bytes;
+        }
+        self.clock = self.clock.saturating_add(1);
+        self.bytes += bytes;
+        self.blocks.insert(
+            key,
+            Block {
+                text: text.into(),
+                tokens,
+                lints: lints.to_vec(),
+                bytes,
+                used: self.clock,
+            },
+        );
+        true
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Checker {
+    context: Option<(DocumentKind, Dialect)>,
+    cache: ParagraphCache,
     dictionary_source: String,
     personal_words: Vec<String>,
     dictionary: Option<Arc<MergedDictionary>>,
@@ -87,8 +167,7 @@ impl Checker {
         if self.dictionary.is_some() && words == self.personal_words {
             return;
         }
-        self.blocks.clear();
-        self.bytes = 0;
+        self.cache.clear();
         self.max_personal_compound_scalars = words
             .iter()
             .filter(|word| word.contains(['-', '\u{2010}', '\u{2011}']))
@@ -155,15 +234,13 @@ impl Checker {
             .flatten();
         let context = dialect.map(|dialect| (kind, dialect));
         if self.context != context {
-            self.blocks.clear();
-            self.bytes = 0;
+            self.cache.clear();
             self.context = context;
         }
         if let Some(dialect) = dialect {
             let rule_overrides = options.rule_overrides.unwrap_or(&DEFAULT_RULE_OVERRIDES);
             if self.rule_overrides.as_ref() != Some(rule_overrides) {
-                self.blocks.clear();
-                self.bytes = 0;
+                self.cache.clear();
                 self.rule_overrides = Some(rule_overrides.clone());
             }
             self.configure_dictionary(options.dictionary);
@@ -210,18 +287,12 @@ impl Checker {
                     token.kind.hash(&mut hash);
                 }
                 let key = hash.finish();
-                self.clock = self.clock.saturating_add(1);
-                let mut result = if let Some(block) = self
-                    .blocks
-                    .get_mut(&key)
-                    .filter(|block| block.text.as_ref() == text && block.tokens == relative)
-                {
-                    block.used = self.clock;
+                let mut result = if let Some(lints) = self.cache.get(key, text, &relative) {
                     #[cfg(test)]
                     {
                         self.stats.0 += 1;
                     }
-                    block.lints.clone()
+                    lints.to_vec()
                 } else {
                     #[cfg(test)]
                     {
@@ -236,60 +307,7 @@ impl Checker {
                         configured_linter(Arc::clone(&dictionary), dialect, rule_overrides)
                     });
                     let result = named_lints(linter, &document);
-                    let bytes = std::mem::size_of_val(text)
-                        + relative.len() * std::mem::size_of::<Token>()
-                        + result
-                            .iter()
-                            .map(|lint| {
-                                std::mem::size_of::<NamedLint>()
-                                    + lint.rule.len()
-                                    + lint.message.len()
-                                    + lint
-                                        .suggestions
-                                        .iter()
-                                        .map(|suggestion| {
-                                            std::mem::size_of_val(suggestion) + match suggestion {
-                                                harper_core::linting::Suggestion::ReplaceWith(
-                                                    chars,
-                                                )
-                                                | harper_core::linting::Suggestion::InsertAfter(
-                                                    chars,
-                                                ) => std::mem::size_of_val(chars.as_slice()),
-                                                harper_core::linting::Suggestion::Remove => 0,
-                                            }
-                                        })
-                                        .sum::<usize>()
-                            })
-                            .sum::<usize>();
-                    if bytes <= MAX_CACHE_BYTES {
-                        if let Some(old) = self.blocks.remove(&key) {
-                            self.bytes -= old.bytes;
-                        }
-                        while self.blocks.len() >= MAX_BLOCKS
-                            || self.bytes + bytes > MAX_CACHE_BYTES
-                        {
-                            let Some(oldest) = self
-                                .blocks
-                                .iter()
-                                .min_by_key(|(_, block)| block.used)
-                                .map(|(&key, _)| key)
-                            else {
-                                break;
-                            };
-                            self.bytes -= self.blocks.remove(&oldest).unwrap().bytes;
-                        }
-                        self.bytes += bytes;
-                        self.blocks.insert(
-                            key,
-                            Block {
-                                text: text.into(),
-                                tokens: relative,
-                                lints: result.clone(),
-                                bytes,
-                                used: self.clock,
-                            },
-                        );
-                    }
+                    self.cache.insert(key, text, relative, &result);
                     result
                 };
                 for lint in &mut result {
@@ -721,14 +739,155 @@ mod tests {
     #[test]
     fn paragraph_cache_is_bounded_and_eviction_preserves_results() {
         let mut checker = Checker::default();
-        let source = (0..MAX_BLOCKS + 8)
-            .map(|index| format!("The value is {index}.\n\n"))
-            .collect::<String>();
-        check(&mut checker, &source, DocumentKind::Tex);
-        assert!(checker.blocks.len() <= MAX_BLOCKS);
-        assert!(checker.bytes <= MAX_CACHE_BYTES);
-        check(&mut checker, "This is the the result.", DocumentKind::Tex);
-        assert!(checker.blocks.len() <= MAX_BLOCKS);
+        let source = "This is the the result.";
+        let initial = check(&mut checker, source, DocumentKind::Tex);
+        assert!(initial.iter().any(|issue| issue.message.contains("repeat")));
+        assert_eq!(checker.cache.blocks.len(), 1);
+        let original_key = *checker.cache.blocks.keys().next().unwrap();
+        assert_eq!(check(&mut checker, source, DocumentKind::Tex), initial);
+        assert_eq!(checker.cache_stats(), (1, 0));
+
+        // Exercise real cache admission/eviction without asking Harper to lint
+        // a thousand unrelated paragraphs just to fill the cache.
+        let mut key = 0;
+        for _ in 0..MAX_BLOCKS {
+            while checker.cache.blocks.contains_key(&key) {
+                key += 1;
+            }
+            assert!(checker.cache.insert(key, &['x'], Vec::new(), &[]));
+            key += 1;
+        }
+        assert!(!checker.cache.blocks.contains_key(&original_key));
+        assert_cache_bounds(&checker.cache);
+        assert_eq!(check(&mut checker, source, DocumentKind::Tex), initial);
+        assert_eq!(checker.cache_stats(), (0, 1));
+        assert_eq!(check(&mut checker, source, DocumentKind::Tex), initial);
+        assert_eq!(checker.cache_stats(), (1, 0));
+        assert_cache_bounds(&checker.cache);
+    }
+
+    fn assert_cache_bounds(cache: &ParagraphCache) {
+        assert!(cache.blocks.len() <= MAX_BLOCKS);
+        assert!(cache.bytes <= MAX_CACHE_BYTES);
+        assert_eq!(
+            cache.bytes,
+            cache
+                .blocks
+                .values()
+                .map(|block| block.bytes)
+                .sum::<usize>()
+        );
+    }
+
+    #[test]
+    fn paragraph_entry_limit_retains_recently_hit_blocks() {
+        let mut cache = ParagraphCache::default();
+        for key in 0..MAX_BLOCKS as u64 {
+            assert!(cache.insert(key, &['x'], Vec::new(), &[]));
+        }
+        assert_eq!(cache.blocks.len(), MAX_BLOCKS);
+        assert!(cache.get(0, &['x'], &[]).is_some());
+        for key in MAX_BLOCKS as u64..(MAX_BLOCKS + 8) as u64 {
+            assert!(cache.insert(key, &['x'], Vec::new(), &[]));
+        }
+        assert_eq!(cache.blocks.len(), MAX_BLOCKS);
+        assert!(cache.blocks.contains_key(&0));
+        assert!((1..=8).all(|key| !cache.blocks.contains_key(&key)));
+        assert_eq!(cache.bytes, MAX_BLOCKS * std::mem::size_of::<char>());
+        assert_cache_bounds(&cache);
+    }
+
+    #[test]
+    fn paragraph_byte_limit_evicts_the_least_recent_block_at_the_actual_budget() {
+        let mut cache = ParagraphCache::default();
+        let text = vec!['x'; MAX_CACHE_BYTES / (2 * std::mem::size_of::<char>())];
+        assert!(cache.insert(1, &text, Vec::new(), &[]));
+        assert!(cache.insert(2, &text, Vec::new(), &[]));
+        assert_eq!(cache.bytes, MAX_CACHE_BYTES);
+        assert_eq!(cache.blocks.len(), 2);
+        assert!(cache.get(1, &text, &[]).is_some());
+        assert!(cache.insert(3, &text, Vec::new(), &[]));
+        assert_eq!(cache.bytes, MAX_CACHE_BYTES);
+        assert_eq!(cache.blocks.len(), 2);
+        assert!(cache.blocks.contains_key(&1));
+        assert!(!cache.blocks.contains_key(&2));
+        assert!(cache.blocks.contains_key(&3));
+        assert_cache_bounds(&cache);
+    }
+
+    #[test]
+    fn paragraph_replacement_accounts_for_payloads_and_rejects_hash_collisions() {
+        use harper_core::{
+            Span,
+            linting::{Lint, Suggestion},
+        };
+        let text = ['a'];
+        let token = Token::new(Span::new(0, 1), TokenKind::Word(None));
+        let lints = [NamedLint {
+            rule: "FixtureRule".into(),
+            sentence_initial: false,
+            lint: Lint {
+                span: Span::new(0, 1),
+                message: "fixture".into(),
+                suggestions: vec![
+                    Suggestion::ReplaceWith(vec!['x', 'y']),
+                    Suggestion::InsertAfter(vec!['!']),
+                    Suggestion::Remove,
+                ],
+                ..Lint::default()
+            },
+        }];
+        let mut cache = ParagraphCache::default();
+        assert!(cache.insert(7, &text, vec![token.clone()], &lints));
+        assert_eq!(
+            cache.bytes,
+            std::mem::size_of_val(&text)
+                + std::mem::size_of::<Token>()
+                + std::mem::size_of::<NamedLint>()
+                + "FixtureRule".len()
+                + "fixture".len()
+                + 3 * std::mem::size_of::<Suggestion>()
+                + 3 * std::mem::size_of::<char>()
+        );
+        let used = cache.blocks[&7].used;
+        assert!(cache.get(7, &['b'], std::slice::from_ref(&token)).is_none());
+        let opaque = Token::new(Span::new(0, 1), TokenKind::Unlintable);
+        assert!(cache.get(7, &text, &[opaque]).is_none());
+        assert_eq!(cache.blocks[&7].used, used, "failed matches are not hits");
+        assert_eq!(cache.get(7, &text, &[token]), Some(lints.as_slice()));
+        assert!(cache.blocks[&7].used > used);
+
+        let replacement = ['a', 'b'];
+        let token = Token::new(Span::new(0, 2), TokenKind::Word(None));
+        assert!(cache.insert(7, &replacement, vec![token], &[]));
+        assert_eq!(cache.blocks.len(), 1);
+        assert_eq!(
+            cache.bytes,
+            std::mem::size_of_val(&replacement) + std::mem::size_of::<Token>()
+        );
+        assert_cache_bounds(&cache);
+        cache.clear();
+        assert!(cache.blocks.is_empty());
+        assert_eq!((cache.bytes, cache.clock), (0, 0));
+        assert_cache_bounds(&cache);
+    }
+
+    #[test]
+    fn oversized_paragraph_rejection_preserves_the_existing_entry() {
+        let mut cache = ParagraphCache::default();
+        assert!(cache.insert(1, &['x'], Vec::new(), &[]));
+        let old_text = cache.blocks[&1].text.as_ptr();
+        let before = (cache.bytes, cache.clock);
+        let oversized = vec!['x'; MAX_CACHE_BYTES / std::mem::size_of::<char>() + 1];
+        let (admitted, allocated) =
+            crate::test_allocations::allocated(|| cache.insert(1, &oversized, Vec::new(), &[]));
+        assert!(!admitted);
+        assert_eq!(allocated, 0, "rejected payloads must not be cloned");
+        assert_eq!(cache.blocks.len(), 1);
+        assert_eq!((cache.bytes, cache.clock), before);
+        assert_eq!(cache.blocks[&1].text.as_ptr(), old_text);
+        assert_eq!(cache.blocks[&1].text.as_ref(), ['x']);
+        assert_cache_bounds(&cache);
     }
 
     #[test]
@@ -1280,7 +1439,7 @@ mod tests {
                 checker.dictionary.is_none(),
                 "inactive Harper must not initialize or build its large dictionary"
             );
-            assert!(checker.blocks.is_empty());
+            assert!(checker.cache.blocks.is_empty());
         }
     }
     #[test]

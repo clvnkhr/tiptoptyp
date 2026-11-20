@@ -294,6 +294,7 @@ fn export(input: &Input, samples: usize) -> Value {
             }
             let text = &source[range.clone()];
             let block = checker
+                .cache
                 .blocks
                 .values()
                 .find(|block| block.text.as_ref() == text && block.tokens == relative)
