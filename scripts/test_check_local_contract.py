@@ -32,7 +32,12 @@ else:
     with open(os.environ['CHECK_TEST_LOG'], 'a') as log:
         log.write(json.dumps({'tool': name, 'args': sys.argv[1:], 'cwd': os.getcwd()}) + '\\n')
     if os.environ.get('CHECK_TEST_FAIL') == name + ':' + sys.argv[1]:
+        print('fixture tool failed', file=sys.stderr)
         sys.exit(23)
+    if name == 'cargo' and sys.argv[1] == 'test' and '--features' in sys.argv:
+        for owner in ['performance::', 'desktop_test::tests']:
+            if owner in sys.argv and os.environ.get('CHECK_TEST_EMPTY_OWNER') != owner:
+                print('test ' + owner.rstrip(':') + '::fixture ... ok')
 '''
         for name in ('python3', 'node', 'cargo', 'uname'):
             executable = commands / name
@@ -80,14 +85,24 @@ else:
         self.assertEqual([command['args'] for command in commands], [
             ['fmt', '--manifest-path', 'xtask/Cargo.toml', '--', '--check'],
             ['clippy', '--locked', '--all-targets', '--features', 'profiling,desktop-ui-tests', '--', '-D', 'warnings'],
-            ['test', '--locked', '--features', 'profiling,desktop-ui-tests', '--bin', 'tiptoptyp', '--', 'performance::', 'desktop_test::tests'],
+            ['test', '--locked', '--features', 'profiling,desktop-ui-tests', '--bin', 'tiptoptyp', '--', '--format', 'pretty', '--color', 'never', 'performance::', 'desktop_test::tests'],
         ])
 
     def test_linux_features_use_profiling_without_mac_only_inspection(self):
         result, commands = self.run_checks('features', CHECK_TEST_HOST='Linux')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(commands[-1]['args'], ['test', '--locked', '--features', 'profiling', '--bin', 'tiptoptyp', 'performance::'])
+        self.assertEqual(commands[-1]['args'], ['test', '--locked', '--features', 'profiling', '--bin', 'tiptoptyp', '--', '--format', 'pretty', '--color', 'never', 'performance::'])
         self.assertNotIn('desktop-ui-tests', str(commands))
+
+    def test_each_feature_owner_must_run_even_when_the_other_owner_passes(self):
+        result, _ = self.run_checks('features', CHECK_TEST_EMPTY_OWNER='desktop_test::tests')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('No passing feature tests for owner: desktop_test::tests', result.stderr)
+
+    def test_feature_test_failure_preserves_its_status_and_output(self):
+        result, _ = self.run_checks('features', CHECK_TEST_FAIL='cargo:test')
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertIn('fixture tool failed', result.stderr)
 
     def test_all_runs_each_local_lane_once(self):
         result, commands = self.run_checks('all')

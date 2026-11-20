@@ -39,15 +39,36 @@ rust() {
     cargo test --locked --manifest-path xtask/Cargo.toml
 }
 
+feature_tests() {
+    feature_set=$1
+    shift
+    if feature_output=$(cargo test --locked --features "$feature_set" --bin tiptoptyp \
+        -- --format pretty --color never "$@" 2>&1); then
+        printf '%s\n' "$feature_output"
+    else
+        feature_status=$?
+        printf '%s\n' "$feature_output" >&2
+        return "$feature_status"
+    fi
+    # libtest accepts a stale filter as a successful zero-test run. Every
+    # requested owner must actually pass a test, including after refactors.
+    for feature_owner do
+        if ! printf '%s\n' "$feature_output" | grep -E "^test $feature_owner.* \.\.\. ok$" >/dev/null; then
+            printf 'No passing feature tests for owner: %s\n' "$feature_owner" >&2
+            return 1
+        fi
+    done
+}
+
 features() {
     printf '%s\n' 'Running local feature contracts.'
     cargo fmt --manifest-path xtask/Cargo.toml -- --check
     if [ "$(uname -s)" = Darwin ]; then
         cargo clippy --locked --all-targets --features profiling,desktop-ui-tests -- -D warnings
-        cargo test --locked --features profiling,desktop-ui-tests --bin tiptoptyp -- performance:: desktop_test::tests
+        feature_tests profiling,desktop-ui-tests performance:: desktop_test::tests
     else
         cargo clippy --locked --all-targets --features profiling -- -D warnings
-        cargo test --locked --features profiling --bin tiptoptyp performance::
+        feature_tests profiling performance::
     fi
 }
 
