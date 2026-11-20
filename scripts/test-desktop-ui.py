@@ -73,12 +73,22 @@ JOURNEY_NAMES = (
 )
 
 
-def selected_journeys(name, start_at=None):
+def selected_journeys(name, start_at=None, only=None):
     # Optional local ML must never become a hidden prerequisite of "all".
     if name == 'all':
         journeys = [*EXPLORER_JOURNEYS, *OVERLEAF_JOURNEYS, *ACTIVITY_JOURNEYS, *INDENTATION_JOURNEYS, *NEWEST_JOURNEYS, "file_versions", "command_palette", "preview_jump", "terminal_theme", "panels", "terminal_find", "terminal_load", "find", "editing", "search", "tabs", "tab_drag", "dialogs", "diagnostics", "completion", "layout", "pdf_layout", "explorer_toggle", "explorer_scroll", "folding", "selection_wrap", "git_hunks", "preview_keyboard", "pdfium_resize", "closing", "focus", "settings_search", *TOOL_DEFAULTS_JOURNEYS, "editor_preferences", "background", "background_fades", "context_menu", "pdf_output", "preview", "partial_preview", "controls", "empty", "snippets", "ime", "drawing", *IMAGE_JOURNEYS, *AUTOFIX_JOURNEYS, *TEX_REFACTOR_JOURNEYS, *TEX_JOURNEYS]
     else:
         journeys = list(TEX_JOURNEYS) if name == 'tex' else [name]
+    if only is not None:
+        if name != 'all' or start_at is not None:
+            raise ValueError('--only requires --journey all and cannot combine with --start-at')
+        if not only or len(only) != len(set(only)):
+            raise ValueError('--only requires distinct journey names')
+        if not set(only) <= set(journeys):
+            raise ValueError('--only must select journeys in the shared all session')
+        # Keep the established shared-session order and fixture contract. An
+        # explicit subset does not acquire optional model/tool prerequisites.
+        journeys = [journey for journey in journeys if journey in only]
     if start_at is not None:
         if name != 'all':
             raise ValueError('--start-at requires --journey all')
@@ -1066,6 +1076,8 @@ def main():
     parser.add_argument("--journey", choices=JOURNEY_NAMES, default="all")
     parser.add_argument("--start-at", choices=selected_journeys('all'),
                         help="run an explicit suffix of --journey all; record the exact selection without counting omitted journeys")
+    parser.add_argument("--only", choices=selected_journeys('all'), action="append",
+                        help="run only these shared-session journeys in their usual order; repeat to reuse one build and app session")
     parser.add_argument("--liquid-model-dir", type=Path, help="Liquid journeys only: read-only prepared model reference; downloads optional assets into a temporary cache")
     parser.add_argument("--diagnostic-fix-model-dir", type=Path, help="Diagnostic-fix journey only: read-only prepared foundation-model cache copied into its temporary folder")
     parser.add_argument("--ltex-executable", type=Path, help="LTeX journey only: path to an installed ltex-ls-plus launcher")
@@ -1082,7 +1094,7 @@ def main():
     modes.add_argument("--prepare-only", action="store_true", help="build runner and editor without launching")
     args = parser.parse_args()
     try:
-        planned_journeys = selected_journeys(args.journey, args.start_at)
+        planned_journeys = selected_journeys(args.journey, args.start_at, args.only)
     except ValueError as error:
         parser.error(str(error))
     if args.journey in LTEX_JOURNEYS:
@@ -1120,7 +1132,7 @@ def main():
     evidence = Path(tempfile.mkdtemp(prefix="run-", dir=evidence_root))
     driver = evidence_root / "desktop-ui-driver"
     result = {"passed": False, "journeys": [], "platform": platform.platform(),
-              "selection": {"requested": args.journey, "start_at": args.start_at,
+              "selection": {"requested": args.journey, "start_at": args.start_at, "only": args.only,
                             "planned": planned_journeys},
               "evidence": "native input and read-only state; no visual composition verification"}
     if args.journey == "effects_pacing":
