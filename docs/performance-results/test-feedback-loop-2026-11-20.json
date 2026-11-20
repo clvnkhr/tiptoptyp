@@ -1,0 +1,611 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-20",
+  "host": "macOS-14.6.1-arm64-arm-64bit-Mach-O",
+  "compiler": "rustc1.98.1 (48a229cea), aarch64-apple-darwin; dev/test opt-level1, debug2, incremental",
+  "scope": "Fresh process test-harness elapsed time, same dev/test opt1 debug2 compiler1.98.1 and fixtures; excludes all Cargo compilation and native journeys. Three rounds AB/BA/AB; no concurrent build/profiler. Ordinary host activity uncontrolled.",
+  "before_revision": "e6bccf2",
+  "source_sha256": {
+    "before": {
+      "src/tinymist.rs": "67607b8bad7b6d7218f4ab8000dbbb66a0be52147bfb32ed14e72eaa5f0c7917",
+      "src/writing/cache.rs": "c4776046422f120d2e23bc5ab18da40c3fc402eac4d9c17164a7a0762f249d5c",
+      "src/writing/cache/probe.rs": "e6642966eaa6c89837120d33c43248709820805aff0be0db548134611b813e77"
+    },
+    "after": {
+      "src/tinymist.rs": "d9885cc802337c9870d5c9dd994b2a928a2a7034d03efe74520f3f852038b0c3",
+      "src/writing/cache.rs": "6a672e69995d0fe744849e6e98eeb5f8171a74b2c083376edf33e9c29d036999",
+      "src/writing/cache/probe.rs": "0db33d96b784fbd19c459c33430ae9021fcddff2f1ac559d6f933599e3495d1b"
+    }
+  },
+  "summary_seconds": {
+    "timeout": {
+      "before": 3.2584588332101703,
+      "after": 0.23991554114036262
+    },
+    "cache-bound": {
+      "before": 2.4433377909008414,
+      "after": 0.4167041659820825
+    },
+    "integration-pair": {
+      "before": 9.259017292177305,
+      "after": 9.183304667007178
+    }
+  },
+  "runs": [
+    {
+      "round": 1,
+      "label": "before",
+      "case": "timeout",
+      "wall_seconds": 3.263100542128086
+    },
+    {
+      "round": 1,
+      "label": "before",
+      "case": "cache-bound",
+      "wall_seconds": 2.4183578328229487
+    },
+    {
+      "round": 1,
+      "label": "before",
+      "case": "integration-pair",
+      "wall_seconds": 9.94006900000386
+    },
+    {
+      "round": 1,
+      "label": "after",
+      "case": "timeout",
+      "wall_seconds": 1.3173812080640346
+    },
+    {
+      "round": 1,
+      "label": "after",
+      "case": "cache-bound",
+      "wall_seconds": 0.4167041659820825
+    },
+    {
+      "round": 1,
+      "label": "after",
+      "case": "integration-pair",
+      "wall_seconds": 9.33538420801051
+    },
+    {
+      "round": 2,
+      "label": "after",
+      "case": "timeout",
+      "wall_seconds": 0.23991554114036262
+    },
+    {
+      "round": 2,
+      "label": "after",
+      "case": "cache-bound",
+      "wall_seconds": 0.4208884169347584
+    },
+    {
+      "round": 2,
+      "label": "after",
+      "case": "integration-pair",
+      "wall_seconds": 9.183304667007178
+    },
+    {
+      "round": 2,
+      "label": "before",
+      "case": "timeout",
+      "wall_seconds": 3.2584588332101703
+    },
+    {
+      "round": 2,
+      "label": "before",
+      "case": "cache-bound",
+      "wall_seconds": 2.4433377909008414
+    },
+    {
+      "round": 2,
+      "label": "before",
+      "case": "integration-pair",
+      "wall_seconds": 9.259017292177305
+    },
+    {
+      "round": 3,
+      "label": "before",
+      "case": "timeout",
+      "wall_seconds": 3.2432834580540657
+    },
+    {
+      "round": 3,
+      "label": "before",
+      "case": "cache-bound",
+      "wall_seconds": 2.4466152088716626
+    },
+    {
+      "round": 3,
+      "label": "before",
+      "case": "integration-pair",
+      "wall_seconds": 9.2539130828809
+    },
+    {
+      "round": 3,
+      "label": "after",
+      "case": "timeout",
+      "wall_seconds": 0.2380958751309663
+    },
+    {
+      "round": 3,
+      "label": "after",
+      "case": "cache-bound",
+      "wall_seconds": 0.4095606671180576
+    },
+    {
+      "round": 3,
+      "label": "after",
+      "case": "integration-pair",
+      "wall_seconds": 9.102799916174263
+    }
+  ],
+  "raw_artifacts": [
+    ".tiptoptyp/profiles/test-feedback-baseline-2026-11-20/",
+    ".tiptoptyp/profiles/test-feedback-after-2026-11-20/"
+  ],
+  "binary_sha256": {
+    ".tiptoptyp/profiles/test-feedback-baseline-2026-11-20/app-tests": "edd0ee38b1b3ce96688e6f7875557be91a991b843a8bc1b541d39a72952dd011",
+    ".tiptoptyp/profiles/test-feedback-baseline-2026-11-20/install_macos": "1af89c582b64cd8a0d90f45c75df92e6b8a68175d57e5e7270ff3bb18bbb4905",
+    ".tiptoptyp/profiles/test-feedback-baseline-2026-11-20/theme_gallery_manifest": "1a8dd915fe6409de13a9a17e109b38421dd1cd9b3947c5585ef278efeacbf079",
+    ".tiptoptyp/profiles/test-feedback-after-2026-11-20/app-tests": "5c56fc8e82ea78968fabc57c08944f487f887f2ca743d0b5972ffb9cd87a4a20",
+    ".tiptoptyp/profiles/test-feedback-after-2026-11-20/contracts": "a7fa9d492bc91229f6db9c9defebcfa5549ef95478eb22493ca4f3eca1cb2fd4"
+  },
+  "interpretation": [
+    "Timeout policy now has exact clock-boundary assertions while its real worker smoke remains.",
+    "The cache cap uses cheap cache entries plus a small grammar equivalence witness.",
+    "Installer+gallery harness execution is effectively unchanged. Consolidation reduces18 ordinary Rust integration targets/links/runner invocations to1; no build-time speedup is established by this execution benchmark.",
+    "Measurements exclude Cargo build time, native journeys, idle app behavior and cross-platform guarantees. Fresh processes with uncontrolled ordinary host activity; no concurrent build or profiler during canonical runs."
+  ],
+  "native_workload": {
+    "scope": "Deterministic native-workload case/action counts, not elapsed-time or whole-app speed measurements.",
+    "comment_controls": {
+      "before": {
+        "formatter_cases": 8,
+        "diagnostic_cases": 8,
+        "diagnostic_off_on_source_publications": 16
+      },
+      "after": {
+        "formatter_cases": 5,
+        "diagnostic_cases": 5,
+        "diagnostic_off_on_source_publications": 10
+      },
+      "retained": "Default-both format+diagnostics for both language backends; all six custom Settings fields, exact whitespace persistence, invalid drafts/reset; custom format-only and diag-only positive/negative witnesses, plus custom-both. Real Harper and LTeX raw finding/path/currentness checks and exact single Undo remain.",
+      "custom_cases": [
+        [
+          "typ",
+          "formatting"
+        ],
+        [
+          "typ",
+          "diagnostics"
+        ],
+        [
+          "tex",
+          "both"
+        ]
+      ],
+      "rust_coverage": [
+        "comment_controls::tests::formatting_and_diagnostics_can_use_independent_pairs",
+        "comment_controls::tests::common_and_feature_switches_share_one_flat_state_per_feature",
+        "comment_controls::tests::whitespace_variants_match_markers_without_changing_lexical_or_channel_rules",
+        "comment_controls::tests::whitespace_in_custom_markers_is_ignored_and_normalized_duplicates_are_rejected",
+        "app::diagnostic_regions::tests::every_provider_and_severity_share_problems_badge_facets_and_inline_suppression",
+        "app::diagnostic_regions::tests::whitespace_variants_keep_channel_scope_raw_findings_and_idle_cache",
+        "app::diagnostic_regions::tests::changing_diagnostic_markers_reprojects_stored_findings_without_editing_or_republishing",
+        "app::settings_panel::tests::comment_control_fields_preserve_invalid_drafts_and_apply_only_valid_independent_pairs",
+        "app::format_regions::tests::whole_document_replacements_format_both_sides_and_leave_disabled_bytes_exact",
+        "app::format_regions::tests::feature_specific_markers_and_flat_both_overrides_do_not_block_other_formatting",
+        "app::format_regions::app_tests::typst_and_tex_replies_preserve_regions_and_cursors_with_one_undo_and_stale_rejection"
+      ]
+    },
+    "math_grids": {
+      "before": {
+        "draft_edit_sessions": 12,
+        "resize_sessions": 1,
+        "total_draft_sessions": 13,
+        "apply_undo_cases": 6,
+        "cancel_cases": 6
+      },
+      "after": {
+        "draft_edit_sessions": 8,
+        "resize_sessions": 1,
+        "total_draft_sessions": 9,
+        "apply_undo_cases": 6,
+        "cancel_cases": 2
+      },
+      "retained": "All six native kinds keep actual formula input, exact Apply and Undo. Both language-specific dialog variants retain Cancel; Typst matrix row-resize and source-before-apply assertions remain. Type-specific controls (array column specs, fixed-width cases/vectors) are not assumed covered by a shared parser.",
+      "rust_coverage": [
+        "app::table_workbench::math_tests::math_workbench_apply_is_unicode_safe_and_checks_the_original_revision",
+        "app::table_workbench::tests::stale_table_menu_cannot_open_another_document_with_identical_source",
+        "app::table_workbench::tests::tex_grid_apply_is_lossless_and_rejects_stale_source",
+        "app::table_workbench::tests::real_arxiv_table_workbench_preserves_exact_edits_cancel_and_undo",
+        "editor_features::math_table::tests::matrix_vector_and_cases_keep_exact_source_and_math_cells",
+        "editor_features::math_table::tests::native_journey_fixture_exposes_literal_formula_grids_and_retains_options",
+        "editor_features::tex_table::tests::mathematical_grids_are_lossless_and_have_real_cell_dimensions"
+      ]
+    },
+    "redundant_open_observations_removed": {
+      "path_only_waits": 5,
+      "extra_snapshot": 1,
+      "duplicate_focus_check": 1,
+      "guard": "open_native_file verifies exact path and keyboard ownership together and returns the verified state. Feature/rendering/preview-owner waits remain."
+    },
+    "verification": {
+      "desktop_contracts": 481,
+      "seconds": 2.843,
+      "log": "/private/tmp/ttt-journey-audit-contracts.log",
+      "native": "Not run by child agent; root coordinates affected journeys."
+    },
+    "limitations": [
+      "No real native timing improvement claimed.",
+      "No app production code or typed ownership/revision admission changed.",
+      "Only repeated shared Cancel and comment channel/language Cartesian products were removed; distinct native UI branches and provider checks remain."
+    ]
+  },
+  "native_dialog_source_audit": {
+    "scope": "Native dialog test-harness synchronization. This is a deterministic fixed-wait budget audit, not real-native wall-time or whole-app performance.",
+    "baseline_git_revision": "e6bccf216fdc273baba3217c1b88ab675dec6abe",
+    "before_syntactic_sleep_floor_seconds": 19.200000000000003,
+    "after_syntactic_sleep_floor_seconds": 0,
+    "sites": [
+      {
+        "path": "scripts/desktop_ui_asset_layout_journeys.py",
+        "function": "pdf_layout",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_image_journeys.py",
+        "function": "images",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_journeys.py",
+        "function": "dialogs",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.8
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_journeys.py",
+        "function": "_git_hunks",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.8
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_journeys.py",
+        "function": "pdfium_resize",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_journeys.py",
+        "function": "pdf_output",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_journeys.py",
+        "function": "_context_menu",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.8
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_jump_journeys.py",
+        "function": "jump_open_fixture",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_newest_journeys.py",
+        "function": "open_table_fixture",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_palette_journeys.py",
+        "function": "palette_empty_document",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_tex_journeys.py",
+        "function": "tex_document",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "open_native_file"
+      },
+      {
+        "path": "scripts/desktop_ui_tex_journeys.py",
+        "function": "save_to_fixture",
+        "fixed_sleeps_seconds": [
+          0.8,
+          0.3,
+          0.5
+        ],
+        "syntactic_total_seconds": 1.6,
+        "open_save_presses": 1,
+        "after_fixed_dialog_sleep_seconds": 0,
+        "replacement": "native Save readiness"
+      }
+    ],
+    "implementation": "One readiness-driven native Open helper and one Save helper; Open/Save button presence, GoToWindow admission, enabled confirmation, exact opened document path and optional source keyboard ownership. No retries or fixed fallback sleeps.",
+    "removed_tests": "Three duplicate provider/table-specific Open and generic Save protocol tests were replaced by common dialog contracts. Full source/feature assertions remain in each journey.",
+    "deterministic_verification": {
+      "desktop_contracts": 481,
+      "desktop_contract_wall_seconds": 2.843,
+      "common_dialog_contracts": 9,
+      "common_dialog_contract_wall_seconds": 0.002,
+      "log": "/private/tmp/ttt-journey-audit-contracts.log"
+    },
+    "source_sha256": {
+      "scripts/desktop_ui_asset_layout_journeys.py": "68f07cdc97c2511c1254b24d5209e1b6ab76ee3fb691d8bd9a984456801a4d5e",
+      "scripts/desktop_ui_autofix_journeys.py": "2d88886f721efec5f8f9a219da0856dbf3d30a393bb3ccf980b9e0f655606424",
+      "scripts/desktop_ui_comment_controls_journeys.py": "fb54d24edaa1956ecd06c796e04ef9e37dced4383ee6d64905ef387e8a0a1862",
+      "scripts/desktop_ui_diagnostic_fix_journeys.py": "71a3cb7cd3e1c37bcbe48c2ff051d9e07fcec254d746f73caaececfd06a05729",
+      "scripts/desktop_ui_effects_journeys.py": "700424553ac43e8c8d77458360408b18ac540f9c7c1bec92be7c28202fe600c0",
+      "scripts/desktop_ui_image_journeys.py": "3aac21dc5a1ac9d475d80ea51892bd9d22912ea3f277039b2d5a3543b6e24629",
+      "scripts/desktop_ui_inactive_preview_journeys.py": "6072b7d866ab298a9f272cade0e9546c96ecccec7c1dfea18f62b399cdd54ba0",
+      "scripts/desktop_ui_indentation_journeys.py": "80d29739e8d1728609d8200cbfd3f83729849ff04cfe7f058b871fd62d731ec2",
+      "scripts/desktop_ui_journeys.py": "82c097f5b7331312d531645ec2b9445ed376393dce41b37236df6fb07a51eddd",
+      "scripts/desktop_ui_jump_journeys.py": "d2875d5c7571cd6f764bb0320995a5a350a7775240d42193efd87322f2d55eb8",
+      "scripts/desktop_ui_liquid_journeys.py": "515d16050381628c60cd0ffe298e15d83bb24564135f9d2cd79e5b8bcd2b6d03",
+      "scripts/desktop_ui_ltex_journeys.py": "127ab72581dc0a16002dee14010b7d05d0ef28fcdc7d075a266538a29e64b73c",
+      "scripts/desktop_ui_math_grid_journeys.py": "fe62e14a40c299f2ce880e582f927a4dbb94c6ce4bcb798254296d42e6702e12",
+      "scripts/desktop_ui_newest_journeys.py": "8f4eecbf631291a78356edc2c27e352598e1ab77f6982d405ba62a63992fc0de",
+      "scripts/desktop_ui_overleaf_journeys.py": "8c9d9cc1fff615a1f30dfbf4d47ca29c59e49d11e67f9e2ca646d18caa034e59",
+      "scripts/desktop_ui_palette_journeys.py": "7812378e6e5e8e73b3880809b830de82cc39197780b64b9f460020a62e302780",
+      "scripts/desktop_ui_partial_journeys.py": "8b621c2e9fcfbe4c367e6ec2aa56eee9fd302c0011abf346f9b106a8fe4193de",
+      "scripts/desktop_ui_problems_journeys.py": "1ce88558e648ab6e81fcc2f0e6b0a66696575add3f78d09d3fd362aeafe6d7e8",
+      "scripts/desktop_ui_tex_editor_features.py": "65ba745d253ffa9b6bf4fa6551f7e578c3aa47675965e13f82b7c748459e478d",
+      "scripts/desktop_ui_tex_journeys.py": "a0fe4dc5a799363e029b665f7ad3069a505e5aad6dbb7c24b476e04ce94cadd1",
+      "scripts/desktop_ui_tex_magic_journeys.py": "e303b9250d7d7bbb923dd52e6c4712cb33f057240f6b2172a17c2f48b0acc146",
+      "scripts/desktop_ui_tex_refactor_journeys.py": "5fa33ab91d286a8ffdb5bb7e93e3919fc9459f4cf3b70662c523b625bb7d5f2d",
+      "scripts/desktop_ui_version_journeys.py": "583efe1c53b51038e65d9a9260ed993e59d074c013c82d2fb2af7b2122b4c103",
+      "scripts/desktop_ui_workspace_switch_journeys.py": "dc42143b1315662eb2fb9f7cea74e00c99919eb18c36f2b5ffd8941152326caf",
+      "scripts/test_desktop_ui_contract.py": "fa76dfc2f0e48ac62c1fab4766505b89f389b3b982851c1b689a9a1954265c8d",
+      "scripts/test_desktop_ui_dialog_contract.py": "45a52573f9f90f102673ebb2bf44e8a45720065adb646aebbacdcb1311b39da0"
+    },
+    "native_verification": "Not run by child agent; root coordinates representative dialogs, TeX/table and asset journeys.",
+    "limitations": [
+      "Syntactic floors are per source site. Repeated calls/loops may repeat that floor, but aggregate journey duration is not inferred.",
+      "Readiness observes native AX receipts rather than assuming a faster machine. Slow machines retain bounded deadlines.",
+      "Independent stability windows for clipping, compositor settling, asynchronous providers and real input delivery remain."
+    ]
+  },
+  "ci": {
+    "default_rust_suite": "complete, retained",
+    "macos_application_feature_variants_before": 3,
+    "macos_application_feature_variants_after": 2,
+    "supplemental_tests": [
+      "performance::",
+      "desktop_test::tests"
+    ],
+    "script_suite": "Independent Ubuntu job runs all test_*.py; macOS additionally exercises lockf/cache cleanup.",
+    "real_tools_and_native_jobs": "retained"
+  },
+  "verification": {
+    "local_all": {
+      "command": "./scripts/check-local.sh all",
+      "passed": true,
+      "log": "/private/tmp/ttt-feedback-local-all.log",
+      "python_tests": 777,
+      "python_skipped": 1,
+      "node_tests": 421,
+      "rust_tests": 3963,
+      "rust_ignored": 91,
+      "packaging_tests": 55,
+      "packaging_ignored": 1,
+      "supplemental_feature_tests": 24,
+      "supplemental_feature_ignored": 2,
+      "scope": "Complete local run before the final stale-filter guard; final fast/features reruns validate that guard and its new tests. Rust implementation remained unchanged."
+    },
+    "full_combined_features": {
+      "command": "cargo +1.98.1 test --features profiling,desktop-ui-tests --no-fail-fast",
+      "passed": true,
+      "log": "/private/tmp/ttt-feedback-features-tests.log"
+    },
+    "dependency_policy": {
+      "command": "cargo +1.98.1 deny check",
+      "passed": true,
+      "log": "/private/tmp/ttt-feedback-deny.log"
+    },
+    "initial_failure": {
+      "log": "/private/tmp/ttt-feedback-tests.log",
+      "reason": "Two existing TeX fixture startup waits exceeded5seconds before their semantic assertions. Matrix fixtures now admit messages synchronously; one actual framed handshake remains."
+    },
+    "native": {
+      "status": "passed",
+      "dialog": {
+        "passed": true,
+        "artifacts": ".tiptoptyp/desktop-ui-tests/run-f4bldyak/"
+      },
+      "shared_subset": {
+        "passed": true,
+        "journeys": [
+          "tables",
+          "math_grids",
+          "images"
+        ],
+        "selection": {
+          "requested": "all",
+          "start_at": null,
+          "only": [
+            "tables",
+            "math_grids",
+            "images"
+          ],
+          "planned": [
+            "tables",
+            "math_grids",
+            "images"
+          ]
+        },
+        "version": "tiptoptyp Dev 0.1.0 (bbf470141790.1795141869)",
+        "binary_sha256": "62d992de634523079aacd82581f972fb14b9a7484f5e62e72e41eae8a1d42ccf",
+        "artifacts": ".tiptoptyp/desktop-ui-tests/run-k8czbsqn/"
+      },
+      "comment_controls": {
+        "passed": true,
+        "journeys": [
+          "comment_controls"
+        ],
+        "version": "tiptoptyp Dev 0.1.0 (bbf470141790.1795141869)",
+        "binary_sha256": "62d992de634523079aacd82581f972fb14b9a7484f5e62e72e41eae8a1d42ccf",
+        "artifacts": ".tiptoptyp/desktop-ui-tests/run-wcmcex53/"
+      },
+      "visual_verification": false,
+      "scope": "Native input/read-only semantic state for dialogs; selected tables, math_grids and images; comment_controls real providers/custom settings. No framebuffer/composed visual proof claimed."
+    },
+    "final_fast": {
+      "command": "./scripts/check-local.sh fast",
+      "passed": true,
+      "python_tests": 779,
+      "python_skipped": 1,
+      "node_tests": 421,
+      "log": "/private/tmp/ttt-feedback-local-fast-final.log"
+    },
+    "final_features": {
+      "command": "./scripts/check-local.sh features",
+      "passed": true,
+      "tests": 24,
+      "ignored": 2,
+      "owner_admission": "Both performance:: and desktop_test::tests produced passing cases, with empty-owner failure covered by executable contracts.",
+      "log": "/private/tmp/ttt-feedback-local-features-final.log"
+    },
+    "status": "complete",
+    "headless_and_native_results_separate": true
+  },
+  "tex_fixture_repair": {
+    "before_failure_log": "/private/tmp/ttt-feedback-tests.log",
+    "semantic_fake_frame_waits_before": 10,
+    "semantic_fake_frame_waits_after": 0,
+    "retained_real_stdio_witnesses": 1,
+    "production_code_or_timeout_changes": false,
+    "remaining_constraint": "Session still requires a live owned transport for health/Drop; splitting a ProtocolSession could make the semantic matrix entirely process-free."
+  },
+  "hardware": {
+    "model": "Mac14,5",
+    "cpu": "Apple M2 Max",
+    "logical_cpus": 12,
+    "memory_bytes": 34359738368
+  },
+  "primary_validation": "Local; scripts/check-local.sh [fast|rust|features|all]. GitHub mirrors the same commands as supplementary evidence.",
+  "local_runner": {
+    "modes": {
+      "fast": "Complete Python/Node/self-test lane, no Rust build or GUI",
+      "rust": "All four required Rust checks",
+      "features": "Strict supplemental-feature compilation and owned contracts",
+      "all": "All three local lanes"
+    },
+    "failure_policy": "Stop on first failing command; preserve exit status; never claim native evidence from these headless lanes.",
+    "feature_admission": "Each requested owner must have at least one passing libtest case; empty/stale filters are a gate failure."
+  },
+  "native_dialog_comparison": {
+    "scope": "One sequential before/after native dialogs sample, same preserved inspection-enabled dev binary, fixture, viewport and settings. Includes driver compilation, app launch and actions; no Cargo build or other profiler concurrently. Not a robust speed benchmark or visual-composition proof.",
+    "binary": ".tiptoptyp/profiles/test-feedback-native-2026-11-20/inspection-app",
+    "runs": [
+      {
+        "label": "before",
+        "wall_seconds": 8.566715124994516,
+        "exit": 1,
+        "evidence": ".tiptoptyp/desktop-ui-tests/run-lm6t0_7h",
+        "passed": false,
+        "journeys": []
+      },
+      {
+        "label": "after",
+        "wall_seconds": 13.780290708877146,
+        "exit": 0,
+        "evidence": ".tiptoptyp/desktop-ui-tests/run-f4bldyak",
+        "passed": true,
+        "journeys": [
+          "dialogs"
+        ]
+      }
+    ],
+    "comparison_limit": "Original journey failed on optional native search-control lookup; no elapsed-time speedup can be claimed."
+  },
+  "audit_scope": {
+    "ordinary_app_integration_modules": 18,
+    "native_leaf_journeys": 84,
+    "shared_session_journeys": 60,
+    "default_rust_suite": "complete retained",
+    "retained_boundaries": "All ordinary integration assertions; all six math Apply/Undo kinds; both provider/language witnesses; request-owner/stale/cancel sequences; native platform, browser, model and real-tool boundaries as documented."
+  }
+}

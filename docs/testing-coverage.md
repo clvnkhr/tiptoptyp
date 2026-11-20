@@ -1,5 +1,8 @@
 # End-to-end tests and coverage
 
+For focused local commands, CI lane ownership and the rationale for retained
+versus consolidated checks, see the [test feedback-loop audit](test-feedback-loop.md).
+
 The preview regression lane exercises real services without requiring a desktop:
 
 - `src/app/preview_controls/e2e.rs` compiles a three-page Typst document, renders

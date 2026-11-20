@@ -315,6 +315,19 @@ Observation success is recorded separately as `observation_passed: true`.
 Neither counts as an interaction-suite pass. The drift detector checks include
 the previously observed 3-point-per-frame growth and invalid/missing geometry.
 
+For a focused subset of the shared `all` session, repeat `--only`:
+
+```sh
+python3 scripts/test-desktop-ui.py --only dialogs --only images --only math_grids
+```
+
+This uses one build and app session, preserves the usual journey order, and
+records the exact requested/executed subset. It cannot combine with `--start-at`
+or another `--journey`. Optional model/tool-specific journeys still use their
+individual entry points. Omitted journeys never count as passes. The
+[feedback-loop audit](test-feedback-loop.md) maps reduced matrices to retained
+semantic and native evidence.
+
 ## Integration and next steps
 
 The manually dispatched Desktop UI workflow targets a dedicated, logged-in

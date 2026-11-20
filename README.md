@@ -297,6 +297,12 @@ third-party obligations.
 
 ## Development and testing
 
+Run the standard local lanes with `./scripts/check-local.sh all`, or use `fast`,
+`rust` and `features` separately. With no argument it runs the fast script/browser
+lane without building Rust or opening the desktop. GitHub mirrors these local
+commands; it is supplementary validation.
+Native journeys and optional real-tool/model checks remain explicit local commands.
+
 Run the required checks from the repository root:
 
 ```sh
@@ -313,6 +319,16 @@ native input, a real service or external tools. See
 [the working agreement](AGENTS.md), [test coverage](docs/testing-coverage.md),
 [desktop journeys](docs/desktop-ui-journeys.md) and
 [screenshot contracts](docs/ui-qa-screenshots.md).
+
+For the shortest local loop, select the owning target:
+`cargo test -p tiptoptyp-core`, `cargo test --lib`,
+`cargo test --bin tiptoptyp -- tex::`, or
+`cargo test -p tiptoptyp --test contracts -- build_identity_inputs::`. App-only tests avoid
+building the separate executable used by CLI integration tests. Several shared
+native journeys can reuse one session, for example
+`python3 scripts/test-desktop-ui.py --only dialogs --only images --only math_grids`.
+See the [test audit and feedback-loop guide](docs/test-feedback-loop.md) for
+coverage ownership, retained boundaries and follow-up architecture work.
 
 Profiling is opt-in and saves its metadata under `.tiptoptyp/profiles`:
 

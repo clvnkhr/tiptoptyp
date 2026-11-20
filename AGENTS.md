@@ -98,6 +98,10 @@ repeated transition and frame-stability checks over single settled states.
 
 ## Testability and observability
 
+- Use the owning test target while iterating; see `docs/test-feedback-loop.md`.
+  App-unit filters should use `cargo test --bin tiptoptyp -- <filters>` to avoid
+  the separate CLI executable/integration build. The full handoff gate below
+  remains required. Shared native checks can use an explicit `--only` subset.
 - Put geometry, sizing, scene routing, and state-transition rules in small
   pure functions or data structures so they can be tested without a desktop.
 - Add a regression test for every brittle UI invariant: panel bounds, minimum

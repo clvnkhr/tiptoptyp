@@ -298,7 +298,7 @@ work without adding an idle repaint loop or changing active rendering cadence.
 ```sh
 cargo test settings_window
 cargo test paused_preview_is_static_but_loading_animates
-cargo test --test contracts webview_activation::
+cargo test -p tiptoptyp --test contracts -- webview_activation::
 ```
 
 These tests exercise independent child/parent passes and wheel input, semantic
