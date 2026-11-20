@@ -21,6 +21,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  fast:
+    name: Script and browser contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      # These use private fixtures, fake compilers and local servers. They do
+      # not need the Rust/GUI build, sidecars or model downloads.
+      - name: Local fast checks
+        run: sh scripts/check-local.sh fast
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -41,6 +57,16 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - name: Formatting
+        run: cargo +1.98.1 fmt --all -- --check
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Dependency policy
+        run: cargo +1.98.1 deny check
       - name: Install Linux GUI build dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgtk-3-dev
@@ -62,52 +88,24 @@ jobs:
       - name: Verify macOS Zig libc linking
         if: runner.os == 'macOS'
         run: sh scripts/check-macos-zig.sh
-      - name: Install Rust
-        run: rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-      - name: Dependency policy
-        run: cargo +1.98.1 deny check
-      - name: Formatting
-        run: cargo +1.98.1 fmt --all -- --check
       # Select Wry directly: dependency warning caps hide release-only warnings.
       - name: Release WebKit warnings
         if: runner.os == 'macOS'
         env:
           RUSTFLAGS: -D warnings
         run: cargo +1.98.1 check --locked --release -p wry
-      - name: Clippy
-        run: cargo +1.98.1 clippy --locked --all-targets -- -D warnings
-      - name: Application and core tests
-        run: cargo +1.98.1 test --locked --no-fail-fast
-      - name: Desktop journey detector contracts
-        run: python3 -m unittest discover -s scripts -p 'test_*contract.py'
-      - name: Overleaf bridge and local-server contracts
-        run: |
-          node --test scripts/test_overleaf_bridge.cjs
-          python3 -m unittest discover -s scripts -p 'test_overleaf_*fixture.py'
-      - name: Grammar comparison harness (no model downloads)
-        run: |
-          python3 -m unittest discover -s scripts -p 'test_grammar*.py'
-          python3 -m unittest discover -s scripts -p 'test_harper*.py'
-          python3 -m unittest discover -s scripts -p 'test_liquid*.py'
-      - name: Compile desktop inspection and test its geometry
+      - name: Required local Rust checks
+        run: sh scripts/check-local.sh rust
+      # The fast lane covers Linux flock. Keep the macOS lockf/deletion path
+      # on its actual platform as well; the rest of the script suite runs once.
+      - name: macOS cache cleanup contracts
         if: runner.os == 'macOS'
-        run: cargo +1.98.1 test --locked --features desktop-ui-tests --bin tiptoptyp desktop_test::tests
-      - name: Embedded preview interaction tests
-        run: |
-          node --test scripts/test-preview-navigation.mjs scripts/test-preview-snapshot-buffer.mjs scripts/test-preview-zoom-snapshot.mjs scripts/test-desktop-preview-probe.mjs scripts/test-preview-native-probe.mjs
-          node scripts/test-preview-e2e.cjs --large --self-test
-          python3 scripts/test-preview-partial-native.py --self-test
-      - name: Packaging tests
-        run: cargo +1.98.1 test --locked --manifest-path xtask/Cargo.toml
-      - name: Profiling infrastructure checks
-        run: |
-          cargo +1.98.1 fmt --manifest-path xtask/Cargo.toml -- --check
-          cargo +1.98.1 clippy --locked --all-targets --features profiling -- -D warnings
-          cargo +1.98.1 test --locked --features profiling --no-fail-fast
+        run: python3 -m unittest discover -s scripts -p 'test_prune_cargo_incremental_contract.py'
+      # Shared behavior runs in the complete default suite above. Compile all
+      # supplemental code strictly, then execute the feature-owned contracts.
+      # One combined macOS variant avoids a third large application test build.
+      - name: Supplemental local feature contracts
+        run: sh scripts/check-local.sh features
 
   real-tools:
     name: Real previews and Rust coverage (macOS)

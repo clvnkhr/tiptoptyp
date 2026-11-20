@@ -69,14 +69,15 @@ class UiWorkflowContract(unittest.TestCase):
             # sentinel exits without pretending a native process ever existed.
             pass
 
-        for name, suffix, source, explorer in (
-                ('all', '.typ', runner.PREVIEW_SOURCE, True),
-                ('explorer_files', '.txt', 'Desktop journey fixture.\n', True),
-                ('diagnostic_fix_setup', '.txt', 'Desktop journey fixture.\n', False),
-                ('overleaf', '.typ', runner.PREVIEW_SOURCE, False),
-                ('startup_preview', '.typ', runner.PREVIEW_SOURCE, False),
-                ('tex', '.tex', runner.TEX_SOURCE, False)):
-            with self.subTest(journey=name), tempfile.TemporaryDirectory() as temporary:
+        for name, suffix, source, explorer, only in (
+                ('all', '.typ', runner.PREVIEW_SOURCE, True, None),
+                ('all', '.typ', runner.PREVIEW_SOURCE, True, ['images', 'dialogs']),
+                ('explorer_files', '.txt', 'Desktop journey fixture.\n', True, None),
+                ('diagnostic_fix_setup', '.txt', 'Desktop journey fixture.\n', False, None),
+                ('overleaf', '.typ', runner.PREVIEW_SOURCE, False, None),
+                ('startup_preview', '.typ', runner.PREVIEW_SOURCE, False, None),
+                ('tex', '.tex', runner.TEX_SOURCE, False, None)):
+            with self.subTest(journey=name, only=only), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 executable = root / 'preserved-test-binary'
                 executable.write_bytes(b'not executable app code')
@@ -120,6 +121,8 @@ class UiWorkflowContract(unittest.TestCase):
                     raise LaunchObserved()
 
                 argv = ['test-desktop-ui.py', '--journey', name, '--executable', str(executable)]
+                for selected in only or []:
+                    argv.extend(['--only', selected])
                 with patch.object(runner, 'ROOT', root), patch.object(runner.sys, 'argv', argv), \
                         patch.object(runner.sys, 'platform', 'darwin'), \
                         patch.object(runner.platform, 'platform', return_value='fixture platform'), \
@@ -135,6 +138,8 @@ class UiWorkflowContract(unittest.TestCase):
                 receipt = json.loads(receipts[0].read_text())
                 self.assertFalse(receipt['passed'], 'preparation must never count as native evidence')
                 self.assertEqual(receipt['journeys'], [])
+                self.assertEqual(receipt['selection']['only'], only)
+                self.assertEqual(receipt['selection']['planned'], runner.selected_journeys(name, only=only))
 
     def test_native_dropdown_exposes_every_registered_choice_exactly_once(self):
         workflow = (ROOT / ".github/workflows/desktop-ui.yml").read_text()
@@ -145,21 +150,33 @@ class UiWorkflowContract(unittest.TestCase):
         self.assertEqual(len(runner.JOURNEY_NAMES), len(set(runner.JOURNEY_NAMES)))
         self.assertSetEqual(set(choices), set(runner.JOURNEY_NAMES))
 
-    def test_fast_ci_selector_collects_all_detector_contract_files(self):
+    def test_independent_fast_lane_collects_all_script_tests(self):
         workflow = (ROOT / ".github/workflows/checks.yml").read_text()
-        match = re.search(r"- name: Desktop journey detector contracts\n\s+run: ([^\n]+)", workflow)
-        self.assertIsNotNone(match, "missing fast desktop detector check")
-        command = shlex.split(match.group(1))
-        if command[:4] == ["python3", "-m", "unittest", "discover"]:
-            directory = ROOT / command[command.index("-s") + 1]
-            pattern = command[command.index("-p") + 1]
-            collected = {path.resolve() for path in directory.glob(pattern)}
-        else:
-            self.assertEqual(command[0], "python3")
-            collected = {(ROOT / command[1]).resolve()}
-        expected = {path.resolve() for path in (ROOT / "scripts").glob("test_*contract.py")}
+        lane = re.search(r"^  fast:\n(.*?)(?=^  [a-z][a-z-]*:|\Z)",
+                         workflow, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(lane, "script checks must not wait for the Rust build")
+        self.assertNotIn('needs:', lane.group(1))
+        match = re.search(r"- name: Local fast checks\n\s+run: ([^\n]+)", lane.group(1))
+        self.assertIsNotNone(match, "CI must mirror the local runner")
+        self.assertEqual(shlex.split(match.group(1)), ['sh', 'scripts/check-local.sh', 'fast'])
+        local = (ROOT / 'scripts/check-local.sh').read_text()
+        discover = re.findall(r'^ +python3 -m unittest discover [^\n]+', local, re.MULTILINE)
+        self.assertEqual(len(discover), 1)
+        command = shlex.split(discover[0])
+        directory = ROOT / command[command.index('-s') + 1]
+        pattern = command[command.index('-p') + 1]
+        collected = {path.resolve() for path in directory.glob(pattern)}
+        expected = {path.resolve() for path in (ROOT / "scripts").glob("test_*.py")}
         self.assertSetEqual(collected, expected,
-                            "new standalone detector contracts must not become orphaned in CI")
+                            "new script tests must not become orphaned in CI")
+
+    def test_supplemental_features_share_one_macos_build_and_keep_their_owned_contracts(self):
+        workflow = (ROOT / ".github/workflows/checks.yml").read_text()
+        # The local runner's executable contracts check flags, full-suite and
+        # feature coverage. CI owns no competing copy of those command lists.
+        self.assertEqual(workflow.count('run: sh scripts/check-local.sh rust'), 1)
+        self.assertEqual(workflow.count('run: sh scripts/check-local.sh features'), 1)
+        self.assertNotIn('test --locked --features profiling --no-fail-fast', workflow)
 
 
 if __name__ == "__main__":

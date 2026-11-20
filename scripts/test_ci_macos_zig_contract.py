@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -128,7 +129,7 @@ sys.exit(int(os.environ.get("TTT_ZIG_TEST_BUILD_FAILURE", "0")))
                 if expected_coverage:
                     self.assertIn("coverage output", (logs / "coverage-run.log").read_text())
 
-    def test_every_hosted_macos_job_selects_sdk_before_preflight_and_cargo(self):
+    def test_every_hosted_macos_job_selects_sdk_before_preflight_and_compilation(self):
         workflow = (ROOT / ".github/workflows/checks.yml").read_text()
         starts = list(re.finditer(r"^  ([a-z][a-z-]*):\n", workflow, re.MULTILINE))
         jobs = {match.group(1): workflow[match.end():
@@ -140,12 +141,21 @@ sys.exit(int(os.environ.get("TTT_ZIG_TEST_BUILD_FAILURE", "0")))
                 selection = job.index("- name: Select Xcode 26.3 for Zig")
                 zig = job.index("mlugg/setup-zig@v2")
                 preflight = job.index("run: sh scripts/check-macos-zig.sh")
-                cargo = re.search(r"^ +run: (?:\|\n +)?cargo|^ +cargo ", job,
-                                  re.MULTILINE)
-                self.assertIsNotNone(cargo)
+                native_commands = []
+                for command in re.finditer(r"^ +(?:run: )?(cargo [^\n]+)", job, re.MULTILINE):
+                    args = shlex.split(command.group(1))
+                    subcommand = next(arg for arg in args[1:] if not arg.startswith('+'))
+                    # Formatting and metadata/license policy do not compile or
+                    # link GUI/native code, so they can fail before SDK setup.
+                    if subcommand not in {'fmt', 'deny', 'about'}:
+                        native_commands.append(command.start())
+                native_commands.extend(command.start() for command in re.finditer(
+                    r"^ +run: sh scripts/check-local\.sh (?:rust|features|all)\s*$",
+                    job, re.MULTILINE))
+                self.assertTrue(native_commands)
                 self.assertLess(selection, zig)
                 self.assertLess(zig, preflight)
-                self.assertLess(preflight, cargo.start())
+                self.assertTrue(all(preflight < command for command in native_commands))
                 selection_step = job[selection:zig]
                 self.assertIn("if: runner.os == 'macOS'", selection_step)
                 self.assertIn("/Applications/Xcode_26.3.app/Contents/Developer", selection_step)
