@@ -1,5 +1,4 @@
-#[path = "../build_support/tool_versions.rs"]
-mod tool_versions;
+use super::tool_versions;
 
 const VALID: &str = "# tool target asset version archive hash\n\
 typst target-a asset-a 1.2.3 archive hash\n\
@@ -12,7 +11,7 @@ tex-fmt target-a asset-a 1.0.0 archive hash\n";
 
 #[test]
 fn runtime_labels_are_generated_from_the_packaging_manifest() {
-    let versions = tool_versions::versions(include_str!("../toolchain/manifest.tsv")).unwrap();
+    let versions = tool_versions::versions(include_str!("../../toolchain/manifest.tsv")).unwrap();
     assert_eq!(versions["typst"], env!("TIPTOPTYP_BUNDLED_TYPST_VERSION"));
     assert_eq!(
         versions["tinymist"],

@@ -155,8 +155,8 @@ fn shared_fixture() { std::env::var("key"); }
 #[test]
 fn native_preview_teardown_and_readiness_have_single_owners() {
     for source in [
-        include_str!("../src/app.rs"),
-        include_str!("../src/app/workspace_view.rs"),
+        include_str!("../../src/app.rs"),
+        include_str!("../../src/app/workspace_view.rs"),
     ] {
         assert!(!source.contains("self.webview = None"));
         assert!(!source.contains("self.preview.connection.initialized("));
@@ -165,7 +165,7 @@ fn native_preview_teardown_and_readiness_have_single_owners() {
         assert!(!source.contains("self.preview.was_visible"));
     }
     assert_eq!(
-        include_str!("../src/app/native_views.rs")
+        include_str!("../../src/app/native_views.rs")
             .matches("self.webview = None")
             .count(),
         1
@@ -214,7 +214,7 @@ fn extracted_find_and_shortcut_views_are_presentation_only() {
 
 #[test]
 fn explorer_painting_cannot_start_workspace_or_git_effects() {
-    let source = include_str!("../src/app/explorer_view.rs");
+    let source = include_str!("../../src/app/explorer_view.rs");
     for forbidden in [
         "WorkspaceTree",
         "GitPanel",
@@ -230,7 +230,7 @@ fn explorer_painting_cannot_start_workspace_or_git_effects() {
             "Explorer painting owns {forbidden}"
         );
     }
-    let app = include_str!("../src/app.rs");
+    let app = include_str!("../../src/app.rs");
     assert!(!app.contains("focus_explorer_search:"));
     assert!(!app.contains("git_explorer_reveal:"));
 }
@@ -385,8 +385,8 @@ fn capability_derivation_cannot_probe_or_render() {
 #[test]
 fn build_scheduler_and_application_do_not_decode_engine_output() {
     for source in [
-        include_str!("../src/compiler.rs"),
-        include_str!("../src/app/build.rs"),
+        include_str!("../../src/compiler.rs"),
+        include_str!("../../src/app/build.rs"),
     ] {
         let production = production_source(source);
         for forbidden in [
@@ -419,7 +419,7 @@ fn build_scheduler_and_application_do_not_decode_engine_output() {
             );
         }
     }
-    let support = include_str!("../src/language_support.rs");
+    let support = include_str!("../../src/language_support.rs");
     for forbidden in [
         "egui",
         "std::fs",
@@ -698,7 +698,7 @@ fn pdf_pixels_are_viewport_requested_and_process_budgeted() {
 
 #[test]
 fn save_handoff_does_not_own_io_ui_or_another_document_identity() {
-    let source = production_source(include_str!("../src/save_transaction.rs"));
+    let source = production_source(include_str!("../../src/save_transaction.rs"));
     for forbidden in [
         "std::fs",
         "std::thread",

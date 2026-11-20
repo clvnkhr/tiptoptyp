@@ -1,4 +1,4 @@
-#[path = "../build_support/build_identity.rs"]
+#[path = "../../build_support/build_identity.rs"]
 mod build_identity;
 
 use std::{

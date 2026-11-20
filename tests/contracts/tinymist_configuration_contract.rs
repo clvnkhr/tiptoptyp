@@ -1,13 +1,12 @@
-#[path = "../build_support/tinymist_configuration.rs"]
+#[path = "../../build_support/tinymist_configuration.rs"]
 mod configuration;
-#[path = "../build_support/tool_versions.rs"]
-mod tool_versions;
+use super::tool_versions;
 
 use serde_json::json;
 
 #[test]
 fn bundled_server_must_have_an_explicitly_reviewed_configuration_contract() {
-    let versions = tool_versions::versions(include_str!("../toolchain/manifest.tsv")).unwrap();
+    let versions = tool_versions::versions(include_str!("../../toolchain/manifest.tsv")).unwrap();
     assert!(configuration::supports_version(versions["tinymist"]));
     for unreviewed in ["0.15.2", "0.15.13", "0.16.0", "", "0.15.12-custom"] {
         assert!(!configuration::supports_version(unreviewed), "{unreviewed}");

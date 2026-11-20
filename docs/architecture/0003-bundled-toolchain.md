@@ -36,7 +36,7 @@ per-target archive names and SHA-256 digests live in
 from that manifest at compile time; there is no second version literal to update
 and no runtime manifest read. Missing tools, duplicate tool/target rows, malformed
 rows and disagreements between a tool's target versions fail the build. The shared
-validator is covered by `tests/toolchain_manifest.rs`. Resolution precedence is
+validator is covered by `tests/contracts/toolchain_manifest.rs`. Resolution precedence is
 unchanged; these build-time values are not process-environment overrides.
 
 The packaging task downloads only HTTPS GitHub release assets, verifies the

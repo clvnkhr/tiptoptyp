@@ -17,8 +17,8 @@ fn resources(value: &toml::Value) -> BTreeMap<String, String> {
 #[test]
 fn production_and_cargo_packages_include_all_font_licenses_and_the_same_resources() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let cargo: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
-    let production: toml::Value = toml::from_str(include_str!("../packager-prod.toml")).unwrap();
+    let cargo: toml::Value = toml::from_str(include_str!("../../Cargo.toml")).unwrap();
+    let production: toml::Value = toml::from_str(include_str!("../../packager-prod.toml")).unwrap();
     let cargo = resources(&cargo["package"]["metadata"]["packager"]["resources"]);
     let production = resources(&production["resources"]);
     for entry in std::fs::read_dir(root.join("assets/fonts")).unwrap() {
@@ -97,8 +97,8 @@ fn first_party_packages_declare_the_mit_spdx_license() {
 
 #[test]
 fn macos_production_defaults_to_universal_and_canonical_release_output() {
-    let cargo: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
-    let production: toml::Value = toml::from_str(include_str!("../packager-prod.toml")).unwrap();
+    let cargo: toml::Value = toml::from_str(include_str!("../../Cargo.toml")).unwrap();
+    let production: toml::Value = toml::from_str(include_str!("../../packager-prod.toml")).unwrap();
     let metadata = &cargo["package"]["metadata"]["packager"];
     assert_eq!(
         production["target-triple"].as_str(),
@@ -119,8 +119,8 @@ fn macos_production_defaults_to_universal_and_canonical_release_output() {
 
 #[test]
 fn packages_ship_compressed_payload_trees_without_duplicate_raw_binaries_or_assets() {
-    let cargo: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
-    let production: toml::Value = toml::from_str(include_str!("../packager-prod.toml")).unwrap();
+    let cargo: toml::Value = toml::from_str(include_str!("../../Cargo.toml")).unwrap();
+    let production: toml::Value = toml::from_str(include_str!("../../packager-prod.toml")).unwrap();
     for manifest in [&cargo["package"]["metadata"]["packager"], &production] {
         assert!(
             manifest.get("external-binaries").is_none(),
@@ -214,12 +214,12 @@ fn runtime_version_follows_the_direct_edge_when_transitive_versions_differ() {
 
 #[test]
 fn liquid_measurements_use_the_production_engine_and_optimized_profile() {
-    let app: toml::Value = toml::from_str(include_str!("../Cargo.toml")).unwrap();
+    let app: toml::Value = toml::from_str(include_str!("../../Cargo.toml")).unwrap();
     let probe: toml::Value =
-        toml::from_str(include_str!("../scripts/liquid-native-probe/Cargo.toml")).unwrap();
-    let app_lock: toml::Value = toml::from_str(include_str!("../Cargo.lock")).unwrap();
+        toml::from_str(include_str!("../../scripts/liquid-native-probe/Cargo.toml")).unwrap();
+    let app_lock: toml::Value = toml::from_str(include_str!("../../Cargo.lock")).unwrap();
     let probe_lock: toml::Value =
-        toml::from_str(include_str!("../scripts/liquid-native-probe/Cargo.lock")).unwrap();
+        toml::from_str(include_str!("../../scripts/liquid-native-probe/Cargo.lock")).unwrap();
     for name in ["tokenizers", "nix", "sha2", "hex", "zstd"] {
         let version = |lock: &toml::Value, manifest: &toml::Value| {
             direct_dependency_version(lock, manifest["package"]["name"].as_str().unwrap(), name)
@@ -264,7 +264,7 @@ fn liquid_measurements_use_the_production_engine_and_optimized_profile() {
         patch(&probe, &root.join("scripts/liquid-native-probe")),
         "measurement must use the same patched tokenizer implementation"
     );
-    let task: toml::Value = toml::from_str(include_str!("../xtask/Cargo.toml")).unwrap();
+    let task: toml::Value = toml::from_str(include_str!("../../xtask/Cargo.toml")).unwrap();
     assert_eq!(
         app["dependencies"]["sha2"], task["dependencies"]["sha2"],
         "package verification must use the same hardware hashing implementation"

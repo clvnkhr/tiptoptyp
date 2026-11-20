@@ -23,7 +23,7 @@ impl Installation {
         fs::write(root.join("Applications/tiptoptyp.app/old"), "old").unwrap();
         fs::write(
             root.join("scripts/install.sh"),
-            include_str!("../scripts/install-macos-app.sh"),
+            include_str!("../../scripts/install-macos-app.sh"),
         )
         .unwrap();
         for (name, body) in [

@@ -1,5 +1,5 @@
 //! Exercise the admission policy used before the native IPC body is read.
-#[path = "../vendor/wry/src/ipc_scope.rs"]
+#[path = "../../vendor/wry/src/ipc_scope.rs"]
 mod ipc_scope;
 
 #[test]

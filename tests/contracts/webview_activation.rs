@@ -1,5 +1,5 @@
 //! Child construction must not trade background rendering for app activation.
-#[path = "../vendor/wry/src/wkwebview/creation.rs"]
+#[path = "../../vendor/wry/src/wkwebview/creation.rs"]
 mod creation;
 
 use syn::visit::Visit as _;
@@ -74,7 +74,7 @@ impl<'ast> syn::visit::Visit<'ast> for ActivationCalls {
 
 #[test]
 fn both_macos_activation_apis_obey_the_child_policy_regardless_of_focus_attributes() {
-    let source = syn::parse_file(include_str!("../vendor/wry/src/wkwebview/mod.rs")).unwrap();
+    let source = syn::parse_file(include_str!("../../vendor/wry/src/wkwebview/mod.rs")).unwrap();
     let mut calls = ActivationCalls::default();
     calls.visit_file(&source);
     assert_eq!(calls.guards, 1);
@@ -100,7 +100,7 @@ fn editor_child_creation_does_not_wait_for_focus_or_replace_the_parent_responder
             syn::visit::visit_expr_method_call(self, node);
         }
     }
-    let source = syn::parse_file(include_str!("../src/app/native_views.rs")).unwrap();
+    let source = syn::parse_file(include_str!("../../src/app/native_views.rs")).unwrap();
     let mut creation_methods = None;
     for item in source.items {
         let syn::Item::Impl(implementation) = item else {
