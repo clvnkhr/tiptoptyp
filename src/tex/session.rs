@@ -535,6 +535,113 @@ fn configuration_response(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn snapshot(root: &std::path::Path, source: &str) -> Snapshot {
+        use tiptoptyp_core::document::{DocumentKey, WindowSessionId};
+        let settings = crate::tex::settings::TexSettings::default();
+        let mut snapshot = Snapshot {
+            generation: crate::lsp::Generation(1),
+            key: DocumentKey::new(WindowSessionId::new(1), 2, 0),
+            uri: url::Url::from_file_path(root.join("main.tex"))
+                .unwrap()
+                .into(),
+            source: std::sync::Arc::from(source),
+            root: root.into(),
+            tools: crate::tex::tools::TexTools::resolve(&settings),
+            settings,
+        };
+        // Protocol cases below own their mailboxes. The Session still owns a
+        // real process for health/Drop checks, but it never supplies test data.
+        snapshot.tools.texlab.program = "/bin/sleep".into();
+        snapshot.tools.texlab.origin = crate::toolchain::ToolOrigin::Custom;
+        snapshot.tools.texlab.command.arguments = "30".into();
+        snapshot
+    }
+
+    #[cfg(unix)]
+    fn memory_session(
+        snapshot: &Snapshot,
+    ) -> (Session, SyncSender<Result<Value, String>>, Receiver<Value>) {
+        let mut session = Session::start(Provider::Texlab, snapshot).unwrap();
+        let (outgoing, sent) = mpsc::sync_channel(PIPE_LIMIT);
+        let (messages, incoming) = mpsc::sync_channel(PIPE_LIMIT);
+        // Admission happens synchronously before assertions, independently of
+        // kernel pipes, reader scheduling, shell startup or framing fixtures.
+        session.outgoing = Some(outgoing);
+        session.incoming = Some(incoming);
+        (session, messages, sent)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn framed_stdio_initialization_reaches_ready() {
+        use std::io::Read as _;
+        let directory = tempfile::tempdir().unwrap();
+        let capture = directory.path().join("initialize.json");
+        let mut snapshot = snapshot(directory.path(), "A short document.");
+        let response = json!({"jsonrpc":"2.0","id":1,
+            "result":{"capabilities":{"positionEncoding":"utf-16"}}});
+        let payload = serde_json::to_string(&response).unwrap();
+        let script = format!(
+            concat!(
+                "cr=$(printf '\\r'); length=; ",
+                "while IFS= read -r line; do ",
+                "case \"$line\" in ",
+                "'Content-Length: '*) length=${{line#'Content-Length: '}}; length=${{length%\"$cr\"}};; ",
+                "\"$cr\") break;; esac; done; ",
+                "/bin/dd bs=1 count=\"$length\" of=\"$TTT_TEST_INITIALIZE_CAPTURE\" 2>/dev/null || exit 1; ",
+                "printf '%s\\r\\n\\r\\n%s' 'Content-Length: {}' '{}'; ",
+                "exec /bin/sleep 30"
+            ),
+            payload.len(),
+            payload,
+        );
+        snapshot.tools.texlab.program = "/bin/sh".into();
+        snapshot.tools.texlab.command.arguments = shlex::try_join(["-c", script.as_str()]).unwrap();
+        snapshot.tools.texlab.command.environment =
+            json!({"TTT_TEST_INITIALIZE_CAPTURE":capture}).to_string();
+        let mut session = Session::start(Provider::Texlab, &snapshot).unwrap();
+        // Only this transport witness waits for a child. Protocol case matrices
+        // below do not depend on process/reader startup at all.
+        let received = session
+            .incoming
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(10));
+        let message = match received {
+            Ok(Ok(message)) => message,
+            result => {
+                let status = session.child.try_wait();
+                let mut stderr = String::new();
+                if let Ok(log) = File::open(&session.log) {
+                    let _ = log.take(4096).read_to_string(&mut stderr);
+                }
+                panic!(
+                    "TeX stdio fixture did not initialize: {result:?}; child={status:?}; stderr={stderr:?}"
+                );
+            }
+        };
+        assert_eq!(message, response);
+        let request: Value = serde_json::from_slice(&fs::read(capture).unwrap()).unwrap();
+        assert_eq!(request["method"], "initialize");
+        assert_eq!(request["id"], 1);
+        assert_eq!(
+            request["params"]["capabilities"]["general"]["positionEncodings"],
+            json!(["utf-16"])
+        );
+        let (queued, incoming) = mpsc::sync_channel(PIPE_LIMIT);
+        queued.send(Ok(message)).unwrap();
+        session.incoming = Some(incoming);
+        let events = session.poll().unwrap();
+        assert!(events.iter().any(|event| {
+            matches!(event, Event::Ready { snapshot: ready, .. } if *ready == snapshot.identity())
+        }));
+        assert_eq!(
+            session.phase.opened().unwrap().identity,
+            snapshot.identity()
+        );
+    }
+
     #[test]
     fn initialization_keeps_open_source_and_sync_mode_in_the_ready_phase() {
         let mut phase = SessionPhase::Initializing {
@@ -571,49 +678,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn negotiated_incremental_changes_use_the_last_sent_source_and_keep_the_session() {
-        use std::{os::unix::fs::PermissionsExt, sync::Arc};
-        use tiptoptyp_core::{
-            document::{DocumentKey, WindowSessionId},
-            text::{LspTextEdit, ScalarOffset, apply_text_edits},
-        };
+        use std::sync::Arc;
+        use tiptoptyp_core::text::{LspTextEdit, ScalarOffset, apply_text_edits};
         let directory = tempfile::tempdir().unwrap();
-        let program = directory.path().join("fake-lsp");
-        let wire = directory.path().join("initialize.lsp");
-        fs::write(
-            &program,
-            "#!/bin/sh\n/bin/cat \"$TTT_TEST_MESSAGES\"\nexec /bin/cat >/dev/null\n",
-        )
-        .unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
         for incremental in [false, true] {
-            let settings = crate::tex::settings::TexSettings::default();
-            let mut snapshot = Snapshot {
-                generation: crate::lsp::Generation(1),
-                key: DocumentKey::new(WindowSessionId::new(1), 2, 0),
-                uri: url::Url::from_file_path(directory.path().join("main.tex"))
-                    .unwrap()
-                    .into(),
-                source: Arc::from("文😀 old"),
-                root: directory.path().into(),
-                tools: crate::tex::tools::TexTools::resolve(&settings),
-                settings,
-            };
-            snapshot.tools.texlab.program = program.clone();
-            snapshot.tools.texlab.origin = crate::toolchain::ToolOrigin::Custom;
-            snapshot.tools.texlab.command.environment =
-                json!({"TTT_TEST_MESSAGES":wire}).to_string();
-            let mut bytes = Vec::new();
-            transport::write_lsp_message(&mut bytes, &json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":{"change":if incremental { 2 } else { 1 }}}}})).unwrap();
-            fs::write(&wire, bytes).unwrap();
-            let mut session = Session::start(Provider::Texlab, &snapshot).unwrap();
-            let incoming = session.incoming.take().unwrap();
-            let (queued, receiver) = mpsc::sync_channel(PIPE_LIMIT);
+            let mut snapshot = snapshot(directory.path(), "文😀 old");
+            let (mut session, queued, sent) = memory_session(&snapshot);
             queued
-                .send(incoming.recv_timeout(Duration::from_secs(5)).unwrap())
+                .send(Ok(json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":{"change":if incremental { 2 } else { 1 }}}}})))
                 .unwrap();
-            session.incoming = Some(receiver);
-            let (capture, sent) = mpsc::sync_channel(PIPE_LIMIT);
-            session.outgoing = Some(capture);
             session.poll().unwrap();
             let startup: Vec<_> = sent.try_iter().collect();
             assert_eq!(
@@ -668,17 +741,9 @@ mod tests {
 
     #[cfg(unix)]
     fn exercise_queued_publications(initialized_before_sync: bool, switch_document: bool) {
-        use std::{os::unix::fs::PermissionsExt, sync::Arc};
-        use tiptoptyp_core::document::{DocumentKey, WindowSessionId};
+        use std::sync::Arc;
+        use tiptoptyp_core::document::DocumentKey;
         let directory = tempfile::tempdir().unwrap();
-        let program = directory.path().join("fake-lsp");
-        let wire = directory.path().join("messages.lsp");
-        fs::write(
-            &program,
-            "#!/bin/sh\n/bin/cat \"$TTT_TEST_MESSAGES\"\nexec /bin/cat >/dev/null\n",
-        )
-        .unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
         let diagnostic_capacity = PIPE_LIMIT - usize::from(!initialized_before_sync);
         for (clear, queued_count) in [
             (false, 1),
@@ -686,22 +751,8 @@ mod tests {
             (false, diagnostic_capacity),
             (true, diagnostic_capacity),
         ] {
-            let settings = crate::tex::settings::TexSettings::default();
-            let mut snapshot = Snapshot {
-                generation: crate::lsp::Generation(1),
-                key: DocumentKey::new(WindowSessionId::new(1), 2, 0),
-                uri: url::Url::from_file_path(directory.path().join("main.tex"))
-                    .unwrap()
-                    .into(),
-                source: Arc::from("old"),
-                root: directory.path().into(),
-                tools: crate::tex::tools::TexTools::resolve(&settings),
-                settings,
-            };
-            snapshot.tools.texlab.program = program.clone();
-            snapshot.tools.texlab.origin = crate::toolchain::ToolOrigin::Custom;
-            snapshot.tools.texlab.command.environment =
-                json!({"TTT_TEST_MESSAGES":wire}).to_string();
+            let mut snapshot = snapshot(directory.path(), "old");
+            let (mut session, queued, _sent) = memory_session(&snapshot);
             let diagnostics = if clear {
                 json!([])
             } else {
@@ -710,31 +761,9 @@ mod tests {
                     "message":"old source warning","severity":2
                 }])
             };
-            let mut bytes = Vec::new();
-            transport::write_lsp_message(
-                &mut bytes,
-                &json!({"jsonrpc":"2.0","id":1,
-                "result":{"capabilities":{"positionEncoding":"utf-16"}}}),
-            )
-            .unwrap();
-            for _ in 0..queued_count {
-                transport::write_lsp_message(
-                    &mut bytes,
-                    &json!({"jsonrpc":"2.0", "method":"textDocument/publishDiagnostics",
-                    "params":{"uri":snapshot.uri,"diagnostics":diagnostics}}),
-                )
-                .unwrap();
-            }
-            fs::write(&wire, bytes).unwrap();
-            let mut session = Session::start(Provider::Texlab, &snapshot).unwrap();
-            // Route actual framed subprocess output through a test-owned mailbox.
-            // Receiving each real pipe message first proves deterministic queue
-            // admission, without sleeps or assumptions about reader scheduling.
-            let incoming = session.incoming.take().unwrap();
-            let (queued, receiver) = mpsc::sync_channel(PIPE_LIMIT);
-            session.incoming = Some(receiver);
             queued
-                .send(incoming.recv_timeout(Duration::from_secs(5)).unwrap())
+                .send(Ok(json!({"jsonrpc":"2.0","id":1,
+                    "result":{"capabilities":{"positionEncoding":"utf-16"}}})))
                 .unwrap();
             if initialized_before_sync {
                 assert!(
@@ -746,12 +775,12 @@ mod tests {
                 );
             }
             for _ in 0..queued_count {
-                let publication = incoming
-                    .recv_timeout(Duration::from_secs(5))
-                    .unwrap()
+                queued
+                    .send(Ok(
+                        json!({"jsonrpc":"2.0", "method":"textDocument/publishDiagnostics",
+                        "params":{"uri":snapshot.uri,"diagnostics":diagnostics}}),
+                    ))
                     .unwrap();
-                assert_eq!(publication["method"], "textDocument/publishDiagnostics");
-                queued.send(Ok(publication)).unwrap();
             }
             let old = snapshot.identity();
             if switch_document {

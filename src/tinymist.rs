@@ -1066,6 +1066,28 @@ struct PendingCall {
     deadline: Instant,
 }
 
+impl PendingCall {
+    fn new(request: PendingRequest, now: Instant, timeout_override: Option<Duration>) -> Self {
+        let timeout = timeout_override.unwrap_or_else(|| request.timeout());
+        Self {
+            request,
+            timeout,
+            deadline: now + timeout,
+        }
+    }
+}
+
+fn expired_request(
+    pending: &HashMap<u64, PendingCall>,
+    now: Instant,
+) -> Option<(u64, &PendingCall)> {
+    pending
+        .iter()
+        .filter(|(_, pending)| pending.deadline <= now)
+        .min_by_key(|(id, pending)| (pending.deadline, **id))
+        .map(|(id, pending)| (*id, pending))
+}
+
 enum Incoming {
     Message(Value),
     Stderr(String),
@@ -1302,16 +1324,9 @@ impl Session {
             "method": method,
             "params": params,
         }))?;
-        let timeout = self
-            .request_timeout_override
-            .unwrap_or_else(|| pending.timeout());
         self.pending.insert(
             id,
-            PendingCall {
-                request: pending,
-                timeout,
-                deadline: Instant::now() + timeout,
-            },
+            PendingCall::new(pending, Instant::now(), self.request_timeout_override),
         );
         Ok(id)
     }
@@ -1336,14 +1351,6 @@ impl Session {
             self.notify("$/cancelRequest", json!({ "id": id }))?;
         }
         Ok(())
-    }
-
-    fn expired_request(&self, now: Instant) -> Option<(u64, &PendingCall)> {
-        self.pending
-            .iter()
-            .filter(|(_, pending)| pending.deadline <= now)
-            .min_by_key(|(id, pending)| (pending.deadline, **id))
-            .map(|(id, pending)| (*id, pending))
     }
 
     fn notify(&mut self, method: &str, params: Value) -> std::result::Result<(), String> {
@@ -1541,7 +1548,7 @@ fn worker_loop(
 
         if session_failure.is_none()
             && let Some(active) = session.as_ref()
-            && let Some((id, pending)) = active.expired_request(Instant::now())
+            && let Some((id, pending)) = expired_request(&active.pending, Instant::now())
         {
             session_failure = Some((
                 "timeout",
@@ -3046,34 +3053,32 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn invariant_initialize_rejects_unsupported_positions_before_opening_documents() {
-        for encoding in [json!("utf-8"), json!("utf-32"), json!(false), json!(null)] {
-            let root = tempfile::tempdir().unwrap();
-            let config = TinymistConfig::new(root.path())
-                .with_command("/bin/sh", ["-c", "exec cat >/dev/null"].map(OsString::from));
-            let mut session = Session::spawn(
-                Generation(7),
-                config,
-                Arc::new(ProcessSupervisor::default()),
-            )
-            .unwrap();
-            let (events, receiver) = mpsc::channel();
-            let result = handle_rpc_message(
-                &mut session,
-                json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"positionEncoding":encoding}}}),
-                &events,
-                &crate::worker::RepaintTarget::test(),
-                &AtomicU64::new(7),
-            );
-            assert!(
-                result.is_err(),
-                "accepted unsupported position encoding: {encoding}"
-            );
-            assert_eq!(session.phase, SessionPhase::Initializing);
-            assert!(
-                receiver.try_recv().is_err(),
-                "invalid server cannot become ready"
-            );
-        }
+        // The exhaustive value matrix belongs to the shared LSP protocol
+        // validator. One real session checks this adapter rejects negotiation
+        // before it opens documents or publishes readiness.
+        let root = tempfile::tempdir().unwrap();
+        let config = TinymistConfig::new(root.path())
+            .with_command("/bin/sh", ["-c", "exec cat >/dev/null"].map(OsString::from));
+        let mut session = Session::spawn(
+            Generation(7),
+            config,
+            Arc::new(ProcessSupervisor::default()),
+        )
+        .unwrap();
+        let (events, receiver) = mpsc::channel();
+        let result = handle_rpc_message(
+            &mut session,
+            json!({"jsonrpc":"2.0","id":1,"result":{"capabilities":{"positionEncoding":"utf-8"}}}),
+            &events,
+            &crate::worker::RepaintTarget::test(),
+            &AtomicU64::new(7),
+        );
+        assert!(result.is_err(), "accepted unsupported position encoding");
+        assert_eq!(session.phase, SessionPhase::Initializing);
+        assert!(
+            receiver.try_recv().is_err(),
+            "invalid server cannot become ready"
+        );
     }
 
     fn frame(value: &Value) -> Vec<u8> {
@@ -3119,6 +3124,79 @@ mod tests {
         assert_eq!(hover.timeout(), Duration::from_secs(10));
         assert_eq!(formatting.timeout(), Duration::from_secs(120));
         assert!(formatting.timeout() > PendingRequest::StartPreview.timeout());
+    }
+
+    #[test]
+    fn pending_deadlines_use_exact_boundaries_and_retire_only_completed_requests() {
+        let started = Instant::now();
+        let mut pending = HashMap::new();
+        for (id, request) in [
+            (1, PendingRequest::Initialize),
+            (2, PendingRequest::StartPreview),
+            (
+                3,
+                PendingRequest::FormatDocument {
+                    uri: "file:///tmp/main.typ".to_owned(),
+                    version: 1,
+                    request_token: 1,
+                },
+            ),
+        ] {
+            pending.insert(id, PendingCall::new(request, started, None));
+        }
+        let expired =
+            |pending: &HashMap<_, _>, now| expired_request(pending, now).map(|(id, _)| id);
+        let initialize_deadline = started + INITIALIZE_REQUEST_TIMEOUT;
+        assert_eq!(
+            expired(&pending, initialize_deadline - Duration::from_nanos(1)),
+            None
+        );
+        assert_eq!(expired(&pending, initialize_deadline), Some(1));
+        assert_eq!(
+            expired(&pending, started + FORMAT_REQUEST_TIMEOUT),
+            Some(1),
+            "the earliest unanswered request wins even when later calls expire"
+        );
+        pending.remove(&1);
+        assert_eq!(expired(&pending, initialize_deadline), None);
+        assert_eq!(
+            expired(&pending, started + PREVIEW_REQUEST_TIMEOUT),
+            Some(2)
+        );
+        pending.remove(&2);
+        assert_eq!(
+            expired(
+                &pending,
+                started + FORMAT_REQUEST_TIMEOUT - Duration::from_nanos(1)
+            ),
+            None
+        );
+        assert_eq!(expired(&pending, started + FORMAT_REQUEST_TIMEOUT), Some(3));
+        pending.remove(&3);
+        assert_eq!(
+            expired(&pending, started + FORMAT_REQUEST_TIMEOUT),
+            None,
+            "repeated completion cannot revive retired work"
+        );
+    }
+
+    #[test]
+    fn simultaneous_deadlines_choose_the_oldest_request_identity() {
+        let started = Instant::now();
+        let deadline = started + INITIALIZE_REQUEST_TIMEOUT;
+        let pending = [7, 2, 9]
+            .into_iter()
+            .map(|id| {
+                (
+                    id,
+                    PendingCall::new(PendingRequest::Initialize, started, None),
+                )
+            })
+            .collect();
+        assert_eq!(
+            expired_request(&pending, deadline).map(|(id, _)| id),
+            Some(2)
+        );
     }
 
     #[test]
@@ -4431,7 +4509,10 @@ mod tests {
             // `sleep` keeps every pipe open but never reads the initialize
             // request and never writes a response during the test.
             .with_command("/bin/sleep", [OsString::from("30")])
-            .with_request_timeout(Duration::from_secs(3));
+            // Exercise the real worker/error/child-reaping path with an
+            // already-expired call. Exact nonzero deadline boundaries are
+            // covered synchronously above instead of waiting for wall time.
+            .with_request_timeout(Duration::ZERO);
         config.start_preview = false;
         let generation = sidecar.start_workspace(config).unwrap();
 
@@ -4471,7 +4552,7 @@ mod tests {
             "{timeout_error}"
         );
         assert!(
-            timeout_error.contains("3s"),
+            timeout_error.contains("0ns"),
             "timeout should report its bound: {timeout_error}"
         );
         assert!(stopped, "timed-out session did not stop");
